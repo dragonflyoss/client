@@ -1,0 +1,13 @@
+[package]
+name = "dfdaemon"
+version = "0.1.0"
+authors = ["The Dragonfly Developers"]
+homepage = "https://d7y.io/"
+repository = "https://github.com/dragonflyoss/dfdaemon.git"
+description = "Dragonfly client written in Rust"
+keywords = ["dragonfly", "d7y", "dfdaemon", "dfget","p2p", "container", "docker-image"]
+license = "Apache-2.0"
+readme = "README.md"
+edition = "2021"
+
+[dependencies]
