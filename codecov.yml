@@ -1,0 +1,18 @@
+coverage:
+  precision: 2
+  round: down
+  range: "80...100"
+  status:
+    project:
+      default:
+        enabled: no
+    patch:
+      default:
+        enabled: no
+
+comment:
+  layout: "reach, diff, flags, files"
+  behavior: default
+  require_changes: false
+  branches:
+    - main
