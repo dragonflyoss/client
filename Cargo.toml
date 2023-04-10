@@ -10,4 +10,14 @@ license = "Apache-2.0"
 readme = "README.md"
 edition = "2021"
 
+[[bin]]
+name = "dfget"
+path = "src/bin/dfget/main.rs"
+
+[[bin]]
+name = "dfstore"
+path = "src/bin/dfstore/main.rs"
+
 [dependencies]
+clap = { version = "4.1.13", features = [ "derive" ] }
+home = "0.5.4"
