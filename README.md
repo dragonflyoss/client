@@ -1,9 +1,9 @@
-# Dfdaemon
+# Dragonfly Client
 
-[![GitHub release](https://img.shields.io/github/release/dragonflyoss/dfdaemon.svg)](https://github.com/dragonflyoss/dfdaemon/releases)
-[![CI](https://github.com/dragonflyoss/dfdaemon/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dragonflyoss/dfdaemon/actions/workflows/ci.yml)
-[![Coverage](https://codecov.io/gh/dragonflyoss/dfdaemon/branch/main/graph/badge.svg)](https://codecov.io/gh/dragonflyoss/dfdameon)
-[![Open Source Helpers](https://www.codetriage.com/dragonflyoss/dfdaemon/badges/users.svg)](https://www.codetriage.com/dragonflyoss/dfdaemon)
+[![GitHub release](https://img.shields.io/github/release/dragonflyoss/client.svg)](https://github.com/dragonflyoss/client/releases)
+[![CI](https://github.com/dragonflyoss/client/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dragonflyoss/client/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/dragonflyoss/client/branch/main/graph/badge.svg)](https://codecov.io/gh/dragonflyoss/dfdameon)
+[![Open Source Helpers](https://www.codetriage.com/dragonflyoss/client/badges/users.svg)](https://www.codetriage.com/dragonflyoss/client)
 [![Discussions](https://img.shields.io/badge/discussions-on%20github-blue?style=flat-square)](https://github.com/dragonflyoss/Dragonfly2/discussions)
 [![Twitter](https://img.shields.io/twitter/url?style=social&url=https%3A%2F%2Ftwitter.com%2Fdragonfly_oss)](https://twitter.com/dragonfly_oss)
 [![LICENSE](https://img.shields.io/github/license/dragonflyoss/Dragonfly2.svg?style=flat-square)](https://github.com/dragonflyoss/Dragonfly2/blob/main/LICENSE)
