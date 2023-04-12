@@ -1,5 +1,4 @@
 ---
 name: Custom issue template
-about: Custom issue template for dfdaemon
-
+about: Custom issue template for client
 ---

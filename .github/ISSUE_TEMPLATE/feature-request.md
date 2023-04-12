@@ -1,6 +1,6 @@
 ---
 name: Feature Request
-about: Request a new feature for dfdameon
+about: Request a new feature for client
 labels: enhancement
 
 ---

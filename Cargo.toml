@@ -1,13 +1,27 @@
 [package]
-name = "dfdaemon"
+name = "client"
 version = "1.0.0"
 authors = ["The Dragonfly Developers"]
 homepage = "https://d7y.io/"
-repository = "https://github.com/dragonflyoss/dfdaemon.git"
+repository = "https://github.com/dragonflyoss/client.git"
 description = "Dragonfly client written in Rust"
-keywords = ["dragonfly", "d7y", "dfdaemon", "dfget","p2p", "container", "docker-image"]
+keywords = ["dragonfly", "d7y", "client", "dfdaemon", "dfget", "dfstore", "p2p", "container", "docker-image"]
 license = "Apache-2.0"
 readme = "README.md"
 edition = "2021"
 
+[[bin]]
+name = "dfdaemon"
+path = "src/bin/dfdaemon/main.rs"
+
+[[bin]]
+name = "dfget"
+path = "src/bin/dfget/main.rs"
+
+[[bin]]
+name = "dfstore"
+path = "src/bin/dfstore/main.rs"
+
 [dependencies]
+clap = { version = "4.1.13", features = [ "derive" ] }
+home = "0.5.4"
