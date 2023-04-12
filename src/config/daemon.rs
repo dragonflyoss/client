@@ -16,11 +16,26 @@
 
 use std::path::PathBuf;
 
-// default_unix_socket_path is the default unix socket path for daemon GRPC service.
-pub fn default_unix_socket_path() -> PathBuf {
+// default_daemon_unix_socket_path is the default unix socket path for daemon GRPC service.
+pub fn default_daemon_unix_socket_path() -> PathBuf {
     #[cfg(target_os = "linux")]
-    return PathBuf::from("/run/dragonfly/daemon.socket");
+    return PathBuf::from("/var/run/dragonfly/daemon.socket");
 
     #[cfg(target_os = "macos")]
-    return home::home_dir().unwrap().join(".dragonfly").join("cache");
+    return home::home_dir()
+        .unwrap()
+        .join(".dragonfly")
+        .join("daemon.sock");
+}
+
+// default_daemon_lock_path is the default file lock path for daemon service.
+pub fn default_daemon_lock_path() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    return PathBuf::from("/var/lock/dragonfly/daemon.lock");
+
+    #[cfg(target_os = "macos")]
+    return home::home_dir()
+        .unwrap()
+        .join(".dragonfly")
+        .join("daemon.lock");
 }

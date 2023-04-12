@@ -20,7 +20,7 @@ pub mod daemon;
 pub mod dfget;
 pub mod dfstore;
 
-// default_config_dir is the default config directory for dfdaemon.
+// default_config_dir is the default config directory for client.
 pub fn default_config_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/etc/dragonfly/");
@@ -29,7 +29,7 @@ pub fn default_config_dir() -> PathBuf {
     return home::home_dir().unwrap().join(".dragonfly").join("config");
 }
 
-// default_log_dir is the default log directory for dfdaemon.
+// default_log_dir is the default log directory for client.
 pub fn default_log_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/var/log/dragonfly/");
@@ -38,7 +38,7 @@ pub fn default_log_dir() -> PathBuf {
     return home::home_dir().unwrap().join(".dragonfly").join("logs");
 }
 
-// default_data_dir is the default data directory for dfdaemon.
+// default_data_dir is the default data directory for client.
 pub fn default_data_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/var/lib/dragonfly/");
@@ -47,16 +47,16 @@ pub fn default_data_dir() -> PathBuf {
     return home::home_dir().unwrap().join(".dragonfly").join("data");
 }
 
-// default_plugin_dir is the default plugin directory for dfdaemon.
+// default_plugin_dir is the default plugin directory for client.
 pub fn default_plugin_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
-    return PathBuf::from("/usr/local/dragonfly/plugins/");
+    return PathBuf::from("/var/lib/dragonfly/plugins/");
 
     #[cfg(target_os = "macos")]
     return home::home_dir().unwrap().join(".dragonfly").join("plugins");
 }
 
-// default_cache_dir is the default cache directory for dfdaemon.
+// default_cache_dir is the default cache directory for client.
 pub fn default_cache_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/var/cache/dragonfly/");
