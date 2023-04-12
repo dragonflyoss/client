@@ -1,8 +1,7 @@
 ---
 name: Bug Report
-about: Report a bug for dfdaemon
+about: Report a bug for client
 labels: bug
-
 ---
 
 ### Bug report:
@@ -19,7 +18,7 @@ labels: bug
 
 ### Environment:
 
-- Dfdaemon version:
+- Client version:
 - OS:
 - Kernel (e.g. `uname -a`):
 - Others:

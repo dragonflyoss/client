@@ -5,10 +5,14 @@ authors = ["The Dragonfly Developers"]
 homepage = "https://d7y.io/"
 repository = "https://github.com/dragonflyoss/client.git"
 description = "Dragonfly client written in Rust"
-keywords = ["dragonfly", "d7y", "client", "dfget", "dfstore", "p2p", "container", "docker-image"]
+keywords = ["dragonfly", "d7y", "client", "dfdaemon", "dfget", "dfstore", "p2p", "container", "docker-image"]
 license = "Apache-2.0"
 readme = "README.md"
 edition = "2021"
+
+[[bin]]
+name = "dfdaemon"
+path = "src/bin/dfdaemon/main.rs"
 
 [[bin]]
 name = "dfget"

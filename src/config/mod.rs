@@ -16,9 +16,27 @@
 
 use std::path::PathBuf;
 
-pub mod daemon;
+pub mod dfdaemon;
 pub mod dfget;
 pub mod dfstore;
+
+// default_root_dir is the default root directory for client.
+pub fn default_root_dir() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    return PathBuf::from("/var/run/dragonfly/");
+
+    #[cfg(target_os = "macos")]
+    return home::home_dir().unwrap().join(".dragonfly");
+}
+
+// default_lock_dir is the default lock directory for client.
+pub fn default_lock_dir() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    return PathBuf::from("/var/lock/dragonfly/");
+
+    #[cfg(target_os = "macos")]
+    return home::home_dir().unwrap().join(".dragonfly");
+}
 
 // default_config_dir is the default config directory for client.
 pub fn default_config_dir() -> PathBuf {

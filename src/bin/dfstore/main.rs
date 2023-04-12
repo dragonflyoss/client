@@ -14,15 +14,4 @@
  * limitations under the License.
  */
 
-use crate::config::*;
-use std::path::PathBuf;
-
-// default_dfstore_config_path is the default config path for dfstore.
-pub fn default_dfstore_config_path() -> PathBuf {
-    default_config_dir().join("dfstore.yaml")
-}
-
-// default_dfstore_log_dir is the default log directory for dfstore.
-pub fn default_dfstore_log_dir() -> PathBuf {
-    default_log_dir().join("dfstore")
-}
+fn main() {}

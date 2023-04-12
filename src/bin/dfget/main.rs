@@ -14,15 +14,30 @@
  * limitations under the License.
  */
 
-use crate::config::*;
+use clap::Parser;
 use std::path::PathBuf;
 
-// default_dfstore_config_path is the default config path for dfstore.
-pub fn default_dfstore_config_path() -> PathBuf {
-    default_config_dir().join("dfstore.yaml")
+#[derive(Debug, Parser)]
+#[command(
+    name = "dfget",
+    author,
+    version,
+    about = "Dragonfly client written in Rust",
+    long_about = "A download client based on P2P technology in Dragonfly that can download resources of different protocols."
+)]
+struct Args {
+    #[arg(
+        short = 'o',
+        long = "output",
+        help = "Specify the output path of downloading file."
+    )]
+    output: PathBuf,
+
+    #[arg(short = 'c', long = "config", help = "Specify config file to use.")]
+    config: PathBuf,
 }
 
-// default_dfstore_log_dir is the default log directory for dfstore.
-pub fn default_dfstore_log_dir() -> PathBuf {
-    default_log_dir().join("dfstore")
+fn main() {
+    let args = Args::parse();
+    print!("{:?}", args.output)
 }

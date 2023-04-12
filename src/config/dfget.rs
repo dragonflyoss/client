@@ -13,3 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+use crate::config::*;
+use std::path::PathBuf;
+
+// default_dfget_config_path is the default config path for dfget.
+pub fn default_dfget_config_path() -> PathBuf {
+    default_config_dir().join("dfget.yaml")
+}
+
+// default_dfget_log_dir is the default log directory for dfget.
+pub fn default_dfget_log_dir() -> PathBuf {
+    default_log_dir().join("dfget")
+}
