@@ -13,13 +13,3 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-pub mod announcer;
-pub mod backend;
-pub mod config;
-pub mod downloader;
-pub mod metric;
-pub mod proxy;
-pub mod storage;
-pub mod task;
-pub mod uploader;
