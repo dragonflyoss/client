@@ -28,8 +28,8 @@ pub fn default_dfdaemon_log_dir() -> PathBuf {
 }
 
 // default_dfdaemon_task_dir is the default tasks directory for dfdaemon.
-pub fn default_dfdaemon_tasks_dir() -> PathBuf {
-    default_data_dir().join("dfdaemon").join("tasks")
+pub fn default_dfdaemon_task_dir() -> PathBuf {
+    default_data_dir().join("dfdaemon").join("task")
 }
 
 // default_dfdaemon_plugin_dir is the default plugin directory for dfdaemon.
