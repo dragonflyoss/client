@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::config::*;
+use crate::config::{default_config_dir, default_log_dir};
 use std::path::PathBuf;
 
 // default_dfget_config_path is the default config path for dfget.

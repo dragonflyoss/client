@@ -16,6 +16,7 @@
 
 use clap::Parser;
 use std::path::PathBuf;
+use tracing::Level;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -29,15 +30,31 @@ struct Args {
     #[arg(
         short = 'o',
         long = "output",
-        help = "Specify the output path of downloading file."
+        help = "Specify the output path of downloading file"
     )]
     output: PathBuf,
 
-    #[arg(short = 'c', long = "config", help = "Specify config file to use.")]
+    #[arg(short = 'c', long = "config", help = "Specify config file to use")]
     config: PathBuf,
+
+    #[arg(
+        short = 'l',
+        long,
+        default_value = "info",
+        help = "Set the logging level [trace, debug, info, warn, error]"
+    )]
+    log_level: Level,
+
+    #[arg(
+        short,
+        long,
+        default_value_t = false,
+        help = "Print more information about the download progress"
+    )]
+    verbose: bool,
 }
 
 fn main() {
     let args = Args::parse();
-    print!("{:?}", args.output)
+    print!("{:?}", args.output);
 }

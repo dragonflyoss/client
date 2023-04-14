@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 
-use crate::config::*;
+use crate::config::{
+    default_cache_dir, default_config_dir, default_data_dir, default_lock_dir, default_log_dir,
+    default_plugin_dir, default_root_dir,
+};
 use std::path::PathBuf;
 
 // default_dfdaemon_config_path is the default config path for dfdaemon.
