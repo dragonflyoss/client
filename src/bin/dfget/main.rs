@@ -15,6 +15,7 @@
  */
 
 use clap::Parser;
+use client::config::dfget::*;
 use std::path::PathBuf;
 use tracing::Level;
 
@@ -34,9 +35,6 @@ struct Args {
     )]
     output: PathBuf,
 
-    #[arg(short = 'c', long = "config", help = "Specify config file to use")]
-    config: PathBuf,
-
     #[arg(
         short = 'l',
         long,
@@ -46,12 +44,11 @@ struct Args {
     log_level: Level,
 
     #[arg(
-        short,
         long,
-        default_value_t = false,
-        help = "Print more information about the download progress"
+        default_value_os_t = default_dfget_log_dir(),
+        help = "Specify the log directory"
     )]
-    verbose: bool,
+    log_dir: PathBuf,
 }
 
 fn main() {
