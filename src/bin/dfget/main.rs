@@ -26,8 +26,8 @@ use tracing::Level;
     name = "dfget",
     author,
     version,
-    about = "Dragonfly client written in Rust",
-    long_about = "A download client based on P2P technology in Dragonfly that can download resources of different protocols."
+    about = "dfget is a download command line based on P2P technology",
+    long_about = "A download command line based on P2P technology in Dragonfly that can download resources of different protocols."
 )]
 struct Args {
     #[arg(

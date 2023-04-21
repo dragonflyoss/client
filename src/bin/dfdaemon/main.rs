@@ -14,4 +14,47 @@
  * limitations under the License.
  */
 
-fn main() {}
+use clap::Parser;
+use client::config::dfdaemon::{default_dfdaemon_config_path, default_dfdaemon_log_dir};
+use std::path::PathBuf;
+use tracing::Level;
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "dfdaemon",
+    author,
+    version,
+    about = "dfdaemon is a high performance P2P download daemon",
+    long_about = "A high performance P2P download daemon in Dragonfly that can download resources of different protocols. \
+    When user triggers a file downloading task, dfdaemon will download the pieces of file from other peers. \
+    Meanwhile, it will act as an uploader to support other peers to download pieces from it if it owns them."
+)]
+struct Args {
+    #[arg(
+        short = 'c',
+        long = "config",
+        default_value_os_t = default_dfdaemon_config_path(),
+        help = "Specify config file to use")
+    ]
+    config: PathBuf,
+
+    #[arg(
+        short = 'l',
+        long,
+        default_value = "info",
+        help = "Set the logging level [trace, debug, info, warn, error]"
+    )]
+    log_level: Level,
+
+    #[arg(
+        long,
+        default_value_os_t = default_dfdaemon_log_dir(),
+        help = "Specify the log directory"
+    )]
+    log_dir: PathBuf,
+}
+
+fn main() {
+    let args = Args::parse();
+    print!("{:?}", args.config);
+}
