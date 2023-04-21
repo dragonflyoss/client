@@ -15,8 +15,10 @@
  */
 
 use clap::Parser;
-use client::config::dfget::*;
+use client::config::dfdaemon::default_dfdaemon_unix_socket_path;
+use client::config::dfget::default_dfget_log_dir;
 use std::path::PathBuf;
+use std::time::Duration;
 use tracing::Level;
 
 #[derive(Debug, Parser)]
@@ -34,6 +36,73 @@ struct Args {
         help = "Specify the output path of downloading file"
     )]
     output: PathBuf,
+
+    #[arg(
+        short = 'e',
+        long = "endpoint",
+        default_value_os_t = default_dfdaemon_unix_socket_path(),
+        help = "Endpoint of dfdaemon's GRPC server"
+    )]
+    endpoint: PathBuf,
+
+    #[arg(
+        long = "timeout",
+        value_parser= humantime::parse_duration,
+        default_value = "0s",
+        help = "Set the timeout for downloading a file"
+    )]
+    timeout: Duration,
+
+    #[arg(
+        short = 'd',
+        long = "diegst",
+        required = false,
+        help = "Verify the integrity of the downloaded file using the specified digest, e.g. md5:86d3f3a95c324c9479bd8986968f4327"
+    )]
+    digest: String,
+
+    #[arg(
+        short = 'p',
+        long = "priority",
+        default_value_t = 6,
+        help = "Set the priority for scheduling task"
+    )]
+    priority: u32,
+
+    #[arg(
+        long = "application",
+        required = false,
+        help = "Caller application which is used for statistics and access control"
+    )]
+    application: String,
+
+    #[arg(
+        long = "tag",
+        required = false,
+        help = "Different tags for the same url will be divided into different tasks"
+    )]
+    tag: String,
+
+    #[arg(
+        long = "header",
+        required = false,
+        help = "Set the header for downloading file, e.g. --header='Content-Type: application/json' --header='Accept: application/json'"
+    )]
+    header: Vec<String>,
+
+    #[arg(
+        long = "filter",
+        required = false,
+        help = "Filter the query parameters of the downloaded URL. If the download URL is the same, it will be scheduled as the same task, e.g. --filter='signature' --filter='timeout'"
+    )]
+    filter: Vec<String>,
+
+    #[arg(
+        long = "disable-back-to-source",
+        default_value_t = false,
+        help = "Disable back-to-source download when dfget download failed"
+    )]
+    disable_back_to_source: bool,
 
     #[arg(
         short = 'l',
