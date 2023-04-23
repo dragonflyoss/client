@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use client::config::dfdaemon::default_dfdaemon_unix_socket_path;
 use client::config::dfstore::default_dfstore_log_dir;
 use std::path::PathBuf;
@@ -54,7 +54,40 @@ struct Args {
         help = "Specify the log directory"
     )]
     log_dir: PathBuf,
+
+    #[command(subcommand)]
+    command: Command,
 }
+
+#[derive(Debug, Clone, Subcommand)]
+#[command()]
+pub enum Command {
+    #[command(
+        name = "cp",
+        author,
+        version,
+        about = "Download or upload files using object storage in Dragonfly",
+        long_about = "Download a file from object storage in Dragonfly or upload a local file to object storage in Dragonfly"
+    )]
+    Copy(CopyCommand),
+
+    #[command(
+        name = "rm",
+        author,
+        version,
+        about = "Remove a file from Dragonfly object storage",
+        long_about = "Remove the P2P cache in Dragonfly and remove the file stored in the object storage."
+    )]
+    Remove(RemoveCommand),
+}
+
+// Download or upload files using object storage in Dragonfly.
+#[derive(Debug, Clone, Parser)]
+pub struct CopyCommand {}
+
+// Remove a file from Dragonfly object storage.
+#[derive(Debug, Clone, Parser)]
+pub struct RemoveCommand {}
 
 fn main() {
     let args = Args::parse();
