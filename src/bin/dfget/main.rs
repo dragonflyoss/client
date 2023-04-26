@@ -122,5 +122,5 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    print!("{:?}", args.output);
+    println!("{:?}", args.output);
 }
