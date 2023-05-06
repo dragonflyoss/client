@@ -55,8 +55,8 @@ struct Args {
 
     #[arg(
         short = 'd',
-        long = "diegst",
-        required = false,
+        long = "digest",
+        default_value = "",
         help = "Verify the integrity of the downloaded file using the specified digest, e.g. md5:86d3f3a95c324c9479bd8986968f4327"
     )]
     digest: String,
@@ -71,14 +71,14 @@ struct Args {
 
     #[arg(
         long = "application",
-        required = false,
+        default_value = "",
         help = "Caller application which is used for statistics and access control"
     )]
     application: String,
 
     #[arg(
         long = "tag",
-        required = false,
+        default_value = "",
         help = "Different tags for the same url will be divided into different tasks"
     )]
     tag: String,
