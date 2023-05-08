@@ -20,6 +20,9 @@ use crate::config::{
 };
 use std::path::PathBuf;
 
+// NAME is the name of dfdaemon.
+pub const NAME: &'static str = "dfdaemon";
+
 // default_dfdaemon_config_path is the default config path for dfdaemon.
 pub fn default_dfdaemon_config_path() -> PathBuf {
     default_config_dir().join("dfdaemon.yaml")
@@ -27,27 +30,27 @@ pub fn default_dfdaemon_config_path() -> PathBuf {
 
 // default_dfdaemon_log_dir is the default log directory for dfdaemon.
 pub fn default_dfdaemon_log_dir() -> PathBuf {
-    default_log_dir().join("dfdaemon")
+    default_log_dir().join(NAME)
 }
 
 // default_dfdaemon_content_dir is the default content directory for dfdaemon.
 pub fn default_dfdaemon_content_dir() -> PathBuf {
-    default_data_dir().join("dfdaemon").join("content")
+    default_data_dir().join(NAME).join("content")
 }
 
 // default_dfdaemon_metadata_dir is the default metadata directory for dfdaemon.
 pub fn default_dfdaemon_metadata_dir() -> PathBuf {
-    default_data_dir().join("dfdaemon").join("metadata")
+    default_data_dir().join(NAME).join("metadata")
 }
 
 // default_dfdaemon_plugin_dir is the default plugin directory for dfdaemon.
 pub fn default_dfdaemon_plugin_dir() -> PathBuf {
-    default_plugin_dir().join("dfdaemon")
+    default_plugin_dir().join(NAME)
 }
 
 // default_dfdaemon_cache_dir is the default cache directory for dfdaemon.
 pub fn default_dfdaemon_cache_dir() -> PathBuf {
-    default_cache_dir().join("dfdaemon")
+    default_cache_dir().join(NAME)
 }
 
 // default_dfdaemon_unix_socket_path is the default unix socket path for dfdaemon GRPC service.

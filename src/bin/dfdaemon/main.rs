@@ -15,14 +15,14 @@
  */
 
 use clap::Parser;
-use client::config::dfdaemon::{default_dfdaemon_config_path, default_dfdaemon_log_dir};
+use client::config::dfdaemon::{default_dfdaemon_config_path, default_dfdaemon_log_dir, NAME};
 use client::logging::init_logging;
 use std::path::PathBuf;
 use tracing::{info, Level};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "dfdaemon",
+    name = NAME,
     author,
     version,
     about = "dfdaemon is a high performance P2P download daemon",
@@ -57,6 +57,6 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    let _guards = init_logging("dfdaemon", &args.log_dir, args.log_level);
+    let _guards = init_logging(NAME, &args.log_dir, args.log_level);
     info!("{:?}", args);
 }
