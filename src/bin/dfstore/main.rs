@@ -17,8 +17,9 @@
 use clap::{Parser, Subcommand};
 use client::config::dfdaemon::default_dfdaemon_unix_socket_path;
 use client::config::dfstore::default_dfstore_log_dir;
+use client::logging::init_logging;
 use std::path::PathBuf;
-use tracing::Level;
+use tracing::{info, Level};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -91,5 +92,6 @@ pub struct RemoveCommand {}
 
 fn main() {
     let args = Args::parse();
-    print!("{:?}", args.endpoint);
+    let _guards = init_logging("dfstore", &args.log_dir, args.log_level);
+    info!("{:?}", args);
 }
