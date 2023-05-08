@@ -16,8 +16,9 @@
 
 use clap::Parser;
 use client::config::dfdaemon::{default_dfdaemon_config_path, default_dfdaemon_log_dir};
+use client::logging::init_logging;
 use std::path::PathBuf;
-use tracing::Level;
+use tracing::{info, Level};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -56,5 +57,6 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    print!("{:?}", args.config);
+    let _guards = init_logging("dfdaemon", &args.log_dir, args.log_level);
+    info!("{:?}", args);
 }
