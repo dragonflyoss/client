@@ -22,7 +22,6 @@ use tracing_subscriber::{fmt::Layer, prelude::*, EnvFilter, Registry};
 
 pub fn init_logging(name: &str, dir: &str, level: Level) -> Vec<WorkerGuard> {
     let mut guards = vec![];
-    LogTracer::init().expect("failed to init LogTracer");
 
     // Setup stdout layer.
     let (stdout_writer, stdout_guard) = tracing_appender::non_blocking(std::io::stdout());
@@ -35,13 +34,15 @@ pub fn init_logging(name: &str, dir: &str, level: Level) -> Vec<WorkerGuard> {
     let file_logging_layer = Layer::new().with_writer(rolling_writer);
     guards.push(rolling_writer_guard);
 
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level.to_string()));
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::default().add_directive(level.into()));
 
     let subscriber = Registry::default()
         .with(env_filter)
         .with(stdout_logging_layer)
         .with(file_logging_layer);
+
+    LogTracer::init().expect("failed to init LogTracer");
 
     tracing::subscriber::set_global_default(subscriber).expect("failed to set global subscriber");
 
