@@ -18,7 +18,7 @@ use crate::config::default_log_dir;
 use std::path::PathBuf;
 
 // NAME is the name of dfstore.
-pub const NAME: &'static str = "dfstore";
+pub const NAME: &str = "dfstore";
 
 // default_dfstore_log_dir is the default log directory for dfstore.
 pub fn default_dfstore_log_dir() -> PathBuf {

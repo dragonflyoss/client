@@ -26,7 +26,7 @@ pub fn init_logging(name: &str, dir: &PathBuf, level: Level) -> Vec<WorkerGuard>
 
     // Setup stdout layer.
     let (stdout_writer, stdout_guard) = tracing_appender::non_blocking(std::io::stdout());
-    let stdout_logging_layer = Layer::new().with_writer(stdout_writer).with_ansi(false);
+    let stdout_logging_layer = Layer::new().with_writer(stdout_writer);
     guards.push(stdout_guard);
 
     // Setup file layer.
