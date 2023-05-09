@@ -21,7 +21,7 @@ use crate::config::{
 use std::path::PathBuf;
 
 // NAME is the name of dfdaemon.
-pub const NAME: &'static str = "dfdaemon";
+pub const NAME: &str = "dfdaemon";
 
 // default_dfdaemon_config_path is the default config path for dfdaemon.
 pub fn default_dfdaemon_config_path() -> PathBuf {
