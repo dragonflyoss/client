@@ -15,10 +15,12 @@
  */
 
 use clap::Parser;
-use client::config::dfdaemon::{default_dfdaemon_config_path, default_dfdaemon_log_dir, NAME};
+use client::config::dfdaemon::{
+    default_dfdaemon_config_path, default_dfdaemon_log_dir, Config, NAME,
+};
 use client::logging::init_logging;
 use std::path::PathBuf;
-use tracing::{info, Level};
+use tracing::Level;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -56,7 +58,14 @@ struct Args {
 }
 
 fn main() {
+    // Parse command line arguments.
     let args = Args::parse();
+
+    // Initialize logging.
     let _guards = init_logging(NAME, &args.log_dir, args.log_level);
-    info!("{:?}", args);
+
+    // Load config.
+    let _config = Config::load(&args.config).unwrap_or_else(|err| {
+        panic!("failed to load config: {}", err);
+    });
 }
