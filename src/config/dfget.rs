@@ -18,7 +18,7 @@ use crate::config::default_log_dir;
 use std::path::PathBuf;
 
 // NAME is the name of dfget.
-pub const NAME: &'static str = "dfget";
+pub const NAME: &str = "dfget";
 
 // default_dfget_log_dir is the default log directory for dfget.
 pub fn default_dfget_log_dir() -> PathBuf {
