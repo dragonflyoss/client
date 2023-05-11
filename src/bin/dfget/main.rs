@@ -20,7 +20,7 @@ use client::config::dfget::{default_dfget_log_dir, NAME};
 use client::logging::init_logging;
 use std::path::PathBuf;
 use std::time::Duration;
-use tracing::{info, Level};
+use tracing::Level;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -122,7 +122,9 @@ struct Args {
 }
 
 fn main() {
+    // Parse command line arguments.
     let args = Args::parse();
+
+    // Initialize logging.
     let _guards = init_logging(NAME, &args.log_dir, args.log_level);
-    info!("{:?}", args);
 }
