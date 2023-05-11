@@ -18,7 +18,11 @@ use crate::config::{
     default_cache_dir, default_config_dir, default_data_dir, default_lock_dir, default_log_dir,
     default_plugin_dir, default_root_dir,
 };
+use serde::Deserialize;
+use std::fs;
 use std::path::PathBuf;
+use tracing::info;
+use validator::Validate;
 
 // NAME is the name of dfdaemon.
 pub const NAME: &str = "dfdaemon";
@@ -61,4 +65,56 @@ pub fn default_dfdaemon_unix_socket_path() -> PathBuf {
 // default_dfdaemon_lock_path is the default file lock path for dfdaemon service.
 pub fn default_dfdaemon_lock_path() -> PathBuf {
     default_lock_dir().join("dfdaemon.lock")
+}
+
+// Config is the configuration for dfdaemon.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[serde(default)]
+pub struct Config {
+    // data_dir is the directory to store task's metadata and content.
+    pub data_dir: PathBuf,
+
+    // plugin_dir is the directory to store plugins.
+    pub plugin_dir: PathBuf,
+
+    // cache_dir is the directory to store cache files.
+    pub cache_dir: PathBuf,
+
+    // root_dir is the root directory for dfdaemon.
+    pub root_dir: PathBuf,
+
+    // lock_path is the file lock path for dfdaemon service.
+    pub lock_dir: PathBuf,
+}
+
+// Default implements default value for Config.
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            data_dir: default_dfdaemon_metadata_dir(),
+            plugin_dir: default_dfdaemon_plugin_dir(),
+            cache_dir: default_dfdaemon_cache_dir(),
+            root_dir: default_root_dir(),
+            lock_dir: default_lock_dir(),
+        }
+    }
+}
+
+// Config implements Config.
+impl Config {
+    // load loads configuration from file.
+    pub fn load(path: &PathBuf) -> Result<Self, String> {
+        if path.exists() {
+            let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+            let config: Config = serde_yaml::from_str(&content).map_err(|e| e.to_string())?;
+            info!("load config from {}", path.display());
+            Ok(config)
+        } else {
+            info!(
+                "config file {} not found, use default config",
+                path.display()
+            );
+            Ok(Self::default())
+        }
+    }
 }
