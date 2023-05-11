@@ -69,7 +69,7 @@ pub fn default_dfdaemon_lock_path() -> PathBuf {
 
 // Config is the configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Config {
     // data_dir is the directory to store task's metadata and content.
     pub data_dir: PathBuf,
