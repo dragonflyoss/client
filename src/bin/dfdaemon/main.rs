@@ -65,7 +65,5 @@ fn main() {
     let _guards = init_logging(NAME, &args.log_dir, args.log_level);
 
     // Load config.
-    let _config = Config::load(&args.config).unwrap_or_else(|err| {
-        panic!("failed to load config: {}", err);
-    });
+    let _config = Config::load(&args.config).unwrap();
 }

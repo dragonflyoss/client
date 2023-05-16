@@ -67,6 +67,16 @@ pub fn default_dfdaemon_lock_path() -> PathBuf {
     default_lock_dir().join("dfdaemon.lock")
 }
 
+// Error is the error for Config.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
+
+    #[error(transparent)]
+    YAML(#[from] serde_yaml::Error),
+}
+
 // Config is the configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -103,10 +113,10 @@ impl Default for Config {
 // Config implements Config.
 impl Config {
     // load loads configuration from file.
-    pub fn load(path: &PathBuf) -> Result<Self, String> {
+    pub fn load(path: &PathBuf) -> Result<Config, Error> {
         if path.exists() {
-            let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
-            let config: Config = serde_yaml::from_str(&content).map_err(|e| e.to_string())?;
+            let content = fs::read_to_string(path)?;
+            let config: Config = serde_yaml::from_str(&content)?;
             info!("load config from {}", path.display());
             Ok(config)
         } else {
