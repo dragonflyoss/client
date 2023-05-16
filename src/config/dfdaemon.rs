@@ -20,6 +20,7 @@ use crate::config::{
 };
 use serde::Deserialize;
 use std::fs;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use tracing::info;
 use validator::Validate;
@@ -67,6 +68,11 @@ pub fn default_dfdaemon_lock_path() -> PathBuf {
     default_lock_dir().join("dfdaemon.lock")
 }
 
+// default_dfdaemon_tracing_addr is the default address to report tracing log.
+pub fn default_dfdaemon_tracing_addr() -> SocketAddr {
+    SocketAddr::from((Ipv4Addr::LOCALHOST, 14268))
+}
+
 // Error is the error for Config.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -75,6 +81,35 @@ pub enum Error {
 
     #[error(transparent)]
     YAML(#[from] serde_yaml::Error),
+}
+
+// Tracing is the tracing configuration for dfdaemon.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Tracing {
+    // enable indicates whether enable tracing.
+    pub enable: bool,
+
+    // addr is the address to report tracing log.
+    pub addr: SocketAddr,
+}
+
+// Tracing implements default value for Tracing.
+impl Default for Tracing {
+    fn default() -> Self {
+        Tracing {
+            enable: false,
+            addr: default_dfdaemon_tracing_addr(),
+        }
+    }
+}
+
+// Metrics is the metrics configuration for dfdaemon.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Metrics {
+    // enable indicates whether enable metrics.
+    pub enable: bool,
 }
 
 // Config is the configuration for dfdaemon.
@@ -95,6 +130,12 @@ pub struct Config {
 
     // lock_path is the file lock path for dfdaemon service.
     pub lock_dir: PathBuf,
+
+    // metrics is the metrics configuration for dfdaemon.
+    pub metrics: Metrics,
+
+    // tracing is the tracing configuration for dfdaemon.
+    pub tracing: Tracing,
 }
 
 // Default implements default value for Config.
@@ -106,6 +147,8 @@ impl Default for Config {
             cache_dir: default_dfdaemon_cache_dir(),
             root_dir: default_root_dir(),
             lock_dir: default_lock_dir(),
+            metrics: Metrics::default(),
+            tracing: Tracing::default(),
         }
     }
 }
