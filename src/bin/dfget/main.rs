@@ -17,7 +17,7 @@
 use clap::Parser;
 use client::config::dfdaemon::default_dfdaemon_unix_socket_path;
 use client::config::dfget::{default_dfget_log_dir, NAME};
-use client::logging::init_logging;
+use client::tracing::init_tracing;
 use std::path::PathBuf;
 use std::time::Duration;
 use tracing::Level;
@@ -125,6 +125,6 @@ fn main() {
     // Parse command line arguments.
     let args = Args::parse();
 
-    // Initialize logging.
-    let _guards = init_logging(NAME, &args.log_dir, args.log_level);
+    // Initialize tracting.
+    let _guards = init_tracing(NAME, &args.log_dir, args.log_level);
 }

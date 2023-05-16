@@ -83,6 +83,9 @@ pub enum Error {
     YAML(#[from] serde_yaml::Error),
 }
 
+// Result is the result for Config.
+pub type Result<T> = std::result::Result<T, Error>;
+
 // Tracing is the tracing configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -156,7 +159,7 @@ impl Default for Config {
 // Config implements Config.
 impl Config {
     // load loads configuration from file.
-    pub fn load(path: &PathBuf) -> Result<Config, Error> {
+    pub fn load(path: &PathBuf) -> Result<Config> {
         if path.exists() {
             let content = fs::read_to_string(path)?;
             let config: Config = serde_yaml::from_str(&content)?;

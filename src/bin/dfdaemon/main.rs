@@ -18,7 +18,7 @@ use clap::Parser;
 use client::config::dfdaemon::{
     default_dfdaemon_config_path, default_dfdaemon_log_dir, Config, NAME,
 };
-use client::logging::init_logging;
+use client::tracing::init_tracing;
 use std::path::PathBuf;
 use tracing::Level;
 
@@ -61,8 +61,8 @@ fn main() {
     // Parse command line arguments.
     let args = Args::parse();
 
-    // Initialize logging.
-    let _guards = init_logging(NAME, &args.log_dir, args.log_level);
+    // Initialize tracing.
+    let _guards = init_tracing(NAME, &args.log_dir, args.log_level);
 
     // Load config.
     let _config = Config::load(&args.config).unwrap();
