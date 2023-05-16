@@ -33,3 +33,4 @@ humantime = "2.1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 validator = { version = "0.15", features = ["derive"] }
+thiserror = "1.0"
