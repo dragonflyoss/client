@@ -62,7 +62,7 @@ fn main() {
     let args = Args::parse();
 
     // Initialize tracing.
-    let _guards = init_tracing(NAME, &args.log_dir, args.log_level);
+    let _guards = init_tracing(NAME, &args.log_dir, args.log_level, None);
 
     // Load config.
     let _config = Config::load(&args.config).unwrap();
