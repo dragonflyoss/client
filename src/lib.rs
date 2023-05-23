@@ -18,7 +18,7 @@ pub mod announcer;
 pub mod backend;
 pub mod config;
 pub mod downloader;
-pub mod metric;
+pub mod metrics;
 pub mod proxy;
 pub mod storage;
 pub mod task;

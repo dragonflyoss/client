@@ -115,6 +115,14 @@ pub struct Metrics {
     pub enable: bool,
 }
 
+// Network is the network configuration for dfdaemon.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Network {
+    // enable_ipv6 indicates whether enable ipv6.
+    pub enable_ipv6: bool,
+}
+
 // Config is the configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -139,6 +147,9 @@ pub struct Config {
 
     // tracing is the tracing configuration for dfdaemon.
     pub tracing: Tracing,
+
+    // network is the network configuration for dfdaemon.
+    pub network: Network,
 }
 
 // Default implements default value for Config.
@@ -152,11 +163,12 @@ impl Default for Config {
             lock_dir: default_lock_dir(),
             metrics: Metrics::default(),
             tracing: Tracing::default(),
+            network: Network::default(),
         }
     }
 }
 
-// Config implements Config.
+// Config implements the config operation of dfdaemon.
 impl Config {
     // load loads configuration from file.
     pub fn load(path: &PathBuf) -> Result<Config> {
