@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
 pub mod dfdaemon;
@@ -81,4 +82,9 @@ pub fn default_cache_dir() -> PathBuf {
 
     #[cfg(target_os = "macos")]
     return home::home_dir().unwrap().join(".dragonfly").join("cache");
+}
+
+// default_metrics_listen_addr is the default metrics listen address.
+pub fn default_metrics_listen_addr() -> SocketAddr {
+    SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), 8000)
 }

@@ -18,6 +18,7 @@ use clap::Parser;
 use client::config::dfdaemon::{
     default_dfdaemon_config_path, default_dfdaemon_log_dir, Config, NAME,
 };
+use client::metrics::Metrics;
 use client::tracing::init_tracing;
 use std::path::PathBuf;
 use tracing::Level;
@@ -57,7 +58,8 @@ struct Args {
     log_dir: PathBuf,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     // Parse command line arguments.
     let args = Args::parse();
 
@@ -65,5 +67,8 @@ fn main() {
     let _guards = init_tracing(NAME, &args.log_dir, args.log_level, None);
 
     // Load config.
-    let _config = Config::load(&args.config).unwrap();
+    let config = Config::load(&args.config).unwrap();
+
+    let metrics = Metrics::new(config.network.enable_ipv6);
+    metrics.serve().await;
 }
