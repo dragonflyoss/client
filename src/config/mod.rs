@@ -21,6 +21,12 @@ pub mod dfdaemon;
 pub mod dfget;
 pub mod dfstore;
 
+// SERVICE_NAME is the name of the service.
+pub const SERVICE_NAME: &str = "dragonfly";
+
+// NAME is the name of the package.
+pub const NAME: &str = env!("CARGO_PKG_NAME");
+
 // default_root_dir is the default root directory for client.
 pub fn default_root_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
