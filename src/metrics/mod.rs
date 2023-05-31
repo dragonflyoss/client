@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
+use crate::config::{NAME, SERVICE_NAME};
 use lazy_static::lazy_static;
-use prometheus::{gather, Encoder, IntCounter, Registry, TextEncoder};
+use prometheus::{gather, Encoder, IntCounterVec, IntGaugeVec, Opts, Registry, TextEncoder};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use tracing::error;
 use warp::{Filter, Rejection, Reply};
@@ -24,9 +25,19 @@ lazy_static! {
     // REGISTRY is used to register all metrics.
     pub static ref REGISTRY: Registry = Registry::new();
 
+    // VERSION_GAUGE is used to record the version info of the service.
+    pub static ref VERSION_GAUGE: IntGaugeVec =
+        IntGaugeVec::new(
+            Opts::new("version", "Version info of the service.").namespace(SERVICE_NAME).subsystem(NAME),
+            &["major", "minor", "git_version", "git_commit", "platform", "build_time"]
+        ).expect("metric can be created");
+
     // DOWNLOAD_PEER_COUNT is used to count the number of download peers.
-    pub static ref DOWNLOAD_PEER_COUNT: IntCounter =
-        IntCounter::new("download_peer_total", "Counter of the number of the download peer.").expect("metric can be created");
+    pub static ref DOWNLOAD_PEER_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("download_peer_total", "Counter of the number of the download peer.").namespace(SERVICE_NAME).subsystem(NAME),
+            &["task_type"]
+        ).expect("metric can be created");
 }
 
 // Metrics is the metrics server.
@@ -62,6 +73,10 @@ impl Metrics {
 
 // register_custom_metrics registers all custom metrics.
 fn register_custom_metrics() {
+    REGISTRY
+        .register(Box::new(VERSION_GAUGE.clone()))
+        .expect("metric can be registered");
+
     REGISTRY
         .register(Box::new(DOWNLOAD_PEER_COUNT.clone()))
         .expect("metric can be registered");
