@@ -18,9 +18,10 @@ use crate::config::{
     default_cache_dir, default_config_dir, default_data_dir, default_lock_dir, default_log_dir,
     default_plugin_dir, default_root_dir,
 };
+use local_ip_address::{local_ip, local_ipv6};
 use serde::Deserialize;
 use std::fs;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 use tracing::info;
@@ -120,9 +121,9 @@ pub struct Host {
 
     // hostname is the hostname of the host.
     pub hostname: String,
-    // TODO Implement default values of ipv4 and ipv6.
+
     // ip is the advertise ip of the host.
-    // pub ip: IpAddr,
+    pub ip: IpAddr,
 }
 
 // Host implements default value for Host.
@@ -132,6 +133,7 @@ impl Default for Host {
             idc: None,
             location: None,
             hostname: hostname::get().unwrap().to_string_lossy().to_string(),
+            ip: local_ip().unwrap(),
         }
     }
 }
@@ -428,5 +430,14 @@ impl Config {
             );
             Ok(Self::default())
         }
+    }
+
+    // convert converts the configuration.
+    pub fn convert(&mut self) -> Result<Config> {
+        if self.network.enable_ipv6 {
+            self.host.ip = local_ipv6().unwrap()
+        }
+
+        Ok(self.clone())
     }
 }
