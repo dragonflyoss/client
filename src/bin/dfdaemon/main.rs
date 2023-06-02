@@ -67,7 +67,7 @@ async fn main() {
     let _guards = init_tracing(NAME, &args.log_dir, args.log_level, None);
 
     // Load config.
-    let config = Config::load(&args.config).unwrap();
+    let config = Config::load(&args.config).unwrap().convert().unwrap();
 
     let metrics = Metrics::new(config.network.enable_ipv6);
     metrics.serve().await;
