@@ -18,8 +18,10 @@ use clap::Parser;
 use client::config::dfdaemon::{
     default_dfdaemon_config_path, default_dfdaemon_log_dir, Config, NAME,
 };
+use client::health::Health;
 use client::metrics::Metrics;
 use client::tracing::init_tracing;
+use std::error::Error;
 use std::path::PathBuf;
 use tracing::Level;
 
@@ -59,7 +61,7 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() {
+pub async fn main() -> Result<(), Box<dyn Error>> {
     // Parse command line arguments.
     let args = Args::parse();
 
@@ -67,8 +69,15 @@ async fn main() {
     let _guards = init_tracing(NAME, &args.log_dir, args.log_level, None);
 
     // Load config.
-    let config = Config::load(&args.config).unwrap();
+    let config = Config::load(&args.config)?;
 
+    // Start metrics server.
     let metrics = Metrics::new(config.network.enable_ipv6);
-    metrics.serve().await;
+    tokio::spawn(async move { metrics.serve().await });
+
+    // Start health server.
+    let health = Health::new(config.network.enable_ipv6);
+    health.serve().await;
+
+    Ok(())
 }
