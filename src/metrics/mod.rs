@@ -64,54 +64,54 @@ impl Metrics {
 
     // serve starts the metrics server.
     pub async fn serve(&self) {
-        register_custom_metrics();
+        self.register_custom_metrics();
 
-        let metrics_route = warp::path!("metrics").and_then(metrics_handler);
+        let metrics_route = warp::path!("metrics").and_then(Self::metrics_handler);
         warp::serve(metrics_route).run(self.addr).await;
     }
-}
 
-// register_custom_metrics registers all custom metrics.
-fn register_custom_metrics() {
-    REGISTRY
-        .register(Box::new(VERSION_GAUGE.clone()))
-        .expect("metric can be registered");
+    // register_custom_metrics registers all custom metrics.
+    fn register_custom_metrics(&self) {
+        REGISTRY
+            .register(Box::new(VERSION_GAUGE.clone()))
+            .expect("metric can be registered");
 
-    REGISTRY
-        .register(Box::new(DOWNLOAD_PEER_COUNT.clone()))
-        .expect("metric can be registered");
-}
+        REGISTRY
+            .register(Box::new(DOWNLOAD_PEER_COUNT.clone()))
+            .expect("metric can be registered");
+    }
 
-// metrics_handler handles the metrics request.
-async fn metrics_handler() -> Result<impl Reply, Rejection> {
-    let encoder = TextEncoder::new();
+    // metrics_handler handles the metrics request.
+    async fn metrics_handler() -> Result<impl Reply, Rejection> {
+        let encoder = TextEncoder::new();
 
-    let mut buffer = Vec::new();
-    if let Err(e) = encoder.encode(&REGISTRY.gather(), &mut buffer) {
-        error!("could not encode custom metrics: {}", e);
-    };
-    let mut res = match String::from_utf8(buffer.clone()) {
-        Ok(v) => v,
-        Err(e) => {
-            error!("custom metrics could not be from_utf8'd: {}", e);
-            String::default()
-        }
-    };
-    buffer.clear();
+        let mut buffer = Vec::new();
+        if let Err(e) = encoder.encode(&REGISTRY.gather(), &mut buffer) {
+            error!("could not encode custom metrics: {}", e);
+        };
+        let mut res = match String::from_utf8(buffer.clone()) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("custom metrics could not be from_utf8'd: {}", e);
+                String::default()
+            }
+        };
+        buffer.clear();
 
-    let mut buffer = Vec::new();
-    if let Err(e) = encoder.encode(&gather(), &mut buffer) {
-        error!("could not encode prometheus metrics: {}", e);
-    };
-    let res_custom = match String::from_utf8(buffer.clone()) {
-        Ok(v) => v,
-        Err(e) => {
-            error!("prometheus metrics could not be from_utf8'd: {}", e);
-            String::default()
-        }
-    };
-    buffer.clear();
+        let mut buffer = Vec::new();
+        if let Err(e) = encoder.encode(&gather(), &mut buffer) {
+            error!("could not encode prometheus metrics: {}", e);
+        };
+        let res_custom = match String::from_utf8(buffer.clone()) {
+            Ok(v) => v,
+            Err(e) => {
+                error!("prometheus metrics could not be from_utf8'd: {}", e);
+                String::default()
+            }
+        };
+        buffer.clear();
 
-    res.push_str(&res_custom);
-    Ok(res)
+        res.push_str(&res_custom);
+        Ok(res)
+    }
 }

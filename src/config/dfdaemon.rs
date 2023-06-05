@@ -284,6 +284,14 @@ pub struct Health {
     pub enable: bool,
 }
 
+// Network is the network configuration for dfdaemon.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Network {
+    // enable_ipv6 indicates whether enable ipv6.
+    pub enable_ipv6: bool,
+}
+
 // Metrics is the metrics configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -311,14 +319,6 @@ impl Default for Tracing {
             addr: default_tracing_addr(),
         }
     }
-}
-
-// Network is the network configuration for dfdaemon.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Network {
-    // enable_ipv6 indicates whether enable ipv6.
-    pub enable_ipv6: bool,
 }
 
 // Config is the configuration for dfdaemon.
@@ -407,9 +407,9 @@ impl Default for Config {
             security: Security::default(),
             object_storage: ObjectStorage::default(),
             health: Health::default(),
+            network: Network::default(),
             metrics: Metrics::default(),
             tracing: Tracing::default(),
-            network: Network::default(),
         }
     }
 }
