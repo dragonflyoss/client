@@ -420,8 +420,11 @@ impl Config {
     pub fn load(path: &PathBuf) -> Result<Config> {
         if path.exists() {
             let content = fs::read_to_string(path)?;
-            let config: Config = serde_yaml::from_str(&content)?;
+            let mut config: Config = serde_yaml::from_str(&content)?;
             info!("load config from {}", path.display());
+
+            // Convert configuration.
+            config.convert();
             Ok(config)
         } else {
             info!(
@@ -433,11 +436,10 @@ impl Config {
     }
 
     // convert converts the configuration.
-    pub fn convert(&mut self) -> Result<Config> {
+    fn convert(&mut self) {
+        // Convert IP address.
         if self.network.enable_ipv6 {
             self.host.ip = local_ipv6().unwrap()
         }
-
-        Ok(self.clone())
     }
 }
