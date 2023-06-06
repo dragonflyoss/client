@@ -276,14 +276,6 @@ pub struct ObjectStorage {
     pub enable: bool,
 }
 
-// Health is the health configuration for dfdaemon.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Health {
-    // enable indicates whether enable health check server.
-    pub enable: bool,
-}
-
 // Network is the network configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -373,9 +365,6 @@ pub struct Config {
     // object_storage is the object storage configuration for dfdaemon.
     pub object_storage: ObjectStorage,
 
-    // health is the health configuration for dfdaemon.
-    pub health: Health,
-
     // metrics is the metrics configuration for dfdaemon.
     pub metrics: Metrics,
 
@@ -406,7 +395,6 @@ impl Default for Config {
             proxy: Proxy::default(),
             security: Security::default(),
             object_storage: ObjectStorage::default(),
-            health: Health::default(),
             network: Network::default(),
             metrics: Metrics::default(),
             tracing: Tracing::default(),
