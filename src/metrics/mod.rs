@@ -17,8 +17,10 @@
 use crate::config::{NAME, SERVICE_NAME};
 use lazy_static::lazy_static;
 use prometheus::{gather, Encoder, IntCounterVec, IntGaugeVec, Opts, Registry, TextEncoder};
+use std::future::Future;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use tracing::error;
+use tracing::info;
 use warp::{Filter, Rejection, Reply};
 
 lazy_static! {
@@ -62,12 +64,21 @@ impl Metrics {
         }
     }
 
-    // serve starts the metrics server.
-    pub async fn serve(&self) {
+    // run starts the metrics server.
+    pub async fn run(&self, shutdown: impl Future) {
         self.register_custom_metrics();
 
         let metrics_route = warp::path!("metrics").and_then(Self::metrics_handler);
-        warp::serve(metrics_route).run(self.addr).await;
+        tokio::select! {
+            _ = warp::serve(metrics_route).run(self.addr) => {
+                // Metrics server ended.
+                info!("metrics server ended");
+            }
+            _ = shutdown => {
+                // Metrics server shutting down with signals.
+                info!("metrics server shutting down");
+            }
+        }
     }
 
     // register_custom_metrics registers all custom metrics.

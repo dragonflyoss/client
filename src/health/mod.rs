@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+use std::future::Future;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use tracing::info;
 use warp::{Filter, Rejection, Reply};
 
 // Health is the health server.
@@ -39,13 +41,23 @@ impl Health {
         }
     }
 
-    // serve starts the metrics server.
-    pub async fn serve(&self) {
+    // run starts the metrics server.
+    pub async fn run(&self, shutdown: impl Future) {
         let health_route = warp::path!("healthy")
             .and(warp::get())
             .and(warp::path::end())
             .and_then(Self::health_handler);
-        warp::serve(health_route).run(self.addr).await;
+
+        tokio::select! {
+            _ = warp::serve(health_route).run(self.addr) => {
+                // Health server ended.
+                info!("health server ended");
+            }
+            _ = shutdown => {
+                // Health server shutting down with signals.
+                info!("health server shutting down");
+            }
+        }
     }
 
     // health_handler handles the health check request.
