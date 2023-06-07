@@ -23,7 +23,8 @@ use client::metrics::Metrics;
 use client::tracing::init_tracing;
 use std::error::Error;
 use std::path::PathBuf;
-use tracing::Level;
+use tokio::signal::unix::{signal, SignalKind};
+use tracing::{info, Level};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -61,7 +62,7 @@ struct Args {
 }
 
 #[tokio::main]
-pub async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), Box<dyn Error>> {
     // Parse command line arguments.
     let args = Args::parse();
 
@@ -73,11 +74,34 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
     // Start metrics server.
     let metrics = Metrics::new(config.network.enable_ipv6);
-    tokio::spawn(async move { metrics.serve().await });
+    let metrics_handle = tokio::spawn(async move { metrics.run(shutdown_signal()).await });
 
     // Start health server.
     let health = Health::new(config.network.enable_ipv6);
-    health.serve().await;
+    let health_handle = tokio::spawn(async move { health.run(shutdown_signal()).await });
+
+    // Wait for servers to exit.
+    tokio::try_join!(metrics_handle, health_handle)?;
 
     Ok(())
+}
+
+// shutdown_signal returns a future that will resolve when a SIGINT, SIGTERM or SIGQUIT signal is
+// received by the process.
+async fn shutdown_signal() {
+    let mut sigint = signal(SignalKind::interrupt()).unwrap();
+    let mut sigterm = signal(SignalKind::terminate()).unwrap();
+    let mut sigquit = signal(SignalKind::quit()).unwrap();
+
+    tokio::select! {
+        _ = sigint.recv() => {
+            info!("received SIGINT, shutting down");
+        },
+        _ = sigterm.recv() => {
+            info!("received SIGTERM, shutting down");
+        }
+        _ = sigquit.recv() => {
+            info!("received SIGQUIT, shutting down");
+        }
+    }
 }
