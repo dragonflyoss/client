@@ -20,6 +20,9 @@ use tokio::sync::mpsc;
 use tracing::info;
 use warp::{Filter, Rejection, Reply};
 
+// DEFAULT_PORT is the default port of the health server.
+const DEFAULT_PORT: u16 = 40901;
+
 // Health is the health server.
 #[derive(Debug)]
 pub struct Health {
@@ -43,9 +46,9 @@ impl Health {
     ) -> Self {
         // Initialize the address of the server.
         let addr = if enable_ipv6 {
-            SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 40901)
+            SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), DEFAULT_PORT)
         } else {
-            SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 40901)
+            SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), DEFAULT_PORT)
         };
 
         Self {
@@ -57,7 +60,7 @@ impl Health {
 
     // run starts the metrics server.
     pub async fn run(&mut self) {
-        let health_route = warp::path!("healthy")
+        let health_route = warp::path!("/healthy")
             .and(warp::get())
             .and(warp::path::end())
             .and_then(Self::health_handler);

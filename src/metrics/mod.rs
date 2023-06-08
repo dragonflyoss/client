@@ -24,6 +24,9 @@ use tracing::error;
 use tracing::info;
 use warp::{Filter, Rejection, Reply};
 
+// DEFAULT_PORT is the default port of the metrics server.
+const DEFAULT_PORT: u16 = 8000;
+
 lazy_static! {
     // REGISTRY is used to register all metrics.
     pub static ref REGISTRY: Registry = Registry::new();
@@ -66,9 +69,9 @@ impl Metrics {
     ) -> Self {
         // Initialize the address of the server.
         let addr = if enable_ipv6 {
-            SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 8000)
+            SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), DEFAULT_PORT)
         } else {
-            SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 8000)
+            SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), DEFAULT_PORT)
         };
 
         Self {
