@@ -15,10 +15,11 @@
  */
 
 use crate::config::{NAME, SERVICE_NAME};
+use crate::shutdown::Shutdown;
 use lazy_static::lazy_static;
 use prometheus::{gather, Encoder, IntCounterVec, IntGaugeVec, Opts, Registry, TextEncoder};
-use std::future::Future;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use tokio::sync::mpsc;
 use tracing::error;
 use tracing::info;
 use warp::{Filter, Rejection, Reply};
@@ -43,38 +44,53 @@ lazy_static! {
 }
 
 // Metrics is the metrics server.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Metrics {
     // addr is the address of the metrics server.
     addr: SocketAddr,
+
+    // shutdown is used to shutdown the metrics server.
+    shutdown: Shutdown,
+
+    // _shutdown_complete is used to notify the metrics server is shutdown.
+    _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
 // Metrics implements the metrics server.
 impl Metrics {
     // new creates a new Metrics.
-    pub fn new(enable_ipv6: bool) -> Self {
-        if enable_ipv6 {
-            return Self {
-                addr: SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 8000),
-            };
-        }
+    pub fn new(
+        enable_ipv6: bool,
+        shutdown: Shutdown,
+        shutdown_complete_tx: mpsc::UnboundedSender<()>,
+    ) -> Self {
+        // Initialize the address of the server.
+        let addr = if enable_ipv6 {
+            SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 8000)
+        } else {
+            SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 8000)
+        };
 
         Self {
-            addr: SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 8000),
+            addr,
+            shutdown,
+            _shutdown_complete: shutdown_complete_tx,
         }
     }
 
     // run starts the metrics server.
-    pub async fn run(&self, shutdown: impl Future) {
+    pub async fn run(&mut self) {
         self.register_custom_metrics();
 
         let metrics_route = warp::path!("metrics").and_then(Self::metrics_handler);
+
+        // Start the metrics server and wait for it to finish.
         tokio::select! {
             _ = warp::serve(metrics_route).run(self.addr) => {
                 // Metrics server ended.
                 info!("metrics server ended");
             }
-            _ = shutdown => {
+            _ = self.shutdown.recv() => {
                 // Metrics server shutting down with signals.
                 info!("metrics server shutting down");
             }
@@ -96,6 +112,7 @@ impl Metrics {
     async fn metrics_handler() -> Result<impl Reply, Rejection> {
         let encoder = TextEncoder::new();
 
+        // Encode custom metrics.
         let mut buffer = Vec::new();
         if let Err(e) = encoder.encode(&REGISTRY.gather(), &mut buffer) {
             error!("could not encode custom metrics: {}", e);
@@ -109,6 +126,7 @@ impl Metrics {
         };
         buffer.clear();
 
+        // Encode prometheus metrics.
         let mut buffer = Vec::new();
         if let Err(e) = encoder.encode(&gather(), &mut buffer) {
             error!("could not encode prometheus metrics: {}", e);

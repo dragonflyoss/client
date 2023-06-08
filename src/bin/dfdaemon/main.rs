@@ -20,10 +20,11 @@ use client::config::dfdaemon::{
 };
 use client::health::Health;
 use client::metrics::Metrics;
+use client::shutdown::{shutdown_signal, Shutdown};
 use client::tracing::init_tracing;
 use std::error::Error;
 use std::path::PathBuf;
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::{broadcast, mpsc};
 use tracing::{info, Level};
 
 #[derive(Debug, Parser)]
@@ -67,41 +68,48 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
     // Initialize tracing.
-    let _guards = init_tracing(NAME, &args.log_dir, args.log_level, None);
+    let _ = init_tracing(NAME, &args.log_dir, args.log_level, None);
 
     // Load config.
     let config = Config::load(&args.config)?;
 
-    // Start metrics server.
-    let metrics = Metrics::new(config.network.enable_ipv6);
-    let metrics_handle = tokio::spawn(async move { metrics.run(shutdown_signal()).await });
+    // Initialize channel for graceful shutdown.
+    let (notify_shutdown, _) = broadcast::channel(1);
+    let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::unbounded_channel();
 
-    // Start health server.
-    let health = Health::new(config.network.enable_ipv6);
-    let health_handle = tokio::spawn(async move { health.run(shutdown_signal()).await });
+    // Initialize metrics server.
+    let mut metrics = Metrics::new(
+        config.network.enable_ipv6,
+        Shutdown::new(notify_shutdown.subscribe()),
+        shutdown_complete_tx.clone(),
+    );
 
-    // Wait for servers to exit.
-    tokio::try_join!(metrics_handle, health_handle)?;
+    // Initialize health server.
+    let mut health = Health::new(
+        config.network.enable_ipv6,
+        Shutdown::new(notify_shutdown.subscribe()),
+        shutdown_complete_tx.clone(),
+    );
+
+    // Wait for servers to exit or shutdown signal.
+    tokio::select! {
+        _ = tokio::spawn(async move { metrics.run().await }) => {
+            info!("metrics server exited");
+        },
+        _ = tokio::spawn(async move { health.run().await }) => {
+            info!("health server exited");
+        },
+        _ = shutdown_signal() => {},
+    }
+
+    // Drop notify_shutdown to notify the other server to exit.
+    drop(notify_shutdown);
+
+    // Drop shutdown_complete_rx to wait for the other server to exit.
+    drop(shutdown_complete_tx);
+
+    // Wait for the other server to exit.
+    let _ = shutdown_complete_rx.recv().await;
 
     Ok(())
-}
-
-// shutdown_signal returns a future that will resolve when a SIGINT, SIGTERM or SIGQUIT signal is
-// received by the process.
-async fn shutdown_signal() {
-    let mut sigint = signal(SignalKind::interrupt()).unwrap();
-    let mut sigterm = signal(SignalKind::terminate()).unwrap();
-    let mut sigquit = signal(SignalKind::quit()).unwrap();
-
-    tokio::select! {
-        _ = sigint.recv() => {
-            info!("received SIGINT, shutting down");
-        },
-        _ = sigterm.recv() => {
-            info!("received SIGTERM, shutting down");
-        }
-        _ = sigquit.recv() => {
-            info!("received SIGQUIT, shutting down");
-        }
-    }
 }
