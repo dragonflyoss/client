@@ -21,6 +21,7 @@ use client::config::dfdaemon::{
 use client::health::Health;
 use client::metrics::Metrics;
 use client::shutdown::{shutdown_signal, Shutdown};
+use client::storage::metadata::Metadata;
 use client::tracing::init_tracing;
 use std::error::Error;
 use std::path::PathBuf;
@@ -72,6 +73,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Load config.
     let config = Config::load(&args.config)?;
+
+    // Initialize metadata.
+    let _ = Metadata::new(config.data_dir)?;
 
     // Initialize channel for graceful shutdown.
     let (notify_shutdown, _) = broadcast::channel(1);

@@ -99,9 +99,11 @@ pub fn default_seed_peer_keepalive_interval() -> Duration {
 // Error is the error for Config.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    // IO is the error for IO operation.
     #[error(transparent)]
     IO(#[from] std::io::Error),
 
+    // YAML is the error for serde_yaml.
     #[error(transparent)]
     YAML(#[from] serde_yaml::Error),
 }
@@ -379,7 +381,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            data_dir: default_dfdaemon_metadata_dir(),
+            data_dir: default_data_dir(),
             plugin_dir: default_dfdaemon_plugin_dir(),
             cache_dir: default_dfdaemon_cache_dir(),
             root_dir: default_root_dir(),

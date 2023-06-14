@@ -32,7 +32,7 @@ pub struct Shutdown {
 impl Shutdown {
     // new creates a new Shutdown.
     pub fn new(notify: broadcast::Receiver<()>) -> Shutdown {
-        Shutdown {
+        Self {
             is_shutdown: false,
             notify,
         }
