@@ -60,7 +60,7 @@ impl Health {
 
     // run starts the metrics server.
     pub async fn run(&mut self) {
-        let health_route = warp::path!("/healthy")
+        let health_route = warp::path!("healthy")
             .and(warp::get())
             .and(warp::path::end())
             .and_then(Self::health_handler);

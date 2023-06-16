@@ -85,7 +85,10 @@ impl Metrics {
     pub async fn run(&mut self) {
         self.register_custom_metrics();
 
-        let metrics_route = warp::path!("metrics").and_then(Self::metrics_handler);
+        let metrics_route = warp::path!("metrics")
+            .and(warp::get())
+            .and(warp::path::end())
+            .and_then(Self::metrics_handler);
 
         // Start the metrics server and wait for it to finish.
         tokio::select! {
