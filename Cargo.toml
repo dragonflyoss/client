@@ -33,6 +33,7 @@ tracing-opentelemetry = "0.18.0"
 humantime = "2.1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
+serde_json = "1.0"
 validator = { version = "0.16", features = ["derive"] }
 thiserror = "1.0"
 opentelemetry = { version = "0.18.0", default-features = false, features = ["trace", "rt-tokio"] }
@@ -43,3 +44,6 @@ warp = "0.3.5"
 tokio = { version = "1.28.1", features = ["full"] }
 hostname = "^0.3"
 local-ip-address = "0.5.3"
+rocksdb = "0.21.0"
+num_cpus = "1.0"
+chrono = { version = "0.4.26", features = ["serde"] }
