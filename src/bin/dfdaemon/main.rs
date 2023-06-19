@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
     // Initialize tracing.
-    let _ = init_tracing(NAME, &args.log_dir, args.log_level, None);
+    let _guards = init_tracing(NAME, &args.log_dir, args.log_level, None);
 
     // Load config.
     let config = Config::load(&args.config)?;
