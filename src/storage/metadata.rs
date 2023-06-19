@@ -15,7 +15,7 @@
  */
 
 use crate::config::NAME;
-use chrono::NaiveDateTime;
+use chrono::{NaiveDateTime, Utc};
 use rocksdb::{BlockBasedOptions, Cache, ColumnFamily, Options, DB};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -50,6 +50,9 @@ pub struct Task {
     // piece_length is the length of the piece.
     piece_length: u64,
 
+    // uploaded_count is the count of the task uploaded by other peers.
+    uploaded_count: u64,
+
     // updated_at is the time when the task metadata is updated. If the task is downloaded
     // by other peers, it will also update updated_at.
     updated_at: NaiveDateTime,
@@ -60,7 +63,7 @@ pub struct Task {
 
 // PieceState is the state of the piece.
 #[derive(Debug, Clone, Default, Copy, PartialEq, Eq, Serialize, Deserialize)]
-enum PieceState {
+pub enum PieceState {
     // Running is the state of the piece which is running,
     // piece is being downloaded from source or other peers.
     #[default]
@@ -92,6 +95,13 @@ pub struct Piece {
 
     // state is the state of the piece.
     state: PieceState,
+
+    // uploaded_count is the count of the piece uploaded by other peers.
+    uploaded_count: u64,
+
+    // updated_at is the time when the piece metadata is updated. If the piece is downloaded
+    // by other peers, it will also update updated_at.
+    updated_at: NaiveDateTime,
 
     // created_at is the time when the piece metadata is created.
     created_at: NaiveDateTime,
@@ -152,16 +162,32 @@ impl Metadata {
         Ok(Metadata { db })
     }
 
-    // put_task puts the task metadata.
-    pub fn put_task(self, id: &str, task: &Task) -> Result<()> {
-        let handle = self.cf_handle(TASK_CF_NAME)?;
-        let json = serde_json::to_string(&task)?;
-        self.db.put_cf(handle, id.as_bytes(), json.as_bytes())?;
+    // download_task downloads the task for the peer.
+    pub fn download_task(self, id: &str, piece_length: u64) -> Result<()> {
+        self.put_task(
+            id,
+            &Task {
+                id: id.to_string(),
+                piece_length,
+                updated_at: Utc::now().naive_utc(),
+                created_at: Utc::now().naive_utc(),
+                ..Default::default()
+            },
+        )?;
+        Ok(())
+    }
+
+    // upload_task uploads the task for the other peer.
+    pub fn upload_task(&self, id: &str) -> Result<()> {
+        let mut task = self.get_task(id)?;
+        task.uploaded_count += 1;
+        task.updated_at = Utc::now().naive_utc();
+        self.put_task(id, &task)?;
         Ok(())
     }
 
     // get_task gets the task metadata.
-    pub fn get_task(self, id: &str) -> Result<Task> {
+    pub fn get_task(&self, id: &str) -> Result<Task> {
         let handle = self.cf_handle(TASK_CF_NAME)?;
         match self.db.get_cf(handle, id)? {
             Some(bytes) => Ok(serde_json::from_slice(&bytes)?),
@@ -176,20 +202,87 @@ impl Metadata {
         Ok(())
     }
 
-    // put_piece puts the piece metadata.
-    pub fn put_piece(self, task_id: &str, piece: &Piece) -> Result<()> {
-        let handle = self.cf_handle(PIECE_CF_NAME)?;
-        let json = serde_json::to_string(&piece)?;
-        self.db.put_cf(
-            handle,
-            self.piece_id(task_id, piece.number).as_bytes(),
-            json.as_bytes(),
+    // download_piece sets the piece state to running.
+    pub fn download_piece(&self, task_id: &str, number: u32) -> Result<()> {
+        self.put_piece(
+            task_id,
+            &Piece {
+                number,
+                state: PieceState::Running,
+                updated_at: Utc::now().naive_utc(),
+                created_at: Utc::now().naive_utc(),
+                ..Default::default()
+            },
         )?;
         Ok(())
     }
 
+    // download_piece_succeeded sets the piece state to succeeded.
+    pub fn download_piece_succeeded(
+        self,
+        task_id: &str,
+        number: u32,
+        offset: u64,
+        length: u64,
+        digest: &str,
+    ) -> Result<()> {
+        let mut piece = self.get_piece(task_id, number)?;
+        if piece.state != PieceState::Running {
+            return Err(Error::Other(format!(
+                "piece {} state is not running",
+                number
+            )));
+        }
+
+        piece.offset = offset;
+        piece.length = length;
+        piece.digest = digest.to_string();
+        piece.state = PieceState::Succeeded;
+        piece.updated_at = Utc::now().naive_utc();
+        self.put_piece(task_id, &piece)?;
+        Ok(())
+    }
+
+    // download_piece_failed sets the piece state to failed.
+    pub fn download_piece_failed(self, task_id: &str, number: u32) -> Result<()> {
+        let mut piece = self.get_piece(task_id, number)?;
+        if piece.state != PieceState::Running {
+            return Err(Error::Other(format!(
+                "piece {} state is not running",
+                number
+            )));
+        }
+
+        piece.state = PieceState::Failed;
+        piece.updated_at = Utc::now().naive_utc();
+        self.put_piece(task_id, &piece)?;
+        Ok(())
+    }
+
+    // upload_piece uploads the piece for the other peer.
+    pub fn upload_piece(&self, task_id: &str, number: u32) -> Result<()> {
+        let mut piece = self.get_piece(task_id, number)?;
+        if piece.state != PieceState::Succeeded {
+            return Err(Error::Other(format!(
+                "piece {} state is not succeeded",
+                number
+            )));
+        }
+
+        piece.uploaded_count += 1;
+        piece.updated_at = Utc::now().naive_utc();
+        self.put_piece(task_id, &piece)?;
+        Ok(())
+    }
+
+    // get_piece_state gets the piece state.
+    pub fn get_piece_state(self, task_id: &str, number: u32) -> Result<PieceState> {
+        let piece = self.get_piece(task_id, number)?;
+        Ok(piece.state)
+    }
+
     // get_piece gets the piece metadata.
-    pub fn get_piece(self, task_id: &str, number: u32) -> Result<Piece> {
+    pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Piece> {
         let handle = self.cf_handle(PIECE_CF_NAME)?;
         match self
             .db
@@ -208,6 +301,26 @@ impl Metadata {
         let handle = self.cf_handle(PIECE_CF_NAME)?;
         self.db
             .delete_cf(handle, self.piece_id(task_id, number).as_bytes())?;
+        Ok(())
+    }
+
+    // put_task puts the task metadata.
+    fn put_task(&self, id: &str, task: &Task) -> Result<()> {
+        let handle = self.cf_handle(TASK_CF_NAME)?;
+        let json = serde_json::to_string(&task)?;
+        self.db.put_cf(handle, id.as_bytes(), json.as_bytes())?;
+        Ok(())
+    }
+
+    // put_piece puts the piece metadata.
+    fn put_piece(&self, task_id: &str, piece: &Piece) -> Result<()> {
+        let handle = self.cf_handle(PIECE_CF_NAME)?;
+        let json = serde_json::to_string(&piece)?;
+        self.db.put_cf(
+            handle,
+            self.piece_id(task_id, piece.number).as_bytes(),
+            json.as_bytes(),
+        )?;
         Ok(())
     }
 
