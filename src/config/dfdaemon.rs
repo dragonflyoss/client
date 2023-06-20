@@ -40,16 +40,6 @@ pub fn default_dfdaemon_log_dir() -> PathBuf {
     default_log_dir().join(NAME)
 }
 
-// default_dfdaemon_content_dir is the default content directory for dfdaemon.
-pub fn default_dfdaemon_content_dir() -> PathBuf {
-    default_data_dir().join(NAME).join("content")
-}
-
-// default_dfdaemon_metadata_dir is the default metadata directory for dfdaemon.
-pub fn default_dfdaemon_metadata_dir() -> PathBuf {
-    default_data_dir().join(NAME).join("metadata")
-}
-
 // default_dfdaemon_plugin_dir is the default plugin directory for dfdaemon.
 pub fn default_dfdaemon_plugin_dir() -> PathBuf {
     default_plugin_dir().join(NAME)
