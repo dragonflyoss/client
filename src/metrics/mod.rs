@@ -20,8 +20,7 @@ use lazy_static::lazy_static;
 use prometheus::{gather, Encoder, IntCounterVec, IntGaugeVec, Opts, Registry, TextEncoder};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use tokio::sync::mpsc;
-use tracing::error;
-use tracing::info;
+use tracing::{error, info};
 use warp::{Filter, Rejection, Reply};
 
 // DEFAULT_PORT is the default port of the metrics server.
