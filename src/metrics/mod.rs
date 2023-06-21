@@ -118,32 +118,34 @@ impl Metrics {
         let encoder = TextEncoder::new();
 
         // Encode custom metrics.
-        let mut buffer = Vec::new();
-        if let Err(e) = encoder.encode(&REGISTRY.gather(), &mut buffer) {
+        let mut buf = Vec::new();
+        if let Err(e) = encoder.encode(&REGISTRY.gather(), &mut buf) {
             error!("could not encode custom metrics: {}", e);
         };
-        let mut res = match String::from_utf8(buffer.clone()) {
+
+        let mut res = match String::from_utf8(buf.clone()) {
             Ok(v) => v,
             Err(e) => {
                 error!("custom metrics could not be from_utf8'd: {}", e);
                 String::default()
             }
         };
-        buffer.clear();
+        buf.clear();
 
         // Encode prometheus metrics.
-        let mut buffer = Vec::new();
-        if let Err(e) = encoder.encode(&gather(), &mut buffer) {
+        let mut buf = Vec::new();
+        if let Err(e) = encoder.encode(&gather(), &mut buf) {
             error!("could not encode prometheus metrics: {}", e);
         };
-        let res_custom = match String::from_utf8(buffer.clone()) {
+
+        let res_custom = match String::from_utf8(buf.clone()) {
             Ok(v) => v,
             Err(e) => {
                 error!("prometheus metrics could not be from_utf8'd: {}", e);
                 String::default()
             }
         };
-        buffer.clear();
+        buf.clear();
 
         res.push_str(&res_custom);
         Ok(res)

@@ -292,11 +292,10 @@ impl Metadata {
 
     // get_piece_state gets the piece state.
     pub fn get_piece_state(&self, id: &str) -> Result<Option<PieceState>> {
-        if let Some(piece) = self.get_piece(id)? {
-            return Ok(Some(piece.state));
+        match self.get_piece(id)? {
+            Some(piece) => Ok(Some(piece.state)),
+            None => Ok(None),
         }
-
-        Ok(None)
     }
 
     // piece_id returns the piece id.
