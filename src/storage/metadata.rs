@@ -19,6 +19,7 @@ use crate::storage::{Error, Result};
 use chrono::{NaiveDateTime, Utc};
 use rocksdb::{BlockBasedOptions, Cache, ColumnFamily, Options, DB};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::Path;
 use tracing::info;
 
@@ -78,6 +79,17 @@ pub enum PieceState {
     // it means that peer back-to-source downloads failed, and when the enableBackToSource is false
     // in dfdaemon configuration, it means that piece downloads from other peers failed.
     Failed,
+}
+
+// PieceState implements the fmt::Display interface.
+impl fmt::Display for PieceState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Running => write!(f, "Running"),
+            Self::Succeeded => write!(f, "Succeeded"),
+            Self::Failed => write!(f, "Failed"),
+        }
+    }
 }
 
 // Piece is the metadata of the piece.
@@ -146,14 +158,14 @@ impl Metadata {
 
     // download_task_started updates the metadata of the task when the task downloads started.
     pub fn download_task_started(&self, id: &str, piece_length: u64) -> Result<Task> {
-        let task = match self.get_task(id) {
+        let task = match self.get_task(id)? {
             // If the task exists, update the updated_at.
-            Ok(mut task) => {
+            Some(mut task) => {
                 task.updated_at = Utc::now().naive_utc();
                 task
             }
             // If the task does not exist, create a new task.
-            _ => Task {
+            None => Task {
                 id: id.to_string(),
                 piece_length,
                 updated_at: Utc::now().naive_utc(),
@@ -168,19 +180,23 @@ impl Metadata {
 
     // upload_task_finished updates the metadata of the task when task uploads finished.
     pub fn upload_task_finished(&self, id: &str) -> Result<Task> {
-        let mut task = self.get_task(id)?;
-        task.uploaded_count += 1;
-        task.updated_at = Utc::now().naive_utc();
-        self.put_task(id, &task)?;
-        Ok(task)
+        match self.get_task(id)? {
+            Some(mut task) => {
+                task.uploaded_count += 1;
+                task.updated_at = Utc::now().naive_utc();
+                self.put_task(id, &task)?;
+                Ok(task)
+            }
+            None => Err(Error::TaskNotFound(id.to_string())),
+        }
     }
 
     // get_task gets the task metadata.
-    pub fn get_task(&self, id: &str) -> Result<Task> {
+    pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         let handle = self.cf_handle(TASK_CF_NAME)?;
         match self.db.get_cf(handle, id)? {
-            Some(bytes) => Ok(serde_json::from_slice(&bytes)?),
-            None => Err(Error::Other(format!("task {} not found", id))),
+            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+            None => Ok(None),
         }
     }
 
@@ -207,59 +223,80 @@ impl Metadata {
         length: u64,
         digest: &str,
     ) -> Result<()> {
-        let mut piece = self.get_piece(id)?;
-        if piece.state != PieceState::Running {
-            return Err(Error::Other(format!("piece {} state is not running", id)));
-        }
+        match self.get_piece(id)? {
+            Some(mut piece) => {
+                if piece.state != PieceState::Running {
+                    return Err(Error::InvalidStateTransition(
+                        piece.state.to_string(),
+                        PieceState::Succeeded.to_string(),
+                    ));
+                }
 
-        piece.offset = offset;
-        piece.length = length;
-        piece.digest = digest.to_string();
-        piece.state = PieceState::Succeeded;
-        piece.updated_at = Utc::now().naive_utc();
-        self.put_piece(id, &piece)?;
-        Ok(())
+                piece.offset = offset;
+                piece.length = length;
+                piece.digest = digest.to_string();
+                piece.state = PieceState::Succeeded;
+                piece.updated_at = Utc::now().naive_utc();
+                self.put_piece(id, &piece)?;
+                Ok(())
+            }
+            None => Err(Error::PieceNotFound(id.to_string())),
+        }
     }
 
     // download_piece_failed updates the metadata of the piece when the piece downloads failed.
     pub fn download_piece_failed(&self, id: &str) -> Result<()> {
-        let mut piece = self.get_piece(id)?;
-        if piece.state != PieceState::Running {
-            return Err(Error::Other(format!("piece {} state is not running", id)));
-        }
+        match self.get_piece(id)? {
+            Some(mut piece) => {
+                if piece.state != PieceState::Running {
+                    return Err(Error::InvalidStateTransition(
+                        piece.state.to_string(),
+                        PieceState::Failed.to_string(),
+                    ));
+                }
 
-        piece.state = PieceState::Failed;
-        piece.updated_at = Utc::now().naive_utc();
-        self.put_piece(id, &piece)?;
-        Ok(())
+                piece.state = PieceState::Failed;
+                piece.updated_at = Utc::now().naive_utc();
+                self.put_piece(id, &piece)?;
+                Ok(())
+            }
+            None => Err(Error::PieceNotFound(id.to_string())),
+        }
     }
 
     // upload_piece_finished updates the metadata of the piece when piece uploads finished.
     pub fn upload_piece_finished(&self, id: &str) -> Result<()> {
-        let mut piece = self.get_piece(id)?;
-        if piece.state != PieceState::Succeeded {
-            return Err(Error::Other(format!("piece {} state is not succeeded", id)));
-        }
+        match self.get_piece(id)? {
+            Some(mut piece) => {
+                if piece.state != PieceState::Succeeded {
+                    return Err(Error::InvalidState(piece.state.to_string()));
+                }
 
-        piece.uploaded_count += 1;
-        piece.updated_at = Utc::now().naive_utc();
-        self.put_piece(id, &piece)?;
-        Ok(())
+                piece.uploaded_count += 1;
+                piece.updated_at = Utc::now().naive_utc();
+                self.put_piece(id, &piece)?;
+                Ok(())
+            }
+            None => Err(Error::PieceNotFound(id.to_string())),
+        }
     }
 
     // get_piece gets the piece metadata.
-    pub fn get_piece(&self, id: &str) -> Result<Piece> {
+    pub fn get_piece(&self, id: &str) -> Result<Option<Piece>> {
         let handle = self.cf_handle(PIECE_CF_NAME)?;
         match self.db.get_cf(handle, id.as_bytes())? {
-            Some(bytes) => Ok(serde_json::from_slice(&bytes)?),
-            None => Err(Error::Other(format!("piece {} not found", id))),
+            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+            None => Ok(None),
         }
     }
 
     // get_piece_state gets the piece state.
-    pub fn get_piece_state(&self, id: &str) -> Result<PieceState> {
-        let piece = self.get_piece(id)?;
-        Ok(piece.state)
+    pub fn get_piece_state(&self, id: &str) -> Result<Option<PieceState>> {
+        if let Some(piece) = self.get_piece(id)? {
+            return Ok(Some(piece.state));
+        }
+
+        Ok(None)
     }
 
     // piece_id returns the piece id.
@@ -287,6 +324,6 @@ impl Metadata {
     fn cf_handle(&self, cf_name: &str) -> Result<&ColumnFamily> {
         self.db
             .cf_handle(cf_name)
-            .ok_or_else(|| Error::Other(format!("column family {} not found", cf_name)))
+            .ok_or_else(|| Error::ColumnFamilyNotFound(cf_name.to_string()))
     }
 }

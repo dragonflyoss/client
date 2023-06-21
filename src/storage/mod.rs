@@ -34,9 +34,25 @@ pub enum Error {
     #[error(transparent)]
     IO(#[from] std::io::Error),
 
-    // Other is the other error.
-    #[error("{0}")]
-    Other(String),
+    // TaskNotFound is the error when the task is not found.
+    #[error{"task {0} not found"}]
+    TaskNotFound(String),
+
+    // PieceNotFound is the error when the piece is not found.
+    #[error{"piece {0} not found"}]
+    PieceNotFound(String),
+
+    // ColumnFamilyNotFound is the error when the column family is not found.
+    #[error{"column family {0} not found"}]
+    ColumnFamilyNotFound(String),
+
+    // InvalidStateTransition is the error when the state transition is invalid.
+    #[error{"can not transit from {0} to {1}"}]
+    InvalidStateTransition(String, String),
+
+    // InvalidState is the error when the state is invalid.
+    #[error{"invalid state {0}"}]
+    InvalidState(String),
 }
 
 // Result is the result for Storage.
@@ -71,7 +87,7 @@ impl Storage {
     }
 
     // get_task returns the task metadata.
-    pub fn get_task(&self, id: &str) -> Result<metadata::Task> {
+    pub fn get_task(&self, id: &str) -> Result<Option<metadata::Task>> {
         self.metadata.get_task(id)
     }
 
@@ -112,23 +128,31 @@ impl Storage {
     // upload_piece updates the metadata of the piece when the piece uploads finished and
     // returns the data of the piece.
     pub fn upload_piece(&self, task_id: &str, number: u32) -> Result<Vec<u8>> {
-        let piece_id = self.metadata.piece_id(task_id, number);
-        let piece = self.metadata.get_piece(&piece_id)?;
-        let data = self
-            .content
-            .read_piece(task_id, piece.offset, piece.length)?;
-        self.metadata.upload_piece_finished(&piece_id)?;
-        Ok(data)
+        let id = self.metadata.piece_id(task_id, number);
+        match self.metadata.get_piece(&id)? {
+            Some(piece) => {
+                let data = self
+                    .content
+                    .read_piece(task_id, piece.offset, piece.length)?;
+                self.metadata.upload_piece_finished(&id)?;
+                Ok(data)
+            }
+            None => Err(Error::PieceNotFound(id)),
+        }
     }
 
     // get_piece returns the piece metadata.
-    pub fn get_piece(&self, task_id: &str, number: u32) -> Result<metadata::Piece> {
+    pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<metadata::Piece>> {
         self.metadata
             .get_piece(self.metadata.piece_id(task_id, number).as_str())
     }
 
     // get_piece_state returns the piece state.
-    pub fn get_piece_state(&self, task_id: &str, number: u32) -> Result<metadata::PieceState> {
+    pub fn get_piece_state(
+        &self,
+        task_id: &str,
+        number: u32,
+    ) -> Result<Option<metadata::PieceState>> {
         self.metadata
             .get_piece_state(self.metadata.piece_id(task_id, number).as_str())
     }
