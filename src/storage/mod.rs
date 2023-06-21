@@ -91,13 +91,8 @@ impl Storage {
         self.metadata.get_task(id)
     }
 
-    // TODO implement feature.
-    // reuse_piece reuses the piece.
-    // pub async fn reuse_piece(&self, task_id: &str, number: u32) -> Result<Option<Vec<u8>>> {
-    // Ok(None)
-    // }
-
-    // download_piece_started updates the metadata of the piece and writes the data of piece to file when the piece downloads started.
+    // download_piece_started updates the metadata of the piece and writes
+    // the data of piece to file when the piece downloads started.
     pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<()> {
         self.metadata.download_piece_started(task_id, number)?;
         Ok(())
