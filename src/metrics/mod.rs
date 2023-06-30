@@ -119,14 +119,14 @@ impl Metrics {
 
         // Encode custom metrics.
         let mut buf = Vec::new();
-        if let Err(e) = encoder.encode(&REGISTRY.gather(), &mut buf) {
-            error!("could not encode custom metrics: {}", e);
+        if let Err(err) = encoder.encode(&REGISTRY.gather(), &mut buf) {
+            error!("could not encode custom metrics: {}", err);
         };
 
         let mut res = match String::from_utf8(buf.clone()) {
             Ok(v) => v,
-            Err(e) => {
-                error!("custom metrics could not be from_utf8'd: {}", e);
+            Err(err) => {
+                error!("custom metrics could not be from_utf8'd: {}", err);
                 String::default()
             }
         };
@@ -134,14 +134,14 @@ impl Metrics {
 
         // Encode prometheus metrics.
         let mut buf = Vec::new();
-        if let Err(e) = encoder.encode(&gather(), &mut buf) {
-            error!("could not encode prometheus metrics: {}", e);
+        if let Err(err) = encoder.encode(&gather(), &mut buf) {
+            error!("could not encode prometheus metrics: {}", err);
         };
 
         let res_custom = match String::from_utf8(buf.clone()) {
             Ok(v) => v,
-            Err(e) => {
-                error!("prometheus metrics could not be from_utf8'd: {}", e);
+            Err(err) => {
+                error!("prometheus metrics could not be from_utf8'd: {}", err);
                 String::default()
             }
         };

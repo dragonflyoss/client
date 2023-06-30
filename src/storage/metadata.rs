@@ -157,7 +157,7 @@ impl Metadata {
     }
 
     // download_task_started updates the metadata of the task when the task downloads started.
-    pub fn download_task_started(&self, id: &str, piece_length: u64) -> Result<Task> {
+    pub fn download_task_started(&self, id: &str, piece_length: u64) -> Result<()> {
         let task = match self.get_task(id)? {
             // If the task exists, update the updated_at.
             Some(mut task) => {
@@ -174,18 +174,16 @@ impl Metadata {
             },
         };
 
-        self.put_task(id, &task)?;
-        Ok(task)
+        self.put_task(id, &task)
     }
 
     // upload_task_finished updates the metadata of the task when task uploads finished.
-    pub fn upload_task_finished(&self, id: &str) -> Result<Task> {
+    pub fn upload_task_finished(&self, id: &str) -> Result<()> {
         match self.get_task(id)? {
             Some(mut task) => {
                 task.uploaded_count += 1;
                 task.updated_at = Utc::now().naive_utc();
-                self.put_task(id, &task)?;
-                Ok(task)
+                self.put_task(id, &task)
             }
             None => Err(Error::TaskNotFound(id.to_string())),
         }
@@ -211,8 +209,7 @@ impl Metadata {
                 created_at: Utc::now().naive_utc(),
                 ..Default::default()
             },
-        )?;
-        Ok(())
+        )
     }
 
     // download_piece_succeeded updates the metadata of the piece when the piece downloads succeeded.
@@ -237,8 +234,7 @@ impl Metadata {
                 piece.digest = digest.to_string();
                 piece.state = PieceState::Succeeded;
                 piece.updated_at = Utc::now().naive_utc();
-                self.put_piece(id, &piece)?;
-                Ok(())
+                self.put_piece(id, &piece)
             }
             None => Err(Error::PieceNotFound(id.to_string())),
         }
@@ -257,8 +253,7 @@ impl Metadata {
 
                 piece.state = PieceState::Failed;
                 piece.updated_at = Utc::now().naive_utc();
-                self.put_piece(id, &piece)?;
-                Ok(())
+                self.put_piece(id, &piece)
             }
             None => Err(Error::PieceNotFound(id.to_string())),
         }
@@ -274,8 +269,7 @@ impl Metadata {
 
                 piece.uploaded_count += 1;
                 piece.updated_at = Utc::now().naive_utc();
-                self.put_piece(id, &piece)?;
-                Ok(())
+                self.put_piece(id, &piece)
             }
             None => Err(Error::PieceNotFound(id.to_string())),
         }

@@ -15,9 +15,13 @@
  */
 
 use std::path::Path;
+use std::time::Duration;
 
 mod content;
 mod metadata;
+
+// DEFAULT_RETRY_INTERVAL is the default retry interval for waiting piece download finished.
+const DEFAULT_RETRY_INTERVAL: Duration = Duration::from_millis(10);
 
 // Error is the error for Storage.
 #[derive(Debug, thiserror::Error)]
@@ -41,6 +45,10 @@ pub enum Error {
     // PieceNotFound is the error when the piece is not found.
     #[error{"piece {0} not found"}]
     PieceNotFound(String),
+
+    // PieceStateIsFailed is the error when the piece state is failed.
+    #[error{"piece {0} state is failed"}]
+    PieceStateIsFailed(String),
 
     // ColumnFamilyNotFound is the error when the column family is not found.
     #[error{"column family {0} not found"}]
@@ -77,12 +85,12 @@ impl Storage {
     }
 
     // download_task_started updates the metadata of the task when the task downloads started.
-    pub fn download_task_started(&self, id: &str, piece_length: u64) -> Result<metadata::Task> {
+    pub fn download_task_started(&self, id: &str, piece_length: u64) -> Result<()> {
         self.metadata.download_task_started(id, piece_length)
     }
 
     // upload_task_finished updates the metadata of the task when task uploads finished.
-    pub fn upload_task_finished(&self, id: &str) -> Result<metadata::Task> {
+    pub fn upload_task_finished(&self, id: &str) -> Result<()> {
         self.metadata.upload_task_finished(id)
     }
 
@@ -94,8 +102,7 @@ impl Storage {
     // download_piece_started updates the metadata of the piece and writes
     // the data of piece to file when the piece downloads started.
     pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<()> {
-        self.metadata.download_piece_started(task_id, number)?;
-        Ok(())
+        self.metadata.download_piece_started(task_id, number)
     }
 
     // download_piece_succeeded updates the metadata of the piece when the piece downloads succeeded.
@@ -109,15 +116,13 @@ impl Storage {
     ) -> Result<()> {
         self.content.write_piece(task_id, offset, data)?;
         self.metadata
-            .download_piece_succeeded(task_id, offset, length, digest)?;
-        Ok(())
+            .download_piece_succeeded(task_id, offset, length, digest)
     }
 
     // download_piece_failed updates the metadata of the piece when the piece downloads failed.
     pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
         self.metadata
-            .download_piece_failed(self.metadata.piece_id(task_id, number).as_str())?;
-        Ok(())
+            .download_piece_failed(self.metadata.piece_id(task_id, number).as_str())
     }
 
     // upload_piece updates the metadata of the piece when the piece uploads finished and
@@ -133,6 +138,36 @@ impl Storage {
                 Ok(data)
             }
             None => Err(Error::PieceNotFound(id)),
+        }
+    }
+
+    // reuse_piece return the data of piece, if piece is running, waiting for piece download finished.
+    pub async fn reuse_piece(&self, task_id: &str, number: u32) -> Result<Vec<u8>> {
+        loop {
+            let id = self.metadata.piece_id(task_id, number);
+            match self
+                .metadata
+                .get_piece(self.metadata.piece_id(task_id, number).as_str())
+            {
+                Ok(Some(piece)) => match piece.state {
+                    // If the piece is succeeded, return the data of
+                    // the piece and update the metadata.
+                    metadata::PieceState::Succeeded => return self.upload_piece(task_id, number),
+
+                    // If the piece is failed, return the error.
+                    metadata::PieceState::Failed => return Err(Error::PieceStateIsFailed(id)),
+
+                    // If the piece is running, poll the matedata of the piece
+                    // until the piece download is finished.
+                    metadata::PieceState::Running => {}
+                },
+                // If the piece is not found, return the error.
+                Ok(None) => return Err(Error::PieceNotFound(id)),
+                Err(err) => return Err(err),
+            }
+
+            // Sleep to avoid hot looping and wait for the piece to be download finished.
+            tokio::time::sleep(DEFAULT_RETRY_INTERVAL).await;
         }
     }
 
