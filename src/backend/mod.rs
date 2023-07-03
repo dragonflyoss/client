@@ -17,12 +17,7 @@
 mod http;
 
 pub enum BackendConfig {
-    HTTP(HTTPConfig),
-}
-
-pub struct HTTPConfig {
-    pub url: String,
-    pub headers: Vec<(String, String)>,
+    HTTP(http::HTTPConfig),
 }
 
 // Error is the error for Backend.

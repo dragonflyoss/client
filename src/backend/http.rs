@@ -14,18 +14,23 @@
  * limitations under the License.
  */
 
-use crate::backend::{Backend, HTTPConfig, Result};
+pub struct HTTPConfig {
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+}
 
 pub struct HTTPBackend {
     url: String,
-    headers: Vec<(String, String)>,
 }
 
 impl HTTPBackend {
     pub fn new(config: HTTPConfig) -> Self {
-        HTTPBackend {
-            url: config.url,
-            headers: config.headers,
-        }
+        HTTPBackend { url: config.url }
+    }
+}
+
+impl super::Backend for HTTPBackend {
+    fn get(&self) -> super::Result<Vec<u8>> {
+        Ok(vec![])
     }
 }
