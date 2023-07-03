@@ -15,13 +15,9 @@
  */
 
 use std::path::Path;
-use std::time::Duration;
 
 mod content;
 mod metadata;
-
-// DEFAULT_RETRY_INTERVAL is the default retry interval for waiting piece download finished.
-const DEFAULT_RETRY_INTERVAL: Duration = Duration::from_millis(10);
 
 // Error is the error for Storage.
 #[derive(Debug, thiserror::Error)]
@@ -105,8 +101,8 @@ impl Storage {
         self.metadata.download_piece_started(task_id, number)
     }
 
-    // download_piece_succeeded updates the metadata of the piece when the piece downloads succeeded.
-    pub fn download_piece_succeeded(
+    // download_piece_finished updates the metadata of the piece and writes the data of piece to file.
+    pub fn download_piece_finished(
         &self,
         task_id: &str,
         offset: u64,
@@ -116,18 +112,12 @@ impl Storage {
     ) -> Result<()> {
         self.content.write_piece(task_id, offset, data)?;
         self.metadata
-            .download_piece_succeeded(task_id, offset, length, digest)
+            .download_piece_finished(task_id, offset, length, digest)
     }
 
-    // download_piece_failed updates the metadata of the piece when the piece downloads failed.
-    pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
-        self.metadata
-            .download_piece_failed(self.metadata.piece_id(task_id, number).as_str())
-    }
-
-    // upload_piece updates the metadata of the piece when the piece uploads finished and
+    // upload_piece_finished updates the metadata of the piece when the piece uploads finished and
     // returns the data of the piece.
-    pub fn upload_piece(&self, task_id: &str, number: u32) -> Result<Vec<u8>> {
+    pub fn upload_piece_finished(&self, task_id: &str, number: u32) -> Result<Vec<u8>> {
         let id = self.metadata.piece_id(task_id, number);
         match self.metadata.get_piece(&id)? {
             Some(piece) => {
@@ -141,49 +131,9 @@ impl Storage {
         }
     }
 
-    // reuse_piece return the data of piece, if piece is running, waiting for piece download finished.
-    pub async fn reuse_piece(&self, task_id: &str, number: u32) -> Result<Vec<u8>> {
-        loop {
-            let id = self.metadata.piece_id(task_id, number);
-            match self
-                .metadata
-                .get_piece(self.metadata.piece_id(task_id, number).as_str())
-            {
-                Ok(Some(piece)) => match piece.state {
-                    // If the piece is succeeded, return the data of
-                    // the piece and update the metadata.
-                    metadata::PieceState::Succeeded => return self.upload_piece(task_id, number),
-
-                    // If the piece is failed, return the error.
-                    metadata::PieceState::Failed => return Err(Error::PieceStateIsFailed(id)),
-
-                    // If the piece is running, poll the matedata of the piece
-                    // until the piece download is finished.
-                    metadata::PieceState::Running => {}
-                },
-                // If the piece is not found, return the error.
-                Ok(None) => return Err(Error::PieceNotFound(id)),
-                Err(err) => return Err(err),
-            }
-
-            // Sleep to avoid hot looping and wait for the piece to be download finished.
-            tokio::time::sleep(DEFAULT_RETRY_INTERVAL).await;
-        }
-    }
-
     // get_piece returns the piece metadata.
     pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<metadata::Piece>> {
         self.metadata
             .get_piece(self.metadata.piece_id(task_id, number).as_str())
-    }
-
-    // get_piece_state returns the piece state.
-    pub fn get_piece_state(
-        &self,
-        task_id: &str,
-        number: u32,
-    ) -> Result<Option<metadata::PieceState>> {
-        self.metadata
-            .get_piece_state(self.metadata.piece_id(task_id, number).as_str())
     }
 }

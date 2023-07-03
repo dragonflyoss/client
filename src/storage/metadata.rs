@@ -19,7 +19,6 @@ use crate::storage::{Error, Result};
 use chrono::{NaiveDateTime, Utc};
 use rocksdb::{BlockBasedOptions, Cache, ColumnFamily, Options, DB};
 use serde::{Deserialize, Serialize};
-use std::fmt;
 use std::path::Path;
 use tracing::info;
 
@@ -64,34 +63,6 @@ pub struct Task {
     pub created_at: NaiveDateTime,
 }
 
-// PieceState is the state of the piece.
-#[derive(Debug, Clone, Default, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PieceState {
-    // Running is the state of the piece which is running,
-    // piece is being downloaded from source or other peers.
-    #[default]
-    Running,
-
-    // Succeeded is the state of the piece which is succeeded, piece downloaded successfully.
-    Succeeded,
-
-    // Failed is the state of the piece which is failed. When the enableBackToSource is true in dfdaemon configuration,
-    // it means that peer back-to-source downloads failed, and when the enableBackToSource is false
-    // in dfdaemon configuration, it means that piece downloads from other peers failed.
-    Failed,
-}
-
-// PieceState implements the fmt::Display interface.
-impl fmt::Display for PieceState {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Running => write!(f, "Running"),
-            Self::Succeeded => write!(f, "Succeeded"),
-            Self::Failed => write!(f, "Failed"),
-        }
-    }
-}
-
 // Piece is the metadata of the piece.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Piece {
@@ -106,9 +77,6 @@ pub struct Piece {
 
     // digest is the digest of the piece.
     pub digest: String,
-
-    // state is the state of the piece.
-    pub state: PieceState,
 
     // uploaded_count is the count of the piece uploaded by other peers.
     pub uploaded_count: u64,
@@ -204,7 +172,6 @@ impl Metadata {
             id,
             &Piece {
                 number,
-                state: PieceState::Running,
                 updated_at: Utc::now().naive_utc(),
                 created_at: Utc::now().naive_utc(),
                 ..Default::default()
@@ -212,8 +179,8 @@ impl Metadata {
         )
     }
 
-    // download_piece_succeeded updates the metadata of the piece when the piece downloads succeeded.
-    pub fn download_piece_succeeded(
+    // download_piece_finished updates the metadata of the piece when the piece downloads finished.
+    pub fn download_piece_finished(
         &self,
         id: &str,
         offset: u64,
@@ -222,36 +189,9 @@ impl Metadata {
     ) -> Result<()> {
         match self.get_piece(id)? {
             Some(mut piece) => {
-                if piece.state != PieceState::Running {
-                    return Err(Error::InvalidStateTransition(
-                        piece.state.to_string(),
-                        PieceState::Succeeded.to_string(),
-                    ));
-                }
-
                 piece.offset = offset;
                 piece.length = length;
                 piece.digest = digest.to_string();
-                piece.state = PieceState::Succeeded;
-                piece.updated_at = Utc::now().naive_utc();
-                self.put_piece(id, &piece)
-            }
-            None => Err(Error::PieceNotFound(id.to_string())),
-        }
-    }
-
-    // download_piece_failed updates the metadata of the piece when the piece downloads failed.
-    pub fn download_piece_failed(&self, id: &str) -> Result<()> {
-        match self.get_piece(id)? {
-            Some(mut piece) => {
-                if piece.state != PieceState::Running {
-                    return Err(Error::InvalidStateTransition(
-                        piece.state.to_string(),
-                        PieceState::Failed.to_string(),
-                    ));
-                }
-
-                piece.state = PieceState::Failed;
                 piece.updated_at = Utc::now().naive_utc();
                 self.put_piece(id, &piece)
             }
@@ -263,10 +203,6 @@ impl Metadata {
     pub fn upload_piece_finished(&self, id: &str) -> Result<()> {
         match self.get_piece(id)? {
             Some(mut piece) => {
-                if piece.state != PieceState::Succeeded {
-                    return Err(Error::InvalidState(piece.state.to_string()));
-                }
-
                 piece.uploaded_count += 1;
                 piece.updated_at = Utc::now().naive_utc();
                 self.put_piece(id, &piece)
@@ -280,14 +216,6 @@ impl Metadata {
         let handle = self.cf_handle(PIECE_CF_NAME)?;
         match self.db.get_cf(handle, id.as_bytes())? {
             Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
-            None => Ok(None),
-        }
-    }
-
-    // get_piece_state gets the piece state.
-    pub fn get_piece_state(&self, id: &str) -> Result<Option<PieceState>> {
-        match self.get_piece(id)? {
-            Some(piece) => Ok(Some(piece.state)),
             None => Ok(None),
         }
     }
