@@ -13,3 +13,37 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+mod http;
+
+pub enum BackendConfig {
+    HTTP(HTTPConfig),
+}
+
+pub struct HTTPConfig {
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+}
+
+// Error is the error for Backend.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {}
+
+// Result is the result for Backend.
+pub type Result<T> = std::result::Result<T, Error>;
+
+// Backend is the interface for backend.
+pub trait Backend {
+    // get gets the content of the key.
+    fn get(&self) -> Result<Vec<u8>>;
+}
+
+pub struct BackendFactory {}
+
+impl BackendFactory {
+    pub fn new(config: BackendConfig) -> Box<dyn Backend> {
+        match config {
+            BackendConfig::HTTP(config) => Box::new(http::HTTPBackend::new(config)),
+        }
+    }
+}
