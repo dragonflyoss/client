@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-use crate::config::{NAME, SERVICE_NAME};
-use crate::shutdown::Shutdown;
+use crate::config;
+use crate::shutdown;
 use lazy_static::lazy_static;
 use prometheus::{gather, Encoder, IntCounterVec, IntGaugeVec, Opts, Registry, TextEncoder};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -33,14 +33,14 @@ lazy_static! {
     // VERSION_GAUGE is used to record the version info of the service.
     pub static ref VERSION_GAUGE: IntGaugeVec =
         IntGaugeVec::new(
-            Opts::new("version", "Version info of the service.").namespace(SERVICE_NAME).subsystem(NAME),
+            Opts::new("version", "Version info of the service.").namespace(config::SERVICE_NAME).subsystem(config::NAME),
             &["major", "minor", "git_version", "git_commit", "platform", "build_time"]
         ).expect("metric can be created");
 
     // DOWNLOAD_PEER_COUNT is used to count the number of download peers.
     pub static ref DOWNLOAD_PEER_COUNT: IntCounterVec =
         IntCounterVec::new(
-            Opts::new("download_peer_total", "Counter of the number of the download peer.").namespace(SERVICE_NAME).subsystem(NAME),
+            Opts::new("download_peer_total", "Counter of the number of the download peer.").namespace(config::SERVICE_NAME).subsystem(config::NAME),
             &["task_type"]
         ).expect("metric can be created");
 }
@@ -52,7 +52,7 @@ pub struct Metrics {
     addr: SocketAddr,
 
     // shutdown is used to shutdown the metrics server.
-    shutdown: Shutdown,
+    shutdown: shutdown::Shutdown,
 
     // _shutdown_complete is used to notify the metrics server is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
@@ -63,7 +63,7 @@ impl Metrics {
     // new creates a new Metrics.
     pub fn new(
         enable_ipv6: bool,
-        shutdown: Shutdown,
+        shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
         // Initialize the address of the server.
