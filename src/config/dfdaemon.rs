@@ -14,10 +14,6 @@
  * limitations under the License.
  */
 
-use crate::config::{
-    default_cache_dir, default_config_dir, default_data_dir, default_lock_dir, default_log_dir,
-    default_plugin_dir, default_root_dir,
-};
 use local_ip_address::{local_ip, local_ipv6};
 use serde::Deserialize;
 use std::fs;
@@ -32,32 +28,32 @@ pub const NAME: &str = "dfdaemon";
 
 // default_dfdaemon_config_path is the default config path for dfdaemon.
 pub fn default_dfdaemon_config_path() -> PathBuf {
-    default_config_dir().join("dfdaemon.yaml")
+    super::default_config_dir().join("dfdaemon.yaml")
 }
 
 // default_dfdaemon_log_dir is the default log directory for dfdaemon.
 pub fn default_dfdaemon_log_dir() -> PathBuf {
-    default_log_dir().join(NAME)
+    super::default_log_dir().join(NAME)
 }
 
 // default_dfdaemon_plugin_dir is the default plugin directory for dfdaemon.
 pub fn default_dfdaemon_plugin_dir() -> PathBuf {
-    default_plugin_dir().join(NAME)
+    super::default_plugin_dir().join(NAME)
 }
 
 // default_dfdaemon_cache_dir is the default cache directory for dfdaemon.
 pub fn default_dfdaemon_cache_dir() -> PathBuf {
-    default_cache_dir().join(NAME)
+    super::default_cache_dir().join(NAME)
 }
 
 // default_dfdaemon_unix_socket_path is the default unix socket path for dfdaemon GRPC service.
 pub fn default_dfdaemon_unix_socket_path() -> PathBuf {
-    default_root_dir().join("dfdaemon.sock")
+    super::default_root_dir().join("dfdaemon.sock")
 }
 
 // default_dfdaemon_lock_path is the default file lock path for dfdaemon service.
 pub fn default_dfdaemon_lock_path() -> PathBuf {
-    default_lock_dir().join("dfdaemon.lock")
+    super::default_lock_dir().join("dfdaemon.lock")
 }
 
 // default_tracing_addr is the default address to report tracing log.
@@ -371,11 +367,11 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            data_dir: default_data_dir(),
+            data_dir: super::default_data_dir(),
             plugin_dir: default_dfdaemon_plugin_dir(),
             cache_dir: default_dfdaemon_cache_dir(),
-            root_dir: default_root_dir(),
-            lock_dir: default_lock_dir(),
+            root_dir: super::default_root_dir(),
+            lock_dir: super::default_lock_dir(),
             host: Host::default(),
             manager: Manager::default(),
             scheduler: Scheduler::default(),

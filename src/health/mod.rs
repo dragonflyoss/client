@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::shutdown::Shutdown;
+use crate::shutdown;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use tokio::sync::mpsc;
 use tracing::info;
@@ -30,7 +30,7 @@ pub struct Health {
     pub addr: SocketAddr,
 
     // shutdown is used to shutdown the health server.
-    shutdown: Shutdown,
+    shutdown: shutdown::Shutdown,
 
     // _shutdown_complete is used to notify the metrics server is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
@@ -41,7 +41,7 @@ impl Health {
     // new creates a new Metrics.
     pub fn new(
         enable_ipv6: bool,
-        shutdown: Shutdown,
+        shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
         // Initialize the address of the server.

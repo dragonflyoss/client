@@ -15,12 +15,10 @@
  */
 
 use clap::Parser;
-use client::config::dfdaemon::{
-    default_dfdaemon_config_path, default_dfdaemon_log_dir, Config, NAME,
-};
+use client::config::dfdaemon;
 use client::health::Health;
 use client::metrics::Metrics;
-use client::shutdown::{shutdown_signal, Shutdown};
+use client::shutdown;
 use client::storage::Storage;
 use client::tracing::init_tracing;
 use std::error::Error;
@@ -30,7 +28,7 @@ use tracing::{info, Level};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = NAME,
+    name = dfdaemon::NAME,
     author,
     version,
     about = "dfdaemon is a high performance P2P download daemon",
@@ -42,7 +40,7 @@ struct Args {
     #[arg(
         short = 'c',
         long = "config",
-        default_value_os_t = default_dfdaemon_config_path(),
+        default_value_os_t = dfdaemon::default_dfdaemon_config_path(),
         help = "Specify config file to use")
     ]
     config: PathBuf,
@@ -57,7 +55,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value_os_t = default_dfdaemon_log_dir(),
+        default_value_os_t = dfdaemon::default_dfdaemon_log_dir(),
         help = "Specify the log directory"
     )]
     log_dir: PathBuf,
@@ -69,10 +67,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
     // Initialize tracing.
-    let _guards = init_tracing(NAME, &args.log_dir, args.log_level, None);
+    let _guards = init_tracing(dfdaemon::NAME, &args.log_dir, args.log_level, None);
 
     // Load config.
-    let config = Config::load(&args.config)?;
+    let config = dfdaemon::Config::load(&args.config)?;
 
     // Initialize storage.
     let _storage = Storage::new(&config.data_dir)?;
@@ -84,14 +82,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Initialize metrics server.
     let mut metrics = Metrics::new(
         config.network.enable_ipv6,
-        Shutdown::new(notify_shutdown.subscribe()),
+        shutdown::Shutdown::new(notify_shutdown.subscribe()),
         shutdown_complete_tx.clone(),
     );
 
     // Initialize health server.
     let mut health = Health::new(
         config.network.enable_ipv6,
-        Shutdown::new(notify_shutdown.subscribe()),
+        shutdown::Shutdown::new(notify_shutdown.subscribe()),
         shutdown_complete_tx.clone(),
     );
 
@@ -103,7 +101,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         _ = tokio::spawn(async move { health.run().await }) => {
             info!("health server exited");
         },
-        _ = shutdown_signal() => {},
+        _ = shutdown::shutdown_signal() => {},
     }
 
     // Drop notify_shutdown to notify the other server to exit.

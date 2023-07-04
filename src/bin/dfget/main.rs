@@ -15,8 +15,8 @@
  */
 
 use clap::Parser;
-use client::config::dfdaemon::default_dfdaemon_unix_socket_path;
-use client::config::dfget::{default_dfget_log_dir, NAME};
+use client::config::dfdaemon;
+use client::config::dfget;
 use client::tracing::init_tracing;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -24,7 +24,7 @@ use tracing::Level;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = NAME,
+    name = dfget::NAME,
     author,
     version,
     about = "dfget is a download command line based on P2P technology",
@@ -41,7 +41,7 @@ struct Args {
     #[arg(
         short = 'e',
         long = "endpoint",
-        default_value_os_t = default_dfdaemon_unix_socket_path(),
+        default_value_os_t = dfdaemon::default_dfdaemon_unix_socket_path(),
         help = "Endpoint of dfdaemon's GRPC server"
     )]
     endpoint: PathBuf,
@@ -115,7 +115,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value_os_t = default_dfget_log_dir(),
+        default_value_os_t = dfget::default_dfget_log_dir(),
         help = "Specify the log directory"
     )]
     log_dir: PathBuf,
@@ -126,5 +126,5 @@ fn main() {
     let args = Args::parse();
 
     // Initialize tracting.
-    let _guards = init_tracing(NAME, &args.log_dir, args.log_level, None);
+    let _guards = init_tracing(dfget::NAME, &args.log_dir, args.log_level, None);
 }

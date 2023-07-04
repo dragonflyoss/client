@@ -14,12 +14,10 @@
  * limitations under the License.
  */
 
-use crate::config::NAME;
-use crate::storage::Result;
+use crate::config;
 use std::fs;
-use std::fs::File;
+use std::io;
 use std::io::prelude::*;
-use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
@@ -35,8 +33,8 @@ pub struct Content {
 // Content implements the content storage.
 impl Content {
     // new returns a new content.
-    pub fn new(data_dir: &Path) -> Result<Content> {
-        let dir = data_dir.join(NAME).join(DEFAULT_DIR_NAME);
+    pub fn new(data_dir: &Path) -> super::Result<Content> {
+        let dir = data_dir.join(config::NAME).join(DEFAULT_DIR_NAME);
         fs::create_dir_all(&dir)?;
         info!("create content directory: {:?}", dir);
 
@@ -44,9 +42,9 @@ impl Content {
     }
 
     // read_piece reads the piece from the content.
-    pub fn read_piece(&self, task_id: &str, offset: u64, length: u64) -> Result<Vec<u8>> {
-        let mut f = File::open(self.dir.join(task_id))?;
-        f.seek(SeekFrom::Start(offset))?;
+    pub fn read_piece(&self, task_id: &str, offset: u64, length: u64) -> super::Result<Vec<u8>> {
+        let mut f = fs::File::open(self.dir.join(task_id))?;
+        f.seek(io::SeekFrom::Start(offset))?;
 
         let mut buf = vec![0; length as usize];
         f.read_exact(&mut buf)?;
@@ -54,12 +52,12 @@ impl Content {
     }
 
     // write_piece writes the piece to the content.
-    pub fn write_piece(&self, task_id: &str, offset: u64, data: &[u8]) -> Result<()> {
+    pub fn write_piece(&self, task_id: &str, offset: u64, data: &[u8]) -> super::Result<()> {
         let mut f = fs::OpenOptions::new()
             .create(true)
             .write(true)
             .open(self.dir.join(task_id))?;
-        f.seek(SeekFrom::Start(offset))?;
+        f.seek(io::SeekFrom::Start(offset))?;
         f.write_all(data)?;
         f.flush()?;
         Ok(())
