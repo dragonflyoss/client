@@ -13,3 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+pub mod http;
+
+// Error is the error for Backend.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    // Reqwest is the error for reqwest.
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
+}
+
+// Result is the result for Backend.
+pub type Result<T> = std::result::Result<T, Error>;
