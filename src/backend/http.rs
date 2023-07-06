@@ -14,23 +14,47 @@
  * limitations under the License.
  */
 
-pub struct HTTPConfig {
+use bytes::Bytes;
+use reqwest::header::HeaderMap;
+use std::time::Duration;
+
+// Request is the request for HTTP backend.
+pub struct Request {
+    // url is the url of the request.
     pub url: String,
-    pub headers: Vec<(String, String)>,
+    // header is the headers of the request.
+    pub header: HeaderMap,
+    // timeout is the timeout of the request.
+    pub timeout: Option<Duration>,
 }
 
-pub struct HTTPBackend {
-    url: String,
+// Response is the response for HTTP backend.
+pub struct Response {
+    // header is the headers of the response.
+    pub header: HeaderMap,
+    // status_code is the status code of the response.
+    pub status_code: reqwest::StatusCode,
+    // body is the content of the response.
+    pub body: Bytes,
 }
 
-impl HTTPBackend {
-    pub fn new(config: HTTPConfig) -> Self {
-        HTTPBackend { url: config.url }
-    }
-}
+// HTTP is the HTTP backend.
+pub struct HTTP {}
 
-impl super::Backend for HTTPBackend {
-    fn get(&self) -> super::Result<Vec<u8>> {
-        Ok(vec![])
+// HTTP implements the http interface.
+impl HTTP {
+    // Get gets the content of the request.
+    pub async fn get(&self, req: Request) -> super::Result<Response> {
+        let mut request_builder = reqwest::Client::new().get(&req.url).headers(req.header);
+        if let Some(timeout) = req.timeout {
+            request_builder = request_builder.timeout(timeout);
+        }
+
+        let response = request_builder.send().await?;
+        Ok(Response {
+            header: response.headers().clone(),
+            status_code: response.status(),
+            body: response.bytes().await?,
+        })
     }
 }
