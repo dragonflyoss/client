@@ -15,10 +15,13 @@
  */
 
 use crate::config;
+use bytes::Bytes;
 use std::fs;
-use std::io;
-use std::io::prelude::*;
 use std::path::{Path, PathBuf};
+use tokio::fs::File;
+use tokio::io::{
+    self, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter, SeekFrom, Take,
+};
 use tracing::info;
 
 // DEFAULT_DIR_NAME is the default directory name to store content.
@@ -42,24 +45,27 @@ impl Content {
     }
 
     // read_piece reads the piece from the content.
-    pub fn read_piece(&self, task_id: &str, offset: u64, length: u64) -> super::Result<Vec<u8>> {
-        let mut f = fs::File::open(self.dir.join(task_id))?;
-        f.seek(io::SeekFrom::Start(offset))?;
-
-        let mut buf = vec![0; length as usize];
-        f.read_exact(&mut buf)?;
-        Ok(buf)
+    pub async fn read_piece(
+        &self,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+    ) -> super::Result<Take<BufReader<File>>> {
+        let mut f = File::open(self.dir.join(task_id)).await?;
+        f.seek(SeekFrom::Start(offset)).await?;
+        Ok(BufReader::new(f).take(length))
     }
 
     // write_piece writes the piece to the content.
-    pub fn write_piece(&self, task_id: &str, offset: u64, data: &[u8]) -> super::Result<()> {
-        let mut f = fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .open(self.dir.join(task_id))?;
-        f.seek(io::SeekFrom::Start(offset))?;
-        f.write_all(data)?;
-        f.flush()?;
+    pub async fn write_piece_buf(
+        &self,
+        task_id: &str,
+        offset: u64,
+        writer: &mut BufWriter<File>,
+    ) -> super::Result<()> {
+        let mut f = File::open(self.dir.join(task_id)).await?;
+        f.seek(SeekFrom::Start(offset)).await?;
+        io::copy(writer, &mut f).await?;
         Ok(())
     }
 }

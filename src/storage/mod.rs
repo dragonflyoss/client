@@ -115,9 +115,9 @@ impl Storage {
             .download_piece_finished(task_id, offset, length, digest)
     }
 
-    // upload_piece_finished updates the metadata of the piece when the piece uploads finished and
+    // upload_piece updates the metadata of the piece and
     // returns the data of the piece.
-    pub fn upload_piece_finished(&self, task_id: &str, number: u32) -> Result<Vec<u8>> {
+    pub fn upload_piece(&self, task_id: &str, number: u32) -> Result<Vec<u8>> {
         let id = self.metadata.piece_id(task_id, number);
         match self.metadata.get_piece(&id)? {
             Some(piece) => {
