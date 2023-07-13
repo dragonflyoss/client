@@ -15,6 +15,7 @@
  */
 
 use std::path::Path;
+use tokio::io::AsyncRead;
 
 mod content;
 mod metadata;
@@ -102,30 +103,31 @@ impl Storage {
     }
 
     // download_piece_finished updates the metadata of the piece and writes the data of piece to file.
-    pub fn download_piece_finished(
+    pub async fn download_piece_finished<R: AsyncRead + Unpin>(
         &self,
         task_id: &str,
         offset: u64,
-        length: u64,
         digest: &str,
-        data: &[u8],
-    ) -> Result<()> {
-        self.content.write_piece(task_id, offset, data)?;
+        reader: &mut R,
+    ) -> Result<u64> {
+        let length = self.content.write_piece(task_id, offset, reader).await?;
         self.metadata
-            .download_piece_finished(task_id, offset, length, digest)
+            .download_piece_finished(task_id, offset, length, digest)?;
+        Ok(length)
     }
 
-    // upload_piece_finished updates the metadata of the piece when the piece uploads finished and
+    // upload_piece updates the metadata of the piece and
     // returns the data of the piece.
-    pub fn upload_piece_finished(&self, task_id: &str, number: u32) -> Result<Vec<u8>> {
+    pub async fn upload_piece(&self, task_id: &str, number: u32) -> Result<impl AsyncRead> {
         let id = self.metadata.piece_id(task_id, number);
         match self.metadata.get_piece(&id)? {
             Some(piece) => {
-                let data = self
+                let reader = self
                     .content
-                    .read_piece(task_id, piece.offset, piece.length)?;
+                    .read_piece(task_id, piece.offset, piece.length)
+                    .await?;
                 self.metadata.upload_piece_finished(&id)?;
-                Ok(data)
+                Ok(reader)
             }
             None => Err(Error::PieceNotFound(id)),
         }
