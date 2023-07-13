@@ -25,4 +25,3 @@ pub mod shutdown;
 pub mod storage;
 pub mod task;
 pub mod tracing;
-pub mod uploader;
