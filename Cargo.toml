@@ -1,11 +1,11 @@
 [package]
-name = "client"
-version = "1.0.0"
+name = "dragonfly-client"
+version = "0.1.0"
 authors = ["The Dragonfly Developers"]
 homepage = "https://d7y.io/"
 repository = "https://github.com/dragonflyoss/client.git"
 description = "Dragonfly client written in Rust"
-keywords = ["dragonfly", "d7y", "client", "dfdaemon", "dfget", "dfstore", "p2p", "container", "docker-image"]
+keywords = ["dragonfly", "dragonfly-client", "p2p", "container", "docker-image"]
 license = "Apache-2.0"
 readme = "README.md"
 edition = "2021"
