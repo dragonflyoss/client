@@ -19,6 +19,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v2
+
       - name: Install stable toolchain
         uses: actions-rs/toolchain@v1
         with:
@@ -38,6 +41,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v2
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2

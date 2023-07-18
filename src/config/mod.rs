@@ -25,7 +25,7 @@ pub mod dfstore;
 pub const SERVICE_NAME: &str = "dragonfly";
 
 // NAME is the name of the package.
-pub const NAME: &str = env!("CARGO_PKG_NAME");
+pub const NAME: &str = "client";
 
 // default_root_dir is the default root directory for client.
 pub fn default_root_dir() -> PathBuf {
