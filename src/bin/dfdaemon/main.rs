@@ -15,12 +15,12 @@
  */
 
 use clap::Parser;
-use client::config::dfdaemon;
-use client::health::Health;
-use client::metrics::Metrics;
-use client::shutdown;
-use client::storage::Storage;
-use client::tracing::init_tracing;
+use dragonfly_client::config::dfdaemon;
+use dragonfly_client::health::Health;
+use dragonfly_client::metrics::Metrics;
+use dragonfly_client::shutdown;
+use dragonfly_client::storage::Storage;
+use dragonfly_client::tracing::init_tracing;
 use std::error::Error;
 use std::path::PathBuf;
 use tokio::sync::{broadcast, mpsc};

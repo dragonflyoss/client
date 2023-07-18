@@ -15,9 +15,9 @@
  */
 
 use clap::Parser;
-use client::config::dfdaemon;
-use client::config::dfget;
-use client::tracing::init_tracing;
+use dragonfly_client::config::dfdaemon;
+use dragonfly_client::config::dfget;
+use dragonfly_client::tracing::init_tracing;
 use std::path::PathBuf;
 use std::time::Duration;
 use tracing::Level;
