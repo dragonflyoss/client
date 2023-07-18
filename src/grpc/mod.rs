@@ -14,15 +14,27 @@
  * limitations under the License.
  */
 
-pub mod announcer;
-pub mod backend;
-pub mod config;
-pub mod downloader;
-pub mod grpc;
+use std::time::Duration;
+
 pub mod health;
-pub mod metrics;
-pub mod proxy;
-pub mod shutdown;
-pub mod storage;
-pub mod task;
-pub mod tracing;
+pub mod manager;
+pub mod scheduler;
+pub mod security;
+
+// REQUEST_TIMEOUT is the timeout for GRPC requests.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+// Error is the error for GRPC.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    // TonicTransport is the error for tonic transport.
+    #[error(transparent)]
+    TonicTransport(#[from] tonic::transport::Error),
+
+    // TonicStatus is the error for tonic status.
+    #[error(transparent)]
+    TonicStatus(#[from] tonic::Status),
+}
+
+// Result is the result for GRPC.
+pub type Result<T> = std::result::Result<T, Error>;
