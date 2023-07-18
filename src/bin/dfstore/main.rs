@@ -15,9 +15,9 @@
  */
 
 use clap::{Parser, Subcommand};
-use client::config::dfdaemon;
-use client::config::dfstore;
-use client::tracing::init_tracing;
+use dragonfly_client::config::dfdaemon;
+use dragonfly_client::config::dfstore;
+use dragonfly_client::tracing::init_tracing;
 use std::path::PathBuf;
 use tracing::Level;
 
