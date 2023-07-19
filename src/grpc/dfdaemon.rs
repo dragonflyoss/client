@@ -20,6 +20,7 @@ use dragonfly_api::dfdaemon::{
     StatTaskRequest, UploadTaskRequest,
 };
 use std::net::SocketAddr;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 
 // DfdaemonClient is a wrapper of DfdaemonGRPCClient.
@@ -35,7 +36,10 @@ impl DfdaemonClient {
         let conn = tonic::transport::Endpoint::new(addr.to_string())?
             .connect()
             .await?;
-        let client = DfdaemonGRPCClient::new(conn);
+        let client = DfdaemonGRPCClient::new(conn)
+            .send_compressed(CompressionEncoding::Gzip)
+            .accept_compressed(CompressionEncoding::Gzip)
+            .max_decoding_message_size(usize::MAX);
         Ok(Self { client })
     }
 

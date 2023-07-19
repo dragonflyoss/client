@@ -17,7 +17,7 @@
 use local_ip_address::{local_ip, local_ipv6};
 use serde::Deserialize;
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 use tracing::info;
@@ -25,6 +25,15 @@ use validator::Validate;
 
 // NAME is the name of dfdaemon.
 pub const NAME: &str = "dfdaemon";
+
+// DEFAULT_GRPC_SERVER_PORT is the default port of the grpc server.
+const DEFAULT_GRPC_SERVER_PORT: u16 = 65000;
+
+// DEFAULT_METRICS_SERVER_PORT is the default port of the metrics server.
+const DEFAULT_METRICS_SERVER_PORT: u16 = 8000;
+
+// DEFAULT_HEALTH_SERVER_PORT is the default port of the health server.
+const DEFAULT_HEALTH_SERVER_PORT: u16 = 40901;
 
 // default_dfdaemon_config_path is the default config path for dfdaemon.
 pub fn default_dfdaemon_config_path() -> PathBuf {
@@ -54,11 +63,6 @@ pub fn default_dfdaemon_unix_socket_path() -> PathBuf {
 // default_dfdaemon_lock_path is the default file lock path for dfdaemon service.
 pub fn default_dfdaemon_lock_path() -> PathBuf {
     super::default_lock_dir().join("dfdaemon.lock")
-}
-
-// default_tracing_addr is the default address to report tracing log.
-pub fn default_tracing_addr() -> SocketAddr {
-    SocketAddr::from((Ipv4Addr::LOCALHOST, 14268))
 }
 
 // default_scheduler_announce_interval is the default interval to announce peer to the scheduler.
@@ -111,17 +115,57 @@ pub struct Host {
     pub hostname: String,
 
     // ip is the advertise ip of the host.
-    pub ip: IpAddr,
+    pub ip: Option<IpAddr>,
 }
 
 // Host implements default value for Host.
 impl Default for Host {
     fn default() -> Self {
-        Host {
+        Self {
             idc: None,
             location: None,
             hostname: hostname::get().unwrap().to_string_lossy().to_string(),
-            ip: local_ip().unwrap(),
+            ip: None,
+        }
+    }
+}
+
+// Server is the server configuration for dfdaemon.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Server {
+    // data_dir is the directory to store task's metadata and content.
+    pub data_dir: PathBuf,
+
+    // plugin_dir is the directory to store plugins.
+    pub plugin_dir: PathBuf,
+
+    // cache_dir is the directory to store cache files.
+    pub cache_dir: PathBuf,
+
+    // root_dir is the root directory for dfdaemon.
+    pub root_dir: PathBuf,
+
+    // lock_path is the file lock path for dfdaemon service.
+    pub lock_dir: PathBuf,
+
+    // ip is the listen ip of the grpc server.
+    pub ip: Option<IpAddr>,
+
+    // port is the port to the grpc server.
+    pub port: u16,
+}
+
+impl Default for Server {
+    fn default() -> Self {
+        Self {
+            data_dir: super::default_data_dir(),
+            plugin_dir: default_dfdaemon_plugin_dir(),
+            cache_dir: default_dfdaemon_cache_dir(),
+            root_dir: super::default_root_dir(),
+            lock_dir: super::default_lock_dir(),
+            ip: None,
+            port: DEFAULT_GRPC_SERVER_PORT,
         }
     }
 }
@@ -154,7 +198,7 @@ pub struct Scheduler {
 // Scheduler implements default value for Scheduler.
 impl Default for Scheduler {
     fn default() -> Self {
-        Scheduler {
+        Self {
             announce_interval: default_scheduler_announce_interval(),
             schedule_timeout: default_scheduler_schedule_timeout(),
             enable_back_to_source: true,
@@ -199,7 +243,7 @@ pub struct SeedPeer {
 // SeedPeer implements default value for SeedPeer.
 impl Default for SeedPeer {
     fn default() -> Self {
-        SeedPeer {
+        Self {
             enable: false,
             kind: SeedPeerType::Super,
             cluster_id: 1,
@@ -219,21 +263,11 @@ pub struct Dynconfig {
 // Dynconfig implements default value for Dynconfig.
 impl Default for Dynconfig {
     fn default() -> Self {
-        Dynconfig {
+        Self {
             refresh_interval: default_dynconfig_refresh_interval(),
         }
     }
 }
-
-// Downloader is the downloader configuration for dfdaemon.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Downloader {}
-
-// Uploader is the uploader configuration for dfdaemon.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Uploader {}
 
 // Storage is the storage configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
@@ -273,55 +307,63 @@ pub struct Network {
 }
 
 // Metrics is the metrics configuration for dfdaemon.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Metrics {
-    // enable indicates whether enable metrics.
-    pub enable: bool,
+    // ip is the listen ip of the metrics server.
+    pub ip: Option<IpAddr>,
+
+    // port is the port to the metrics server.
+    pub port: u16,
+}
+
+impl Default for Metrics {
+    fn default() -> Self {
+        Self {
+            ip: None,
+            port: DEFAULT_METRICS_SERVER_PORT,
+        }
+    }
+}
+
+// Tracing is the tracing configuration for dfdaemon.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Tracing {
+    // addr is the address to report tracing log.
+    pub addr: Option<SocketAddr>,
 }
 
 // Tracing is the tracing configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct Tracing {
-    // enable indicates whether enable tracing.
-    pub enable: bool,
+pub struct Health {
+    // ip is the listen ip of the health server.
+    pub ip: Option<IpAddr>,
 
-    // addr is the address to report tracing log.
-    pub addr: SocketAddr,
+    // port is the port to the health server.
+    pub port: u16,
 }
 
 // Tracing implements default value for Tracing.
-impl Default for Tracing {
+impl Default for Health {
     fn default() -> Self {
-        Tracing {
-            enable: false,
-            addr: default_tracing_addr(),
+        Self {
+            ip: None,
+            port: DEFAULT_HEALTH_SERVER_PORT,
         }
     }
 }
 
 // Config is the configuration for dfdaemon.
-#[derive(Debug, Clone, Validate, Deserialize)]
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
-    // data_dir is the directory to store task's metadata and content.
-    pub data_dir: PathBuf,
-
-    // plugin_dir is the directory to store plugins.
-    pub plugin_dir: PathBuf,
-
-    // cache_dir is the directory to store cache files.
-    pub cache_dir: PathBuf,
-
-    // root_dir is the root directory for dfdaemon.
-    pub root_dir: PathBuf,
-
-    // lock_path is the file lock path for dfdaemon service.
-    pub lock_dir: PathBuf,
-
     // host is the host configuration for dfdaemon.
     pub host: Host,
+
+    // server is the server configuration for dfdaemon.
+    pub server: Server,
 
     // manager is the manager configuration for dfdaemon.
     pub manager: Manager,
@@ -334,12 +376,6 @@ pub struct Config {
 
     // dynconfig is the dynconfig configuration for dfdaemon.
     pub dynconfig: Dynconfig,
-
-    // downloader is the downloader configuration for dfdaemon.
-    pub downloader: Downloader,
-
-    // uploader is the uploader configuration for dfdaemon.
-    pub uploader: Uploader,
 
     // storage is the storage configuration for dfdaemon.
     pub storage: Storage,
@@ -359,35 +395,11 @@ pub struct Config {
     // tracing is the tracing configuration for dfdaemon.
     pub tracing: Tracing,
 
+    // health is the health configuration for dfdaemon.
+    pub health: Health,
+
     // network is the network configuration for dfdaemon.
     pub network: Network,
-}
-
-// Default implements default value for Config.
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            data_dir: super::default_data_dir(),
-            plugin_dir: default_dfdaemon_plugin_dir(),
-            cache_dir: default_dfdaemon_cache_dir(),
-            root_dir: super::default_root_dir(),
-            lock_dir: super::default_lock_dir(),
-            host: Host::default(),
-            manager: Manager::default(),
-            scheduler: Scheduler::default(),
-            seed_peer: SeedPeer::default(),
-            dynconfig: Dynconfig::default(),
-            downloader: Downloader::default(),
-            uploader: Uploader::default(),
-            storage: Storage::default(),
-            proxy: Proxy::default(),
-            security: Security::default(),
-            object_storage: ObjectStorage::default(),
-            network: Network::default(),
-            metrics: Metrics::default(),
-            tracing: Tracing::default(),
-        }
-    }
 }
 
 // Config implements the config operation of dfdaemon.
@@ -403,19 +415,54 @@ impl Config {
             config.convert();
             Ok(config)
         } else {
+            let mut config = Self::default();
             info!(
                 "config file {} not found, use default config",
                 path.display()
             );
-            Ok(Self::default())
+
+            // Convert configuration.
+            config.convert();
+            Ok(config)
         }
     }
 
     // convert converts the configuration.
     fn convert(&mut self) {
-        // Convert IP address.
-        if self.network.enable_ipv6 {
-            self.host.ip = local_ipv6().unwrap()
+        // Convert advertise ip.
+        if self.host.ip.is_none() {
+            self.host.ip = if self.network.enable_ipv6 {
+                Some(local_ipv6().unwrap())
+            } else {
+                Some(local_ip().unwrap())
+            }
+        }
+
+        // Convert grpc server listen ip.
+        if self.server.ip.is_none() {
+            self.server.ip = if self.network.enable_ipv6 {
+                Some(Ipv6Addr::UNSPECIFIED.into())
+            } else {
+                Some(Ipv4Addr::UNSPECIFIED.into())
+            }
+        }
+
+        // Convert metrics server listen ip.
+        if self.metrics.ip.is_none() {
+            self.metrics.ip = if self.network.enable_ipv6 {
+                Some(Ipv6Addr::UNSPECIFIED.into())
+            } else {
+                Some(Ipv4Addr::UNSPECIFIED.into())
+            }
+        }
+
+        // Convert health server listen ip.
+        if self.health.ip.is_none() {
+            self.health.ip = if self.network.enable_ipv6 {
+                Some(Ipv6Addr::UNSPECIFIED.into())
+            } else {
+                Some(Ipv4Addr::UNSPECIFIED.into())
+            }
         }
     }
 }

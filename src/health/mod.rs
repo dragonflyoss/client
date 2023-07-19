@@ -15,13 +15,10 @@
  */
 
 use crate::shutdown;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use tracing::info;
 use warp::{Filter, Rejection, Reply};
-
-// DEFAULT_PORT is the default port of the health server.
-const DEFAULT_PORT: u16 = 40901;
 
 // Health is the health server.
 #[derive(Debug)]
@@ -40,17 +37,10 @@ pub struct Health {
 impl Health {
     // new creates a new Metrics.
     pub fn new(
-        enable_ipv6: bool,
+        addr: SocketAddr,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
-        // Initialize the address of the server.
-        let addr = if enable_ipv6 {
-            SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), DEFAULT_PORT)
-        } else {
-            SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), DEFAULT_PORT)
-        };
-
         Self {
             addr,
             shutdown,
