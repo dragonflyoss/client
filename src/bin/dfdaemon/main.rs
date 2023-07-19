@@ -22,6 +22,7 @@ use dragonfly_client::shutdown;
 use dragonfly_client::storage::Storage;
 use dragonfly_client::tracing::init_tracing;
 use std::error::Error;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{info, Level};
@@ -66,14 +67,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Parse command line arguments.
     let args = Args::parse();
 
-    // Initialize tracing.
-    let _guards = init_tracing(dfdaemon::NAME, &args.log_dir, args.log_level, None);
-
     // Load config.
     let config = dfdaemon::Config::load(&args.config)?;
 
+    // Initialize tracing.
+    let _guards = init_tracing(
+        dfdaemon::NAME,
+        &args.log_dir,
+        args.log_level,
+        config.tracing.addr,
+    );
+
     // Initialize storage.
-    let _storage = Storage::new(&config.data_dir)?;
+    let _storage = Storage::new(&config.server.data_dir)?;
 
     // Initialize channel for graceful shutdown.
     let (notify_shutdown, _) = broadcast::channel(1);
@@ -81,14 +87,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Initialize metrics server.
     let mut metrics = Metrics::new(
-        config.network.enable_ipv6,
+        SocketAddr::new(config.metrics.ip.unwrap(), config.metrics.port),
         shutdown::Shutdown::new(notify_shutdown.subscribe()),
         shutdown_complete_tx.clone(),
     );
 
     // Initialize health server.
     let mut health = Health::new(
-        config.network.enable_ipv6,
+        SocketAddr::new(config.health.ip.unwrap(), config.health.port),
         shutdown::Shutdown::new(notify_shutdown.subscribe()),
         shutdown_complete_tx.clone(),
     );
@@ -98,9 +104,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         _ = tokio::spawn(async move { metrics.run().await }) => {
             info!("metrics server exited");
         },
+
         _ = tokio::spawn(async move { health.run().await }) => {
             info!("health server exited");
         },
+
         _ = shutdown::shutdown_signal() => {},
     }
 
