@@ -16,6 +16,7 @@
 
 use std::time::Duration;
 
+pub mod dfdaemon;
 pub mod health;
 pub mod manager;
 pub mod scheduler;

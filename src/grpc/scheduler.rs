@@ -40,12 +40,6 @@ impl SchedulerClient {
         Ok(Self { client })
     }
 
-    // TODO Implement the announce_peer method.
-    // list_schedulers lists all schedulers that best match the client.
-    pub async fn announce_peer(&mut self) -> super::Result<()> {
-        Ok(())
-    }
-
     // stat_peer gets the status of the peer.
     pub async fn stat_peer(&mut self, request: StatPeerRequest) -> super::Result<Peer> {
         let mut request = tonic::Request::new(request);
@@ -100,12 +94,6 @@ impl SchedulerClient {
         request.set_timeout(super::REQUEST_TIMEOUT);
 
         self.client.leave_host(request).await?;
-        Ok(())
-    }
-
-    // TODO Implement the sync_probes method.
-    // sync_probes syncs the probes to the scheduler.
-    pub async fn sync_probes(self) -> super::Result<()> {
         Ok(())
     }
 }
