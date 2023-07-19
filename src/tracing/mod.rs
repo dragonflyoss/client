@@ -27,7 +27,7 @@ pub fn init_tracing(
     name: &str,
     log_dir: &PathBuf,
     log_level: Level,
-    jaeger_addr: Option<&SocketAddr>,
+    jaeger_addr: Option<SocketAddr>,
 ) -> Vec<WorkerGuard> {
     let mut guards = vec![];
 

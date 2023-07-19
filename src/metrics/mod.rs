@@ -18,13 +18,10 @@ use crate::config;
 use crate::shutdown;
 use lazy_static::lazy_static;
 use prometheus::{gather, Encoder, IntCounterVec, IntGaugeVec, Opts, Registry, TextEncoder};
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 use warp::{Filter, Rejection, Reply};
-
-// DEFAULT_PORT is the default port of the metrics server.
-const DEFAULT_PORT: u16 = 8000;
 
 lazy_static! {
     // REGISTRY is used to register all metrics.
@@ -62,17 +59,10 @@ pub struct Metrics {
 impl Metrics {
     // new creates a new Metrics.
     pub fn new(
-        enable_ipv6: bool,
+        addr: SocketAddr,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
-        // Initialize the address of the server.
-        let addr = if enable_ipv6 {
-            SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), DEFAULT_PORT)
-        } else {
-            SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), DEFAULT_PORT)
-        };
-
         Self {
             addr,
             shutdown,
