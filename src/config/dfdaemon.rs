@@ -16,10 +16,10 @@
 
 use local_ip_address::{local_ip, local_ipv6};
 use serde::Deserialize;
-use std::fs;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
+use std::{fmt, fs};
 use tracing::info;
 use validator::Validate;
 
@@ -28,6 +28,12 @@ pub const NAME: &str = "dfdaemon";
 
 // DEFAULT_GRPC_SERVER_PORT is the default port of the grpc server.
 const DEFAULT_GRPC_SERVER_PORT: u16 = 65000;
+
+// DEFAULT_PROXY_SERVER_PORT is the default port of the proxy server.
+// const DEFAULT_PROXY_SERVER_PORT: u16 = 65001;
+
+// DEFAULT_OBJECT_STORAGE_SERVER_PORT is the default port of the object storage server.
+const DEFAULT_OBJECT_STORAGE_SERVER_PORT: u16 = 65002;
 
 // DEFAULT_METRICS_SERVER_PORT is the default port of the metrics server.
 const DEFAULT_METRICS_SERVER_PORT: u16 = 8000;
@@ -156,6 +162,7 @@ pub struct Server {
     pub port: u16,
 }
 
+// Server implements default value for Server.
 impl Default for Server {
     fn default() -> Self {
         Self {
@@ -222,6 +229,17 @@ pub enum SeedPeerType {
     Weak,
 }
 
+// SeedPeerType implements Display.
+impl fmt::Display for SeedPeerType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SeedPeerType::Super => write!(f, "super"),
+            SeedPeerType::Strong => write!(f, "strong"),
+            SeedPeerType::Weak => write!(f, "weak"),
+        }
+    }
+}
+
 // SeedPeer is the seed peer configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -234,7 +252,7 @@ pub struct SeedPeer {
     pub kind: SeedPeerType,
 
     // cluster_id is the cluster id of the seed peer cluster.
-    pub cluster_id: u32,
+    pub cluster_id: u64,
 
     // keepalive_interval is the interval to keep alive with manager.
     pub keepalive_interval: Duration,
@@ -291,11 +309,28 @@ pub struct Security {
 }
 
 // ObjectStorage is the object storage configuration for dfdaemon.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ObjectStorage {
     // enable indicates whether enable object storage.
     pub enable: bool,
+
+    // ip is the listen ip of the object storage server.
+    pub ip: Option<IpAddr>,
+
+    // port is the port to the object storage server.
+    pub port: u16,
+}
+
+// ObjectStorage implements default value for ObjectStorage.
+impl Default for ObjectStorage {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            ip: None,
+            port: DEFAULT_OBJECT_STORAGE_SERVER_PORT,
+        }
+    }
 }
 
 // Network is the network configuration for dfdaemon.
@@ -317,6 +352,7 @@ pub struct Metrics {
     pub port: u16,
 }
 
+// Metrics implements default value for Metrics.
 impl Default for Metrics {
     fn default() -> Self {
         Self {
@@ -441,6 +477,15 @@ impl Config {
         // Convert grpc server listen ip.
         if self.server.ip.is_none() {
             self.server.ip = if self.network.enable_ipv6 {
+                Some(Ipv6Addr::UNSPECIFIED.into())
+            } else {
+                Some(Ipv4Addr::UNSPECIFIED.into())
+            }
+        }
+
+        // Convert object storage server listen ip.
+        if self.object_storage.ip.is_none() {
+            self.object_storage.ip = if self.network.enable_ipv6 {
                 Some(Ipv6Addr::UNSPECIFIED.into())
             } else {
                 Some(Ipv4Addr::UNSPECIFIED.into())

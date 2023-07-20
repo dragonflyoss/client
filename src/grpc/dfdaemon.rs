@@ -49,6 +49,7 @@ pub struct DfdaemonServer {
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
+// TODO Implement security feature for the dfdaemon grpc server.
 // DfdaemonServer implements the grpc server of the dfdaemon.
 impl DfdaemonServer {
     pub fn new(

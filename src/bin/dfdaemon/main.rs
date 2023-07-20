@@ -100,6 +100,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         shutdown_complete_tx.clone(),
     );
 
+    // Initialize dfdaemon grpc server.
     let mut dfdaemon_grpc = DfdaemonServer::new(
         SocketAddr::new(config.server.ip.unwrap(), config.server.port),
         shutdown::Shutdown::new(notify_shutdown.subscribe()),
