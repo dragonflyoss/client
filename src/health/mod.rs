@@ -24,18 +24,18 @@ use warp::{Filter, Rejection, Reply};
 #[derive(Debug)]
 pub struct Health {
     // addr is the address of the health server.
-    pub addr: SocketAddr,
+    addr: SocketAddr,
 
     // shutdown is used to shutdown the health server.
     shutdown: shutdown::Shutdown,
 
-    // _shutdown_complete is used to notify the metrics server is shutdown.
+    // _shutdown_complete is used to notify the health server is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
 // Health implements the health server.
 impl Health {
-    // new creates a new Metrics.
+    // new creates a new Health.
     pub fn new(
         addr: SocketAddr,
         shutdown: shutdown::Shutdown,
@@ -48,14 +48,14 @@ impl Health {
         }
     }
 
-    // run starts the metrics server.
+    // run starts the health server.
     pub async fn run(&mut self) {
         let health_route = warp::path!("healthy")
             .and(warp::get())
             .and(warp::path::end())
             .and_then(Self::health_handler);
 
-        // Start the metrics server and wait for it to finish.
+        // Start the health server and wait for it to finish.
         tokio::select! {
             _ = warp::serve(health_route).run(self.addr) => {
                 // Health server ended.
