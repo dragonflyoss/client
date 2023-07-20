@@ -29,7 +29,7 @@ pub struct HealthClient {
 // HealthClient implements the grpc client of the health.
 impl HealthClient {
     // new creates a new HealthClient.
-    pub async fn new(addr: &SocketAddr) -> super::Result<Self> {
+    pub async fn new(addr: SocketAddr) -> super::Result<Self> {
         let conn = tonic::transport::Endpoint::new(addr.to_string())?
             .connect()
             .await?;

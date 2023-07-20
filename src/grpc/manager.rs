@@ -30,7 +30,7 @@ pub struct ManagerClient {
 // ManagerClient implements the grpc client of the manager.
 impl ManagerClient {
     // new creates a new ManagerClient.
-    pub async fn new(addr: &SocketAddr) -> super::Result<Self> {
+    pub async fn new(addr: SocketAddr) -> super::Result<Self> {
         let conn = tonic::transport::Endpoint::new(addr.to_string())?
             .connect()
             .await?;

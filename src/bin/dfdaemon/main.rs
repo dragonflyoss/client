@@ -16,6 +16,7 @@
 
 use clap::Parser;
 use dragonfly_client::config::dfdaemon;
+use dragonfly_client::grpc::dfdaemon::DfdaemonServer;
 use dragonfly_client::health::Health;
 use dragonfly_client::metrics::Metrics;
 use dragonfly_client::shutdown;
@@ -99,6 +100,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         shutdown_complete_tx.clone(),
     );
 
+    let mut dfdaemon_grpc = DfdaemonServer::new(
+        SocketAddr::new(config.server.ip.unwrap(), config.server.port),
+        shutdown::Shutdown::new(notify_shutdown.subscribe()),
+        shutdown_complete_tx.clone(),
+    );
+
     // Wait for servers to exit or shutdown signal.
     tokio::select! {
         _ = tokio::spawn(async move { metrics.run().await }) => {
@@ -107,6 +114,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         _ = tokio::spawn(async move { health.run().await }) => {
             info!("health server exited");
+        },
+
+        _ = tokio::spawn(async move { dfdaemon_grpc.run().await }) => {
+            info!("dfdaemon grpc server exited");
         },
 
         _ = shutdown::shutdown_signal() => {},

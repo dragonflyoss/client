@@ -32,7 +32,7 @@ pub struct SchedulerClient {
 // SchedulerClient implements the grpc client of the scheduler.
 impl SchedulerClient {
     // new creates a new SchedulerClient.
-    pub async fn new(addr: &SocketAddr) -> super::Result<Self> {
+    pub async fn new(addr: SocketAddr) -> super::Result<Self> {
         let conn = tonic::transport::Endpoint::new(addr.to_string())?
             .connect()
             .await?;
