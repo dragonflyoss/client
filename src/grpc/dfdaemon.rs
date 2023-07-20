@@ -66,11 +66,19 @@ impl DfdaemonServer {
 
     // run starts the metrics server.
     pub async fn run(&mut self) {
-        info!("dfdaemon grpc server listening on {}", self.addr);
+        // Register the reflection service.
+        let reflection = tonic_reflection::server::Builder::configure()
+            .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
+            .build()
+            .unwrap();
+
+        // Start the grpc server.
+        info!("listening on {}", self.addr);
         Server::builder()
+            .add_service(reflection)
             .add_service(DfdaemonGRPCServer::new(self.handler))
             .serve_with_shutdown(self.addr, async move {
-                // Health server shutting down with signals.
+                // Dfdaemon grpc server shutting down with signals.
                 let _ = self.shutdown.recv().await;
                 info!("dfdaemon grpc server shutting down");
             })
