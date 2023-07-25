@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::Result;
 use std::net::SocketAddr;
 use tonic::transport::Channel;
 use tonic_health::pb::{
@@ -29,7 +30,7 @@ pub struct HealthClient {
 // HealthClient implements the grpc client of the health.
 impl HealthClient {
     // new creates a new HealthClient.
-    pub async fn new(addr: SocketAddr) -> super::Result<Self> {
+    pub async fn new(addr: SocketAddr) -> Result<Self> {
         let conn = tonic::transport::Endpoint::new(addr.to_string())?
             .connect()
             .await?;
@@ -38,10 +39,7 @@ impl HealthClient {
     }
 
     // check checks the health of the server.
-    pub async fn check(
-        &mut self,
-        request: HealthCheckRequest,
-    ) -> super::Result<HealthCheckResponse> {
+    pub async fn check(&mut self, request: HealthCheckRequest) -> Result<HealthCheckResponse> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 

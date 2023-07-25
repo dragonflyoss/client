@@ -15,6 +15,7 @@
  */
 
 use crate::shutdown;
+use crate::Result as ClientResult;
 use dragonfly_api::common::Task;
 use dragonfly_api::dfdaemon::{
     dfdaemon_client::DfdaemonClient as DfdaemonGRPCClient,
@@ -49,6 +50,7 @@ pub struct DfdaemonServer {
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
+// TODO Implement security feature for the dfdaemon grpc server.
 // DfdaemonServer implements the grpc server of the dfdaemon.
 impl DfdaemonServer {
     pub fn new(
@@ -151,7 +153,7 @@ pub struct DfdaemonClient {
 // DfdaemonClient implements the grpc client of the dfdaemon.
 impl DfdaemonClient {
     // new creates a new DfdaemonClient.
-    pub async fn new(addr: SocketAddr) -> super::Result<Self> {
+    pub async fn new(addr: SocketAddr) -> ClientResult<Self> {
         let conn = tonic::transport::Endpoint::new(addr.to_string())?
             .connect()
             .await?;
@@ -163,7 +165,7 @@ impl DfdaemonClient {
     }
 
     // download_task tells the dfdaemon to download the task.
-    pub async fn download_task(&mut self, request: DownloadTaskRequest) -> super::Result<()> {
+    pub async fn download_task(&mut self, request: DownloadTaskRequest) -> ClientResult<()> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
@@ -172,7 +174,7 @@ impl DfdaemonClient {
     }
 
     // upload_task tells the dfdaemon to upload the task.
-    pub async fn upload_task(&mut self, request: UploadTaskRequest) -> super::Result<()> {
+    pub async fn upload_task(&mut self, request: UploadTaskRequest) -> ClientResult<()> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
@@ -181,7 +183,7 @@ impl DfdaemonClient {
     }
 
     // stat_task gets the status of the task.
-    pub async fn stat_task(&mut self, request: StatTaskRequest) -> super::Result<Task> {
+    pub async fn stat_task(&mut self, request: StatTaskRequest) -> ClientResult<Task> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
@@ -190,7 +192,7 @@ impl DfdaemonClient {
     }
 
     // delete_task tells the dfdaemon to delete the task.
-    pub async fn delete_task(&mut self, request: DeleteTaskRequest) -> super::Result<()> {
+    pub async fn delete_task(&mut self, request: DeleteTaskRequest) -> ClientResult<()> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 

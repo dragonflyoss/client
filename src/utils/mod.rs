@@ -14,4 +14,4 @@
  * limitations under the License.
  */
 
-pub mod http;
+pub mod id_generator;

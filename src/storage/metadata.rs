@@ -15,6 +15,7 @@
  */
 
 use crate::config;
+use crate::{Error, Result};
 use chrono::{NaiveDateTime, Utc};
 use rocksdb::{BlockBasedOptions, Cache, ColumnFamily, Options, DB};
 use serde::{Deserialize, Serialize};
@@ -97,7 +98,7 @@ pub struct Metadata {
 // Metadata implements the metadata storage.
 impl Metadata {
     // new returns a new metadata.
-    pub fn new(data_dir: &Path) -> super::Result<Metadata> {
+    pub fn new(data_dir: &Path) -> Result<Metadata> {
         // Initialize rocksdb options.
         let mut options = Options::default();
         options.create_if_missing(true);
@@ -124,7 +125,7 @@ impl Metadata {
     }
 
     // download_task_started updates the metadata of the task when the task downloads started.
-    pub fn download_task_started(&self, id: &str, piece_length: u64) -> super::Result<()> {
+    pub fn download_task_started(&self, id: &str, piece_length: u64) -> Result<()> {
         let task = match self.get_task(id)? {
             // If the task exists, update the updated_at.
             Some(mut task) => {
@@ -145,19 +146,19 @@ impl Metadata {
     }
 
     // upload_task_finished updates the metadata of the task when task uploads finished.
-    pub fn upload_task_finished(&self, id: &str) -> super::Result<()> {
+    pub fn upload_task_finished(&self, id: &str) -> Result<()> {
         match self.get_task(id)? {
             Some(mut task) => {
                 task.uploaded_count += 1;
                 task.updated_at = Utc::now().naive_utc();
                 self.put_task(id, &task)
             }
-            None => Err(super::Error::TaskNotFound(id.to_string())),
+            None => Err(Error::TaskNotFound(id.to_string())),
         }
     }
 
     // get_task gets the task metadata.
-    pub fn get_task(&self, id: &str) -> super::Result<Option<Task>> {
+    pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         let handle = self.cf_handle(TASK_CF_NAME)?;
         match self.db.get_cf(handle, id)? {
             Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
@@ -166,7 +167,7 @@ impl Metadata {
     }
 
     // download_piece_started updates the metadata of the piece when the piece downloads started.
-    pub fn download_piece_started(&self, id: &str, number: u32) -> super::Result<()> {
+    pub fn download_piece_started(&self, id: &str, number: u32) -> Result<()> {
         self.put_piece(
             id,
             &Piece {
@@ -185,7 +186,7 @@ impl Metadata {
         offset: u64,
         length: u64,
         digest: &str,
-    ) -> super::Result<()> {
+    ) -> Result<()> {
         match self.get_piece(id)? {
             Some(mut piece) => {
                 piece.offset = offset;
@@ -194,24 +195,24 @@ impl Metadata {
                 piece.updated_at = Utc::now().naive_utc();
                 self.put_piece(id, &piece)
             }
-            None => Err(super::Error::PieceNotFound(id.to_string())),
+            None => Err(Error::PieceNotFound(id.to_string())),
         }
     }
 
     // upload_piece_finished updates the metadata of the piece when piece uploads finished.
-    pub fn upload_piece_finished(&self, id: &str) -> super::Result<()> {
+    pub fn upload_piece_finished(&self, id: &str) -> Result<()> {
         match self.get_piece(id)? {
             Some(mut piece) => {
                 piece.uploaded_count += 1;
                 piece.updated_at = Utc::now().naive_utc();
                 self.put_piece(id, &piece)
             }
-            None => Err(super::Error::PieceNotFound(id.to_string())),
+            None => Err(Error::PieceNotFound(id.to_string())),
         }
     }
 
     // get_piece gets the piece metadata.
-    pub fn get_piece(&self, id: &str) -> super::Result<Option<Piece>> {
+    pub fn get_piece(&self, id: &str) -> Result<Option<Piece>> {
         let handle = self.cf_handle(PIECE_CF_NAME)?;
         match self.db.get_cf(handle, id.as_bytes())? {
             Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
@@ -225,7 +226,7 @@ impl Metadata {
     }
 
     // put_task puts the task metadata.
-    fn put_task(&self, id: &str, task: &Task) -> super::Result<()> {
+    fn put_task(&self, id: &str, task: &Task) -> Result<()> {
         let handle = self.cf_handle(TASK_CF_NAME)?;
         let json = serde_json::to_string(&task)?;
         self.db.put_cf(handle, id.as_bytes(), json.as_bytes())?;
@@ -233,7 +234,7 @@ impl Metadata {
     }
 
     // put_piece puts the piece metadata.
-    fn put_piece(&self, id: &str, piece: &Piece) -> super::Result<()> {
+    fn put_piece(&self, id: &str, piece: &Piece) -> Result<()> {
         let handle = self.cf_handle(PIECE_CF_NAME)?;
         let json = serde_json::to_string(&piece)?;
         self.db.put_cf(handle, id.as_bytes(), json.as_bytes())?;
@@ -241,9 +242,9 @@ impl Metadata {
     }
 
     // cf_handle returns the column family handle.
-    fn cf_handle(&self, cf_name: &str) -> super::Result<&ColumnFamily> {
+    fn cf_handle(&self, cf_name: &str) -> Result<&ColumnFamily> {
         self.db
             .cf_handle(cf_name)
-            .ok_or_else(|| super::Error::ColumnFamilyNotFound(cf_name.to_string()))
+            .ok_or_else(|| Error::ColumnFamilyNotFound(cf_name.to_string()))
     }
 }

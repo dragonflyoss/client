@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::Result;
 use dragonfly_api::security::{
     certificate_client::CertificateClient as CertificateGRPCClient, CertificateRequest,
     CertificateResponse,
@@ -30,7 +31,7 @@ pub struct CertificateClient {
 // CertificateClient implements the grpc client of the certificate.
 impl CertificateClient {
     // new creates a new CertificateClient.
-    pub async fn new(addr: SocketAddr) -> super::Result<Self> {
+    pub async fn new(addr: SocketAddr) -> Result<Self> {
         let conn = tonic::transport::Endpoint::new(addr.to_string())?
             .connect()
             .await?;
@@ -42,7 +43,7 @@ impl CertificateClient {
     pub async fn issue_certificate(
         &mut self,
         request: CertificateRequest,
-    ) -> super::Result<CertificateResponse> {
+    ) -> Result<CertificateResponse> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 

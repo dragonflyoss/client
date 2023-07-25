@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::Result;
 use dragonfly_api::common::{Peer, Task};
 use dragonfly_api::scheduler::{
     scheduler_client::SchedulerClient as SchedulerGRPCClient, AnnounceHostRequest,
@@ -32,7 +33,10 @@ pub struct SchedulerClient {
 // SchedulerClient implements the grpc client of the scheduler.
 impl SchedulerClient {
     // new creates a new SchedulerClient.
-    pub async fn new(addr: SocketAddr) -> super::Result<Self> {
+    pub async fn new() -> Result<Self> {
+        // TODO: read the scheduler address from dynamic config.
+        let addr = SocketAddr::from(([127, 0, 0, 1], 8002));
+
         let conn = tonic::transport::Endpoint::new(addr.to_string())?
             .connect()
             .await?;
@@ -41,7 +45,7 @@ impl SchedulerClient {
     }
 
     // stat_peer gets the status of the peer.
-    pub async fn stat_peer(&mut self, request: StatPeerRequest) -> super::Result<Peer> {
+    pub async fn stat_peer(&mut self, request: StatPeerRequest) -> Result<Peer> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
@@ -50,7 +54,7 @@ impl SchedulerClient {
     }
 
     // leave_peer tells the scheduler that the peer is leaving.
-    pub async fn leave_peer(&mut self, request: LeavePeerRequest) -> super::Result<()> {
+    pub async fn leave_peer(&mut self, request: LeavePeerRequest) -> Result<()> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
@@ -62,7 +66,7 @@ impl SchedulerClient {
     pub async fn exchange_peer(
         &mut self,
         request: ExchangePeerRequest,
-    ) -> super::Result<ExchangePeerResponse> {
+    ) -> Result<ExchangePeerResponse> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
@@ -71,7 +75,7 @@ impl SchedulerClient {
     }
 
     // stat_task gets the status of the task.
-    pub async fn stat_task(&mut self, request: StatTaskRequest) -> super::Result<Task> {
+    pub async fn stat_task(&mut self, request: StatTaskRequest) -> Result<Task> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
@@ -80,7 +84,7 @@ impl SchedulerClient {
     }
 
     // announce_host announces the host to the scheduler.
-    pub async fn announce_host(&mut self, request: AnnounceHostRequest) -> super::Result<()> {
+    pub async fn announce_host(&mut self, request: AnnounceHostRequest) -> Result<()> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
@@ -89,7 +93,7 @@ impl SchedulerClient {
     }
 
     // leave_host tells the scheduler that the host is leaving.
-    pub async fn leave_host(&mut self, request: LeaveHostRequest) -> super::Result<()> {
+    pub async fn leave_host(&mut self, request: LeaveHostRequest) -> Result<()> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 

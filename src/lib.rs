@@ -26,3 +26,63 @@ pub mod shutdown;
 pub mod storage;
 pub mod task;
 pub mod tracing;
+pub mod utils;
+
+// Error is the error for Client.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    // RocksDB is the error for rocksdb.
+    #[error(transparent)]
+    RocksDB(#[from] rocksdb::Error),
+
+    // JSON is the error for serde_json.
+    #[error(transparent)]
+    JSON(#[from] serde_json::Error),
+
+    // IO is the error for IO operation.
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
+
+    // URLParse is the error for url parse.
+    #[error(transparent)]
+    URLParse(#[from] url::ParseError),
+
+    // TonicTransport is the error for tonic transport.
+    #[error(transparent)]
+    TonicTransport(#[from] tonic::transport::Error),
+
+    // TonicStatus is the error for tonic status.
+    #[error(transparent)]
+    TonicStatus(#[from] tonic::Status),
+
+    // Reqwest is the error for reqwest.
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
+
+    // TaskNotFound is the error when the task is not found.
+    #[error{"task {0} not found"}]
+    TaskNotFound(String),
+
+    // PieceNotFound is the error when the piece is not found.
+    #[error{"piece {0} not found"}]
+    PieceNotFound(String),
+
+    // PieceStateIsFailed is the error when the piece state is failed.
+    #[error{"piece {0} state is failed"}]
+    PieceStateIsFailed(String),
+
+    // ColumnFamilyNotFound is the error when the column family is not found.
+    #[error{"column family {0} not found"}]
+    ColumnFamilyNotFound(String),
+
+    // InvalidStateTransition is the error when the state transition is invalid.
+    #[error{"can not transit from {0} to {1}"}]
+    InvalidStateTransition(String, String),
+
+    // InvalidState is the error when the state is invalid.
+    #[error{"invalid state {0}"}]
+    InvalidState(String),
+}
+
+// Result is the result for Client.
+pub type Result<T> = std::result::Result<T, Error>;

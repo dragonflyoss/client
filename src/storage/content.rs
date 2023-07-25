@@ -15,6 +15,7 @@
  */
 
 use crate::config;
+use crate::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tokio::fs::File;
@@ -33,7 +34,7 @@ pub struct Content {
 // Content implements the content storage.
 impl Content {
     // new returns a new content.
-    pub fn new(data_dir: &Path) -> super::Result<Content> {
+    pub fn new(data_dir: &Path) -> Result<Content> {
         let dir = data_dir.join(config::NAME).join(DEFAULT_DIR_NAME);
         fs::create_dir_all(&dir)?;
         info!("create content directory: {:?}", dir);
@@ -47,7 +48,7 @@ impl Content {
         task_id: &str,
         offset: u64,
         length: u64,
-    ) -> super::Result<impl AsyncRead> {
+    ) -> Result<impl AsyncRead> {
         let mut f = File::open(self.dir.join(task_id)).await?;
         f.seek(SeekFrom::Start(offset)).await?;
         Ok(f.take(length))
@@ -59,7 +60,7 @@ impl Content {
         task_id: &str,
         offset: u64,
         reader: &mut R,
-    ) -> super::Result<u64> {
+    ) -> Result<u64> {
         let mut f = File::open(self.dir.join(task_id)).await?;
         f.seek(SeekFrom::Start(offset)).await?;
         Ok(io::copy(reader, &mut f).await?)
