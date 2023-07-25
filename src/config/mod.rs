@@ -26,6 +26,12 @@ pub const SERVICE_NAME: &str = "dragonfly";
 // NAME is the name of the package.
 pub const NAME: &str = "client";
 
+// CARGO_PKG_VERSION is the version of the cargo package.
+pub const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+// CARGO_PKG_RUSTC_VERSION is the minimum Rust version supported by the package, not the current Rust version.
+pub const CARGO_PKG_RUSTC_VERSION: &str = env!("CARGO_PKG_RUST_VERSION");
+
 // default_root_dir is the default root directory for client.
 pub fn default_root_dir() -> PathBuf {
     #[cfg(target_os = "linux")]

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::Result;
 use dragonfly_api::manager::{
     manager_client::ManagerClient as ManagerGRPCClient, GetObjectStorageRequest,
     ListSchedulersRequest, ListSchedulersResponse, ObjectStorage, SeedPeer, UpdateSeedPeerRequest,
@@ -30,7 +31,7 @@ pub struct ManagerClient {
 // ManagerClient implements the grpc client of the manager.
 impl ManagerClient {
     // new creates a new ManagerClient.
-    pub async fn new(addr: SocketAddr) -> super::Result<Self> {
+    pub async fn new(addr: SocketAddr) -> Result<Self> {
         let conn = tonic::transport::Endpoint::new(addr.to_string())?
             .connect()
             .await?;
@@ -42,7 +43,7 @@ impl ManagerClient {
     pub async fn list_schedulers(
         &mut self,
         request: ListSchedulersRequest,
-    ) -> super::Result<ListSchedulersResponse> {
+    ) -> Result<ListSchedulersResponse> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
@@ -54,7 +55,7 @@ impl ManagerClient {
     pub async fn get_object_storage(
         &mut self,
         request: GetObjectStorageRequest,
-    ) -> super::Result<ObjectStorage> {
+    ) -> Result<ObjectStorage> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
@@ -63,10 +64,7 @@ impl ManagerClient {
     }
 
     // update_seed_peer updates the seed peer information.
-    pub async fn update_seed_peer(
-        &mut self,
-        request: UpdateSeedPeerRequest,
-    ) -> super::Result<SeedPeer> {
+    pub async fn update_seed_peer(&mut self, request: UpdateSeedPeerRequest) -> Result<SeedPeer> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 

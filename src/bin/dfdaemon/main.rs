@@ -15,13 +15,17 @@
  */
 
 use clap::Parser;
+use dragonfly_client::announcer::Announcer;
 use dragonfly_client::config::dfdaemon;
-use dragonfly_client::grpc::dfdaemon::DfdaemonServer;
+use dragonfly_client::grpc::{
+    dfdaemon::DfdaemonServer, manager::ManagerClient, scheduler::SchedulerClient,
+};
 use dragonfly_client::health::Health;
 use dragonfly_client::metrics::Metrics;
 use dragonfly_client::shutdown;
 use dragonfly_client::storage::Storage;
 use dragonfly_client::tracing::init_tracing;
+use dragonfly_client::utils::id_generator::IDGenerator;
 use std::error::Error;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -82,6 +86,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Initialize storage.
     let _storage = Storage::new(&config.server.data_dir)?;
 
+    // Initialize id generator.
+    let id_generator = IDGenerator::new(
+        config.host.ip.unwrap().to_string(),
+        config.host.hostname.clone(),
+    );
+
+    // Initialize manager client.
+    let manager_client = ManagerClient::new(config.manager.addr.unwrap()).await?;
+
+    // Initialize scheduler client.
+    let scheduler_client = SchedulerClient::new().await?;
+
     // Initialize channel for graceful shutdown.
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::unbounded_channel();
@@ -96,6 +112,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Initialize health server.
     let mut health = Health::new(
         SocketAddr::new(config.health.ip.unwrap(), config.health.port),
+        shutdown::Shutdown::new(notify_shutdown.subscribe()),
+        shutdown_complete_tx.clone(),
+    );
+
+    // Initialize announcer.
+    let mut announcer = Announcer::new(
+        config.clone(),
+        id_generator.host_id(),
+        manager_client,
+        scheduler_client,
         shutdown::Shutdown::new(notify_shutdown.subscribe()),
         shutdown_complete_tx.clone(),
     );
@@ -115,6 +141,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         _ = tokio::spawn(async move { health.run().await }) => {
             info!("health server exited");
+        },
+
+        _ = tokio::spawn(async move { announcer.run().await }) => {
+            info!("announcer grpc server exited");
         },
 
         _ = tokio::spawn(async move { dfdaemon_grpc.run().await }) => {

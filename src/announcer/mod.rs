@@ -14,27 +14,28 @@
  * limitations under the License.
  */
 
-use crate::config::dfdaemon::Config;
-use crate::grpc::{self, manager::ManagerClient, scheduler::SchedulerClient};
+use crate::config::{
+    dfdaemon::{Config, HostType},
+    CARGO_PKG_RUSTC_VERSION, CARGO_PKG_VERSION,
+};
+use crate::grpc::{manager::ManagerClient, scheduler::SchedulerClient};
 use crate::shutdown;
+use crate::Result;
+use dragonfly_api::common::{Build, Cpu, Host, Memory, Network};
 use dragonfly_api::manager::{SourceType, UpdateSeedPeerRequest};
+use dragonfly_api::scheduler::AnnounceHostRequest;
+use std::env;
+use sysinfo::{CpuExt, ProcessExt, System, SystemExt};
 use tokio::sync::mpsc;
-
-// Error is the error for GRPC.
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    // GRPC is the error for the grpc server.
-    #[error(transparent)]
-    GRPC(#[from] grpc::Error),
-}
-
-// Result is the result for Announcer.
-pub type Result<T> = std::result::Result<T, Error>;
+use tracing::{error, info};
 
 // Announcer is used to announce the dfdaemon information to the manager and scheduler.
 pub struct Announcer {
     // config is the configuration of the dfdaemon.
     config: Config,
+
+    // host_id is the id of the host.
+    host_id: String,
 
     // manager_client is the grpc client of the manager.
     manager_client: ManagerClient,
@@ -54,6 +55,7 @@ impl Announcer {
     // new creates a new announcer.
     pub fn new(
         config: Config,
+        host_id: String,
         manager_client: ManagerClient,
         scheduler_client: SchedulerClient,
         shutdown: shutdown::Shutdown,
@@ -61,6 +63,7 @@ impl Announcer {
     ) -> Self {
         Self {
             config,
+            host_id,
             manager_client,
             scheduler_client,
             shutdown,
@@ -69,22 +72,20 @@ impl Announcer {
     }
 
     // run starts the announcer.
-    pub async fn run(&mut self) {
-        let mut interval = tokio::time::interval(self.config.scheduler.announce_interval);
+    pub async fn run(&mut self) -> Result<()> {
+        // Announce the dfdaemon information to the manager.
+        self.announce_to_manager().await?;
 
-        loop {
-            tokio::select! {
-                _ = interval.tick() => {
-                }
-                _ = self.shutdown.recv() => {
-                }
-            }
-        }
+        // Announce the dfdaemon information to the scheduler.
+        self.announce_to_scheduler().await;
+        Ok(())
     }
 
     // announce_to_manager announces the dfdaemon information to the manager.
     pub async fn announce_to_manager(&mut self) -> Result<()> {
+        // If the seed peer is enabled, we should announce the seed peer to the manager.
         if self.config.seed_peer.enable {
+            // Get the object storage port.
             let object_storage_port = if self.config.object_storage.enable {
                 self.config.object_storage.port
             } else {
@@ -97,13 +98,8 @@ impl Announcer {
                     source_type: SourceType::SeedPeerSource.into(),
                     hostname: self.config.host.hostname.clone(),
                     r#type: self.config.seed_peer.kind.to_string(),
-                    idc: self.config.host.idc.clone().map_or("".to_string(), |v| v),
-                    location: self
-                        .config
-                        .host
-                        .location
-                        .clone()
-                        .map_or("".to_string(), |v| v),
+                    idc: self.config.host.idc.clone(),
+                    location: self.config.host.location.clone(),
                     ip: self.config.host.ip.unwrap().to_string(),
                     port: self.config.server.port as i32,
                     download_port: self.config.server.port as i32,
@@ -117,7 +113,111 @@ impl Announcer {
     }
 
     // announce_to_scheduler announces the dfdaemon information to the scheduler.
-    pub async fn announce_to_scheduler(&mut self) -> Result<()> {
+    pub async fn announce_to_scheduler(&mut self) {
+        let mut interval = tokio::time::interval(self.config.scheduler.announce_interval);
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    if let Err(err) = self.announce_host().await {
+                        error!("announce host to scheduler failed: {}", err);
+                    };
+                }
+                _ = self.shutdown.recv() => {
+                    // Announce to scehduler shutting down with signals.
+                    info!("announce to scheduler shutting down");
+                    return
+                }
+            }
+        }
+    }
+
+    // announce_host announces the dfdaemon information to the scheduler.
+    async fn announce_host(&mut self) -> Result<()> {
+        // If the seed peer is enabled, we should announce the seed peer to the scheduler.
+        let host_type = if self.config.seed_peer.enable {
+            self.config.seed_peer.kind
+        } else {
+            HostType::Normal
+        };
+
+        // Get the system information.
+        let mut sys = System::new_all();
+        sys.refresh_all();
+
+        // Get the process information.
+        let process = sys.process(sysinfo::get_current_pid().unwrap()).unwrap();
+
+        // Get the cpu information.
+        let cpu = Cpu {
+            logical_count: sys.physical_core_count().unwrap_or_default() as u32,
+            physical_count: sys.physical_core_count().unwrap_or_default() as u32,
+            percent: sys.global_cpu_info().cpu_usage() as f64,
+            process_percent: process.cpu_usage() as f64,
+
+            // TODO Get the cpu times.
+            times: None,
+        };
+
+        // Get the memory information.
+        let memory = Memory {
+            total: sys.total_memory(),
+            available: sys.available_memory(),
+            used: sys.used_memory(),
+            used_percent: (sys.used_memory() / sys.total_memory()) as f64,
+
+            // TODO Get the process used memory.
+            process_used_percent: 0 as f64,
+            free: sys.free_memory(),
+        };
+
+        // Get the network information.
+        let network = Network {
+            // TODO Get the count of the tcp connection.
+            tcp_connection_count: 0,
+
+            // TODO Get the count of the upload tcp connection.
+            upload_tcp_connection_count: 0,
+            idc: self.config.host.idc.clone(),
+            location: self.config.host.location.clone(),
+        };
+
+        // Get the build information.
+        let build = Build {
+            git_version: CARGO_PKG_VERSION.to_string(),
+            git_commit: None,
+            go_version: None,
+            rust_version: Some(CARGO_PKG_RUSTC_VERSION.to_string()),
+            platform: None,
+        };
+
+        // Struct the host information.
+        let host = Host {
+            id: self.host_id.to_string(),
+            r#type: host_type as u32,
+            hostname: self.config.host.hostname.clone(),
+            ip: self.config.host.ip.unwrap().to_string(),
+            port: self.config.server.port as i32,
+            download_port: self.config.server.port as i32,
+            os: env::consts::OS.to_string(),
+            platform: env::consts::OS.to_string(),
+            platform_family: env::consts::FAMILY.to_string(),
+            platform_version: sys.os_version().unwrap_or_default(),
+            kernel_version: sys.kernel_version().unwrap_or_default(),
+            cpu: Some(cpu),
+            memory: Some(memory),
+            network: Some(network),
+
+            // TODO Get the disk information.
+            disk: None,
+            build: Some(build),
+        };
+
+        // Announce the host to the scheduler.
+        self.scheduler_client
+            .announce_host(AnnounceHostRequest { host: Some(host) })
+            .await?;
+
         Ok(())
     }
 }

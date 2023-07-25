@@ -181,8 +181,8 @@ impl Default for Server {
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Manager {
-    // addrs is manager addresses.
-    pub addrs: Vec<SocketAddr>,
+    // addr is manager address.
+    pub addr: Option<SocketAddr>,
 }
 
 // Scheduler is the scheduler configuration for dfdaemon.
@@ -213,9 +213,13 @@ impl Default for Scheduler {
     }
 }
 
-// SeedPeerType is the type of seed peer.
+// HostType is the type of the host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-pub enum SeedPeerType {
+pub enum HostType {
+    // Normal indicates the peer is normal peer.
+    #[serde(rename = "normal")]
+    Normal,
+
     // Super indicates the peer is super seed peer.
     #[serde(rename = "super")]
     Super,
@@ -229,13 +233,14 @@ pub enum SeedPeerType {
     Weak,
 }
 
-// SeedPeerType implements Display.
-impl fmt::Display for SeedPeerType {
+// HostType implements Display.
+impl fmt::Display for HostType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SeedPeerType::Super => write!(f, "super"),
-            SeedPeerType::Strong => write!(f, "strong"),
-            SeedPeerType::Weak => write!(f, "weak"),
+            HostType::Normal => write!(f, "normal"),
+            HostType::Super => write!(f, "super"),
+            HostType::Strong => write!(f, "strong"),
+            HostType::Weak => write!(f, "weak"),
         }
     }
 }
@@ -249,7 +254,7 @@ pub struct SeedPeer {
 
     // kind is the type of seed peer.
     #[serde(rename = "type")]
-    pub kind: SeedPeerType,
+    pub kind: HostType,
 
     // cluster_id is the cluster id of the seed peer cluster.
     pub cluster_id: u64,
@@ -263,7 +268,7 @@ impl Default for SeedPeer {
     fn default() -> Self {
         Self {
             enable: false,
-            kind: SeedPeerType::Super,
+            kind: HostType::Super,
             cluster_id: 1,
             keepalive_interval: default_seed_peer_keepalive_interval(),
         }
