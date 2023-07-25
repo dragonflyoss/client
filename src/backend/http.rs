@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::Result;
 use futures::TryStreamExt;
 use reqwest::header::HeaderMap;
 use std::time::Duration;
@@ -46,7 +47,7 @@ pub struct HTTP {}
 // HTTP implements the http interface.
 impl HTTP {
     // Get gets the content of the request.
-    pub async fn get(&self, req: Request) -> super::Result<Response<impl AsyncRead>> {
+    pub async fn get(&self, req: Request) -> Result<Response<impl AsyncRead>> {
         let mut request_builder = reqwest::Client::new().get(&req.url).headers(req.header);
         if let Some(timeout) = req.timeout {
             request_builder = request_builder.timeout(timeout);

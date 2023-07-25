@@ -16,10 +16,10 @@
 
 use local_ip_address::{local_ip, local_ipv6};
 use serde::Deserialize;
-use std::fs;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
+use std::{fmt, fs};
 use tracing::info;
 use validator::Validate;
 
@@ -28,6 +28,12 @@ pub const NAME: &str = "dfdaemon";
 
 // DEFAULT_GRPC_SERVER_PORT is the default port of the grpc server.
 const DEFAULT_GRPC_SERVER_PORT: u16 = 65000;
+
+// DEFAULT_PROXY_SERVER_PORT is the default port of the proxy server.
+// const DEFAULT_PROXY_SERVER_PORT: u16 = 65001;
+
+// DEFAULT_OBJECT_STORAGE_SERVER_PORT is the default port of the object storage server.
+const DEFAULT_OBJECT_STORAGE_SERVER_PORT: u16 = 65002;
 
 // DEFAULT_METRICS_SERVER_PORT is the default port of the metrics server.
 const DEFAULT_METRICS_SERVER_PORT: u16 = 8000;
@@ -156,6 +162,7 @@ pub struct Server {
     pub port: u16,
 }
 
+// Server implements default value for Server.
 impl Default for Server {
     fn default() -> Self {
         Self {
@@ -174,8 +181,8 @@ impl Default for Server {
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Manager {
-    // addrs is manager addresses.
-    pub addrs: Vec<SocketAddr>,
+    // addr is manager address.
+    pub addr: Option<SocketAddr>,
 }
 
 // Scheduler is the scheduler configuration for dfdaemon.
@@ -206,9 +213,13 @@ impl Default for Scheduler {
     }
 }
 
-// SeedPeerType is the type of seed peer.
+// HostType is the type of the host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-pub enum SeedPeerType {
+pub enum HostType {
+    // Normal indicates the peer is normal peer.
+    #[serde(rename = "normal")]
+    Normal,
+
     // Super indicates the peer is super seed peer.
     #[serde(rename = "super")]
     Super,
@@ -222,6 +233,18 @@ pub enum SeedPeerType {
     Weak,
 }
 
+// HostType implements Display.
+impl fmt::Display for HostType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HostType::Normal => write!(f, "normal"),
+            HostType::Super => write!(f, "super"),
+            HostType::Strong => write!(f, "strong"),
+            HostType::Weak => write!(f, "weak"),
+        }
+    }
+}
+
 // SeedPeer is the seed peer configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -231,10 +254,10 @@ pub struct SeedPeer {
 
     // kind is the type of seed peer.
     #[serde(rename = "type")]
-    pub kind: SeedPeerType,
+    pub kind: HostType,
 
     // cluster_id is the cluster id of the seed peer cluster.
-    pub cluster_id: u32,
+    pub cluster_id: u64,
 
     // keepalive_interval is the interval to keep alive with manager.
     pub keepalive_interval: Duration,
@@ -245,7 +268,7 @@ impl Default for SeedPeer {
     fn default() -> Self {
         Self {
             enable: false,
-            kind: SeedPeerType::Super,
+            kind: HostType::Super,
             cluster_id: 1,
             keepalive_interval: default_seed_peer_keepalive_interval(),
         }
@@ -291,11 +314,28 @@ pub struct Security {
 }
 
 // ObjectStorage is the object storage configuration for dfdaemon.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ObjectStorage {
     // enable indicates whether enable object storage.
     pub enable: bool,
+
+    // ip is the listen ip of the object storage server.
+    pub ip: Option<IpAddr>,
+
+    // port is the port to the object storage server.
+    pub port: u16,
+}
+
+// ObjectStorage implements default value for ObjectStorage.
+impl Default for ObjectStorage {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            ip: None,
+            port: DEFAULT_OBJECT_STORAGE_SERVER_PORT,
+        }
+    }
 }
 
 // Network is the network configuration for dfdaemon.
@@ -317,6 +357,7 @@ pub struct Metrics {
     pub port: u16,
 }
 
+// Metrics implements default value for Metrics.
 impl Default for Metrics {
     fn default() -> Self {
         Self {
@@ -441,6 +482,15 @@ impl Config {
         // Convert grpc server listen ip.
         if self.server.ip.is_none() {
             self.server.ip = if self.network.enable_ipv6 {
+                Some(Ipv6Addr::UNSPECIFIED.into())
+            } else {
+                Some(Ipv4Addr::UNSPECIFIED.into())
+            }
+        }
+
+        // Convert object storage server listen ip.
+        if self.object_storage.ip.is_none() {
+            self.object_storage.ip = if self.network.enable_ipv6 {
                 Some(Ipv6Addr::UNSPECIFIED.into())
             } else {
                 Some(Ipv4Addr::UNSPECIFIED.into())
