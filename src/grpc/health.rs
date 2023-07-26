@@ -15,7 +15,6 @@
  */
 
 use crate::Result;
-use std::net::SocketAddr;
 use tonic::transport::Channel;
 use tonic_health::pb::{
     health_client::HealthClient as HealthGRPCClient, HealthCheckRequest, HealthCheckResponse,
@@ -30,11 +29,11 @@ pub struct HealthClient {
 // HealthClient implements the grpc client of the health.
 impl HealthClient {
     // new creates a new HealthClient.
-    pub async fn new(addr: SocketAddr) -> Result<Self> {
-        let conn = tonic::transport::Endpoint::new(addr.to_string())?
+    pub async fn new(addr: String) -> Result<Self> {
+        let channel = Channel::from_static(Box::leak(addr.into_boxed_str()))
             .connect()
             .await?;
-        let client = HealthGRPCClient::new(conn);
+        let client = HealthGRPCClient::new(channel);
         Ok(Self { client })
     }
 

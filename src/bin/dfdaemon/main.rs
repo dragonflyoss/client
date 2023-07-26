@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         dfdaemon::NAME,
         &args.log_dir,
         args.log_level,
-        config.tracing.addr,
+        config.tracing.addr.to_owned(),
     );
 
     // Initialize storage.
@@ -93,10 +93,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
 
     // Initialize manager client.
-    let manager_client = ManagerClient::new(config.manager.addr.unwrap()).await?;
+    let manager_client = ManagerClient::new(config.manager.addr.to_owned().unwrap())
+        .await
+        .unwrap();
 
     // Initialize scheduler client.
-    let scheduler_client = SchedulerClient::new().await?;
+    let scheduler_client = SchedulerClient::new().await.unwrap();
 
     // Initialize channel for graceful shutdown.
     let (notify_shutdown, _) = broadcast::channel(1);
