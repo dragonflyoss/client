@@ -15,7 +15,6 @@
  */
 
 use opentelemetry::sdk::propagation::TraceContextPropagator;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -27,7 +26,7 @@ pub fn init_tracing(
     name: &str,
     log_dir: &PathBuf,
     log_level: Level,
-    jaeger_addr: Option<SocketAddr>,
+    jaeger_addr: Option<String>,
 ) -> Vec<WorkerGuard> {
     let mut guards = vec![];
 
@@ -55,7 +54,7 @@ pub fn init_tracing(
         opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
         let tracer = opentelemetry_jaeger::new_agent_pipeline()
             .with_service_name(name)
-            .with_endpoint(jaeger_addr.to_string())
+            .with_endpoint(jaeger_addr)
             .install_batch(opentelemetry::runtime::Tokio)
             .expect("install");
         let jaeger_layer = tracing_opentelemetry::layer().with_tracer(tracer);

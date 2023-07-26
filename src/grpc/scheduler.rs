@@ -21,7 +21,6 @@ use dragonfly_api::scheduler::{
     ExchangePeerRequest, ExchangePeerResponse, LeaveHostRequest, LeavePeerRequest, StatPeerRequest,
     StatTaskRequest,
 };
-use std::net::SocketAddr;
 use tonic::transport::Channel;
 
 // SchedulerClient is a wrapper of SchedulerGRPCClient.
@@ -35,12 +34,10 @@ impl SchedulerClient {
     // new creates a new SchedulerClient.
     pub async fn new() -> Result<Self> {
         // TODO: read the scheduler address from dynamic config.
-        let addr = SocketAddr::from(([127, 0, 0, 1], 8002));
-
-        let conn = tonic::transport::Endpoint::new(addr.to_string())?
+        let channel = Channel::from_static("http://127.0.0.1:8002")
             .connect()
             .await?;
-        let client = SchedulerGRPCClient::new(conn);
+        let client = SchedulerGRPCClient::new(channel);
         Ok(Self { client })
     }
 

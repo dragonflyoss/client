@@ -16,7 +16,7 @@
 
 use local_ip_address::{local_ip, local_ipv6};
 use serde::Deserialize;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 use std::time::Duration;
 use std::{fmt, fs};
@@ -182,7 +182,7 @@ impl Default for Server {
 #[serde(default, rename_all = "camelCase")]
 pub struct Manager {
     // addr is manager address.
-    pub addr: Option<SocketAddr>,
+    pub addr: Option<String>,
 }
 
 // Scheduler is the scheduler configuration for dfdaemon.
@@ -372,7 +372,7 @@ impl Default for Metrics {
 #[serde(default, rename_all = "camelCase")]
 pub struct Tracing {
     // addr is the address to report tracing log.
-    pub addr: Option<SocketAddr>,
+    pub addr: Option<String>,
 }
 
 // Tracing is the tracing configuration for dfdaemon.

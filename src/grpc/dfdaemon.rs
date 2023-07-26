@@ -153,11 +153,11 @@ pub struct DfdaemonClient {
 // DfdaemonClient implements the grpc client of the dfdaemon.
 impl DfdaemonClient {
     // new creates a new DfdaemonClient.
-    pub async fn new(addr: SocketAddr) -> ClientResult<Self> {
-        let conn = tonic::transport::Endpoint::new(addr.to_string())?
+    pub async fn new(addr: String) -> ClientResult<Self> {
+        let channel = Channel::from_static(Box::leak(addr.into_boxed_str()))
             .connect()
             .await?;
-        let client = DfdaemonGRPCClient::new(conn)
+        let client = DfdaemonGRPCClient::new(channel)
             .send_compressed(CompressionEncoding::Gzip)
             .accept_compressed(CompressionEncoding::Gzip)
             .max_decoding_message_size(usize::MAX);
