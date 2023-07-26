@@ -19,7 +19,6 @@ use dragonfly_api::manager::{
     manager_client::ManagerClient as ManagerGRPCClient, GetObjectStorageRequest,
     ListSchedulersRequest, ListSchedulersResponse, ObjectStorage, SeedPeer, UpdateSeedPeerRequest,
 };
-use std::net::SocketAddr;
 use tonic::transport::Channel;
 
 // ManagerClient is a wrapper of ManagerGRPCClient.
@@ -31,11 +30,11 @@ pub struct ManagerClient {
 // ManagerClient implements the grpc client of the manager.
 impl ManagerClient {
     // new creates a new ManagerClient.
-    pub async fn new(addr: SocketAddr) -> Result<Self> {
-        let conn = tonic::transport::Endpoint::new(addr.to_string())?
+    pub async fn new(addr: String) -> Result<Self> {
+        let channel = Channel::from_static(Box::leak(addr.into_boxed_str()))
             .connect()
             .await?;
-        let client = ManagerGRPCClient::new(conn);
+        let client = ManagerGRPCClient::new(channel);
         Ok(Self { client })
     }
 

@@ -19,7 +19,6 @@ use dragonfly_api::security::{
     certificate_client::CertificateClient as CertificateGRPCClient, CertificateRequest,
     CertificateResponse,
 };
-use std::net::SocketAddr;
 use tonic::transport::Channel;
 
 // CertificateClient is a wrapper of CertificateGRPCClient.
@@ -31,11 +30,11 @@ pub struct CertificateClient {
 // CertificateClient implements the grpc client of the certificate.
 impl CertificateClient {
     // new creates a new CertificateClient.
-    pub async fn new(addr: SocketAddr) -> Result<Self> {
-        let conn = tonic::transport::Endpoint::new(addr.to_string())?
+    pub async fn new(addr: String) -> Result<Self> {
+        let channel = Channel::from_static(Box::leak(addr.into_boxed_str()))
             .connect()
             .await?;
-        let client = CertificateGRPCClient::new(conn);
+        let client = CertificateGRPCClient::new(channel);
         Ok(Self { client })
     }
 
