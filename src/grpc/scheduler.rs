@@ -15,8 +15,8 @@
  */
 
 use crate::Result;
-use dragonfly_api::common::{Peer, Task};
-use dragonfly_api::scheduler::{
+use dragonfly_api::common::v2::{Peer, Task};
+use dragonfly_api::scheduler::v2::{
     scheduler_client::SchedulerClient as SchedulerGRPCClient, AnnounceHostRequest,
     ExchangePeerRequest, ExchangePeerResponse, LeaveHostRequest, LeavePeerRequest, StatPeerRequest,
     StatTaskRequest,
