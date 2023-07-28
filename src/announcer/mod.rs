@@ -21,9 +21,9 @@ use crate::config::{
 use crate::grpc::{manager::ManagerClient, scheduler::SchedulerClient};
 use crate::shutdown;
 use crate::Result;
-use dragonfly_api::common::{Build, Cpu, Host, Memory, Network};
-use dragonfly_api::manager::{SourceType, UpdateSeedPeerRequest};
-use dragonfly_api::scheduler::AnnounceHostRequest;
+use dragonfly_api::common::v2::{Build, Cpu, Host, Memory, Network};
+use dragonfly_api::manager::v2::{SourceType, UpdateSeedPeerRequest};
+use dragonfly_api::scheduler::v2::AnnounceHostRequest;
 use std::env;
 use sysinfo::{CpuExt, ProcessExt, System, SystemExt};
 use tokio::sync::mpsc;

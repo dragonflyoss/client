@@ -15,7 +15,7 @@
  */
 
 use crate::Result;
-use dragonfly_api::manager::{
+use dragonfly_api::manager::v2::{
     manager_client::ManagerClient as ManagerGRPCClient, GetObjectStorageRequest,
     ListSchedulersRequest, ListSchedulersResponse, ObjectStorage, SeedPeer, UpdateSeedPeerRequest,
 };
