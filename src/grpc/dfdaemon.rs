@@ -16,8 +16,8 @@
 
 use crate::shutdown;
 use crate::Result as ClientResult;
-use dragonfly_api::common::Task;
-use dragonfly_api::dfdaemon::{
+use dragonfly_api::common::v2::Task;
+use dragonfly_api::dfdaemon::v2::{
     dfdaemon_client::DfdaemonClient as DfdaemonGRPCClient,
     dfdaemon_server::{Dfdaemon, DfdaemonServer as DfdaemonGRPCServer},
     DeleteTaskRequest, DownloadTaskRequest, StatTaskRequest, SyncPiecesRequest, SyncPiecesResponse,
