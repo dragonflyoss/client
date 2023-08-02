@@ -22,26 +22,20 @@ use crate::grpc::{manager::ManagerClient, scheduler::SchedulerClient};
 use crate::shutdown;
 use crate::Result;
 use dragonfly_api::common::v2::{Build, Cpu, Host, Memory, Network};
-use dragonfly_api::manager::v2::{SourceType, UpdateSeedPeerRequest};
+use dragonfly_api::manager::v2::{KeepAliveRequest, SourceType, UpdateSeedPeerRequest};
 use dragonfly_api::scheduler::v2::AnnounceHostRequest;
 use std::env;
 use sysinfo::{CpuExt, ProcessExt, System, SystemExt};
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
-// Announcer is used to announce the dfdaemon information to the manager and scheduler.
-pub struct Announcer {
+// ManagerAnnouncer is used to announce the dfdaemon information to the manager.
+pub struct ManagerAnnouncer {
     // config is the configuration of the dfdaemon.
     config: Config,
 
-    // host_id is the id of the host.
-    host_id: String,
-
     // manager_client is the grpc client of the manager.
     manager_client: ManagerClient,
-
-    // scheduler_client is the grpc client of the scheduler.
-    scheduler_client: SchedulerClient,
 
     // shutdown is used to shutdown the announcer.
     shutdown: shutdown::Shutdown,
@@ -50,39 +44,25 @@ pub struct Announcer {
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-// Announcer implements the announcer of the dfdaemon.
-impl Announcer {
-    // new creates a new announcer.
+// ManagerAnnouncer implements the manager announcer of the dfdaemon.
+impl ManagerAnnouncer {
+    // new creates a new manager announcer.
     pub fn new(
         config: Config,
-        host_id: String,
         manager_client: ManagerClient,
-        scheduler_client: SchedulerClient,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
         Self {
             config,
-            host_id,
             manager_client,
-            scheduler_client,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
     }
 
-    // run starts the announcer.
+    // run announces the dfdaemon information to the manager.
     pub async fn run(&mut self) -> Result<()> {
-        // Announce the dfdaemon information to the manager.
-        self.announce_to_manager().await?;
-
-        // Announce the dfdaemon information to the scheduler.
-        self.announce_to_scheduler().await;
-        Ok(())
-    }
-
-    // announce_to_manager announces the dfdaemon information to the manager.
-    pub async fn announce_to_manager(&mut self) -> Result<()> {
         // If the seed peer is enabled, we should announce the seed peer to the manager.
         if self.config.seed_peer.enable {
             // Get the object storage port.
@@ -107,13 +87,82 @@ impl Announcer {
                     object_storage_port: object_storage_port as i32,
                 })
                 .await?;
+
+            // Keep the connection alive with manager.
+            self.keep_alive().await;
+        } else {
+            // TODO Announce the peer to the manager.
+            self.shutdown.recv().await;
         }
 
         Ok(())
     }
 
-    // announce_to_scheduler announces the dfdaemon information to the scheduler.
-    pub async fn announce_to_scheduler(&mut self) {
+    // keep_alive keeps the connection alive with manager.
+    async fn keep_alive(&mut self) {
+        let mut interval = tokio::time::interval(self.config.seed_peer.keepalive_interval);
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    if let Err(err) = self.manager_client.keep_alive(KeepAliveRequest{
+                        source_type: SourceType::SeedPeerSource.into(),
+                        hostname: self.config.host.hostname.clone(),
+                        ip: self.config.host.ip.unwrap().to_string(),
+                        cluster_id: self.config.seed_peer.cluster_id,
+                    }, self.config.seed_peer.keepalive_interval).await {
+                        warn!("announce to manager failed: {}", err);
+                    }
+                }
+                _ = self.shutdown.recv() => {
+                    // Announce to manager shutting down with signals.
+                    info!("announce to manager shutting down");
+                    return
+                }
+            }
+        }
+    }
+}
+
+// Announcer is used to announce the dfdaemon information to the manager and scheduler.
+pub struct SchedulerAnnouncer {
+    // config is the configuration of the dfdaemon.
+    config: Config,
+
+    // host_id is the id of the host.
+    host_id: String,
+
+    // scheduler_client is the grpc client of the scheduler.
+    scheduler_client: SchedulerClient,
+
+    // shutdown is used to shutdown the announcer.
+    shutdown: shutdown::Shutdown,
+
+    // _shutdown_complete is used to notify the announcer is shutdown.
+    _shutdown_complete: mpsc::UnboundedSender<()>,
+}
+
+// SchedulerAnnouncer implements the scheduler announcer of the dfdaemon.
+impl SchedulerAnnouncer {
+    // new creates a new scheduler announcer.
+    pub fn new(
+        config: Config,
+        host_id: String,
+        scheduler_client: SchedulerClient,
+        shutdown: shutdown::Shutdown,
+        shutdown_complete_tx: mpsc::UnboundedSender<()>,
+    ) -> Self {
+        Self {
+            config,
+            host_id,
+            scheduler_client,
+            shutdown,
+            _shutdown_complete: shutdown_complete_tx,
+        }
+    }
+
+    // run announces the dfdaemon information to the scheduler.
+    pub async fn run(&mut self) {
         let mut interval = tokio::time::interval(self.config.scheduler.announce_interval);
 
         loop {
@@ -124,7 +173,7 @@ impl Announcer {
                     };
                 }
                 _ = self.shutdown.recv() => {
-                    // Announce to scehduler shutting down with signals.
+                    // Announce to scheduler shutting down with signals.
                     info!("announce to scheduler shutting down");
                     return
                 }

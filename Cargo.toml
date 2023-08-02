@@ -61,3 +61,4 @@ sha2 = "0.10"
 hex = "0.4"
 uuid = { version = "1.4", features = ["v4"] }
 url = "2.4.0"
+async-stream = "0.3.5"

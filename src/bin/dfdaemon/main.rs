@@ -15,7 +15,7 @@
  */
 
 use clap::Parser;
-use dragonfly_client::announcer::Announcer;
+use dragonfly_client::announcer::{ManagerAnnouncer, SchedulerAnnouncer};
 use dragonfly_client::config::dfdaemon;
 use dragonfly_client::grpc::{
     dfdaemon::DfdaemonServer, manager::ManagerClient, scheduler::SchedulerClient,
@@ -118,11 +118,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         shutdown_complete_tx.clone(),
     );
 
-    // Initialize announcer.
-    let mut announcer = Announcer::new(
+    // Initialize manager announcer.
+    let mut manager_announcer = ManagerAnnouncer::new(
+        config.clone(),
+        manager_client,
+        shutdown::Shutdown::new(notify_shutdown.subscribe()),
+        shutdown_complete_tx.clone(),
+    );
+
+    // Initialize scheduler announcer.
+    let mut scheduler_announcer = SchedulerAnnouncer::new(
         config.clone(),
         id_generator.host_id(),
-        manager_client,
         scheduler_client,
         shutdown::Shutdown::new(notify_shutdown.subscribe()),
         shutdown_complete_tx.clone(),
@@ -145,8 +152,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             info!("health server exited");
         },
 
-        _ = tokio::spawn(async move { announcer.run().await }) => {
-            info!("announcer grpc server exited");
+        _ = tokio::spawn(async move { manager_announcer.run().await }) => {
+            info!("announcer manager exited");
+        },
+
+        _ = tokio::spawn(async move { scheduler_announcer.run().await }) => {
+            info!("announcer scheduler exited");
         },
 
         _ = tokio::spawn(async move { dfdaemon_grpc.run().await }) => {
