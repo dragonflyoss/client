@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
+use crate::shutdown;
 use crate::Result;
 use dragonfly_api::manager::v2::{
-    manager_client::ManagerClient as ManagerGRPCClient, GetObjectStorageRequest,
+    manager_client::ManagerClient as ManagerGRPCClient, GetObjectStorageRequest, KeepAliveRequest,
     ListSchedulersRequest, ListSchedulersResponse, ObjectStorage, SeedPeer, UpdateSeedPeerRequest,
 };
+use std::time::Duration;
 use tonic::transport::Channel;
 
 // ManagerClient is a wrapper of ManagerGRPCClient.
@@ -69,5 +71,25 @@ impl ManagerClient {
 
         let response = self.client.update_seed_peer(request).await?;
         Ok(response.into_inner())
+    }
+
+    // keep_alive keeps the connection alive.
+    pub async fn keep_alive(
+        &mut self,
+        request: KeepAliveRequest,
+        interval: Duration,
+    ) -> Result<()> {
+        let mut interval = tokio::time::interval(interval);
+        let request = async_stream::stream! {
+            loop {
+                tokio::select! {
+                    _ = shutdown::shutdown_signal() => return,
+                    _ = interval.tick() => yield request.clone(),
+                }
+            }
+        };
+
+        self.client.keep_alive(request).await?;
+        Ok(())
     }
 }
