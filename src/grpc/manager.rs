@@ -14,13 +14,12 @@
  * limitations under the License.
  */
 
-use crate::shutdown;
 use crate::Result;
 use dragonfly_api::manager::v2::{
-    manager_client::ManagerClient as ManagerGRPCClient, GetObjectStorageRequest, KeepAliveRequest,
-    ListSchedulersRequest, ListSchedulersResponse, ObjectStorage, SeedPeer, UpdateSeedPeerRequest,
+    manager_client::ManagerClient as ManagerGRPCClient, DeleteSeedPeerRequest,
+    GetObjectStorageRequest, ListSchedulersRequest, ListSchedulersResponse, ObjectStorage,
+    SeedPeer, UpdateSeedPeerRequest,
 };
-use std::time::Duration;
 use tonic::transport::Channel;
 
 // ManagerClient is a wrapper of ManagerGRPCClient.
@@ -73,23 +72,12 @@ impl ManagerClient {
         Ok(response.into_inner())
     }
 
-    // keep_alive keeps the connection alive.
-    pub async fn keep_alive(
-        &mut self,
-        request: KeepAliveRequest,
-        interval: Duration,
-    ) -> Result<()> {
-        let mut interval = tokio::time::interval(interval);
-        let request = async_stream::stream! {
-            loop {
-                tokio::select! {
-                    _ = shutdown::shutdown_signal() => return,
-                    _ = interval.tick() => yield request.clone(),
-                }
-            }
-        };
+    // delete_seed_peer deletes the seed peer information.
+    pub async fn delete_seed_peer(&mut self, request: DeleteSeedPeerRequest) -> Result<()> {
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(super::REQUEST_TIMEOUT);
 
-        self.client.keep_alive(request).await?;
+        self.client.delete_seed_peer(request).await?;
         Ok(())
     }
 }
