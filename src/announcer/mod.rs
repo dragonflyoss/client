@@ -22,12 +22,12 @@ use crate::grpc::{manager::ManagerClient, scheduler::SchedulerClient};
 use crate::shutdown;
 use crate::Result;
 use dragonfly_api::common::v2::{Build, Cpu, Host, Memory, Network};
-use dragonfly_api::manager::v2::{KeepAliveRequest, SourceType, UpdateSeedPeerRequest};
+use dragonfly_api::manager::v2::{DeleteSeedPeerRequest, SourceType, UpdateSeedPeerRequest};
 use dragonfly_api::scheduler::v2::AnnounceHostRequest;
 use std::env;
 use sysinfo::{CpuExt, ProcessExt, System, SystemExt};
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 // ManagerAnnouncer is used to announce the dfdaemon information to the manager.
 pub struct ManagerAnnouncer {
@@ -88,39 +88,27 @@ impl ManagerAnnouncer {
                 })
                 .await?;
 
-            // Keep the connection alive with manager.
-            self.keep_alive().await;
+            // Announce to scheduler shutting down with signals.
+            self.shutdown.recv().await;
+
+            // Delete the seed peer from the manager.
+            self.manager_client
+                .delete_seed_peer(DeleteSeedPeerRequest {
+                    source_type: SourceType::SeedPeerSource.into(),
+                    hostname: self.config.host.hostname.clone(),
+                    ip: self.config.host.ip.unwrap().to_string(),
+                    seed_peer_cluster_id: self.config.seed_peer.cluster_id,
+                })
+                .await?;
+
+            info!("announce to manager shutting down");
         } else {
             // TODO Announce the peer to the manager.
             self.shutdown.recv().await;
+            info!("announce to manager shutting down");
         }
 
         Ok(())
-    }
-
-    // keep_alive keeps the connection alive with manager.
-    async fn keep_alive(&mut self) {
-        let mut interval = tokio::time::interval(self.config.seed_peer.keepalive_interval);
-
-        loop {
-            tokio::select! {
-                _ = interval.tick() => {
-                    if let Err(err) = self.manager_client.keep_alive(KeepAliveRequest{
-                        source_type: SourceType::SeedPeerSource.into(),
-                        hostname: self.config.host.hostname.clone(),
-                        ip: self.config.host.ip.unwrap().to_string(),
-                        cluster_id: self.config.seed_peer.cluster_id,
-                    }, self.config.seed_peer.keepalive_interval).await {
-                        warn!("announce to manager failed: {}", err);
-                    }
-                }
-                _ = self.shutdown.recv() => {
-                    // Announce to manager shutting down with signals.
-                    info!("announce to manager shutting down");
-                    return
-                }
-            }
-        }
     }
 }
 
