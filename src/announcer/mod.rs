@@ -236,6 +236,7 @@ impl SchedulerAnnouncer {
             ip: self.config.host.ip.unwrap().to_string(),
             port: self.config.server.port as i32,
             download_port: self.config.server.port as i32,
+            object_storage_port: self.config.object_storage.port as i32,
             os: env::consts::OS.to_string(),
             platform: env::consts::OS.to_string(),
             platform_family: env::consts::FAMILY.to_string(),
@@ -248,6 +249,9 @@ impl SchedulerAnnouncer {
             // TODO Get the disk information.
             disk: None,
             build: Some(build),
+
+            // TODO Get scheduler cluster id from dynconfig.
+            scheduler_cluster_id: 0,
         };
 
         // Announce the host to the scheduler.
