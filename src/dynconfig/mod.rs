@@ -14,8 +14,14 @@
  * limitations under the License.
  */
 
+use crate::config::dfdaemon::Config;
+use crate::Result;
+
 // Dynconfig supports dynamic configuration of the client.
 pub struct Dynconfig {
+    // config is the configuration of the dfdaemon.
+    config: Config,
+
     // manager_client is the grpc client of the manager.
     manager_client: ManagerClient,
 
@@ -28,10 +34,34 @@ pub struct Dynconfig {
 
 impl Dynconfig {
     pub fn new(
+        config: Config,
         manager_client: ManagerClient,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
-        Dynconfig {}
+        Dynconfig {
+            config,
+            manager_client,
+            shutdown,
+            _shutdown_complete: shutdown_complete_tx,
+        }
+    }
+
+    // run starts the dynconfig server.
+    pub async fn run(&mut self) -> Result<()> {
+        let mut interval = tokio::time::interval(self.config.scheduler.announce_interval);
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    // TODO Get dynconfig from manager.
+                }
+                _ = self.shutdown.recv() => {
+                    // Dynconfig shutting down with signals.
+                    info!("dynconfig server shutting down");
+                    return
+                }
+            }
+        }
     }
 }
