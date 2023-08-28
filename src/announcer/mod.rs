@@ -103,7 +103,6 @@ impl ManagerAnnouncer {
 
             info!("announce to manager shutting down");
         } else {
-            // TODO Announce the peer to the manager.
             self.shutdown.recv().await;
             info!("announce to manager shutting down");
         }

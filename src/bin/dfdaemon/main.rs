@@ -17,6 +17,7 @@
 use clap::Parser;
 use dragonfly_client::announcer::{ManagerAnnouncer, SchedulerAnnouncer};
 use dragonfly_client::config::dfdaemon;
+use dragonfly_client::dynconfig::Dynconfig;
 use dragonfly_client::grpc::{
     dfdaemon::DfdaemonServer, manager::ManagerClient, scheduler::SchedulerClient,
 };
@@ -118,10 +119,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
         shutdown_complete_tx.clone(),
     );
 
+    // Initialize dynconfig server.
+    let mut dynconfig = Dynconfig::new(
+        config.clone(),
+        manager_client.clone(),
+        shutdown::Shutdown::new(notify_shutdown.subscribe()),
+        shutdown_complete_tx.clone(),
+    )
+    .await?;
+
     // Initialize manager announcer.
     let mut manager_announcer = ManagerAnnouncer::new(
         config.clone(),
-        manager_client,
+        manager_client.clone(),
         shutdown::Shutdown::new(notify_shutdown.subscribe()),
         shutdown_complete_tx.clone(),
     );
@@ -150,6 +160,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         _ = tokio::spawn(async move { health.run().await }) => {
             info!("health server exited");
+        },
+
+        _ = tokio::spawn(async move { dynconfig.run().await }) => {
+            info!("dynconfig manager exited");
         },
 
         _ = tokio::spawn(async move { manager_announcer.run().await }) => {

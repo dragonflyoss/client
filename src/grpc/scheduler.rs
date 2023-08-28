@@ -24,6 +24,7 @@ use dragonfly_api::scheduler::v2::{
 use tonic::transport::Channel;
 
 // SchedulerClient is a wrapper of SchedulerGRPCClient.
+#[derive(Clone)]
 pub struct SchedulerClient {
     // client is the grpc client of the scehduler.
     pub client: SchedulerGRPCClient<Channel>,
