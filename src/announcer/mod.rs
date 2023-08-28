@@ -16,7 +16,7 @@
 
 use crate::config::{
     dfdaemon::{Config, HostType},
-    CARGO_PKG_RUSTC_VERSION, CARGO_PKG_VERSION,
+    CARGO_PKG_RUSTC_VERSION, CARGO_PKG_VERSION, GIT_HASH,
 };
 use crate::grpc::{manager::ManagerClient, scheduler::SchedulerClient};
 use crate::shutdown;
@@ -221,7 +221,7 @@ impl SchedulerAnnouncer {
         // Get the build information.
         let build = Build {
             git_version: CARGO_PKG_VERSION.to_string(),
-            git_commit: None,
+            git_commit: Some(GIT_HASH.unwrap_or_default().to_string()),
             go_version: None,
             rust_version: Some(CARGO_PKG_RUSTC_VERSION.to_string()),
             platform: None,

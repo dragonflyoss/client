@@ -134,7 +134,7 @@ impl Dynconfig {
                 idc: self.config.host.idc.clone(),
                 location: self.config.host.location.clone(),
                 version: CARGO_PKG_VERSION.to_string(),
-                commit: GIT_HASH.unwrap_or("").to_string(),
+                commit: GIT_HASH.unwrap_or_default().to_string(),
             })
             .await?;
 
