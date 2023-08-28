@@ -72,6 +72,10 @@ pub enum Error {
     #[error{"piece {0} state is failed"}]
     PieceStateIsFailed(String),
 
+    // AvailableSchedulersNotFound is the error when the available schedulers is not found.
+    #[error{"available schedulers not found"}]
+    AvailableSchedulersNotFound(),
+
     // ColumnFamilyNotFound is the error when the column family is not found.
     #[error{"column family {0} not found"}]
     ColumnFamilyNotFound(String),

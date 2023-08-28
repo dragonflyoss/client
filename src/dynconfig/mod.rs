@@ -15,14 +15,16 @@
  */
 
 use crate::config::{dfdaemon::Config, CARGO_PKG_VERSION, GIT_HASH};
+use crate::grpc::health::HealthClient;
 use crate::grpc::manager::ManagerClient;
 use crate::shutdown;
 use crate::{Error, Result};
 use dragonfly_api::manager::v2::{
     GetObjectStorageRequest, ListSchedulersRequest, ListSchedulersResponse, ObjectStorage,
-    SourceType,
+    Scheduler, SourceType,
 };
 use tokio::sync::mpsc;
+use tonic_health::pb::{health_check_response::ServingStatus, HealthCheckRequest};
 use tracing::{error, info};
 
 // Data is the dynamic configuration of the dfdaemon.
@@ -30,17 +32,23 @@ pub struct Data {
     // schedulers is the schedulers of the dfdaemon.
     schedulers: ListSchedulersResponse,
 
+    // available_schedulers is the available schedulers of the dfdaemon.
+    available_schedulers: Vec<Scheduler>,
+
+    // available_scheduler_cluster_id is the id of the available scheduler cluster of the dfdaemon.
+    available_scheduler_cluster_id: Option<u64>,
+
     // object_storage is the object storage configuration of the dfdaemon.
     object_storage: Option<ObjectStorage>,
 }
 
 // Dynconfig supports dynamic configuration of the client.
 pub struct Dynconfig {
+    // data is the dynamic configuration of the dfdaemon.
+    pub data: Data,
+
     // config is the configuration of the dfdaemon.
     config: Config,
-
-    // data is the dynamic configuration of the dfdaemon.
-    data: Data,
 
     // manager_client is the grpc client of the manager.
     manager_client: ManagerClient,
@@ -66,6 +74,8 @@ impl Dynconfig {
             config,
             data: Data {
                 schedulers: ListSchedulersResponse::default(),
+                available_schedulers: Vec::new(),
+                available_scheduler_cluster_id: None,
                 object_storage: None,
             },
             manager_client,
@@ -73,7 +83,7 @@ impl Dynconfig {
             _shutdown_complete: shutdown_complete_tx,
         };
 
-        // Get the initial dynamic configuration.
+        // Initialize the dynamic configuration.
         dc.refresh().await?;
         Ok(dc)
     }
@@ -99,24 +109,45 @@ impl Dynconfig {
         }
     }
 
-    // get_schedulers returns the schedulers of the dfdaemon.
-    pub fn get_schedulers(&self) -> ListSchedulersResponse {
-        self.data.schedulers.clone()
-    }
-
-    // get_object_storage returns the object storage configuration of the dfdaemon.
-    pub fn get_object_storage(&self) -> Option<ObjectStorage> {
-        self.data.object_storage.clone()
-    }
-
     // refresh refreshes the dynamic configuration of the dfdaemon.
     async fn refresh(&mut self) -> Result<()> {
-        self.data = self.get().await?;
+        // refresh the schedulers.
+        self.data.schedulers = self.list_schedulers().await?;
+
+        // refresh the object storage configuration.
+        match self.get_object_storage().await {
+            Ok(object_storage) => {
+                self.data.object_storage = Some(object_storage);
+            }
+            Err(err) => {
+                info!("get object storage failed: {}", err);
+                self.data.object_storage = None;
+            }
+        }
+
+        // get the available schedulers.
+        let available_schedulers = self.get_available_schedulers().await?;
+
+        // If the available schedulers is empty, return error.
+        if !available_schedulers.is_empty() {
+            self.data.available_schedulers = available_schedulers;
+        } else {
+            return Err(Error::AvailableSchedulersNotFound());
+        }
+
+        // If the available scheduler cluster id is not set, set it to the first available scheduler.
+        if let Some(available_scheduler) = self.data.available_schedulers.first() {
+            self.data.available_scheduler_cluster_id =
+                Some(available_scheduler.scheduler_cluster_id);
+        } else {
+            return Err(Error::AvailableSchedulersNotFound());
+        }
+
         Ok(())
     }
 
-    // get returns the dynamic configuration of the dfdaemon.
-    async fn get(&mut self) -> Result<Data> {
+    // list_schedulers lists the schedulers from the manager.
+    async fn list_schedulers(&mut self) -> Result<ListSchedulersResponse> {
         // Get the source type.
         let source_type = if self.config.seed_peer.enable {
             SourceType::SeedPeerSource.into()
@@ -125,8 +156,7 @@ impl Dynconfig {
         };
 
         // Get the schedulers from the manager.
-        let schedulers = self
-            .manager_client
+        self.manager_client
             .list_schedulers(ListSchedulersRequest {
                 source_type,
                 hostname: self.config.host.hostname.clone(),
@@ -136,37 +166,63 @@ impl Dynconfig {
                 version: CARGO_PKG_VERSION.to_string(),
                 commit: GIT_HASH.unwrap_or("").to_string(),
             })
-            .await?;
+            .await
+    }
 
-        // Get the object storage configuration from the manager.
-        match self
-            .manager_client
+    // get_object_storage gets the object storage from the manager.
+    async fn get_object_storage(&mut self) -> Result<ObjectStorage> {
+        // Get the source type.
+        let source_type = if self.config.seed_peer.enable {
+            SourceType::SeedPeerSource.into()
+        } else {
+            SourceType::PeerSource.into()
+        };
+
+        self.manager_client
             .get_object_storage(GetObjectStorageRequest {
                 source_type,
                 hostname: self.config.host.hostname.clone(),
                 ip: self.config.host.ip.unwrap().to_string(),
             })
             .await
-        {
-            Ok(object_storage) => Ok(Data {
-                schedulers,
-                object_storage: Some(object_storage),
-            }),
-            Err(err) => {
-                // If the object storage is not found, return the schedulers only.
-                if let Error::TonicStatus(status) = err {
-                    if status.code() == tonic::Code::NotFound {
-                        return Ok(Data {
-                            schedulers,
-                            object_storage: None,
-                        });
-                    }
+    }
 
-                    Err(Error::TonicStatus(status))
-                } else {
-                    Err(err)
+    // get_available_schedulers gets the available schedulers.
+    async fn get_available_schedulers(&mut self) -> Result<Vec<Scheduler>> {
+        let mut available_schedulers: Vec<Scheduler> = Vec::new();
+        let mut available_scheduler_cluster_id: Option<u64> = None;
+        for scheduler in &self.data.schedulers.schedulers {
+            // If scheduler_cluster_id is specified, only return the schedulers
+            // of the specified scheduler cluster.
+            if let Some(scheduler_cluster_id) = available_scheduler_cluster_id {
+                if scheduler.scheduler_cluster_id != scheduler_cluster_id {
+                    continue;
+                }
+            }
+
+            // Check the health of the scheduler.
+            let mut health_client =
+                HealthClient::new(format!("http://{}:{}", scheduler.ip, scheduler.port)).await?;
+
+            match health_client
+                .check(HealthCheckRequest {
+                    service: String::new(),
+                })
+                .await
+            {
+                Ok(resp) => {
+                    if resp.status == ServingStatus::Serving as i32 {
+                        available_schedulers.push(scheduler.clone());
+                        available_scheduler_cluster_id = Some(scheduler.scheduler_cluster_id);
+                    }
+                }
+                Err(err) => {
+                    error!("check scheduler health failed: {}", err);
+                    continue;
                 }
             }
         }
+
+        Ok(available_schedulers)
     }
 }

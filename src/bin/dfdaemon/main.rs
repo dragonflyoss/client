@@ -98,12 +98,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .unwrap();
 
-    // Initialize scheduler client.
-    let scheduler_client = SchedulerClient::new().await.unwrap();
-
     // Initialize channel for graceful shutdown.
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::unbounded_channel();
+
+    // Initialize dynconfig server.
+    let mut dynconfig = Dynconfig::new(
+        config.clone(),
+        manager_client.clone(),
+        shutdown::Shutdown::new(notify_shutdown.subscribe()),
+        shutdown_complete_tx.clone(),
+    )
+    .await?;
+
+    // Initialize scheduler client.
+    let scheduler_client = SchedulerClient::new().await.unwrap();
 
     // Initialize metrics server.
     let mut metrics = Metrics::new(
@@ -118,15 +127,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         shutdown::Shutdown::new(notify_shutdown.subscribe()),
         shutdown_complete_tx.clone(),
     );
-
-    // Initialize dynconfig server.
-    let mut dynconfig = Dynconfig::new(
-        config.clone(),
-        manager_client.clone(),
-        shutdown::Shutdown::new(notify_shutdown.subscribe()),
-        shutdown_complete_tx.clone(),
-    )
-    .await?;
 
     // Initialize manager announcer.
     let mut manager_announcer = ManagerAnnouncer::new(
@@ -154,16 +154,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Wait for servers to exit or shutdown signal.
     tokio::select! {
+        _ = tokio::spawn(async move { dynconfig.run().await }) => {
+            info!("dynconfig manager exited");
+        },
+
         _ = tokio::spawn(async move { metrics.run().await }) => {
             info!("metrics server exited");
         },
 
         _ = tokio::spawn(async move { health.run().await }) => {
             info!("health server exited");
-        },
-
-        _ = tokio::spawn(async move { dynconfig.run().await }) => {
-            info!("dynconfig manager exited");
         },
 
         _ = tokio::spawn(async move { manager_announcer.run().await }) => {
