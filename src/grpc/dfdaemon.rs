@@ -145,6 +145,7 @@ impl Dfdaemon for DfdaemonServerHandler {
 }
 
 // DfdaemonClient is a wrapper of DfdaemonGRPCClient.
+#[derive(Clone)]
 pub struct DfdaemonClient {
     // client is the grpc client of the dfdaemon.
     pub client: DfdaemonGRPCClient<Channel>,
