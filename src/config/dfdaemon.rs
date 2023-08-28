@@ -84,7 +84,7 @@ pub fn default_scheduler_schedule_timeout() -> Duration {
 // default_dynconfig_refresh_interval is the default interval to
 // refresh dynamic configuration from manager.
 pub fn default_dynconfig_refresh_interval() -> Duration {
-    Duration::from_secs(600)
+    Duration::from_secs(1800)
 }
 
 // default_seed_peer_keepalive_interval is the default interval to keepalive with manager.

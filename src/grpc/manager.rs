@@ -23,6 +23,7 @@ use dragonfly_api::manager::v2::{
 use tonic::transport::Channel;
 
 // ManagerClient is a wrapper of ManagerGRPCClient.
+#[derive(Clone)]
 pub struct ManagerClient {
     // client is the grpc client of the manager.
     pub client: ManagerGRPCClient<Channel>,

@@ -22,6 +22,7 @@ use dragonfly_api::security::{
 use tonic::transport::Channel;
 
 // CertificateClient is a wrapper of CertificateGRPCClient.
+#[derive(Clone)]
 pub struct CertificateClient {
     // client is the grpc client of the certificate.
     pub client: CertificateGRPCClient<Channel>,

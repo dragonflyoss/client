@@ -18,6 +18,7 @@ pub mod announcer;
 pub mod backend;
 pub mod config;
 pub mod downloader;
+pub mod dynconfig;
 pub mod grpc;
 pub mod health;
 pub mod metrics;

@@ -21,6 +21,7 @@ use tonic_health::pb::{
 };
 
 // HealthClient is a wrapper of HealthGRPCClient.
+#[derive(Clone)]
 pub struct HealthClient {
     // client is the grpc client of the certificate.
     client: HealthGRPCClient<Channel>,
