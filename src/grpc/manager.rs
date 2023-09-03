@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::Result;
+use crate::{Result, Error};
 use dragonfly_api::manager::v2::{
     manager_client::ManagerClient as ManagerGRPCClient, DeleteSeedPeerRequest,
     GetObjectStorageRequest, ListSchedulersRequest, ListSchedulersResponse, ObjectStorage,
@@ -32,8 +32,9 @@ pub struct ManagerClient {
 // ManagerClient implements the grpc client of the manager.
 impl ManagerClient {
     // new creates a new ManagerClient.
-    pub async fn new(addr: String) -> Result<Self> {
-        let channel = Channel::from_static(Box::leak(addr.into_boxed_str()))
+    pub async fn new(addr: &str) -> Result<Self> {
+        let channel = Channel::from_shared(addr.to_string())
+            .map_err(|_| Error::InvalidURI(addr.into()))?
             .connect()
             .await?;
         let client = ManagerGRPCClient::new(channel);
@@ -42,43 +43,57 @@ impl ManagerClient {
 
     // list_schedulers lists all schedulers that best match the client.
     pub async fn list_schedulers(
-        &mut self,
+        &self,
         request: ListSchedulersRequest,
     ) -> Result<ListSchedulersResponse> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
-        let response = self.client.list_schedulers(request).await?;
+        let request = Self::make_request(request);
+        let response = self.client.clone().list_schedulers(request).await?;
         Ok(response.into_inner())
     }
 
     // get_object_storage provides the object storage information.
     pub async fn get_object_storage(
-        &mut self,
+        &self,
         request: GetObjectStorageRequest,
     ) -> Result<ObjectStorage> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
-        let response = self.client.get_object_storage(request).await?;
+        let request = Self::make_request(request);
+        let response = self.client.clone().get_object_storage(request).await?;
         Ok(response.into_inner())
     }
 
     // update_seed_peer updates the seed peer information.
-    pub async fn update_seed_peer(&mut self, request: UpdateSeedPeerRequest) -> Result<SeedPeer> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
-        let response = self.client.update_seed_peer(request).await?;
+    pub async fn update_seed_peer(&self, request: UpdateSeedPeerRequest) -> Result<SeedPeer> {
+        let request = Self::make_request(request);
+        let response = self.client.clone().update_seed_peer(request).await?;
         Ok(response.into_inner())
     }
 
     // delete_seed_peer deletes the seed peer information.
-    pub async fn delete_seed_peer(&mut self, request: DeleteSeedPeerRequest) -> Result<()> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
-        self.client.delete_seed_peer(request).await?;
+    pub async fn delete_seed_peer(&self, request: DeleteSeedPeerRequest) -> Result<()> {
+        let request = Self::make_request(request);
+        self.client.clone().delete_seed_peer(request).await?;
         Ok(())
     }
+
+    fn make_request<T>(req: T) -> tonic::Request<T> {
+        let mut request = tonic::Request::new(req);
+        request.set_timeout(super::REQUEST_TIMEOUT);
+        request
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ManagerClient;
+
+    #[tokio::test]
+    async fn invalid_uri_should_fail() {
+        let result = ManagerClient::new("htt:/xxx").await;
+        assert!(result.is_err());
+        match result {
+            Err(e) => assert_eq!(e.to_string(), "invalid uri htt:/xxx"),
+            _ => panic!("unexpected error"),
+        }
+    }
+
 }
