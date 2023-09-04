@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::{Result, Error};
+use crate::{Error, Result};
 use dragonfly_api::manager::v2::{
     manager_client::ManagerClient as ManagerGRPCClient, DeleteSeedPeerRequest,
     GetObjectStorageRequest, ListSchedulersRequest, ListSchedulersResponse, ObjectStorage,
@@ -95,5 +95,4 @@ mod tests {
             _ => panic!("unexpected error"),
         }
     }
-
 }
