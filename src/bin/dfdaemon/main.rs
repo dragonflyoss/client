@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use anyhow::Context;
 use clap::Parser;
 use dragonfly_client::announcer::{ManagerAnnouncer, SchedulerAnnouncer};
 use dragonfly_client::config::dfdaemon;
@@ -27,7 +28,6 @@ use dragonfly_client::shutdown;
 use dragonfly_client::storage::Storage;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client::utils::id_generator::IDGenerator;
-use std::error::Error;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use tokio::sync::{broadcast, mpsc};
@@ -69,7 +69,7 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), anyhow::Error> {
     // Parse command line arguments.
     let args = Args::parse();
 
@@ -94,9 +94,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
 
     // Initialize manager client.
-    let manager_client = ManagerClient::new(config.manager.addr.to_owned().unwrap())
+    let manager_client = ManagerClient::new(config.manager.addr.as_ref().unwrap())
         .await
-        .unwrap();
+        .context("failed to initialize manager client")?;
 
     // Initialize channel for graceful shutdown.
     let (notify_shutdown, _) = broadcast::channel(1);
@@ -112,7 +112,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .await?;
 
     // Initialize scheduler client.
-    let scheduler_client = SchedulerClient::new().await.unwrap();
+    let scheduler_client = SchedulerClient::new()
+        .await
+        .context("failed to initialize scheduler client")?;
 
     // Initialize metrics server.
     let mut metrics = Metrics::new(
@@ -183,6 +185,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Drop notify_shutdown to notify the other server to exit.
     drop(notify_shutdown);
+
+    // Drop all guards to close all loggers.
+    drop(_guards);
 
     // Drop shutdown_complete_rx to wait for the other server to exit.
     drop(shutdown_complete_tx);
