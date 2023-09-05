@@ -87,6 +87,9 @@ pub enum Error {
     // InvalidState is the error when the state is invalid.
     #[error{"invalid state {0}"}]
     InvalidState(String),
+
+    #[error("invalid uri {0}")]
+    InvalidURI(String),
 }
 
 // Result is the result for Client.

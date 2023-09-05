@@ -28,6 +28,7 @@ use tonic_health::pb::{health_check_response::ServingStatus, HealthCheckRequest}
 use tracing::{error, info};
 
 // Data is the dynamic configuration of the dfdaemon.
+#[derive(Default)]
 pub struct Data {
     // schedulers is the schedulers of the dfdaemon.
     schedulers: ListSchedulersResponse,
@@ -72,12 +73,7 @@ impl Dynconfig {
         // Create a new Dynconfig.
         let mut dc = Dynconfig {
             config,
-            data: Data {
-                schedulers: ListSchedulersResponse::default(),
-                available_schedulers: Vec::new(),
-                available_scheduler_cluster_id: None,
-                object_storage: None,
-            },
+            data: Data::default(),
             manager_client,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
