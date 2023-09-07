@@ -41,13 +41,13 @@ impl CertificateClient {
 
     // issue_certificate issues a certificate for the peer.
     pub async fn issue_certificate(
-        &mut self,
+        &self,
         request: CertificateRequest,
     ) -> Result<CertificateResponse> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
-        let response = self.client.issue_certificate(request).await?;
+        let response = self.client.clone().issue_certificate(request).await?;
         Ok(response.into_inner())
     }
 }

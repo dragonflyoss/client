@@ -50,7 +50,7 @@ pub struct Dynconfig {
     pub data: Data,
 
     // config is the configuration of the dfdaemon.
-    config: Config,
+    config: Arc<Config>,
 
     // manager_client is the grpc client of the manager.
     manager_client: Arc<ManagerClient>,
@@ -66,7 +66,7 @@ pub struct Dynconfig {
 impl Dynconfig {
     // new creates a new Dynconfig.
     pub async fn new(
-        config: Config,
+        config: Arc<Config>,
         manager_client: Arc<ManagerClient>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
@@ -198,7 +198,7 @@ impl Dynconfig {
             }
 
             // Check the health of the scheduler.
-            let mut health_client =
+            let health_client =
                 HealthClient::new(format!("http://{}:{}", scheduler.ip, scheduler.port)).await?;
 
             match health_client

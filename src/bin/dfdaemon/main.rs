@@ -76,6 +76,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Load config.
     let config = dfdaemon::Config::load(&args.config)?;
+    let config = Arc::new(config);
 
     // Initialize tracing.
     let _guards = init_tracing(
@@ -117,6 +118,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let scheduler_client = SchedulerClient::new()
         .await
         .context("failed to initialize scheduler client")?;
+    let scheduler_client = Arc::new(scheduler_client);
 
     // Initialize metrics server.
     let mut metrics = Metrics::new(
@@ -144,7 +146,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut scheduler_announcer = SchedulerAnnouncer::new(
         config.clone(),
         id_generator.host_id(),
-        scheduler_client,
+        scheduler_client.clone(),
         shutdown::Shutdown::new(notify_shutdown.subscribe()),
         shutdown_complete_tx.clone(),
     );

@@ -166,38 +166,38 @@ impl DfdaemonClient {
     }
 
     // download_task tells the dfdaemon to download the task.
-    pub async fn download_task(&mut self, request: DownloadTaskRequest) -> ClientResult<()> {
+    pub async fn download_task(&self, request: DownloadTaskRequest) -> ClientResult<()> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
-        self.client.download_task(request).await?;
+        self.client.clone().download_task(request).await?;
         Ok(())
     }
 
     // upload_task tells the dfdaemon to upload the task.
-    pub async fn upload_task(&mut self, request: UploadTaskRequest) -> ClientResult<()> {
+    pub async fn upload_task(&self, request: UploadTaskRequest) -> ClientResult<()> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
-        self.client.upload_task(request).await?;
+        self.client.clone().upload_task(request).await?;
         Ok(())
     }
 
     // stat_task gets the status of the task.
-    pub async fn stat_task(&mut self, request: StatTaskRequest) -> ClientResult<Task> {
+    pub async fn stat_task(&self, request: StatTaskRequest) -> ClientResult<Task> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
-        let response = self.client.stat_task(request).await?;
+        let response = self.client.clone().stat_task(request).await?;
         Ok(response.into_inner())
     }
 
     // delete_task tells the dfdaemon to delete the task.
-    pub async fn delete_task(&mut self, request: DeleteTaskRequest) -> ClientResult<()> {
+    pub async fn delete_task(&self, request: DeleteTaskRequest) -> ClientResult<()> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
-        self.client.delete_task(request).await?;
+        self.client.clone().delete_task(request).await?;
         Ok(())
     }
 }

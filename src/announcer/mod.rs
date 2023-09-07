@@ -33,7 +33,7 @@ use tracing::{error, info};
 // ManagerAnnouncer is used to announce the dfdaemon information to the manager.
 pub struct ManagerAnnouncer {
     // config is the configuration of the dfdaemon.
-    config: Config,
+    config: Arc<Config>,
 
     // manager_client is the grpc client of the manager.
     manager_client: Arc<ManagerClient>,
@@ -49,7 +49,7 @@ pub struct ManagerAnnouncer {
 impl ManagerAnnouncer {
     // new creates a new manager announcer.
     pub fn new(
-        config: Config,
+        config: Arc<Config>,
         manager_client: Arc<ManagerClient>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
@@ -115,13 +115,13 @@ impl ManagerAnnouncer {
 // Announcer is used to announce the dfdaemon information to the manager and scheduler.
 pub struct SchedulerAnnouncer {
     // config is the configuration of the dfdaemon.
-    config: Config,
+    config: Arc<Config>,
 
     // host_id is the id of the host.
     host_id: String,
 
     // scheduler_client is the grpc client of the scheduler.
-    scheduler_client: SchedulerClient,
+    scheduler_client: Arc<SchedulerClient>,
 
     // shutdown is used to shutdown the announcer.
     shutdown: shutdown::Shutdown,
@@ -134,9 +134,9 @@ pub struct SchedulerAnnouncer {
 impl SchedulerAnnouncer {
     // new creates a new scheduler announcer.
     pub fn new(
-        config: Config,
+        config: Arc<Config>,
         host_id: String,
-        scheduler_client: SchedulerClient,
+        scheduler_client: Arc<SchedulerClient>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
