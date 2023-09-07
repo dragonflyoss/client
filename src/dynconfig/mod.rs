@@ -23,6 +23,7 @@ use dragonfly_api::manager::v2::{
     GetObjectStorageRequest, ListSchedulersRequest, ListSchedulersResponse, ObjectStorage,
     Scheduler, SourceType,
 };
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tonic_health::pb::{health_check_response::ServingStatus, HealthCheckRequest};
 use tracing::{error, info};
@@ -52,7 +53,7 @@ pub struct Dynconfig {
     config: Config,
 
     // manager_client is the grpc client of the manager.
-    manager_client: ManagerClient,
+    manager_client: Arc<ManagerClient>,
 
     // shutdown is used to shutdown the announcer.
     shutdown: shutdown::Shutdown,
@@ -66,7 +67,7 @@ impl Dynconfig {
     // new creates a new Dynconfig.
     pub async fn new(
         config: Config,
-        manager_client: ManagerClient,
+        manager_client: Arc<ManagerClient>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Result<Self> {

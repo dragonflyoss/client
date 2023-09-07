@@ -25,6 +25,7 @@ use dragonfly_api::common::v2::{Build, Cpu, Host, Memory, Network};
 use dragonfly_api::manager::v2::{DeleteSeedPeerRequest, SourceType, UpdateSeedPeerRequest};
 use dragonfly_api::scheduler::v2::AnnounceHostRequest;
 use std::env;
+use std::sync::Arc;
 use sysinfo::{CpuExt, ProcessExt, System, SystemExt};
 use tokio::sync::mpsc;
 use tracing::{error, info};
@@ -35,7 +36,7 @@ pub struct ManagerAnnouncer {
     config: Config,
 
     // manager_client is the grpc client of the manager.
-    manager_client: ManagerClient,
+    manager_client: Arc<ManagerClient>,
 
     // shutdown is used to shutdown the announcer.
     shutdown: shutdown::Shutdown,
@@ -49,10 +50,10 @@ impl ManagerAnnouncer {
     // new creates a new manager announcer.
     pub fn new(
         config: Config,
-        manager_client: ManagerClient,
+        manager_client: Arc<ManagerClient>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
-    ) -> Self {
+    ) -> ManagerAnnouncer {
         Self {
             config,
             manager_client,
