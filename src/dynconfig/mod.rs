@@ -24,7 +24,7 @@ use dragonfly_api::manager::v2::{
     Scheduler, SourceType,
 };
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
 use tonic_health::pb::{health_check_response::ServingStatus, HealthCheckRequest};
 use tracing::{error, info};
 
@@ -32,22 +32,22 @@ use tracing::{error, info};
 #[derive(Default)]
 pub struct Data {
     // schedulers is the schedulers of the dfdaemon.
-    schedulers: ListSchedulersResponse,
+    pub schedulers: ListSchedulersResponse,
 
     // available_schedulers is the available schedulers of the dfdaemon.
-    available_schedulers: Vec<Scheduler>,
+    pub available_schedulers: Vec<Scheduler>,
 
     // available_scheduler_cluster_id is the id of the available scheduler cluster of the dfdaemon.
-    available_scheduler_cluster_id: Option<u64>,
+    pub available_scheduler_cluster_id: Option<u64>,
 
     // object_storage is the object storage configuration of the dfdaemon.
-    object_storage: Option<ObjectStorage>,
+    pub object_storage: Option<ObjectStorage>,
 }
 
 // Dynconfig supports dynamic configuration of the client.
 pub struct Dynconfig {
     // data is the dynamic configuration of the dfdaemon.
-    pub data: Data,
+    pub data: RwLock<Data>,
 
     // config is the configuration of the dfdaemon.
     config: Arc<Config>,
@@ -72,9 +72,9 @@ impl Dynconfig {
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Result<Self> {
         // Create a new Dynconfig.
-        let mut dc = Dynconfig {
+        let dc = Dynconfig {
             config,
-            data: Data::default(),
+            data: RwLock::new(Data::default()),
             manager_client,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
@@ -107,35 +107,39 @@ impl Dynconfig {
     }
 
     // refresh refreshes the dynamic configuration of the dfdaemon.
-    async fn refresh(&mut self) -> Result<()> {
+    async fn refresh(&self) -> Result<()> {
+        // Get the data with write lock.
+        let mut data = self.data.write().await;
+
         // refresh the schedulers.
-        self.data.schedulers = self.list_schedulers().await?;
+        data.schedulers = self.list_schedulers().await?;
 
         // refresh the object storage configuration.
         match self.get_object_storage().await {
             Ok(object_storage) => {
-                self.data.object_storage = Some(object_storage);
+                data.object_storage = Some(object_storage);
             }
             Err(err) => {
                 info!("get object storage failed: {}", err);
-                self.data.object_storage = None;
+                data.object_storage = None;
             }
         }
 
         // get the available schedulers.
-        let available_schedulers = self.get_available_schedulers().await?;
+        let available_schedulers = self
+            .get_available_schedulers(&data.schedulers.schedulers)
+            .await?;
 
         // If the available schedulers is empty, return error.
         if !available_schedulers.is_empty() {
-            self.data.available_schedulers = available_schedulers;
+            data.available_schedulers = available_schedulers;
         } else {
             return Err(Error::AvailableSchedulersNotFound());
         }
 
         // If the available scheduler cluster id is not set, set it to the first available scheduler.
-        if let Some(available_scheduler) = self.data.available_schedulers.first() {
-            self.data.available_scheduler_cluster_id =
-                Some(available_scheduler.scheduler_cluster_id);
+        if let Some(available_scheduler) = data.available_schedulers.first() {
+            data.available_scheduler_cluster_id = Some(available_scheduler.scheduler_cluster_id);
         } else {
             return Err(Error::AvailableSchedulersNotFound());
         }
@@ -144,7 +148,7 @@ impl Dynconfig {
     }
 
     // list_schedulers lists the schedulers from the manager.
-    async fn list_schedulers(&mut self) -> Result<ListSchedulersResponse> {
+    async fn list_schedulers(&self) -> Result<ListSchedulersResponse> {
         // Get the source type.
         let source_type = if self.config.seed_peer.enable {
             SourceType::SeedPeerSource.into()
@@ -167,7 +171,7 @@ impl Dynconfig {
     }
 
     // get_object_storage gets the object storage from the manager.
-    async fn get_object_storage(&mut self) -> Result<ObjectStorage> {
+    async fn get_object_storage(&self) -> Result<ObjectStorage> {
         // Get the source type.
         let source_type = if self.config.seed_peer.enable {
             SourceType::SeedPeerSource.into()
@@ -185,10 +189,13 @@ impl Dynconfig {
     }
 
     // get_available_schedulers gets the available schedulers.
-    async fn get_available_schedulers(&mut self) -> Result<Vec<Scheduler>> {
+    async fn get_available_schedulers(
+        &self,
+        schedulers: &Vec<Scheduler>,
+    ) -> Result<Vec<Scheduler>> {
         let mut available_schedulers: Vec<Scheduler> = Vec::new();
         let mut available_scheduler_cluster_id: Option<u64> = None;
-        for scheduler in &self.data.schedulers.schedulers {
+        for scheduler in schedulers {
             // If scheduler_cluster_id is specified, only return the schedulers
             // of the specified scheduler cluster.
             if let Some(scheduler_cluster_id) = available_scheduler_cluster_id {
