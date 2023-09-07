@@ -30,6 +30,7 @@ use dragonfly_client::tracing::init_tracing;
 use dragonfly_client::utils::id_generator::IDGenerator;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{info, Level};
 
@@ -97,6 +98,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let manager_client = ManagerClient::new(config.manager.addr.as_ref().unwrap())
         .await
         .context("failed to initialize manager client")?;
+    let manager_client = Arc::new(manager_client);
 
     // Initialize channel for graceful shutdown.
     let (notify_shutdown, _) = broadcast::channel(1);
@@ -186,14 +188,14 @@ async fn main() -> Result<(), anyhow::Error> {
     // Drop notify_shutdown to notify the other server to exit.
     drop(notify_shutdown);
 
-    // Drop all guards to close all loggers.
-    drop(_guards);
-
     // Drop shutdown_complete_rx to wait for the other server to exit.
     drop(shutdown_complete_tx);
 
     // Wait for the other server to exit.
     let _ = shutdown_complete_rx.recv().await;
+
+    // Drop all guards to close all loggers.
+    drop(_guards);
 
     Ok(())
 }
