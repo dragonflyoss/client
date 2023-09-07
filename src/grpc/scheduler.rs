@@ -14,18 +14,24 @@
  * limitations under the License.
  */
 
+// use crate::dynconfig::Dynconfig;
 use crate::Result;
 use dragonfly_api::common::v2::{Peer, Task};
+// use dragonfly_api::manager::v2::Scheduler;
 use dragonfly_api::scheduler::v2::{
     scheduler_client::SchedulerClient as SchedulerGRPCClient, AnnounceHostRequest,
     ExchangePeerRequest, ExchangePeerResponse, LeaveHostRequest, LeavePeerRequest, StatPeerRequest,
     StatTaskRequest,
 };
+// use std::sync::Arc;
 use tonic::transport::Channel;
 
 // SchedulerClient is a wrapper of SchedulerGRPCClient.
 #[derive(Clone)]
 pub struct SchedulerClient {
+    // dynconfig is the dynamic configuration of the dfdaemon.
+    // dynconfig: Arc<Dynconfig>,
+
     // client is the grpc client of the scehduler.
     pub client: SchedulerGRPCClient<Channel>,
 }
@@ -34,7 +40,6 @@ pub struct SchedulerClient {
 impl SchedulerClient {
     // new creates a new SchedulerClient.
     pub async fn new() -> Result<Self> {
-        // TODO: read the scheduler address from dynamic config.
         let channel = Channel::from_static("http://127.0.0.1:8002")
             .connect()
             .await?;
@@ -98,4 +103,10 @@ impl SchedulerClient {
         self.client.clone().leave_host(request).await?;
         Ok(())
     }
+
+    // get_available_schedulers gets the available schedulers.
+    // async fn get_available_schedulers(&self) -> Vec<Scheduler> {
+    // let data = self.dynconfig.data.read().await;
+    // data.available_schedulers.clone()
+    // }
 }

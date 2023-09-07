@@ -53,7 +53,7 @@ impl ManagerAnnouncer {
         manager_client: Arc<ManagerClient>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
-    ) -> ManagerAnnouncer {
+    ) -> Self {
         Self {
             config,
             manager_client,
@@ -170,7 +170,7 @@ impl SchedulerAnnouncer {
     }
 
     // announce_host announces the dfdaemon information to the scheduler.
-    async fn announce_host(&mut self) -> Result<()> {
+    async fn announce_host(&self) -> Result<()> {
         // If the seed peer is enabled, we should announce the seed peer to the scheduler.
         let host_type = if self.config.seed_peer.enable {
             self.config.seed_peer.kind

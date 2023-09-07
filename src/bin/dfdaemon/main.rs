@@ -196,8 +196,5 @@ async fn main() -> Result<(), anyhow::Error> {
     // Wait for the other server to exit.
     let _ = shutdown_complete_rx.recv().await;
 
-    // Drop all guards to close all loggers.
-    drop(_guards);
-
     Ok(())
 }
