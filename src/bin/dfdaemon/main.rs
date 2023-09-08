@@ -106,7 +106,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::unbounded_channel();
 
     // Initialize dynconfig server.
-    let mut dynconfig = Dynconfig::new(
+    let dynconfig = Dynconfig::new(
         config.clone(),
         manager_client.clone(),
         shutdown.clone(),
@@ -121,21 +121,21 @@ async fn main() -> Result<(), anyhow::Error> {
     let scheduler_client = Arc::new(scheduler_client);
 
     // Initialize metrics server.
-    let mut metrics = Metrics::new(
+    let metrics = Metrics::new(
         SocketAddr::new(config.metrics.ip.unwrap(), config.metrics.port),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
 
     // Initialize health server.
-    let mut health = Health::new(
+    let health = Health::new(
         SocketAddr::new(config.health.ip.unwrap(), config.health.port),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
 
     // Initialize manager announcer.
-    let mut manager_announcer = ManagerAnnouncer::new(
+    let manager_announcer = ManagerAnnouncer::new(
         config.clone(),
         manager_client.clone(),
         shutdown.clone(),
@@ -143,7 +143,7 @@ async fn main() -> Result<(), anyhow::Error> {
     );
 
     // Initialize scheduler announcer.
-    let mut scheduler_announcer = SchedulerAnnouncer::new(
+    let scheduler_announcer = SchedulerAnnouncer::new(
         config.clone(),
         id_generator.host_id(),
         scheduler_client.clone(),
@@ -152,7 +152,7 @@ async fn main() -> Result<(), anyhow::Error> {
     );
 
     // Initialize dfdaemon grpc server.
-    let mut dfdaemon_grpc = DfdaemonServer::new(
+    let dfdaemon_grpc = DfdaemonServer::new(
         SocketAddr::new(config.server.ip.unwrap(), config.server.port),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
