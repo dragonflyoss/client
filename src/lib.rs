@@ -90,6 +90,10 @@ pub enum Error {
 
     #[error("invalid uri {0}")]
     InvalidURI(String),
+
+    // GRPCClientNotFound is the error when the grpc client is not found.
+    #[error{"grpc client not found"}]
+    GRPCClientNotFound(),
 }
 
 // Result is the result for Client.

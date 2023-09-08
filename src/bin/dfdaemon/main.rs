@@ -113,9 +113,10 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     )
     .await?;
+    let dynconfig = Arc::new(dynconfig);
 
     // Initialize scheduler client.
-    let scheduler_client = SchedulerClient::new()
+    let scheduler_client = SchedulerClient::new(dynconfig.clone())
         .await
         .context("failed to initialize scheduler client")?;
     let scheduler_client = Arc::new(scheduler_client);
@@ -192,6 +193,10 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Drop shutdown_complete_rx to wait for the other server to exit.
     drop(shutdown_complete_tx);
+
+    // Drop scheduler_client to release dynconfig. when drop the scheduler_client, it will release the
+    // Arc reference of dynconfig, so dynconfig can be released normally.
+    drop(scheduler_client);
 
     // Wait for the other server to exit.
     let _ = shutdown_complete_rx.recv().await;

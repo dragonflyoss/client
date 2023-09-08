@@ -109,7 +109,7 @@ impl Dynconfig {
     }
 
     // refresh refreshes the dynamic configuration of the dfdaemon.
-    async fn refresh(&self) -> Result<()> {
+    pub async fn refresh(&self) -> Result<()> {
         // Get the data with write lock.
         let mut data = self.data.write().await;
 
