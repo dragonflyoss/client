@@ -24,23 +24,33 @@ pub struct Shutdown {
     // is_shutdown is true if the shutdown signal has been received.
     is_shutdown: bool,
 
-    // notify is used to notify the shutdown signal.
-    notify: broadcast::Receiver<()>,
+    // sender is used to send the shutdown signal.
+    sender: broadcast::Sender<()>,
+
+    // receiver is used to receive the shutdown signal.
+    receiver: broadcast::Receiver<()>,
 }
 
 // Shutdown implements the shutdown signal.
 impl Shutdown {
     // new creates a new Shutdown.
-    pub fn new(notify: broadcast::Receiver<()>) -> Shutdown {
+    pub fn new() -> Shutdown {
+        let (sender, receiver) = broadcast::channel(1);
         Self {
             is_shutdown: false,
-            notify,
+            sender,
+            receiver,
         }
     }
 
     // is_shutdown returns true if the shutdown signal has been received.
     pub fn is_shutdown(&self) -> bool {
         self.is_shutdown
+    }
+
+    // trigger triggers the shutdown signal.
+    pub fn trigger(&self) {
+        let _ = self.sender.send(());
     }
 
     // recv waits for the shutdown signal.
@@ -51,10 +61,32 @@ impl Shutdown {
         }
 
         // Wait for the shutdown signal.
-        let _ = self.notify.recv().await;
+        let _ = self.receiver.recv().await;
 
         // Set the shutdown flag.
         self.is_shutdown = true;
+    }
+}
+
+// Default implements the Default trait.
+impl Default for Shutdown {
+    // default returns a new default Shutdown.
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// Clone implements the Clone trait.
+impl Clone for Shutdown {
+    // clone returns a new Shutdown.
+    fn clone(&self) -> Self {
+        let sender = self.sender.clone();
+        let receiver = self.sender.subscribe();
+        Self {
+            is_shutdown: self.is_shutdown,
+            sender,
+            receiver,
+        }
     }
 }
 

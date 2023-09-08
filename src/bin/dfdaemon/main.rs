@@ -31,7 +31,7 @@ use dragonfly_client::utils::id_generator::IDGenerator;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 use tracing::{info, Level};
 
 #[derive(Debug, Parser)]
@@ -102,14 +102,14 @@ async fn main() -> Result<(), anyhow::Error> {
     let manager_client = Arc::new(manager_client);
 
     // Initialize channel for graceful shutdown.
-    let (notify_shutdown, _) = broadcast::channel(1);
+    let shutdown = shutdown::Shutdown::default();
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::unbounded_channel();
 
     // Initialize dynconfig server.
     let mut dynconfig = Dynconfig::new(
         config.clone(),
         manager_client.clone(),
-        shutdown::Shutdown::new(notify_shutdown.subscribe()),
+        shutdown.clone(),
         shutdown_complete_tx.clone(),
     )
     .await?;
@@ -123,14 +123,14 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize metrics server.
     let mut metrics = Metrics::new(
         SocketAddr::new(config.metrics.ip.unwrap(), config.metrics.port),
-        shutdown::Shutdown::new(notify_shutdown.subscribe()),
+        shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
 
     // Initialize health server.
     let mut health = Health::new(
         SocketAddr::new(config.health.ip.unwrap(), config.health.port),
-        shutdown::Shutdown::new(notify_shutdown.subscribe()),
+        shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
 
@@ -138,7 +138,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut manager_announcer = ManagerAnnouncer::new(
         config.clone(),
         manager_client.clone(),
-        shutdown::Shutdown::new(notify_shutdown.subscribe()),
+        shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
 
@@ -147,14 +147,14 @@ async fn main() -> Result<(), anyhow::Error> {
         config.clone(),
         id_generator.host_id(),
         scheduler_client.clone(),
-        shutdown::Shutdown::new(notify_shutdown.subscribe()),
+        shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
 
     // Initialize dfdaemon grpc server.
     let mut dfdaemon_grpc = DfdaemonServer::new(
         SocketAddr::new(config.server.ip.unwrap(), config.server.port),
-        shutdown::Shutdown::new(notify_shutdown.subscribe()),
+        shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
 
@@ -187,8 +187,8 @@ async fn main() -> Result<(), anyhow::Error> {
         _ = shutdown::shutdown_signal() => {},
     }
 
-    // Drop notify_shutdown to notify the other server to exit.
-    drop(notify_shutdown);
+    // Trigger shutdown signal to other servers.
+    shutdown.trigger();
 
     // Drop shutdown_complete_rx to wait for the other server to exit.
     drop(shutdown_complete_tx);
