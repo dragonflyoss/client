@@ -49,7 +49,11 @@ impl Health {
     }
 
     // run starts the health server.
-    pub async fn run(&mut self) {
+    pub async fn run(&self) {
+        // Clone the shutdown channel.
+        let mut shutdown = self.shutdown.clone();
+
+        // Create the health route.
         let health_route = warp::path!("healthy")
             .and(warp::get())
             .and(warp::path::end())
@@ -61,7 +65,7 @@ impl Health {
                 // Health server ended.
                 info!("health server ended");
             }
-            _ = self.shutdown.recv() => {
+            _ = shutdown.recv() => {
                 // Health server shutting down with signals.
                 info!("health server shutting down");
             }

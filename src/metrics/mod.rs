@@ -71,9 +71,14 @@ impl Metrics {
     }
 
     // run starts the metrics server.
-    pub async fn run(&mut self) {
+    pub async fn run(&self) {
+        // Clone the shutdown channel.
+        let mut shutdown = self.shutdown.clone();
+
+        // Register custom metrics.
         self.register_custom_metrics();
 
+        // Create the metrics route.
         let metrics_route = warp::path!("metrics")
             .and(warp::get())
             .and(warp::path::end())
@@ -85,7 +90,7 @@ impl Metrics {
                 // Metrics server ended.
                 info!("metrics server ended");
             }
-            _ = self.shutdown.recv() => {
+            _ = shutdown.recv() => {
                 // Metrics server shutting down with signals.
                 info!("metrics server shutting down");
             }
