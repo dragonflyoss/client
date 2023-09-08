@@ -15,36 +15,40 @@
  */
 
 // use crate::dynconfig::Dynconfig;
-use crate::Result;
+use crate::dynconfig::Dynconfig;
+use crate::{Error, Result};
 use dragonfly_api::common::v2::{Peer, Task};
-// use dragonfly_api::manager::v2::Scheduler;
 use dragonfly_api::scheduler::v2::{
     scheduler_client::SchedulerClient as SchedulerGRPCClient, AnnounceHostRequest,
     ExchangePeerRequest, ExchangePeerResponse, LeaveHostRequest, LeavePeerRequest, StatPeerRequest,
     StatTaskRequest,
 };
-// use std::sync::Arc;
-use tonic::transport::Channel;
+use std::str::FromStr;
+use std::sync::Arc;
+use tonic::transport::{Channel, Endpoint, Uri};
+use tracing::{error, info};
 
 // SchedulerClient is a wrapper of SchedulerGRPCClient.
 #[derive(Clone)]
 pub struct SchedulerClient {
     // dynconfig is the dynamic configuration of the dfdaemon.
-    // dynconfig: Arc<Dynconfig>,
+    dynconfig: Arc<Dynconfig>,
 
     // client is the grpc client of the scehduler.
-    pub client: SchedulerGRPCClient<Channel>,
+    pub client: Option<SchedulerGRPCClient<Channel>>,
 }
 
 // SchedulerClient implements the grpc client of the scheduler.
 impl SchedulerClient {
     // new creates a new SchedulerClient.
-    pub async fn new() -> Result<Self> {
-        let channel = Channel::from_static("http://127.0.0.1:8002")
-            .connect()
-            .await?;
-        let client = SchedulerGRPCClient::new(channel);
-        Ok(Self { client })
+    pub async fn new(dynconfig: Arc<Dynconfig>) -> Result<Self> {
+        let mut client = Self {
+            dynconfig,
+            client: None,
+        };
+
+        client.refresh_scheduler_client().await?;
+        Ok(client)
     }
 
     // stat_peer gets the status of the peer.
@@ -52,7 +56,7 @@ impl SchedulerClient {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
-        let response = self.client.clone().stat_peer(request).await?;
+        let response = self.client()?.stat_peer(request).await?;
         Ok(response.into_inner())
     }
 
@@ -61,7 +65,7 @@ impl SchedulerClient {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
-        self.client.clone().leave_peer(request).await?;
+        self.client()?.leave_peer(request).await?;
         Ok(())
     }
 
@@ -73,7 +77,7 @@ impl SchedulerClient {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
-        let response = self.client.clone().exchange_peer(request).await?;
+        let response = self.client()?.exchange_peer(request).await?;
         Ok(response.into_inner())
     }
 
@@ -82,7 +86,7 @@ impl SchedulerClient {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
-        let response = self.client.clone().stat_task(request).await?;
+        let response = self.client()?.stat_task(request).await?;
         Ok(response.into_inner())
     }
 
@@ -91,7 +95,7 @@ impl SchedulerClient {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
-        self.client.clone().announce_host(request).await?;
+        self.client()?.announce_host(request).await?;
         Ok(())
     }
 
@@ -100,13 +104,44 @@ impl SchedulerClient {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
-        self.client.clone().leave_host(request).await?;
+        self.client()?.leave_host(request).await?;
         Ok(())
     }
 
-    // get_available_schedulers gets the available schedulers.
-    // async fn get_available_schedulers(&self) -> Vec<Scheduler> {
-    // let data = self.dynconfig.data.read().await;
-    // data.available_schedulers.clone()
-    // }
+    // client gets the grpc client of the scheduler.
+    fn client(&self) -> Result<SchedulerGRPCClient<Channel>> {
+        match self.client.clone() {
+            Some(client) => Ok(client),
+            None => Err(Error::GRPCClientNotFound()),
+        }
+    }
+
+    // get_endpoints gets the endpoints of available schedulers.
+    async fn refresh_scheduler_client(&mut self) -> Result<()> {
+        // Refresh the dynamic configuration.
+        self.dynconfig.refresh().await?;
+
+        // Get the endpoints of available schedulers.
+        let data = self.dynconfig.data.read().await;
+        let mut endpoints: Vec<Endpoint> = Vec::new();
+        for scheduler in data.available_schedulers.iter() {
+            match Uri::from_str(format!("http://{}:{}", scheduler.ip, scheduler.port).as_str()) {
+                Ok(uri) => endpoints.push(Endpoint::from(uri)),
+                Err(e) => {
+                    error!("failed to parse uri: {}", e);
+                }
+            }
+        }
+        info!(
+            "available schedulers: {:?}",
+            endpoints.iter().map(|e| e.uri()).collect::<Vec<_>>()
+        );
+
+        // Refresh the scheduler client.
+        self.client
+            .replace(SchedulerGRPCClient::new(Channel::balance_list(
+                endpoints.into_iter(),
+            )));
+        Ok(())
+    }
 }
