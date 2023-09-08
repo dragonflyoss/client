@@ -63,7 +63,10 @@ impl ManagerAnnouncer {
     }
 
     // run announces the dfdaemon information to the manager.
-    pub async fn run(&mut self) -> Result<()> {
+    pub async fn run(&self) -> Result<()> {
+        // Clone the shutdown channel.
+        let mut shutdown = self.shutdown.clone();
+
         // If the seed peer is enabled, we should announce the seed peer to the manager.
         if self.config.seed_peer.enable {
             // Get the object storage port.
@@ -90,7 +93,7 @@ impl ManagerAnnouncer {
                 .await?;
 
             // Announce to scheduler shutting down with signals.
-            self.shutdown.recv().await;
+            shutdown.recv().await;
 
             // Delete the seed peer from the manager.
             self.manager_client
@@ -104,7 +107,7 @@ impl ManagerAnnouncer {
 
             info!("announce to manager shutting down");
         } else {
-            self.shutdown.recv().await;
+            shutdown.recv().await;
             info!("announce to manager shutting down");
         }
 
@@ -150,9 +153,12 @@ impl SchedulerAnnouncer {
     }
 
     // run announces the dfdaemon information to the scheduler.
-    pub async fn run(&mut self) {
-        let mut interval = tokio::time::interval(self.config.scheduler.announce_interval);
+    pub async fn run(&self) {
+        // Clone the shutdown channel.
+        let mut shutdown = self.shutdown.clone();
 
+        // Start the scheduler announcer.
+        let mut interval = tokio::time::interval(self.config.scheduler.announce_interval);
         loop {
             tokio::select! {
                 _ = interval.tick() => {
@@ -160,7 +166,7 @@ impl SchedulerAnnouncer {
                         error!("announce host to scheduler failed: {}", err);
                     };
                 }
-                _ = self.shutdown.recv() => {
+                _ = shutdown.recv() => {
                     // Announce to scheduler shutting down with signals.
                     info!("announce to scheduler shutting down");
                     return

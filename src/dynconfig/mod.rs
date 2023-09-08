@@ -55,10 +55,10 @@ pub struct Dynconfig {
     // manager_client is the grpc client of the manager.
     manager_client: Arc<ManagerClient>,
 
-    // shutdown is used to shutdown the announcer.
+    // shutdown is used to shutdown the dynconfig.
     shutdown: shutdown::Shutdown,
 
-    // _shutdown_complete is used to notify the announcer is shutdown.
+    // _shutdown_complete is used to notify the dynconfig is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
@@ -86,10 +86,12 @@ impl Dynconfig {
     }
 
     // run starts the dynconfig server.
-    pub async fn run(&mut self) -> Result<()> {
+    pub async fn run(&self) -> Result<()> {
+        // Clone the shutdown channel.
+        let mut shutdown = self.shutdown.clone();
+
         // Start the refresh loop.
         let mut interval = tokio::time::interval(self.config.dynconfig.refresh_interval);
-
         loop {
             tokio::select! {
                 _ = interval.tick() => {
@@ -97,7 +99,7 @@ impl Dynconfig {
                         error!("refresh dynconfig failed: {}", err);
                     };
                 }
-                _ = self.shutdown.recv() => {
+                _ = shutdown.recv() => {
                     // Dynconfig server shutting down with signals.
                     info!("dynconfig server shutting down");
                     return Ok(());
