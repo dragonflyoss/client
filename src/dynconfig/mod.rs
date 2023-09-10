@@ -179,10 +179,7 @@ impl Dynconfig {
     }
 
     // get_available_schedulers gets the available schedulers.
-    async fn get_available_schedulers(
-        &self,
-        schedulers: &[Scheduler],
-    ) -> Result<Vec<Scheduler>> {
+    async fn get_available_schedulers(&self, schedulers: &[Scheduler]) -> Result<Vec<Scheduler>> {
         let mut available_schedulers: Vec<Scheduler> = Vec::new();
         let mut available_scheduler_cluster_id: Option<u64> = None;
         for scheduler in schedulers {

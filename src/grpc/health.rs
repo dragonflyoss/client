@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::{Result, Error};
+use crate::{Error, Result};
 use tonic::transport::Channel;
 use tonic_health::pb::{
     health_client::HealthClient as HealthGRPCClient, HealthCheckRequest, HealthCheckResponse,
