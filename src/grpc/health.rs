@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::Result;
+use crate::{Result, Error};
 use tonic::transport::Channel;
 use tonic_health::pb::{
     health_client::HealthClient as HealthGRPCClient, HealthCheckRequest, HealthCheckResponse,
@@ -30,8 +30,9 @@ pub struct HealthClient {
 // HealthClient implements the grpc client of the health.
 impl HealthClient {
     // new creates a new HealthClient.
-    pub async fn new(addr: String) -> Result<Self> {
-        let channel = Channel::from_static(Box::leak(addr.into_boxed_str()))
+    pub async fn new(addr: &str) -> Result<Self> {
+        let channel = Channel::from_shared(addr.to_string())
+            .map_err(|_| Error::InvalidURI(addr.into()))?
             .connect()
             .await?;
         let client = HealthGRPCClient::new(channel);
