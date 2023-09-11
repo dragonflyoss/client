@@ -110,42 +110,30 @@ impl Dynconfig {
 
     // refresh refreshes the dynamic configuration of the dfdaemon.
     pub async fn refresh(&self) -> Result<()> {
+        // refresh the schedulers.
+        let schedulers = self.list_schedulers().await?;
+        // refresh the object storage configuration.
+        let object_storage = self.get_object_storage().await.ok();
+        // Get the data with read lock.
+        let read_guard = self.data.read().await;
+        let available_schedulers = self
+            .get_available_schedulers(&read_guard.schedulers.schedulers)
+            .await?;
+        drop(read_guard);
+
+        if available_schedulers.is_empty() {
+            return Err(Error::AvailableSchedulersNotFound());
+        }
+        // If the available scheduler cluster id is not set, set it to the first available scheduler.
+        let Some(available_scheduler) = available_schedulers.first() else {
+            return Err(Error::AvailableSchedulersNotFound());
+        };
+
         // Get the data with write lock.
         let mut data = self.data.write().await;
-
-        // refresh the schedulers.
-        data.schedulers = self.list_schedulers().await?;
-
-        // refresh the object storage configuration.
-        match self.get_object_storage().await {
-            Ok(object_storage) => {
-                data.object_storage = Some(object_storage);
-            }
-            Err(err) => {
-                info!("get object storage failed: {}", err);
-                data.object_storage = None;
-            }
-        }
-
-        // get the available schedulers.
-        let available_schedulers = self
-            .get_available_schedulers(&data.schedulers.schedulers)
-            .await?;
-
-        // If the available schedulers is empty, return error.
-        if !available_schedulers.is_empty() {
-            data.available_schedulers = available_schedulers;
-        } else {
-            return Err(Error::AvailableSchedulersNotFound());
-        }
-
-        // If the available scheduler cluster id is not set, set it to the first available scheduler.
-        if let Some(available_scheduler) = data.available_schedulers.first() {
-            data.available_scheduler_cluster_id = Some(available_scheduler.scheduler_cluster_id);
-        } else {
-            return Err(Error::AvailableSchedulersNotFound());
-        }
-
+        data.schedulers = schedulers;
+        data.object_storage = object_storage;
+        data.available_scheduler_cluster_id = Some(available_scheduler.scheduler_cluster_id);
         Ok(())
     }
 
@@ -191,10 +179,7 @@ impl Dynconfig {
     }
 
     // get_available_schedulers gets the available schedulers.
-    async fn get_available_schedulers(
-        &self,
-        schedulers: &Vec<Scheduler>,
-    ) -> Result<Vec<Scheduler>> {
+    async fn get_available_schedulers(&self, schedulers: &[Scheduler]) -> Result<Vec<Scheduler>> {
         let mut available_schedulers: Vec<Scheduler> = Vec::new();
         let mut available_scheduler_cluster_id: Option<u64> = None;
         for scheduler in schedulers {
@@ -208,7 +193,7 @@ impl Dynconfig {
 
             // Check the health of the scheduler.
             let health_client =
-                HealthClient::new(format!("http://{}:{}", scheduler.ip, scheduler.port)).await?;
+                HealthClient::new(&format!("http://{}:{}", scheduler.ip, scheduler.port)).await?;
 
             match health_client
                 .check(HealthCheckRequest {
