@@ -110,30 +110,30 @@ impl Dynconfig {
 
     // refresh refreshes the dynamic configuration of the dfdaemon.
     pub async fn refresh(&self) -> Result<()> {
-        // refresh the schedulers.
-        let schedulers = self.list_schedulers().await?;
         // refresh the object storage configuration.
         let object_storage = self.get_object_storage().await.ok();
-        // Get the data with read lock.
-        let read_guard = self.data.read().await;
-        let available_schedulers = self
-            .get_available_schedulers(&read_guard.schedulers.schedulers)
-            .await?;
-        drop(read_guard);
 
+        // refresh the schedulers.
+        let schedulers = self.list_schedulers().await?;
+
+        // Get the available schedulers.
+        let available_schedulers = self
+            .get_available_schedulers(&schedulers.schedulers)
+            .await?;
+
+        // If no available schedulers, return error.
         if available_schedulers.is_empty() {
             return Err(Error::AvailableSchedulersNotFound());
         }
-        // If the available scheduler cluster id is not set, set it to the first available scheduler.
-        let Some(available_scheduler) = available_schedulers.first() else {
-            return Err(Error::AvailableSchedulersNotFound());
-        };
 
         // Get the data with write lock.
         let mut data = self.data.write().await;
         data.schedulers = schedulers;
         data.object_storage = object_storage;
-        data.available_scheduler_cluster_id = Some(available_scheduler.scheduler_cluster_id);
+        data.available_schedulers = available_schedulers;
+        if let Some(available_scheduler) = data.available_schedulers.first() {
+            data.available_scheduler_cluster_id = Some(available_scheduler.scheduler_cluster_id);
+        }
         Ok(())
     }
 
