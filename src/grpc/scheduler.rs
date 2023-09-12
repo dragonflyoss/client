@@ -112,7 +112,7 @@ impl SchedulerClient {
     fn client(&self) -> Result<SchedulerGRPCClient<Channel>> {
         match self.client.clone() {
             Some(client) => Ok(client),
-            None => Err(Error::GRPCClientNotFound()),
+            None => Err(Error::SchedulerClientNotFound()),
         }
     }
 
