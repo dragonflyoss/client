@@ -44,6 +44,11 @@ impl Storage {
         self.metadata.download_task_started(id, piece_length)
     }
 
+    // download_task_failed updates the metadata of the task when the task downloads failed.
+    pub fn download_task_failed(&self, id: &str) -> Result<()> {
+        self.metadata.download_task_failed(id)
+    }
+
     // upload_task_finished updates the metadata of the task when task uploads finished.
     pub fn upload_task_finished(&self, id: &str) -> Result<()> {
         self.metadata.upload_task_finished(id)
@@ -64,36 +69,37 @@ impl Storage {
     pub async fn download_piece_finished<R: AsyncRead + Unpin>(
         &self,
         task_id: &str,
+        number: u32,
         offset: u64,
         digest: &str,
         reader: &mut R,
     ) -> Result<u64> {
         let length = self.content.write_piece(task_id, offset, reader).await?;
         self.metadata
-            .download_piece_finished(task_id, offset, length, digest)?;
+            .download_piece_finished(task_id, number, offset, length, digest)?;
         Ok(length)
+    }
+
+    // download_piece_failed updates the metadata of the piece when the piece downloads failed.
+    pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
+        self.metadata.download_piece_failed(task_id, number)
     }
 
     // upload_piece updates the metadata of the piece and
     // returns the data of the piece.
     pub async fn upload_piece(&self, task_id: &str, number: u32) -> Result<impl AsyncRead> {
-        let id = self.metadata.piece_id(task_id, number);
-        match self.metadata.get_piece(&id)? {
+        match self.metadata.get_piece(task_id, number)? {
             Some(piece) => {
                 let reader = self
                     .content
                     .read_piece(task_id, piece.offset, piece.length)
                     .await?;
-                self.metadata.upload_piece_finished(&id)?;
+                self.metadata.upload_piece_finished(task_id, number)?;
                 Ok(reader)
             }
-            None => Err(Error::PieceNotFound(id)),
+            None => Err(Error::PieceNotFound(
+                self.metadata.piece_id(task_id, number),
+            )),
         }
-    }
-
-    // get_piece returns the piece metadata.
-    pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<metadata::Piece>> {
-        self.metadata
-            .get_piece(self.metadata.piece_id(task_id, number).as_str())
     }
 }
