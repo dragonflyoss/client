@@ -157,6 +157,14 @@ impl Metadata {
         }
     }
 
+    // download_task_failed updates the metadata of the task when the task downloads failed.
+    pub fn download_task_failed(&self, id: &str) -> Result<()> {
+        match self.get_task(id)? {
+            Some(_piece) => self.delete_task(id),
+            None => Err(Error::TaskNotFound(id.to_string())),
+        }
+    }
+
     // get_task gets the task metadata.
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         let handle = self.cf_handle(TASK_CF_NAME)?;
@@ -166,10 +174,25 @@ impl Metadata {
         }
     }
 
+    // put_task puts the task metadata.
+    fn put_task(&self, id: &str, task: &Task) -> Result<()> {
+        let handle = self.cf_handle(TASK_CF_NAME)?;
+        let json = serde_json::to_string(&task)?;
+        self.db.put_cf(handle, id.as_bytes(), json.as_bytes())?;
+        Ok(())
+    }
+
+    // delete_task deletes the task metadata.
+    fn delete_task(&self, id: &str) -> Result<()> {
+        let handle = self.cf_handle(TASK_CF_NAME)?;
+        self.db.delete_cf(handle, id.as_bytes())?;
+        Ok(())
+    }
+
     // download_piece_started updates the metadata of the piece when the piece downloads started.
-    pub fn download_piece_started(&self, id: &str, number: u32) -> Result<()> {
+    pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<()> {
         self.put_piece(
-            id,
+            task_id,
             &Piece {
                 number,
                 updated_at: Utc::now().naive_utc(),
@@ -182,37 +205,47 @@ impl Metadata {
     // download_piece_finished updates the metadata of the piece when the piece downloads finished.
     pub fn download_piece_finished(
         &self,
-        id: &str,
+        task_id: &str,
+        number: u32,
         offset: u64,
         length: u64,
         digest: &str,
     ) -> Result<()> {
-        match self.get_piece(id)? {
+        match self.get_piece(task_id, number)? {
             Some(mut piece) => {
                 piece.offset = offset;
                 piece.length = length;
                 piece.digest = digest.to_string();
                 piece.updated_at = Utc::now().naive_utc();
-                self.put_piece(id, &piece)
+                self.put_piece(task_id, &piece)
             }
-            None => Err(Error::PieceNotFound(id.to_string())),
+            None => Err(Error::PieceNotFound(self.piece_id(task_id, number))),
+        }
+    }
+
+    // download_piece_failed updates the metadata of the piece when the piece downloads failed.
+    pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
+        match self.get_piece(task_id, number)? {
+            Some(_piece) => self.delete_piece(task_id, number),
+            None => Err(Error::PieceNotFound(self.piece_id(task_id, number))),
         }
     }
 
     // upload_piece_finished updates the metadata of the piece when piece uploads finished.
-    pub fn upload_piece_finished(&self, id: &str) -> Result<()> {
-        match self.get_piece(id)? {
+    pub fn upload_piece_finished(&self, task_id: &str, number: u32) -> Result<()> {
+        match self.get_piece(task_id, number)? {
             Some(mut piece) => {
                 piece.uploaded_count += 1;
                 piece.updated_at = Utc::now().naive_utc();
-                self.put_piece(id, &piece)
+                self.put_piece(task_id, &piece)
             }
-            None => Err(Error::PieceNotFound(id.to_string())),
+            None => Err(Error::PieceNotFound(self.piece_id(task_id, number))),
         }
     }
 
     // get_piece gets the piece metadata.
-    pub fn get_piece(&self, id: &str) -> Result<Option<Piece>> {
+    pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<Piece>> {
+        let id = self.piece_id(task_id, number);
         let handle = self.cf_handle(PIECE_CF_NAME)?;
         match self.db.get_cf(handle, id.as_bytes())? {
             Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
@@ -220,25 +253,26 @@ impl Metadata {
         }
     }
 
-    // piece_id returns the piece id.
-    pub fn piece_id(&self, task_id: &str, number: u32) -> String {
-        format!("{}-{}", task_id, number)
-    }
-
-    // put_task puts the task metadata.
-    fn put_task(&self, id: &str, task: &Task) -> Result<()> {
-        let handle = self.cf_handle(TASK_CF_NAME)?;
-        let json = serde_json::to_string(&task)?;
-        self.db.put_cf(handle, id.as_bytes(), json.as_bytes())?;
-        Ok(())
-    }
-
     // put_piece puts the piece metadata.
-    fn put_piece(&self, id: &str, piece: &Piece) -> Result<()> {
+    fn put_piece(&self, task_id: &str, piece: &Piece) -> Result<()> {
+        let id = self.piece_id(task_id, piece.number);
         let handle = self.cf_handle(PIECE_CF_NAME)?;
         let json = serde_json::to_string(&piece)?;
         self.db.put_cf(handle, id.as_bytes(), json.as_bytes())?;
         Ok(())
+    }
+
+    // delete_piece deletes the piece metadata.
+    fn delete_piece(&self, task_id: &str, number: u32) -> Result<()> {
+        let id = self.piece_id(task_id, number);
+        let handle = self.cf_handle(PIECE_CF_NAME)?;
+        self.db.delete_cf(handle, id.as_bytes())?;
+        Ok(())
+    }
+
+    // piece_id returns the piece id.
+    pub fn piece_id(&self, task_id: &str, number: u32) -> String {
+        format!("{}-{}", task_id, number)
     }
 
     // cf_handle returns the column family handle.
