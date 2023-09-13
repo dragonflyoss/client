@@ -88,12 +88,17 @@ pub enum Error {
     #[error{"invalid state {0}"}]
     InvalidState(String),
 
+    // InvalidURI is the error when the uri is invalid.
     #[error("invalid uri {0}")]
     InvalidURI(String),
 
-    // GRPCClientNotFound is the error when the grpc client is not found.
-    #[error{"grpc client not found"}]
-    GRPCClientNotFound(),
+    // SchedulerClientNotFound is the error when the scheduler client is not found.
+    #[error{"scheduler client not found"}]
+    SchedulerClientNotFound(),
+
+    // UnexpectedResponse is the error when the response is unexpected.
+    #[error{"unexpected response"}]
+    UnexpectedResponse(),
 }
 
 // Result is the result for Client.

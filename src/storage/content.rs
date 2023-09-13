@@ -55,7 +55,7 @@ impl Content {
     }
 
     // write_piece writes the piece to the content.
-    pub async fn write_piece<R: AsyncRead + Unpin>(
+    pub async fn write_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
         offset: u64,
