@@ -66,7 +66,7 @@ impl Storage {
     }
 
     // download_piece_finished updates the metadata of the piece and writes the data of piece to file.
-    pub async fn download_piece_finished<R: AsyncRead + Unpin>(
+    pub async fn download_piece_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
         number: u32,

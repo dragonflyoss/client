@@ -168,6 +168,15 @@ impl DfdaemonClient {
         Ok(Self { client })
     }
 
+    // sync_pieces syncs the pieces.
+    pub async fn sync_pieces(
+        &self,
+        request: impl tonic::IntoStreamingRequest<Message = SyncPiecesRequest>,
+    ) -> ClientResult<tonic::Response<tonic::codec::Streaming<SyncPiecesResponse>>> {
+        let response = self.client.clone().sync_pieces(request).await?;
+        Ok(response)
+    }
+
     // download_task tells the dfdaemon to download the task.
     pub async fn download_task(&self, request: DownloadTaskRequest) -> ClientResult<()> {
         let mut request = tonic::Request::new(request);
