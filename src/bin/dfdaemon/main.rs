@@ -17,6 +17,7 @@
 use anyhow::Context;
 use clap::Parser;
 use dragonfly_client::announcer::{ManagerAnnouncer, SchedulerAnnouncer};
+use dragonfly_client::backend::http::HTTP;
 use dragonfly_client::config::dfdaemon;
 use dragonfly_client::dynconfig::Dynconfig;
 use dragonfly_client::grpc::{
@@ -26,6 +27,7 @@ use dragonfly_client::health::Health;
 use dragonfly_client::metrics::Metrics;
 use dragonfly_client::shutdown;
 use dragonfly_client::storage::Storage;
+use dragonfly_client::task::Task;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client::utils::id_generator::IDGenerator;
 use std::net::SocketAddr;
@@ -87,7 +89,8 @@ async fn main() -> Result<(), anyhow::Error> {
     );
 
     // Initialize storage.
-    let _storage = Storage::new(&config.server.data_dir)?;
+    let storage = Storage::new(&config.server.data_dir)?;
+    let storage = Arc::new(storage);
 
     // Initialize id generator.
     let id_generator = IDGenerator::new(
@@ -95,11 +98,18 @@ async fn main() -> Result<(), anyhow::Error> {
         config.host.hostname.clone(),
     );
 
+    // Initialize http client.
+    let http_client = HTTP::new();
+    let http_client = Arc::new(http_client);
+
     // Initialize manager client.
     let manager_client = ManagerClient::new(config.manager.addr.as_ref().unwrap())
         .await
         .context("failed to initialize manager client")?;
     let manager_client = Arc::new(manager_client);
+
+    // Initialize task manager.
+    let _task = Task::new(storage.clone(), http_client.clone());
 
     // Initialize channel for graceful shutdown.
     let shutdown = shutdown::Shutdown::default();

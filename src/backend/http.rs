@@ -42,13 +42,23 @@ pub struct Response<R: AsyncRead> {
 }
 
 // HTTP is the HTTP backend.
-pub struct HTTP {}
+pub struct HTTP {
+    // client is the http client.
+    client: reqwest::Client,
+}
 
 // HTTP implements the http interface.
 impl HTTP {
+    // new returns a new HTTP.
+    pub fn new() -> Self {
+        Self {
+            client: reqwest::Client::new(),
+        }
+    }
+
     // Get gets the content of the request.
     pub async fn get(&self, req: Request) -> Result<Response<impl AsyncRead>> {
-        let mut request_builder = reqwest::Client::new().get(&req.url).headers(req.header);
+        let mut request_builder = self.client.get(&req.url).headers(req.header);
         if let Some(timeout) = req.timeout {
             request_builder = request_builder.timeout(timeout);
         }
@@ -67,5 +77,13 @@ impl HTTP {
             status_code,
             reader,
         })
+    }
+}
+
+// Default implements the Default trait.
+impl Default for HTTP {
+    // default returns a new default HTTP.
+    fn default() -> Self {
+        Self::new()
     }
 }

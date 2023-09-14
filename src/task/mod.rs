@@ -14,33 +14,37 @@
  * limitations under the License.
  */
 
+use crate::backend::http::{Request, HTTP};
 use crate::grpc::dfdaemon::DfdaemonClient;
 use crate::storage::Storage;
-use crate::{Error, Result};
+use crate::{Error, HttpError, Result};
+use dragonfly_api::common::v2::Peer;
 use dragonfly_api::dfdaemon::v2::{
     sync_pieces_request, sync_pieces_response, InterestedPiecesRequest, InterestedPiecesResponse,
     SyncPiecesRequest,
 };
+use reqwest::header::HeaderMap;
 use std::sync::Arc;
-use tokio::io::AsyncRead;
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::error;
 
 // Task represents a task manager.
 pub struct Task {
     // manager_client is the grpc client of the manager.
-    dfdaemon_client: Arc<DfdaemonClient>,
-
-    // manager_client is the grpc client of the manager.
     storage: Arc<Storage>,
+
+    // http_client is the http client.
+    http_client: Arc<HTTP>,
 }
 
 // NewTask returns a new Task.
 impl Task {
     // new returns a new Task.
-    pub fn new(dfdaemon_client: Arc<DfdaemonClient>, storage: Arc<Storage>) -> Self {
+    pub fn new(storage: Arc<Storage>, http_client: Arc<HTTP>) -> Self {
         Self {
-            dfdaemon_client,
             storage,
+            http_client,
         }
     }
 
@@ -49,7 +53,16 @@ impl Task {
         &self,
         task_id: &str,
         number: u32,
+        remote_peer: Peer,
     ) -> Result<impl AsyncRead> {
+        // Create a dfdaemon client.
+        let host = remote_peer
+            .host
+            .clone()
+            .ok_or(Error::InvalidPeer(remote_peer.id))?;
+        let dfdaemon_client =
+            DfdaemonClient::new(format!("http://{}:{}", host.ip, host.port)).await?;
+
         // Record the start of downloading piece.
         self.storage.download_piece_started(task_id, number)?;
 
@@ -64,7 +77,7 @@ impl Task {
         });
 
         // Send the interested pieces request.
-        let response = self.dfdaemon_client.sync_pieces(in_stream).await?;
+        let response = dfdaemon_client.sync_pieces(in_stream).await?;
         let mut resp_stream = response.into_inner();
         if let Some(message) = resp_stream.message().await? {
             if let Some(response) = message.response {
@@ -82,7 +95,18 @@ impl Task {
                                     &piece.digest,
                                     &mut piece.content.as_slice(),
                                 )
-                                .await?;
+                                .await
+                                .map_err(|err| {
+                                    // Record the failure of downloading piece,
+                                    // If storage fails to record piece.
+                                    error!("download piece finished: {}", err);
+                                    if let Some(err) =
+                                        self.storage.download_piece_failed(task_id, number).err()
+                                    {
+                                        error!("download piece failed: {}", err)
+                                    };
+                                    err
+                                })?;
 
                             // Return reader of the piece.
                             return self.storage.upload_piece(task_id, number).await;
@@ -121,7 +145,69 @@ impl Task {
     }
 
     // download_piece_from_source downloads a piece from the source.
-    pub fn download_piece_from_source(&self) -> Result<()> {
-        unimplemented!()
+    pub async fn download_piece_from_source(
+        &self,
+        task_id: &str,
+        number: u32,
+        url: &str,
+        offset: u64,
+        header: HeaderMap,
+        timeout: Duration,
+    ) -> Result<impl AsyncRead> {
+        // Record the start of downloading piece.
+        self.storage.download_piece_started(task_id, number)?;
+
+        // Download the piece from the source.
+        let mut response = self
+            .http_client
+            .get(Request {
+                url: url.to_string(),
+                header,
+                timeout: Some(timeout),
+            })
+            .await
+            .map_err(|err| {
+                // Record the failure of downloading piece,
+                // if the request is failed.
+                error!("http error: {}", err);
+                if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                    error!("download piece failed: {}", err)
+                };
+                err
+            })?;
+
+        // HTTP status code is not OK, handle the error.
+        if !response.status_code.is_success() {
+            // Record the failure of downloading piece,
+            // if the status code is not OK.
+            self.storage.download_piece_failed(task_id, number)?;
+
+            let mut buffer = String::new();
+            response.reader.read_to_string(&mut buffer).await?;
+            error!("http error {}: {}", response.status_code, buffer.as_str());
+            return Err(Error::HTTP(HttpError {
+                status_code: response.status_code,
+                header: response.header,
+                body: buffer,
+            }));
+        }
+
+        // TODO Calculate the digest of the piece.
+        // Record the finish of downloading piece.
+        self.storage
+            .download_piece_finished(task_id, number, offset, "", &mut response.reader)
+            .await
+            .map_err(|err| {
+                // Record the failure of downloading piece,
+                // If storage fails to record piece.
+                error!("download piece finished: {}", err);
+                if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                    error!("download piece failed: {}", err)
+                };
+                err
+            })?;
+
+        // Return reader of the piece.
+        self.storage.upload_piece(task_id, number).await
     }
 }
