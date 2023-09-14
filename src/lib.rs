@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+use reqwest::header::HeaderMap;
+
 pub mod announcer;
 pub mod backend;
 pub mod config;
@@ -60,6 +62,14 @@ pub enum Error {
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
 
+    // Reqwest is the error for reqwest.
+    #[error(transparent)]
+    HTTP(HttpError),
+
+    // HostNotFound is the error when the host is not found.
+    #[error{"host {0} not found"}]
+    HostNotFound(String),
+
     // TaskNotFound is the error when the task is not found.
     #[error{"task {0} not found"}]
     TaskNotFound(String),
@@ -92,6 +102,10 @@ pub enum Error {
     #[error("invalid uri {0}")]
     InvalidURI(String),
 
+    // InvalidPeer is the error when the peer is invalid.
+    #[error("invalid peer {0}")]
+    InvalidPeer(String),
+
     // SchedulerClientNotFound is the error when the scheduler client is not found.
     #[error{"scheduler client not found"}]
     SchedulerClientNotFound(),
@@ -99,6 +113,20 @@ pub enum Error {
     // UnexpectedResponse is the error when the response is unexpected.
     #[error{"unexpected response"}]
     UnexpectedResponse(),
+}
+
+// HttpError is the error for http.
+#[derive(Debug, thiserror::Error)]
+#[error("http error {status_code}: {body}")]
+pub struct HttpError {
+    // status_code is the status code of the response.
+    pub status_code: reqwest::StatusCode,
+
+    // header is the headers of the response.
+    pub header: HeaderMap,
+
+    // body is the body of the response.
+    pub body: String,
 }
 
 // Result is the result for Client.
