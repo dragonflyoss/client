@@ -16,10 +16,14 @@
 
 use crate::config;
 use crate::Result;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, SeekFrom};
+use tokio_util::io::InspectReader;
 use tracing::info;
 
 // DEFAULT_DIR_NAME is the default directory name to store content.
@@ -61,8 +65,17 @@ impl Content {
         offset: u64,
         reader: &mut R,
     ) -> Result<u64> {
+        let mut bufcount = 0;
+        let mut hasher = Sha256::new();
+        let tee = InspectReader::new(reader, |bytes| {
+            bufcount += 1;
+            hasher.update(bytes);
+        });
+        let hash = hasher.finalize();
+        println!("{}", bufcount);
+
         let mut f = File::open(self.dir.join(task_id)).await?;
         f.seek(SeekFrom::Start(offset)).await?;
-        Ok(io::copy(reader, &mut f).await?)
+        Ok(io::copy(tee.into_inner(), &mut f).await?)
     }
 }
