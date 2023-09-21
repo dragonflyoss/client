@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::utils::digest::{Algorithm, Digest};
 use crate::{Error, Result};
 use std::path::Path;
 use tokio::io::AsyncRead;
@@ -65,18 +66,55 @@ impl Storage {
         self.metadata.download_piece_started(task_id, number)
     }
 
-    // download_piece_finished updates the metadata of the piece and writes the data of piece to file.
-    pub async fn download_piece_finished<R: AsyncRead + Unpin + ?Sized>(
+    // download_piece_from_source_finished is used for downloading piece from source.
+    pub async fn download_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
         number: u32,
         offset: u64,
-        digest: &str,
         reader: &mut R,
     ) -> Result<u64> {
-        let length = self.content.write_piece(task_id, offset, reader).await?;
-        self.metadata
-            .download_piece_finished(task_id, number, offset, length, digest)?;
+        let response = self.content.write_piece(task_id, offset, reader).await?;
+        let length = response.length;
+        let digest = Digest::new(Algorithm::Sha256, response.hash);
+
+        self.metadata.download_piece_finished(
+            task_id,
+            number,
+            offset,
+            length,
+            digest.to_string().as_str(),
+        )?;
+        Ok(length)
+    }
+
+    // download_piece_from_remote_peer_finished is used for downloading piece from remote peer.
+    pub async fn download_piece_from_remote_peer_finished<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        task_id: &str,
+        number: u32,
+        offset: u64,
+        expected_digest: String,
+        reader: &mut R,
+    ) -> Result<u64> {
+        let response = self.content.write_piece(task_id, offset, reader).await?;
+        let length = response.length;
+        let digest = Digest::new(Algorithm::Sha256, response.hash);
+
+        // Check the digest of the piece.
+        if digest.to_string() != expected_digest {
+            return Err(Error::PieceDigestMismatch(
+                self.metadata.piece_id(task_id, number),
+            ));
+        }
+
+        self.metadata.download_piece_finished(
+            task_id,
+            number,
+            offset,
+            length,
+            digest.to_string().as_str(),
+        )?;
         Ok(length)
     }
 

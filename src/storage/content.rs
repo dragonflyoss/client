@@ -19,9 +19,7 @@ use crate::Result;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
+use tokio::fs::{File, OpenOptions};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tokio_util::io::InspectReader;
 use tracing::info;
@@ -33,6 +31,14 @@ const DEFAULT_DIR_NAME: &str = "content";
 pub struct Content {
     // dir is the directory to store content.
     dir: PathBuf,
+}
+
+// WritePieceResponse is the response of writing a piece.
+pub struct WritePieceResponse {
+    // length is the length of the piece.
+    pub length: u64,
+    // hash is the hash of the piece.
+    pub hash: String,
 }
 
 // Content implements the content storage.
@@ -64,18 +70,29 @@ impl Content {
         task_id: &str,
         offset: u64,
         reader: &mut R,
-    ) -> Result<u64> {
-        let mut bufcount = 0;
+    ) -> Result<WritePieceResponse> {
+        // Sha256 is used to calculate the hash of the piece.
         let mut hasher = Sha256::new();
-        let tee = InspectReader::new(reader, |bytes| {
-            bufcount += 1;
-            hasher.update(bytes);
-        });
-        let hash = hasher.finalize();
-        println!("{}", bufcount);
 
-        let mut f = File::open(self.dir.join(task_id)).await?;
+        // InspectReader is used to calculate the hash of the piece.
+        let mut tee = InspectReader::new(reader, |bytes| hasher.update(bytes));
+
+        // Open the file and seek to the offset.
+        let mut f = OpenOptions::new()
+            .write(true)
+            .open(self.dir.join(task_id))
+            .await?;
         f.seek(SeekFrom::Start(offset)).await?;
-        Ok(io::copy(tee.into_inner(), &mut f).await?)
+
+        // Copy the piece to the file.
+        let length = io::copy(&mut tee, &mut f).await?;
+
+        // Calculate the hash of the piece.
+        let hash = hasher.finalize();
+
+        Ok(WritePieceResponse {
+            length,
+            hash: base16ct::lower::encode_string(&hash),
+        })
     }
 }
