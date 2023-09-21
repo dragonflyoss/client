@@ -48,6 +48,15 @@ impl Task {
         }
     }
 
+    // download_piece_from_local_peer downloads a piece from a local peer.
+    pub async fn download_piece_from_local_peer(
+        &self,
+        task_id: &str,
+        number: u32,
+    ) -> Result<impl AsyncRead> {
+        self.storage.upload_piece(task_id, number).await
+    }
+
     // download_piece_from_remote_peer downloads a piece from a remote peer.
     pub async fn download_piece_from_remote_peer<'a>(
         &self,
@@ -88,11 +97,11 @@ impl Task {
                         if let Some(piece) = pieces.first() {
                             // Record the finish of downloading piece.
                             self.storage
-                                .download_piece_finished(
+                                .download_piece_from_remote_peer_finished(
                                     task_id,
                                     number,
                                     piece.offset,
-                                    &piece.digest,
+                                    piece.digest.clone(),
                                     &mut piece.content.as_slice(),
                                 )
                                 .await
@@ -133,15 +142,6 @@ impl Task {
         error!("message not found");
         self.storage.download_piece_failed(task_id, number)?;
         Err(Error::UnexpectedResponse())
-    }
-
-    // download_piece_from_local_peer downloads a piece from a local peer.
-    pub async fn download_piece_from_local_peer(
-        &self,
-        task_id: &str,
-        number: u32,
-    ) -> Result<impl AsyncRead> {
-        self.storage.upload_piece(task_id, number).await
     }
 
     // download_piece_from_source downloads a piece from the source.
@@ -192,10 +192,9 @@ impl Task {
             }));
         }
 
-        // TODO Calculate the digest of the piece.
         // Record the finish of downloading piece.
         self.storage
-            .download_piece_finished(task_id, number, offset, "", &mut response.reader)
+            .download_piece_from_source_finished(task_id, number, offset, &mut response.reader)
             .await
             .map_err(|err| {
                 // Record the failure of downloading piece,

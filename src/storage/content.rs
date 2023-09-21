@@ -16,10 +16,12 @@
 
 use crate::config;
 use crate::Result;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tokio::fs::File;
+use tokio::fs::{File, OpenOptions};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, SeekFrom};
+use tokio_util::io::InspectReader;
 use tracing::info;
 
 // DEFAULT_DIR_NAME is the default directory name to store content.
@@ -29,6 +31,14 @@ const DEFAULT_DIR_NAME: &str = "content";
 pub struct Content {
     // dir is the directory to store content.
     dir: PathBuf,
+}
+
+// WritePieceResponse is the response of writing a piece.
+pub struct WritePieceResponse {
+    // length is the length of the piece.
+    pub length: u64,
+    // hash is the hash of the piece.
+    pub hash: String,
 }
 
 // Content implements the content storage.
@@ -60,9 +70,29 @@ impl Content {
         task_id: &str,
         offset: u64,
         reader: &mut R,
-    ) -> Result<u64> {
-        let mut f = File::open(self.dir.join(task_id)).await?;
+    ) -> Result<WritePieceResponse> {
+        // Sha256 is used to calculate the hash of the piece.
+        let mut hasher = Sha256::new();
+
+        // InspectReader is used to calculate the hash of the piece.
+        let mut tee = InspectReader::new(reader, |bytes| hasher.update(bytes));
+
+        // Open the file and seek to the offset.
+        let mut f = OpenOptions::new()
+            .write(true)
+            .open(self.dir.join(task_id))
+            .await?;
         f.seek(SeekFrom::Start(offset)).await?;
-        Ok(io::copy(reader, &mut f).await?)
+
+        // Copy the piece to the file.
+        let length = io::copy(&mut tee, &mut f).await?;
+
+        // Calculate the hash of the piece.
+        let hash = hasher.finalize();
+
+        Ok(WritePieceResponse {
+            length,
+            hash: base16ct::lower::encode_string(&hash),
+        })
     }
 }
