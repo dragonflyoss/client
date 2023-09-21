@@ -113,6 +113,10 @@ pub enum Error {
     // UnexpectedResponse is the error when the response is unexpected.
     #[error{"unexpected response"}]
     UnexpectedResponse(),
+
+    // PieceDigestMismatch is the error when the piece digest is mismatch.
+    #[error{"piece {0} digest mismatch"}]
+    PieceDigestMismatch(String),
 }
 
 // HttpError is the error for http.
