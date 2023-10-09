@@ -19,8 +19,8 @@ use crate::{Error, Result};
 use std::path::Path;
 use tokio::io::AsyncRead;
 
-mod content;
-mod metadata;
+pub mod content;
+pub mod metadata;
 
 // Storage is the storage of the task.
 pub struct Storage {
@@ -41,7 +41,7 @@ impl Storage {
     }
 
     // download_task_started updates the metadata of the task when the task downloads started.
-    pub fn download_task_started(&self, id: &str, piece_length: u64) -> Result<()> {
+    pub fn download_task_started(&self, id: &str, piece_length: i32) -> Result<()> {
         self.metadata.download_task_started(id, piece_length)
     }
 

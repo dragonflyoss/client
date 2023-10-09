@@ -109,7 +109,7 @@ impl SchedulerClient {
     }
 
     // client gets the grpc client of the scheduler.
-    fn client(&self) -> Result<SchedulerGRPCClient<Channel>> {
+    pub fn client(&self) -> Result<SchedulerGRPCClient<Channel>> {
         match self.client.clone() {
             Some(client) => Ok(client),
             None => Err(Error::SchedulerClientNotFound()),

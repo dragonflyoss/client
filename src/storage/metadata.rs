@@ -50,7 +50,7 @@ pub struct Task {
     pub id: String,
 
     // piece_length is the length of the piece.
-    pub piece_length: u64,
+    pub piece_length: i32,
 
     // uploaded_count is the count of the task uploaded by other peers.
     pub uploaded_count: u64,
@@ -125,7 +125,7 @@ impl Metadata {
     }
 
     // download_task_started updates the metadata of the task when the task downloads started.
-    pub fn download_task_started(&self, id: &str, piece_length: u64) -> Result<()> {
+    pub fn download_task_started(&self, id: &str, piece_length: i32) -> Result<()> {
         let task = match self.get_task(id)? {
             // If the task exists, update the updated_at.
             Some(mut task) => {

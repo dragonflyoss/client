@@ -15,16 +15,19 @@
  */
 
 use crate::shutdown;
+use crate::task;
 use crate::Result as ClientResult;
 use dragonfly_api::common::v2::Task;
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_client::DfdaemonClient as DfdaemonGRPCClient,
     dfdaemon_server::{Dfdaemon, DfdaemonServer as DfdaemonGRPCServer},
-    DeleteTaskRequest, DownloadTaskRequest, StatTaskRequest, SyncPiecesRequest, SyncPiecesResponse,
-    UploadTaskRequest,
+    DeleteTaskRequest, DownloadTaskRequest, StatTaskRequest as DfdaemonStatTaskRequest,
+    SyncPiecesRequest, SyncPiecesResponse, UploadTaskRequest,
 };
+use dragonfly_api::scheduler::v2::StatTaskRequest as SchedulerStatTaskRequest;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::Stream;
 use tonic::codec::CompressionEncoding;
@@ -35,13 +38,12 @@ use tonic::{
 use tracing::info;
 
 // DfdaemonServer is the grpc server of the dfdaemon.
-#[derive(Debug)]
 pub struct DfdaemonServer {
     // addr is the address of the grpc server.
     addr: SocketAddr,
 
-    // handler is the handler of the dfdaemon grpc service.
-    handler: DfdaemonServerHandler,
+    // task is the task manager.
+    task: Arc<task::Task>,
 
     // shutdown is used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
@@ -55,12 +57,13 @@ pub struct DfdaemonServer {
 impl DfdaemonServer {
     pub fn new(
         addr: SocketAddr,
+        task: Arc<task::Task>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
         Self {
             addr,
-            handler: DfdaemonServerHandler {},
+            task,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -81,7 +84,9 @@ impl DfdaemonServer {
         info!("listening on {}", self.addr);
         Server::builder()
             .add_service(reflection)
-            .add_service(DfdaemonGRPCServer::new(self.handler))
+            .add_service(DfdaemonGRPCServer::new(DfdaemonServerHandler {
+                task: self.task.clone(),
+            }))
             .serve_with_shutdown(self.addr, async move {
                 // Dfdaemon grpc server shutting down with signals.
                 let _ = shutdown.recv().await;
@@ -93,8 +98,10 @@ impl DfdaemonServer {
 }
 
 // DfdaemonServerHandler is the handler of the dfdaemon grpc service.
-#[derive(Debug, Clone, Copy)]
-pub struct DfdaemonServerHandler {}
+pub struct DfdaemonServerHandler {
+    // task is the task manager.
+    task: Arc<task::Task>,
+}
 
 // TODO Implement the dfdaemon grpc service.
 // DfdaemonServerHandler implements the dfdaemon grpc service.
@@ -132,9 +139,21 @@ impl Dfdaemon for DfdaemonServerHandler {
     }
 
     // stat_task gets the status of the task.
-    async fn stat_task(&self, request: Request<StatTaskRequest>) -> Result<Response<Task>, Status> {
-        println!("stat_task: {:?}", request);
-        Err(Status::unimplemented("not implemented"))
+    async fn stat_task(
+        &self,
+        request: Request<DfdaemonStatTaskRequest>,
+    ) -> Result<Response<Task>, Status> {
+        let mut request = tonic::Request::new(SchedulerStatTaskRequest {
+            id: request.into_inner().task_id.clone(),
+        });
+        request.set_timeout(super::REQUEST_TIMEOUT);
+
+        self.task
+            .scheduler_client
+            .client()
+            .map_err(|e| Status::internal(e.to_string()))?
+            .stat_task(request)
+            .await
     }
 
     // delete_task tells the dfdaemon to delete the task.
@@ -196,7 +215,7 @@ impl DfdaemonClient {
     }
 
     // stat_task gets the status of the task.
-    pub async fn stat_task(&self, request: StatTaskRequest) -> ClientResult<Task> {
+    pub async fn stat_task(&self, request: DfdaemonStatTaskRequest) -> ClientResult<Task> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 
