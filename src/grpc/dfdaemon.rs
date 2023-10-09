@@ -16,26 +16,28 @@
 
 use crate::shutdown;
 use crate::task;
-use crate::Result as ClientResult;
+use crate::{Error, Result as ClientResult};
 use dragonfly_api::common::v2::Task;
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_client::DfdaemonClient as DfdaemonGRPCClient,
     dfdaemon_server::{Dfdaemon, DfdaemonServer as DfdaemonGRPCServer},
-    DeleteTaskRequest, DownloadTaskRequest, StatTaskRequest as DfdaemonStatTaskRequest,
-    SyncPiecesRequest, SyncPiecesResponse, UploadTaskRequest,
+    sync_pieces_request, sync_pieces_response, DeleteTaskRequest, DownloadTaskRequest,
+    InterestedAllPiecesRequest, InterestedAllPiecesResponse, InterestedPiecesRequest,
+    InterestedPiecesResponse, StatTaskRequest as DfdaemonStatTaskRequest, SyncPiecesRequest,
+    SyncPiecesResponse, UploadTaskRequest,
 };
 use dragonfly_api::scheduler::v2::StatTaskRequest as SchedulerStatTaskRequest;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio_stream::Stream;
+use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
 use tonic::codec::CompressionEncoding;
 use tonic::{
     transport::{Channel, Server},
     Request, Response, Status,
 };
-use tracing::info;
+use tracing::{error, info};
 
 // DfdaemonServer is the grpc server of the dfdaemon.
 pub struct DfdaemonServer {
@@ -116,8 +118,46 @@ impl Dfdaemon for DfdaemonServerHandler {
         &self,
         request: Request<tonic::Streaming<SyncPiecesRequest>>,
     ) -> Result<Response<Self::SyncPiecesStream>, Status> {
-        println!("sync_pieces: {:?}", request);
-        Err(Status::unimplemented("not implemented"))
+        let mut in_stream = request.into_inner();
+
+        let output_stream = async_stream::try_stream! {
+            while let Some(message) = in_stream.next().await {
+                match message {
+                    Ok(message) => {
+                        let task_id = message.task_id.clone();
+                        match message.request {
+                            Some(sync_pieces_request::Request::InterestedPiecesRequest(
+                                InterestedPiecesRequest { piece_numbers },
+                            )) => {
+                                for piece_number in piece_numbers {
+                                    let reader = self.task.download_piece_from_local_peer(&task_id, piece_number).await;
+                                    yield SyncPiecesResponse {
+                                        task_id: task_id.clone(),
+                                        piece_number,
+                                        reader: Some(reader),
+                                    };
+
+                                }
+                            }
+                            Some(sync_pieces_request::Request::InterestedAllPiecesRequest(
+                                InterestedAllPiecesRequest {},
+                            )) => {
+                            }
+                            None => {
+                                error!("sync pieces request is empty");
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                    }
+                }
+            }
+        };
+
+        Ok(Response::new(
+            Box::pin(output_stream) as Self::SyncPiecesStream
+        ))
     }
 
     // download_task tells the dfdaemon to download the task.
