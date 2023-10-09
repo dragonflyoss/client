@@ -15,8 +15,8 @@
  */
 
 use crate::backend::http::{Request, HTTP};
-use crate::grpc::dfdaemon::DfdaemonClient;
-use crate::storage::Storage;
+use crate::grpc::{dfdaemon::DfdaemonClient, scheduler::SchedulerClient};
+use crate::storage::{metadata, Storage};
 use crate::{Error, HttpError, Result};
 use dragonfly_api::common::v2::Peer;
 use dragonfly_api::dfdaemon::v2::{
@@ -34,18 +34,31 @@ pub struct Task {
     // manager_client is the grpc client of the manager.
     storage: Arc<Storage>,
 
+    // scheduler_client is the grpc client of the scheduler.
+    pub scheduler_client: Arc<SchedulerClient>,
+
     // http_client is the http client.
     http_client: Arc<HTTP>,
 }
 
-// NewTask returns a new Task.
+// Task implements the task manager.
 impl Task {
     // new returns a new Task.
-    pub fn new(storage: Arc<Storage>, http_client: Arc<HTTP>) -> Self {
+    pub fn new(
+        storage: Arc<Storage>,
+        scheduler_client: Arc<SchedulerClient>,
+        http_client: Arc<HTTP>,
+    ) -> Self {
         Self {
             storage,
+            scheduler_client,
             http_client,
         }
+    }
+
+    // get_task gets a task from the local storage.
+    pub fn get_task(&self, task_id: &str) -> Result<Option<metadata::Task>> {
+        self.storage.get_task(task_id)
     }
 
     // download_piece_from_local_peer downloads a piece from a local peer.

@@ -108,9 +108,6 @@ async fn main() -> Result<(), anyhow::Error> {
         .context("failed to initialize manager client")?;
     let manager_client = Arc::new(manager_client);
 
-    // Initialize task manager.
-    let _task = Task::new(storage.clone(), http_client.clone());
-
     // Initialize channel for graceful shutdown.
     let shutdown = shutdown::Shutdown::default();
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::unbounded_channel();
@@ -130,6 +127,14 @@ async fn main() -> Result<(), anyhow::Error> {
         .await
         .context("failed to initialize scheduler client")?;
     let scheduler_client = Arc::new(scheduler_client);
+
+    // Initialize task manager.
+    let task = Task::new(
+        storage.clone(),
+        scheduler_client.clone(),
+        http_client.clone(),
+    );
+    let task = Arc::new(task);
 
     // Initialize metrics server.
     let metrics = Metrics::new(
@@ -165,6 +170,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize dfdaemon grpc server.
     let dfdaemon_grpc = DfdaemonServer::new(
         SocketAddr::new(config.server.ip.unwrap(), config.server.port),
+        task.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
