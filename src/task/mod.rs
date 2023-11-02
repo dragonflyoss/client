@@ -57,24 +57,29 @@ impl Task {
     }
 
     // get_task gets a task from the local storage.
-    pub fn get_task(&self, task_id: &str) -> Result<Option<metadata::Task>> {
+    pub fn get_task(&self, task_id: &str) -> Result<metadata::Task> {
         self.storage.get_task(task_id)
+    }
+
+    // get_piece gets a piece from the local storage.
+    pub fn get_piece(&self, task_id: &str, number: i32) -> Result<metadata::Piece> {
+        self.storage.get_piece(task_id, number)
     }
 
     // download_piece_from_local_peer downloads a piece from a local peer.
     pub async fn download_piece_from_local_peer(
         &self,
         task_id: &str,
-        number: u32,
+        number: i32,
     ) -> Result<impl AsyncRead> {
         self.storage.upload_piece(task_id, number).await
     }
 
     // download_piece_from_remote_peer downloads a piece from a remote peer.
-    pub async fn download_piece_from_remote_peer<'a>(
+    pub async fn download_piece_from_remote_peer(
         &self,
         task_id: &str,
-        number: u32,
+        number: i32,
         remote_peer: Peer,
     ) -> Result<impl AsyncRead> {
         // Create a dfdaemon client.
@@ -102,45 +107,42 @@ impl Task {
         let response = dfdaemon_client.sync_pieces(in_stream).await?;
         let mut resp_stream = response.into_inner();
         if let Some(message) = resp_stream.message().await? {
-            if let Some(response) = message.response {
-                match response {
-                    sync_pieces_response::Response::InterestedPiecesResponse(
-                        InterestedPiecesResponse { pieces },
-                    ) => {
-                        if let Some(piece) = pieces.first() {
-                            // Record the finish of downloading piece.
-                            self.storage
-                                .download_piece_from_remote_peer_finished(
-                                    task_id,
-                                    number,
-                                    piece.offset,
-                                    piece.digest.clone(),
-                                    &mut piece.content.as_slice(),
-                                )
-                                .await
-                                .map_err(|err| {
-                                    // Record the failure of downloading piece,
-                                    // If storage fails to record piece.
-                                    error!("download piece finished: {}", err);
-                                    if let Some(err) =
-                                        self.storage.download_piece_failed(task_id, number).err()
-                                    {
-                                        error!("download piece failed: {}", err)
-                                    };
-                                    err
-                                })?;
+            if let Some(sync_pieces_response::Response::InterestedPiecesResponse(
+                InterestedPiecesResponse { piece },
+            )) = message.response
+            {
+                if let Some(piece) = piece {
+                    // Record the finish of downloading piece.
+                    self.storage
+                        .download_piece_from_remote_peer_finished(
+                            task_id,
+                            number,
+                            piece.offset,
+                            piece.digest.clone(),
+                            &mut piece.content.as_slice(),
+                        )
+                        .await
+                        .map_err(|err| {
+                            // Record the failure of downloading piece,
+                            // If storage fails to record piece.
+                            error!("download piece finished: {}", err);
+                            if let Some(err) =
+                                self.storage.download_piece_failed(task_id, number).err()
+                            {
+                                error!("download piece failed: {}", err)
+                            };
+                            err
+                        })?;
 
-                            // Return reader of the piece.
-                            return self.storage.upload_piece(task_id, number).await;
-                        }
+                    // Return reader of the piece.
+                    return self.storage.upload_piece(task_id, number).await;
+                }
 
-                        // Record the failure of downloading piece,
-                        // if the piece is not found.
-                        error!("piece not found");
-                        self.storage.download_piece_failed(task_id, number)?;
-                        return Err(Error::UnexpectedResponse());
-                    }
-                };
+                // Record the failure of downloading piece,
+                // if the piece is not found.
+                error!("piece not found");
+                self.storage.download_piece_failed(task_id, number)?;
+                return Err(Error::UnexpectedResponse());
             }
 
             // Record the failure of downloading piece,
@@ -161,7 +163,7 @@ impl Task {
     pub async fn download_piece_from_source(
         &self,
         task_id: &str,
-        number: u32,
+        number: i32,
         url: &str,
         offset: u64,
         header: HeaderMap,

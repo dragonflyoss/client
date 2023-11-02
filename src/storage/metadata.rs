@@ -67,7 +67,7 @@ pub struct Task {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Piece {
     // number is the piece number.
-    pub number: u32,
+    pub number: i32,
 
     // offset is the offset of the piece in the task.
     pub offset: u64,
@@ -87,6 +87,17 @@ pub struct Piece {
 
     // created_at is the time when the piece metadata is created.
     pub created_at: NaiveDateTime,
+
+    // finished_at is the time when the piece downloads finished.
+    pub finished_at: Option<NaiveDateTime>,
+}
+
+// Piece implements the piece metadata.
+impl Piece {
+    // is_finished returns whether the piece downloads finished.
+    pub fn is_finished(&self) -> bool {
+        self.finished_at.is_some()
+    }
 }
 
 // Metadata is the metadata of the task.
@@ -190,7 +201,7 @@ impl Metadata {
     }
 
     // download_piece_started updates the metadata of the piece when the piece downloads started.
-    pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<()> {
+    pub fn download_piece_started(&self, task_id: &str, number: i32) -> Result<()> {
         self.put_piece(
             task_id,
             &Piece {
@@ -206,7 +217,7 @@ impl Metadata {
     pub fn download_piece_finished(
         &self,
         task_id: &str,
-        number: u32,
+        number: i32,
         offset: u64,
         length: u64,
         digest: &str,
@@ -217,6 +228,7 @@ impl Metadata {
                 piece.length = length;
                 piece.digest = digest.to_string();
                 piece.updated_at = Utc::now().naive_utc();
+                piece.finished_at = Some(Utc::now().naive_utc());
                 self.put_piece(task_id, &piece)
             }
             None => Err(Error::PieceNotFound(self.piece_id(task_id, number))),
@@ -224,7 +236,7 @@ impl Metadata {
     }
 
     // download_piece_failed updates the metadata of the piece when the piece downloads failed.
-    pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
+    pub fn download_piece_failed(&self, task_id: &str, number: i32) -> Result<()> {
         match self.get_piece(task_id, number)? {
             Some(_piece) => self.delete_piece(task_id, number),
             None => Err(Error::PieceNotFound(self.piece_id(task_id, number))),
@@ -232,7 +244,7 @@ impl Metadata {
     }
 
     // upload_piece_finished updates the metadata of the piece when piece uploads finished.
-    pub fn upload_piece_finished(&self, task_id: &str, number: u32) -> Result<()> {
+    pub fn upload_piece_finished(&self, task_id: &str, number: i32) -> Result<()> {
         match self.get_piece(task_id, number)? {
             Some(mut piece) => {
                 piece.uploaded_count += 1;
@@ -244,7 +256,7 @@ impl Metadata {
     }
 
     // get_piece gets the piece metadata.
-    pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<Piece>> {
+    pub fn get_piece(&self, task_id: &str, number: i32) -> Result<Option<Piece>> {
         let id = self.piece_id(task_id, number);
         let handle = self.cf_handle(PIECE_CF_NAME)?;
         match self.db.get_cf(handle, id.as_bytes())? {
@@ -263,7 +275,7 @@ impl Metadata {
     }
 
     // delete_piece deletes the piece metadata.
-    fn delete_piece(&self, task_id: &str, number: u32) -> Result<()> {
+    fn delete_piece(&self, task_id: &str, number: i32) -> Result<()> {
         let id = self.piece_id(task_id, number);
         let handle = self.cf_handle(PIECE_CF_NAME)?;
         self.db.delete_cf(handle, id.as_bytes())?;
@@ -271,7 +283,7 @@ impl Metadata {
     }
 
     // piece_id returns the piece id.
-    pub fn piece_id(&self, task_id: &str, number: u32) -> String {
+    pub fn piece_id(&self, task_id: &str, number: i32) -> String {
         format!("{}-{}", task_id, number)
     }
 

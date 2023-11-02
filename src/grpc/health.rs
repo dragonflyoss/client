@@ -86,7 +86,7 @@ mod test {
         });
         tokio::time::sleep(Duration::from_secs(1)).await;
         return MockHealthServer {
-            handle: handle,
+            handle,
             addr: addr.to_string(),
         };
     }

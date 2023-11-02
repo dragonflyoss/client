@@ -25,8 +25,10 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 pub struct Request {
     // url is the url of the request.
     pub url: String,
+
     // header is the headers of the request.
     pub header: HeaderMap,
+
     // timeout is the timeout of the request.
     pub timeout: Option<Duration>,
 }
@@ -35,8 +37,10 @@ pub struct Request {
 pub struct Response<R: AsyncRead> {
     // header is the headers of the response.
     pub header: HeaderMap,
+
     // status_code is the status code of the response.
     pub status_code: reqwest::StatusCode,
+
     // body is the content of the response.
     pub reader: R,
 }

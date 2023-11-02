@@ -56,13 +56,15 @@ impl Storage {
     }
 
     // get_task returns the task metadata.
-    pub fn get_task(&self, id: &str) -> Result<Option<metadata::Task>> {
-        self.metadata.get_task(id)
+    pub fn get_task(&self, id: &str) -> Result<metadata::Task> {
+        self.metadata
+            .get_task(id)?
+            .ok_or(Error::TaskNotFound(id.to_string()))
     }
 
     // download_piece_started updates the metadata of the piece and writes
     // the data of piece to file when the piece downloads started.
-    pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<()> {
+    pub fn download_piece_started(&self, task_id: &str, number: i32) -> Result<()> {
         self.metadata.download_piece_started(task_id, number)
     }
 
@@ -70,7 +72,7 @@ impl Storage {
     pub async fn download_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
-        number: u32,
+        number: i32,
         offset: u64,
         reader: &mut R,
     ) -> Result<u64> {
@@ -92,7 +94,7 @@ impl Storage {
     pub async fn download_piece_from_remote_peer_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
-        number: u32,
+        number: i32,
         offset: u64,
         expected_digest: String,
         reader: &mut R,
@@ -119,13 +121,13 @@ impl Storage {
     }
 
     // download_piece_failed updates the metadata of the piece when the piece downloads failed.
-    pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
+    pub fn download_piece_failed(&self, task_id: &str, number: i32) -> Result<()> {
         self.metadata.download_piece_failed(task_id, number)
     }
 
     // upload_piece updates the metadata of the piece and
     // returns the data of the piece.
-    pub async fn upload_piece(&self, task_id: &str, number: u32) -> Result<impl AsyncRead> {
+    pub async fn upload_piece(&self, task_id: &str, number: i32) -> Result<impl AsyncRead> {
         match self.metadata.get_piece(task_id, number)? {
             Some(piece) => {
                 let reader = self
@@ -139,5 +141,14 @@ impl Storage {
                 self.metadata.piece_id(task_id, number),
             )),
         }
+    }
+
+    // get_piece returns the piece metadata.
+    pub fn get_piece(&self, task_id: &str, number: i32) -> Result<metadata::Piece> {
+        self.metadata
+            .get_piece(task_id, number)?
+            .ok_or(Error::PieceNotFound(
+                self.metadata.piece_id(task_id, number),
+            ))
     }
 }

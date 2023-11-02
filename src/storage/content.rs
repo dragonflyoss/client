@@ -37,6 +37,7 @@ pub struct Content {
 pub struct WritePieceResponse {
     // length is the length of the piece.
     pub length: u64,
+
     // hash is the hash of the piece.
     pub hash: String,
 }
