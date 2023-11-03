@@ -117,6 +117,9 @@ impl Metadata {
         options.optimize_level_style_compaction(DEFAULT_MEMTABLE_MEMORY_BUDGET);
         options.increase_parallelism(num_cpus::get() as i32);
         options.set_max_open_files(DEFAULT_MAX_OPEN_FILES);
+        // Set prefix extractor to reduce the memory usage of bloom filter and length of task id is 64.
+        options.set_prefix_extractor(rocksdb::SliceTransform::create_fixed_prefix(64));
+        options.set_memtable_prefix_bloom_ratio(0.2);
 
         // Initialize rocksdb block based table options.
         let mut block_options = BlockBasedOptions::default();
@@ -129,7 +132,15 @@ impl Metadata {
 
         // Open rocksdb.
         let dir = data_dir.join(config::NAME).join(DEFAULT_DIR_NAME);
-        let db = DB::open_cf(&options, &dir, [TASK_CF_NAME, PIECE_CF_NAME])?;
+        let cf_names = [TASK_CF_NAME, PIECE_CF_NAME];
+        let db = DB::open_cf_with_opts(
+            &options,
+            &dir,
+            cf_names
+                .iter()
+                .map(|name| (name.to_string(), options.clone()))
+                .collect::<Vec<_>>(),
+        )?;
         info!("create metadata directory: {:?}", dir);
 
         Ok(Metadata { db })
