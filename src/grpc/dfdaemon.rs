@@ -106,7 +106,6 @@ pub struct DfdaemonServerHandler {
     task: Arc<task::Task>,
 }
 
-// TODO Implement the dfdaemon grpc service.
 // DfdaemonServerHandler implements the dfdaemon grpc service.
 #[tonic::async_trait]
 impl Dfdaemon for DfdaemonServerHandler {
