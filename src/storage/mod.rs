@@ -74,10 +74,10 @@ impl Storage {
         task_id: &str,
         number: i32,
         offset: u64,
+        length: u64,
         reader: &mut R,
     ) -> Result<u64> {
         let response = self.content.write_piece(task_id, offset, reader).await?;
-        let length = response.length;
         let digest = Digest::new(Algorithm::Sha256, response.hash);
 
         self.metadata.download_piece_finished(

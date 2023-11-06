@@ -120,7 +120,8 @@ impl Dfdaemon for DfdaemonServerHandler {
 
         // Get the piece numbers from the local storage.
         let piece_numbers = task
-            .get_pieces(task_id.as_str())
+            .piece
+            .get_all(task_id.as_str())
             .map_err(|e| {
                 error!("get piece numbers from local storage: {}", e);
                 Status::internal(e.to_string())
@@ -154,7 +155,7 @@ impl Dfdaemon for DfdaemonServerHandler {
                 {
                      for piece_number in piece_numbers {
                          // Get the piece metadata from the local storage.
-                         let piece = match task.get_piece(&task_id, piece_number) {
+                         let piece = match task.piece.get(&task_id, piece_number) {
                              Ok(piece) => piece,
                              Err(e) => {
                                  error!("get piece metadata from local storage: {}", e);
@@ -163,7 +164,7 @@ impl Dfdaemon for DfdaemonServerHandler {
                          };
 
                          // Get the piece content from the local storage.
-                         let mut reader = match task.download_piece_from_local_peer(&task_id, piece_number).await {
+                         let mut reader = match task.piece.download_from_local_peer(&task_id, piece_number).await {
                              Ok(reader) => reader,
                              Err(e) => {
                                  error!("get piece content from local peer: {}", e);
