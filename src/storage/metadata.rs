@@ -276,6 +276,22 @@ impl Metadata {
         }
     }
 
+    // get_pieces gets the pieces metadata.
+    pub fn get_pieces(&self, task_id: &str) -> Result<Vec<Piece>> {
+        let handle = self.cf_handle(PIECE_CF_NAME)?;
+        let iter = self.db.prefix_iterator_cf(handle, task_id.as_bytes());
+
+        // Iterate the pieces metadata.
+        let mut pieces = Vec::new();
+        for ele in iter {
+            let (_, value) = ele?;
+            let piece: Piece = serde_json::from_slice(&value)?;
+            pieces.push(piece);
+        }
+
+        Ok(pieces)
+    }
+
     // put_piece puts the piece metadata.
     fn put_piece(&self, task_id: &str, piece: &Piece) -> Result<()> {
         let id = self.piece_id(task_id, piece.number);
