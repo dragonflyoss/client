@@ -66,6 +66,11 @@ impl Task {
         self.storage.get_piece(task_id, number)
     }
 
+    // get_pieces gets pieces from the local storage.
+    pub fn get_pieces(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
+        self.storage.get_pieces(task_id)
+    }
+
     // download_piece_from_local_peer downloads a piece from a local peer.
     pub async fn download_piece_from_local_peer(
         &self,

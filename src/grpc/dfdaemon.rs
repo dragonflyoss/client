@@ -114,8 +114,22 @@ impl Dfdaemon for DfdaemonServerHandler {
         &self,
         request: Request<GetPieceNumbersRequest>,
     ) -> Result<Response<GetPieceNumbersResponse>, Status> {
-        println!("get_piece_numbers: {:?}", request);
-        Err(Status::unimplemented("not implemented"))
+        let request = request.into_inner();
+        let task_id = request.task_id.clone();
+        let task = self.task.clone();
+
+        // Get the piece numbers from the local storage.
+        let piece_numbers = task
+            .get_pieces(task_id.as_str())
+            .map_err(|e| {
+                error!("get piece numbers from local storage: {}", e);
+                Status::internal(e.to_string())
+            })?
+            .iter()
+            .map(|piece| piece.number)
+            .collect();
+
+        Ok(Response::new(GetPieceNumbersResponse { piece_numbers }))
     }
 
     // SyncPiecesStream is the stream of the sync pieces response.
