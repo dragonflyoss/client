@@ -163,6 +163,15 @@ impl Dfdaemon for DfdaemonServerHandler {
                              }
                          };
 
+                         // Check whether the piece exists.
+                         let piece = match piece {
+                             Some(piece) => piece,
+                             None => {
+                                 error!("piece {} not found", piece_number);
+                                 continue;
+                             }
+                         };
+
                          // Get the piece content from the local storage.
                          let mut reader = match task.piece.download_from_local_peer(&task_id, piece_number).await {
                              Ok(reader) => reader,

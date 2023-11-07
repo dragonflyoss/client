@@ -97,6 +97,7 @@ async fn main() -> Result<(), anyhow::Error> {
         config.host.ip.unwrap().to_string(),
         config.host.hostname.clone(),
     );
+    let id_generator = Arc::new(id_generator);
 
     // Initialize http client.
     let http_client = HTTP::new();
@@ -130,6 +131,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Initialize task manager.
     let task = Task::new(
+        id_generator.clone(),
         storage.clone(),
         scheduler_client.clone(),
         http_client.clone(),

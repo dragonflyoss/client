@@ -116,6 +116,14 @@ pub enum Error {
     // PieceDigestMismatch is the error when the piece digest is mismatch.
     #[error{"piece {0} digest mismatch"}]
     PieceDigestMismatch(String),
+
+    // InvalidParameter is the error when the parameter is invalid.
+    #[error("invalid parameter")]
+    InvalidParameter(),
+
+    // Unimplemented is the error when the feature is not implemented.
+    #[error{"unimplemented"}]
+    Unimplemented(),
 }
 
 // HttpError is the error for http.
