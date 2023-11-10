@@ -18,7 +18,7 @@ use crate::backend::http::{Request, HTTP};
 use crate::grpc::{dfdaemon::DfdaemonClient, scheduler::SchedulerClient};
 use crate::storage::{metadata, Storage};
 use crate::{Error, HttpError, Result};
-use dragonfly_api::common::v2::Peer;
+use dragonfly_api::common::v2::{Peer, Range};
 use dragonfly_api::dfdaemon::v2::{
     sync_pieces_request, sync_pieces_response, InterestedPiecesRequest, InterestedPiecesResponse,
     SyncPiecesRequest,
@@ -64,6 +64,39 @@ impl Piece {
     // get_all gets all pieces from the local storage.
     pub fn get_all(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
         self.storage.get_pieces(task_id)
+    }
+
+    // get_by_numbers gets pieces by numbers from the local storage.
+    pub fn get_by_numbers(&self, task_id: &str, numbers: &[i32]) -> Result<Vec<metadata::Piece>> {
+        let mut pieces = Vec::new();
+        for number in numbers {
+            let piece = self
+                .storage
+                .get_piece(task_id, *number)?
+                .ok_or(Error::PieceNotFound(
+                    self.storage.piece_id(task_id, *number),
+                ))?;
+            pieces.push(piece);
+        }
+
+        Ok(pieces)
+    }
+
+    // calculate_numbers_by_range calculates the piece numbers to download.
+    pub fn calculate_numbers_by_range(&self, piece_length: i32, range: Range) -> Vec<i32> {
+        let mut numbers = Vec::new();
+        let mut number = 0;
+        let mut current_length = 0;
+        while current_length < range.start + range.length {
+            current_length = i64::from((number + 1) * piece_length);
+            if current_length > range.start {
+                numbers.push(number);
+            }
+
+            number += 1;
+        }
+
+        numbers
     }
 
     // download_from_local_peer downloads a piece from a local peer.
