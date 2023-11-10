@@ -57,7 +57,7 @@ impl Piece {
     }
 
     // get gets a piece from the local storage.
-    pub fn get(&self, task_id: &str, number: i32) -> Result<metadata::Piece> {
+    pub fn get(&self, task_id: &str, number: i32) -> Result<Option<metadata::Piece>> {
         self.storage.get_piece(task_id, number)
     }
 

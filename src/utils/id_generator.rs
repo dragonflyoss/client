@@ -47,9 +47,9 @@ impl IDGenerator {
     pub fn task_id(
         &self,
         url: String,
-        digest: String,
-        tag: String,
-        application: String,
+        digest: Option<String>,
+        tag: Option<String>,
+        application: Option<String>,
         piece_length: i32,
         filters: Vec<String>,
     ) -> Result<String> {
@@ -61,13 +61,31 @@ impl IDGenerator {
         let mut artifact_url = url.clone();
         artifact_url.query_pairs_mut().clear().extend_pairs(query);
 
-        // Generate the task id.
+        // Initialize the hasher.
         let mut hasher = Sha256::new();
+
+        // Add the url to generate the task id.
         hasher.update(artifact_url.to_string());
-        hasher.update(digest);
-        hasher.update(tag);
-        hasher.update(application);
+
+        // Add the digest to generate the task id.
+        if let Some(digest) = digest {
+            hasher.update(digest);
+        }
+
+        // Add the tag to generate the task id.
+        if let Some(tag) = tag {
+            hasher.update(tag);
+        }
+
+        // Add the application to generate the task id.
+        if let Some(application) = application {
+            hasher.update(application);
+        }
+
+        // Add the piece length to generate the task id.
         hasher.update(piece_length.to_string());
+
+        // Generate the task id.
         Ok(hex::encode(hasher.finalize()))
     }
 
