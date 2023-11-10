@@ -56,10 +56,9 @@ impl Storage {
     }
 
     // get_task returns the task metadata.
-    pub fn get_task(&self, id: &str) -> Result<metadata::Task> {
-        self.metadata
-            .get_task(id)?
-            .ok_or(Error::TaskNotFound(id.to_string()))
+    pub fn get_task(&self, id: &str) -> Result<Option<metadata::Task>> {
+        let task = self.metadata.get_task(id)?;
+        Ok(task)
     }
 
     // download_piece_started updates the metadata of the piece and writes
@@ -144,12 +143,9 @@ impl Storage {
     }
 
     // get_piece returns the piece metadata.
-    pub fn get_piece(&self, task_id: &str, number: i32) -> Result<metadata::Piece> {
-        self.metadata
-            .get_piece(task_id, number)?
-            .ok_or(Error::PieceNotFound(
-                self.metadata.piece_id(task_id, number),
-            ))
+    pub fn get_piece(&self, task_id: &str, number: i32) -> Result<Option<metadata::Piece>> {
+        let piece = self.metadata.get_piece(task_id, number)?;
+        Ok(piece)
     }
 
     // get_pieces returns the pieces metadata.

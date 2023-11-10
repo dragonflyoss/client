@@ -61,6 +61,22 @@ pub struct Task {
 
     // created_at is the time when the task metadata is created.
     pub created_at: NaiveDateTime,
+
+    // finished_at is the time when the task downloads finished.
+    pub finished_at: Option<NaiveDateTime>,
+}
+
+// Task implements the task metadata.
+impl Task {
+    // is_started returns whether the task downloads started.
+    pub fn is_started(&self) -> bool {
+        self.finished_at.is_none()
+    }
+
+    // is_finished returns whether the task downloads finished.
+    pub fn is_finished(&self) -> bool {
+        self.finished_at.is_some()
+    }
 }
 
 // Piece is the metadata of the piece.
@@ -94,6 +110,11 @@ pub struct Piece {
 
 // Piece implements the piece metadata.
 impl Piece {
+    // is_started returns whether the piece downloads started.
+    pub fn is_started(&self) -> bool {
+        self.finished_at.is_none()
+    }
+
     // is_finished returns whether the piece downloads finished.
     pub fn is_finished(&self) -> bool {
         self.finished_at.is_some()

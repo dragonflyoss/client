@@ -18,7 +18,7 @@ use std::fmt;
 use std::str::FromStr;
 
 // SEPARATOR is the separator of digest.
-pub const SEPARATOR: &str = "&";
+pub const SEPARATOR: &str = ":";
 
 // Algorithm is a enum of the algorithm that is used to generate digest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
