@@ -201,7 +201,7 @@ impl Dfdaemon for DfdaemonServerHandler {
                                          offset: piece.offset,
                                          length: piece.length,
                                          digest: piece.digest,
-                                         content,
+                                         content: Some(content),
                                          traffic_type: None,
                                          cost: None,
                                          created_at: None,
@@ -284,6 +284,18 @@ impl DfdaemonClient {
             .accept_compressed(CompressionEncoding::Gzip)
             .max_decoding_message_size(usize::MAX);
         Ok(Self { client })
+    }
+
+    // get_piece_numbers gets the piece numbers.
+    pub async fn get_piece_numbers(
+        &self,
+        request: GetPieceNumbersRequest,
+    ) -> ClientResult<Vec<i32>> {
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(super::REQUEST_TIMEOUT);
+
+        let response = self.client.clone().get_piece_numbers(request).await?;
+        Ok(response.into_inner().piece_numbers)
     }
 
     // sync_pieces syncs the pieces.

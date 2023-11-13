@@ -37,10 +37,7 @@ impl IDGenerator {
 
     // host_id generates the host id.
     pub fn host_id(&self) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(self.ip.as_bytes());
-        hasher.update(self.hostname.as_bytes());
-        hex::encode(hasher.finalize())
+        format!("{}-{}", self.ip, self.hostname)
     }
 
     // task_id generates the task id.
@@ -91,6 +88,6 @@ impl IDGenerator {
 
     // peer_id generates the peer id.
     pub fn peer_id(&self) -> String {
-        Uuid::new_v4().to_string()
+        format!("{}-{}-{}", self.ip, self.hostname, Uuid::new_v4())
     }
 }
