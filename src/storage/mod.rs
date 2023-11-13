@@ -104,9 +104,7 @@ impl Storage {
 
         // Check the digest of the piece.
         if digest.to_string() != expected_digest {
-            return Err(Error::PieceDigestMismatch(
-                self.metadata.piece_id(task_id, number),
-            ));
+            return Err(Error::PieceDigestMismatch(self.piece_id(task_id, number)));
         }
 
         self.metadata.download_piece_finished(
@@ -136,9 +134,7 @@ impl Storage {
                 self.metadata.upload_piece_finished(task_id, number)?;
                 Ok(reader)
             }
-            None => Err(Error::PieceNotFound(
-                self.metadata.piece_id(task_id, number),
-            )),
+            None => Err(Error::PieceNotFound(self.piece_id(task_id, number))),
         }
     }
 
@@ -151,5 +147,10 @@ impl Storage {
     // get_pieces returns the pieces metadata.
     pub fn get_pieces(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
         self.metadata.get_pieces(task_id)
+    }
+
+    // piece_id returns the piece id.
+    pub fn piece_id(&self, task_id: &str, number: i32) -> String {
+        self.metadata.piece_id(task_id, number)
     }
 }

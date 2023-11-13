@@ -55,6 +55,9 @@ pub struct Task {
     // uploaded_count is the count of the task uploaded by other peers.
     pub uploaded_count: u64,
 
+    // content_length is the length of the task.
+    pub content_length: i64,
+
     // updated_at is the time when the task metadata is updated. If the task is downloaded
     // by other peers, it will also update updated_at.
     pub updated_at: NaiveDateTime,

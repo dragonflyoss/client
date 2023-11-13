@@ -98,7 +98,19 @@ impl Task {
             Some(task) => {
                 // If the task is finished, return the file.
                 if task.is_finished() {
-                    let pieces = self.piece.get_all(task_id.as_str())?;
+                    let pieces = match download.range {
+                        Some(range) => {
+                            // Calculate the piece numbers to download.
+                            let numbers = self
+                                .piece
+                                .calculate_numbers_by_range(task.piece_length, range);
+
+                            // Get the pieces by numbers.
+                            self.piece.get_by_numbers(task_id.as_str(), &numbers)?
+                        }
+                        None => self.piece.get_all(task_id.as_str())?,
+                    };
+
                     for piece in pieces {
                         // Seek to the offset of the piece.
                         f.seek(SeekFrom::Start(piece.offset)).await?;
