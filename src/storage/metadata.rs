@@ -16,7 +16,7 @@
 
 use crate::config;
 use crate::{Error, Result};
-use chrono::{NaiveDateTime, Utc};
+use chrono::{Duration, NaiveDateTime, Utc};
 use rocksdb::{BlockBasedOptions, Cache, ColumnFamily, Options, DB};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -56,7 +56,7 @@ pub struct Task {
     pub uploaded_count: u64,
 
     // content_length is the length of the task.
-    pub content_length: i64,
+    pub content_length: Option<i64>,
 
     // updated_at is the time when the task metadata is updated. If the task is downloaded
     // by other peers, it will also update updated_at.
@@ -121,6 +121,12 @@ impl Piece {
     // is_finished returns whether the piece downloads finished.
     pub fn is_finished(&self) -> bool {
         self.finished_at.is_some()
+    }
+
+    // cost returns the cost of the piece downloaded.
+    pub fn cost(&self) -> Option<Duration> {
+        self.finished_at
+            .map(|finished_at| finished_at - self.created_at)
     }
 }
 
@@ -189,6 +195,16 @@ impl Metadata {
         };
 
         self.put_task(id, &task)
+    }
+
+    // set_task_content_length sets the content length of the task.
+    pub fn set_task_content_length(&self, id: &str, content_length: i64) -> Result<()> {
+        if let Some(mut task) = self.get_task(id)? {
+            task.content_length = Some(content_length);
+            return self.put_task(id, &task);
+        }
+
+        Err(Error::TaskNotFound(id.to_string()))
     }
 
     // upload_task_finished updates the metadata of the task when task uploads finished.

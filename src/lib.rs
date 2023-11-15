@@ -61,9 +61,17 @@ pub enum Error {
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
 
+    // MpscSend is the error for send.
+    #[error("mpsc send: {0}")]
+    MpscSend(String),
+
     // Reqwest is the error for reqwest.
     #[error(transparent)]
     HTTP(HttpError),
+
+    // HTTPResponseBuilding is the error for http response building.
+    #[error(transparent)]
+    HttpResponseBuilding(#[from] warp::http::Error),
 
     // HostNotFound is the error when the host is not found.
     #[error{"host {0} not found"}]
@@ -114,16 +122,31 @@ pub enum Error {
     UnexpectedResponse(),
 
     // PieceDigestMismatch is the error when the piece digest is mismatch.
-    #[error{"piece {0} digest mismatch"}]
-    PieceDigestMismatch(String),
+    #[error{"piece digest mismatch"}]
+    PieceDigestMismatch(),
+
+    // InvalidContentLength is the error when the content length is invalid.
+    #[error("invalid content length")]
+    InvalidContentLength(),
 
     // InvalidParameter is the error when the parameter is invalid.
     #[error("invalid parameter")]
     InvalidParameter(),
 
+    // Unknown is the error when the error is unknown.
+    #[error("unknown {0}")]
+    Unknown(String),
+
     // Unimplemented is the error when the feature is not implemented.
     #[error{"unimplemented"}]
     Unimplemented(),
+}
+
+// SendError is the error for send.
+impl<T> From<tokio::sync::mpsc::error::SendError<T>> for Error {
+    fn from(e: tokio::sync::mpsc::error::SendError<T>) -> Error {
+        Error::MpscSend(e.to_string())
+    }
 }
 
 // HttpError is the error for http.

@@ -14,20 +14,29 @@
  * limitations under the License.
  */
 
-use crate::backend::http::HTTP;
+use crate::backend::http::{Request as HTTPRequest, HTTP};
 use crate::grpc::scheduler::SchedulerClient;
 use crate::storage::{metadata, Storage};
-use crate::utils::digest::{Algorithm, Digest as UtilsDigest};
+use crate::utils::http::{hashmap_to_headermap, headermap_to_hashmap};
 use crate::utils::id_generator::IDGenerator;
 use crate::{Error, Result};
-use dragonfly_api::common::v2::Download;
-use sha2::{Digest, Sha256};
+use dragonfly_api::common::v2::{Download, Piece, TrafficType};
+use dragonfly_api::scheduler::v2::{
+    announce_peer_request, announce_peer_response, download_piece_back_to_source_failed_request,
+    AnnouncePeerRequest, DownloadPeerStartedRequest, DownloadPieceBackToSourceFailedRequest,
+    DownloadPieceFailedRequest, DownloadPieceFinishedRequest, HttpResponse, RegisterPeerRequest,
+};
+use reqwest::header::{self, HeaderMap};
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::mpsc;
 use tokio::{
     fs::{self, OpenOptions},
-    io::{self, AsyncSeekExt, SeekFrom},
+    io::{AsyncSeekExt, SeekFrom},
 };
-use tokio_util::io::InspectReader;
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::Request;
+use tracing::{error, info};
 
 pub mod piece;
 
@@ -41,6 +50,9 @@ pub struct Task {
 
     // scheduler_client is the grpc client of the scheduler.
     pub scheduler_client: Arc<SchedulerClient>,
+
+    // http_client is the http client.
+    http_client: Arc<HTTP>,
 
     // piece is the piece manager.
     pub piece: piece::Piece,
@@ -59,6 +71,7 @@ impl Task {
             id_generator,
             storage: storage.clone(),
             scheduler_client: scheduler_client.clone(),
+            http_client: http_client.clone(),
             piece: piece::Piece::new(
                 storage.clone(),
                 scheduler_client.clone(),
@@ -73,18 +86,38 @@ impl Task {
 
     // download_into_file downloads a task into a file.
     pub async fn download_into_file(&self, download: Download) -> Result<fs::File> {
-        // Get the output path.
-        let output_path = download.output_path.ok_or(Error::InvalidParameter())?;
+        // Generate the host id.
+        let host_id = self.id_generator.host_id();
 
         // Generate the task id.
         let task_id = self.id_generator.task_id(
-            download.url,
-            download.digest,
-            download.tag,
-            download.application,
+            download.url.clone(),
+            download.digest.clone(),
+            download.tag.clone(),
+            download.application.clone(),
             download.piece_length,
-            download.filters,
+            download.filters.clone(),
         )?;
+
+        // Generate the peer id.
+        let peer_id = self.id_generator.peer_id();
+
+        // Get the output path.
+        let output_path = download
+            .output_path
+            .clone()
+            .ok_or(Error::InvalidParameter())?;
+
+        // Convert the header.
+        let header = hashmap_to_headermap(&download.header)?;
+
+        // Convert the timeout.
+        let timeout: Option<Duration> = match download.timeout.clone() {
+            Some(timeout) => {
+                Some(Duration::try_from(timeout).map_err(|_| Error::InvalidParameter())?)
+            }
+            None => None,
+        };
 
         // Open the file.
         let mut f = OpenOptions::new()
@@ -92,70 +125,531 @@ impl Task {
             .open(output_path.as_str())
             .await?;
 
+        // Get the content length of the task.
+        let content_length = self
+            .get_content_length(
+                task_id.as_str(),
+                download.url.as_str(),
+                header.clone(),
+                timeout,
+            )
+            .await?;
+
+        // Calculate the interested pieces to download.
+        let interested_pieces = self.piece.calculate_interested(
+            download.piece_length,
+            content_length,
+            download.range.clone(),
+        )?;
+
         // Get the task from the local storage.
         let task = self.get(task_id.as_str())?;
         match task {
             Some(task) => {
                 // If the task is finished, return the file.
                 if task.is_finished() {
-                    let pieces = match download.range {
-                        Some(range) => {
-                            // Calculate the piece numbers to download.
-                            let numbers = self
-                                .piece
-                                .calculate_numbers_by_range(task.piece_length, range);
-
-                            // Get the pieces by numbers.
-                            self.piece.get_by_numbers(task_id.as_str(), &numbers)?
-                        }
-                        None => self.piece.get_all(task_id.as_str())?,
-                    };
-
-                    for piece in pieces {
-                        // Seek to the offset of the piece.
-                        f.seek(SeekFrom::Start(piece.offset)).await?;
-
-                        // Download the piece from the local peer.
-                        let reader = self
-                            .piece
-                            .download_from_local_peer(task_id.as_str(), piece.number)
-                            .await?;
-
-                        // Sha256 is used to calculate the hash of the piece.
-                        let mut hasher = Sha256::new();
-
-                        // InspectReader is used to calculate the hash of the piece.
-                        let mut tee = InspectReader::new(reader, |bytes| hasher.update(bytes));
-
-                        // Copy the piece to the file.
-                        io::copy(&mut tee, &mut f).await?;
-
-                        // Calculate the hash of the piece.
-                        let hash = hasher.finalize();
-
-                        // Calculate the digest of the piece.
-                        let digest = UtilsDigest::new(
-                            Algorithm::Sha256,
-                            base16ct::lower::encode_string(&hash),
-                        );
-
-                        // Check the digest of the piece.
-                        if digest.to_string() != piece.digest {
-                            return Err(Error::PieceDigestMismatch(piece.number.to_string()));
-                        }
-                    }
+                    // Download the pieces from the local peer.
+                    self.download_partial_from_local_peer_into_file(
+                        &mut f,
+                        task_id.as_str(),
+                        interested_pieces,
+                    )
+                    .await?;
 
                     return Ok(f);
                 }
 
-                // If the task is not finished, download the task.
-                Err(Error::Unimplemented())
+                // Download the pieces from the local peer.
+                let finished_pieces = self
+                    .download_partial_from_local_peer_into_file(
+                        &mut f,
+                        task_id.as_str(),
+                        interested_pieces.clone(),
+                    )
+                    .await?;
+
+                // Remove the finished pieces from the pieces.
+                let interested_pieces = self
+                    .piece
+                    .remove_finished_from_interested(finished_pieces, interested_pieces);
+
+                // Check if all pieces are downloaded.
+                if interested_pieces.is_empty() {
+                    return Ok(f);
+                };
+
+                // Download the pieces with scheduler.
+                if let Err(err) = self
+                    .download_partial_with_scheduler_into_file(
+                        &mut f,
+                        task_id.as_str(),
+                        host_id.as_str(),
+                        peer_id.as_str(),
+                        interested_pieces.clone(),
+                        download.clone(),
+                    )
+                    .await
+                {
+                    error!("download partial with scheduler into file error: {:?}", err);
+
+                    // Download the pieces from the source.
+                    self.download_partial_from_source_into_file(
+                        &mut f,
+                        interested_pieces,
+                        task_id.as_str(),
+                        download.url.clone(),
+                        header.clone(),
+                        timeout,
+                    )
+                    .await?;
+                };
+
+                Ok(f)
             }
             None => {
-                // If the task is not found, create a new task.
-                Err(Error::Unimplemented())
+                // Download the pieces with scheduler.
+                if let Err(err) = self
+                    .download_partial_with_scheduler_into_file(
+                        &mut f,
+                        task_id.as_str(),
+                        host_id.as_str(),
+                        peer_id.as_str(),
+                        interested_pieces.clone(),
+                        download.clone(),
+                    )
+                    .await
+                {
+                    error!("download partial with scheduler into file error: {:?}", err);
+
+                    // Download the pieces from the source.
+                    self.download_partial_from_source_into_file(
+                        &mut f,
+                        interested_pieces,
+                        task_id.as_str(),
+                        download.url.clone(),
+                        header.clone(),
+                        timeout,
+                    )
+                    .await?;
+                };
+
+                Ok(f)
             }
         }
+    }
+
+    // download_partial_with_scheduler_into_file downloads a partial task with scheduler into a file.
+    async fn download_partial_with_scheduler_into_file(
+        &self,
+        f: &mut fs::File,
+        task_id: &str,
+        host_id: &str,
+        peer_id: &str,
+        interested_pieces: Vec<metadata::Piece>,
+        download: Download,
+    ) -> Result<()> {
+        // Convert the header.
+        let header: HeaderMap = (&download.header).try_into()?;
+
+        // Initialize the finished pieces.
+        let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
+
+        // Initialize stream channel.
+        let (tx, rx) = mpsc::channel(128);
+
+        // Send the register peer request.
+        tx.send(AnnouncePeerRequest {
+            host_id: host_id.to_string(),
+            task_id: task_id.to_string(),
+            peer_id: peer_id.to_string(),
+            request: Some(announce_peer_request::Request::RegisterPeerRequest(
+                RegisterPeerRequest {
+                    download: Some(download.clone()),
+                },
+            )),
+        })
+        .await?;
+
+        // Send the download peer started request.
+        tx.send(AnnouncePeerRequest {
+            host_id: host_id.to_string(),
+            task_id: task_id.to_string(),
+            peer_id: peer_id.to_string(),
+            request: Some(announce_peer_request::Request::DownloadPeerStartedRequest(
+                DownloadPeerStartedRequest {},
+            )),
+        })
+        .await?;
+
+        // Initialize the stream.
+        let in_stream = ReceiverStream::new(rx);
+        let response = self
+            .scheduler_client
+            .announce_peer(Request::new(in_stream))
+            .await?;
+
+        let mut out_stream = response.into_inner();
+        while let Some(message) = out_stream.message().await? {
+            let response = message.response.ok_or(Error::UnexpectedResponse())?;
+            match response {
+                announce_peer_response::Response::EmptyTaskResponse(response) => {
+                    // If the task is empty, return an empty vector.
+                    info!("empty task response: {:?}", response);
+                    return Ok(());
+                }
+                announce_peer_response::Response::NormalTaskResponse(response) => {
+                    // If the task is normal, download the pieces from the remote peer.
+                    info!("normal task response: {:?}", response);
+                    let candidate_parents = response.candidate_parents;
+
+                    let collect_interested_pieces = self
+                        .piece
+                        .collect_interested_from_remote_peer(
+                            task_id,
+                            interested_pieces.clone(),
+                            candidate_parents,
+                        )
+                        .await;
+
+                    for collect_interested_piece in collect_interested_pieces {
+                        let mut reader = match self
+                            .piece
+                            .download_from_remote_peer(
+                                task_id,
+                                collect_interested_piece.number,
+                                collect_interested_piece.parent.clone(),
+                            )
+                            .await
+                        {
+                            Ok(reader) => reader,
+                            Err(err) => {
+                                error!("download from remote peer error: {:?}", err);
+
+                                // Send the download piece failed request.
+                                if let Err(err) = tx.send(AnnouncePeerRequest {
+                                    host_id: host_id.to_string(),
+                                    task_id: task_id.to_string(),
+                                    peer_id: peer_id.to_string(),
+                                    request: Some(
+                                        announce_peer_request::Request::DownloadPieceFailedRequest(
+                                            DownloadPieceFailedRequest {
+                                                piece_number: collect_interested_piece.number,
+                                                parent_id: collect_interested_piece.parent.id.clone(),
+                                                temporary: true,
+                                            },
+                                        ),
+                                    ),
+                                })
+                                .await {
+                                    error!("send download piece failed request error: {:?}", err);
+                                    continue;
+                                };
+
+                                continue;
+                            }
+                        };
+
+                        // Get the piece metadata from the local storage.
+                        let metadata = self
+                            .piece
+                            .get(task_id, collect_interested_piece.number)?
+                            .ok_or(Error::PieceNotFound(
+                                collect_interested_piece.number.to_string(),
+                            ))?;
+
+                        // Write the piece into the file.
+                        self.piece
+                            .write_into_file_and_verify(&mut reader, f, metadata.digest.as_str())
+                            .await?;
+
+                        // Send the download piece finished request.
+                        tx.send(AnnouncePeerRequest {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                            request: Some(
+                                announce_peer_request::Request::DownloadPieceFinishedRequest(
+                                    DownloadPieceFinishedRequest {
+                                        piece: Some(Piece {
+                                            number: metadata.number,
+                                            parent_id: Some(
+                                                collect_interested_piece.parent.id.clone(),
+                                            ),
+                                            offset: metadata.offset,
+                                            length: metadata.length,
+                                            digest: metadata.digest.clone(),
+                                            content: None,
+                                            traffic_type: Some(TrafficType::RemotePeer as i32),
+                                            cost: metadata
+                                                .cost()
+                                                .map(prost_wkt_types::Duration::from),
+                                            created_at: Some(prost_wkt_types::Timestamp::from(
+                                                metadata.created_at,
+                                            )),
+                                        }),
+                                    },
+                                ),
+                            ),
+                        })
+                        .await?;
+
+                        finished_pieces.push(metadata.clone());
+                    }
+                }
+                announce_peer_response::Response::NeedBackToSourceResponse(response) => {
+                    // If the task need back to source, download the pieces from the source.
+                    info!("need back to source response: {:?}", response);
+                    let interested_pieces = self.piece.remove_finished_from_interested(
+                        finished_pieces.clone(),
+                        interested_pieces.clone(),
+                    );
+
+                    for interested_piece in interested_pieces {
+                        // Seek to the offset of the piece.
+                        if let Err(err) = f.seek(SeekFrom::Start(interested_piece.offset)).await {
+                            error!("seek error: {:?}", err);
+                            continue;
+                        }
+
+                        // Download the piece from the local peer.
+                        let mut reader = match self
+                            .piece
+                            .download_from_source(
+                                task_id,
+                                interested_piece.number,
+                                download.url.clone().as_str(),
+                                interested_piece.offset,
+                                interested_piece.length,
+                                header.clone(),
+                                None,
+                            )
+                            .await
+                        {
+                            Ok(reader) => reader,
+                            Err(Error::HTTP(err)) => {
+                                error!("download from source error: {:?}", err);
+
+                                // Send the download piece failed request.
+                                if let Err(err) = tx.send(AnnouncePeerRequest {
+                                    host_id: host_id.to_string(),
+                                    task_id: task_id.to_string(),
+                                    peer_id: peer_id.to_string(),
+                                    request: Some(announce_peer_request::Request::DownloadPieceBackToSourceFailedRequest(
+                                            DownloadPieceBackToSourceFailedRequest{
+                                                piece_number: interested_piece.number,
+                                                response: Some(download_piece_back_to_source_failed_request::Response::HttpResponse(
+                                                        HttpResponse{
+                                                            header: headermap_to_hashmap(&err.header),
+                                                            status_code: err.status_code.as_u16() as i32,
+                                                            status: err.status_code.canonical_reason().unwrap_or("").to_string(),
+                                                        }
+                                                )),
+                                            }
+                                    )),
+                                })
+                                .await {
+                                    error!("send download piece failed request error: {:?}", err);
+                                    continue;
+                                };
+
+                                return Err(Error::HTTP(err));
+                            }
+                            Err(err) => {
+                                error!("download from source error: {:?}", err);
+
+                                // Send the download piece failed request.
+                                if let Err(err) = tx.send(AnnouncePeerRequest {
+                                    host_id: host_id.to_string(),
+                                    task_id: task_id.to_string(),
+                                    peer_id: peer_id.to_string(),
+                                    request: Some(announce_peer_request::Request::DownloadPieceBackToSourceFailedRequest(
+                                            DownloadPieceBackToSourceFailedRequest{
+                                                piece_number: interested_piece.number,
+                                                response: None,
+                                            }
+                                    )),
+                                })
+                                .await {
+                                    error!("send download piece failed request error: {:?}", err);
+                                    continue;
+                                };
+
+                                return Err(err);
+                            }
+                        };
+
+                        // Get the piece metadata from the local storage.
+                        let metadata = self
+                            .piece
+                            .get(task_id, interested_piece.number)?
+                            .ok_or(Error::PieceNotFound(interested_piece.number.to_string()))?;
+
+                        // Write the piece into the file.
+                        self.piece
+                            .write_into_file_and_verify(&mut reader, f, metadata.digest.as_str())
+                            .await?;
+
+                        finished_pieces.push(interested_piece.clone());
+                    }
+                }
+            }
+        }
+
+        // Check if all pieces are downloaded.
+        if finished_pieces.len() == interested_pieces.len() {
+            return Ok(());
+        }
+
+        // If not all pieces are downloaded, return an error.
+        Err(Error::Unknown(
+            "not all pieces are downloaded with scheduler".to_string(),
+        ))
+    }
+
+    // download_partial_from_local_peer_into_file downloads a partial task from a local peer into a file.
+    async fn download_partial_from_local_peer_into_file(
+        &self,
+        f: &mut fs::File,
+        task_id: &str,
+        interested_pieces: Vec<metadata::Piece>,
+    ) -> Result<Vec<metadata::Piece>> {
+        // Initialize the finished pieces.
+        let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
+
+        for interested_piece in interested_pieces {
+            // Seek to the offset of the piece.
+            if let Err(err) = f.seek(SeekFrom::Start(interested_piece.offset)).await {
+                error!("seek error: {:?}", err);
+                continue;
+            }
+
+            // Download the piece from the local peer.
+            let mut reader = match self
+                .piece
+                .download_from_local_peer(task_id, interested_piece.number)
+                .await
+            {
+                Ok(reader) => reader,
+                Err(err) => {
+                    error!("download from local peer error: {:?}", err);
+                    continue;
+                }
+            };
+
+            // Get the piece metadata from the local storage.
+            let metadata = self
+                .piece
+                .get(task_id, interested_piece.number)?
+                .ok_or(Error::PieceNotFound(interested_piece.number.to_string()))?;
+
+            // Write the piece into the file.
+            self.piece
+                .write_into_file_and_verify(&mut reader, f, metadata.digest.as_str())
+                .await?;
+
+            finished_pieces.push(interested_piece.clone());
+        }
+
+        Ok(finished_pieces)
+    }
+
+    // download_partial_from_source_into_file downloads a partial task from the source into a file.
+    async fn download_partial_from_source_into_file(
+        &self,
+        f: &mut fs::File,
+        interested_pieces: Vec<metadata::Piece>,
+        task_id: &str,
+        url: String,
+        header: HeaderMap,
+        timeout: Option<Duration>,
+    ) -> Result<()> {
+        // Initialize the finished pieces.
+        let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
+
+        // Download the pieces.
+        for interested_piece in &interested_pieces {
+            // Download the piece from the source.
+            let mut reader = self
+                .piece
+                .download_from_source(
+                    task_id,
+                    interested_piece.number,
+                    url.as_str(),
+                    interested_piece.offset,
+                    interested_piece.length,
+                    header.clone(),
+                    timeout,
+                )
+                .await?;
+
+            // Get the piece metadata from the local storage.
+            let metadata = self
+                .piece
+                .get(task_id, interested_piece.number)?
+                .ok_or(Error::PieceNotFound(interested_piece.number.to_string()))?;
+
+            // Write the piece into the file.
+            self.piece
+                .write_into_file_and_verify(&mut reader, f, metadata.digest.as_str())
+                .await?;
+
+            // Remove the piece from the pieces.
+            finished_pieces.push(interested_piece.clone());
+        }
+
+        // Check if all pieces are downloaded.
+        if finished_pieces.len() == interested_pieces.len() {
+            return Ok(());
+        }
+
+        // If not all pieces are downloaded, return an error.
+        Err(Error::Unknown(
+            "not all pieces are downloaded from source".to_string(),
+        ))
+    }
+
+    // get_content_length gets the content length of the task.
+    async fn get_content_length(
+        &self,
+        task_id: &str,
+        url: &str,
+        header: HeaderMap,
+        timeout: Option<Duration>,
+    ) -> Result<i64> {
+        let task = self
+            .storage
+            .get_task(task_id)?
+            .ok_or(Error::TaskNotFound(task_id.to_string()))?;
+
+        if let Some(content_length) = task.content_length {
+            return Ok(content_length);
+        }
+
+        // Head the url to get the content length.
+        let response = self
+            .http_client
+            .head(HTTPRequest {
+                url: url.to_string(),
+                header,
+                timeout,
+            })
+            .await?;
+
+        // Get the content length from the response.
+        let content_length = response
+            .header
+            .get(header::CONTENT_LENGTH)
+            .ok_or(Error::InvalidContentLength())?
+            .to_str()
+            .map_err(|_| Error::InvalidContentLength())?
+            .parse::<i64>()
+            .map_err(|_| Error::InvalidContentLength())?;
+
+        // Set the content length of the task.
+        self.storage
+            .set_task_content_length(task_id, content_length)?;
+
+        Ok(content_length)
     }
 
     // download_into_async_read downloads a task into an AsyncRead.

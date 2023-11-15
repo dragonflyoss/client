@@ -33,8 +33,17 @@ pub struct Request {
     pub timeout: Option<Duration>,
 }
 
-// Response is the response for HTTP backend.
-pub struct Response<R: AsyncRead> {
+// HeadResponse is the head response for HTTP backend.
+pub struct HeadResponse {
+    // header is the headers of the response.
+    pub header: HeaderMap,
+
+    // status_code is the status code of the response.
+    pub status_code: reqwest::StatusCode,
+}
+
+// GetResponse is the get response for HTTP backend.
+pub struct GetResponse<R: AsyncRead> {
     // header is the headers of the response.
     pub header: HeaderMap,
 
@@ -60,11 +69,32 @@ impl HTTP {
         }
     }
 
+    // Head gets the header of the request.
+    pub async fn head(&self, req: Request) -> Result<HeadResponse> {
+        let mut request_builder = self.client.head(&req.url).headers(req.header);
+        if let Some(timeout) = req.timeout {
+            request_builder = request_builder.timeout(timeout);
+        } else {
+            request_builder = request_builder.timeout(super::REQUEST_TIMEOUT);
+        }
+
+        let response = request_builder.send().await?;
+        let header = response.headers().clone();
+        let status_code = response.status();
+
+        Ok(HeadResponse {
+            header,
+            status_code,
+        })
+    }
+
     // Get gets the content of the request.
-    pub async fn get(&self, req: Request) -> Result<Response<impl AsyncRead>> {
+    pub async fn get(&self, req: Request) -> Result<GetResponse<impl AsyncRead>> {
         let mut request_builder = self.client.get(&req.url).headers(req.header);
         if let Some(timeout) = req.timeout {
             request_builder = request_builder.timeout(timeout);
+        } else {
+            request_builder = request_builder.timeout(super::REQUEST_TIMEOUT);
         }
 
         let response = request_builder.send().await?;
@@ -76,7 +106,7 @@ impl HTTP {
             .into_async_read()
             .compat();
 
-        Ok(Response {
+        Ok(GetResponse {
             header,
             status_code,
             reader,

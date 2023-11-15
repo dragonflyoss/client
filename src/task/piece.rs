@@ -17,17 +17,34 @@
 use crate::backend::http::{Request, HTTP};
 use crate::grpc::{dfdaemon::DfdaemonClient, scheduler::SchedulerClient};
 use crate::storage::{metadata, Storage};
+use crate::utils::digest::{Algorithm, Digest as UtilsDigest};
 use crate::{Error, HttpError, Result};
+use chrono::Utc;
 use dragonfly_api::common::v2::{Peer, Range};
 use dragonfly_api::dfdaemon::v2::{
-    sync_pieces_request, sync_pieces_response, InterestedPiecesRequest, InterestedPiecesResponse,
-    SyncPiecesRequest,
+    sync_pieces_request, sync_pieces_response, GetPieceNumbersRequest, InterestedPiecesRequest,
+    InterestedPiecesResponse, SyncPiecesRequest,
 };
+use rand::prelude::*;
 use reqwest::header::HeaderMap;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::{
+    fs,
+    io::{self, AsyncRead, AsyncReadExt},
+};
+use tokio_util::io::InspectReader;
 use tracing::error;
+
+// CollectPiece represents a piece to collect.
+pub struct CollectPiece {
+    // number is the piece number.
+    pub number: i32,
+
+    // parent is the parent peer.
+    pub parent: Peer,
+}
 
 // Piece represents a piece manager.
 pub struct Piece {
@@ -66,40 +83,224 @@ impl Piece {
         self.storage.get_pieces(task_id)
     }
 
-    // get_by_numbers gets pieces by numbers from the local storage.
-    pub fn get_by_numbers(&self, task_id: &str, numbers: &[i32]) -> Result<Vec<metadata::Piece>> {
-        let mut pieces = Vec::new();
-        for number in numbers {
-            let piece = self
-                .storage
-                .get_piece(task_id, *number)?
-                .ok_or(Error::PieceNotFound(
-                    self.storage.piece_id(task_id, *number),
-                ))?;
-            pieces.push(piece);
+    // write_into_file_and_verify writes the piece into the file and verifies the digest of the piece.
+    pub async fn write_into_file_and_verify<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        reader: &mut R,
+        f: &mut fs::File,
+        expected_digest: &str,
+    ) -> Result<()> {
+        // Sha256 is used to calculate the hash of the piece.
+        let mut hasher = Sha256::new();
+
+        // InspectReader is used to calculate the hash of the piece.
+        let mut tee = InspectReader::new(reader, |bytes| hasher.update(bytes));
+
+        // Copy the piece to the file.
+        io::copy(&mut tee, f).await?;
+
+        // Calculate the hash of the piece.
+        let hash = hasher.finalize();
+
+        // Calculate the digest of the piece.
+        let digest = UtilsDigest::new(Algorithm::Sha256, base16ct::lower::encode_string(&hash));
+
+        // Check the digest of the piece.
+        if expected_digest != digest.to_string() {
+            return Err(Error::PieceDigestMismatch());
+        }
+
+        Ok(())
+    }
+
+    // calculate_interested calculates the interested pieces by content_length and range.
+    pub fn calculate_interested(
+        &self,
+        piece_length: i32,
+        content_length: i64,
+        range: Option<Range>,
+    ) -> Result<Vec<metadata::Piece>> {
+        // piece_length must be greater than 0.
+        if piece_length <= 0 {
+            return Err(Error::InvalidParameter());
+        }
+
+        // content_length must be greater than 0.
+        if content_length < 0 {
+            return Err(Error::InvalidContentLength());
+        }
+
+        // If content_length is 0, return empty piece.
+        if content_length == 0 {
+            return Ok(Vec::new());
+        }
+
+        // If range is not None, calculate the pieces by range.
+        if let Some(range) = range {
+            if range.start < 0 || range.length <= 0 {
+                return Err(Error::InvalidParameter());
+            }
+
+            let mut number = 0;
+            let mut offset = 0;
+            let mut pieces: Vec<metadata::Piece> = Vec::new();
+            loop {
+                // If offset is greater than content_length, break the loop.
+                if offset >= content_length {
+                    let mut piece = pieces.pop().ok_or(Error::InvalidParameter())?;
+                    piece.length =
+                        (piece_length + content_length as i32 - piece.offset as i32) as u64;
+                    pieces.push(piece);
+                    break;
+                }
+
+                // If offset is greater than range.start + range.length, break the loop.
+                if offset < range.start + range.length {
+                    break;
+                }
+
+                offset = i64::from((number + 1) * piece_length);
+                if offset > range.start {
+                    pieces.push(metadata::Piece {
+                        number,
+                        offset: offset as u64,
+                        length: piece_length as u64,
+                        digest: "".to_string(),
+                        uploaded_count: 0,
+                        updated_at: Utc::now().naive_utc(),
+                        created_at: Utc::now().naive_utc(),
+                        finished_at: None,
+                    });
+                }
+
+                number += 1;
+            }
+
+            return Ok(pieces);
+        }
+
+        // Calculate the pieces by content_length without range.
+        let mut number = 0;
+        let mut offset = 0;
+        let mut pieces: Vec<metadata::Piece> = Vec::new();
+        loop {
+            // If offset is greater than content_length, break the loop.
+            if offset >= content_length {
+                let mut piece = pieces.pop().ok_or(Error::InvalidParameter())?;
+                piece.length = (piece_length + content_length as i32 - piece.offset as i32) as u64;
+                pieces.push(piece);
+                break;
+            }
+
+            offset = i64::from((number + 1) * piece_length);
+            pieces.push(metadata::Piece {
+                number,
+                offset: offset as u64,
+                length: piece_length as u64,
+                digest: "".to_string(),
+                uploaded_count: 0,
+                updated_at: Utc::now().naive_utc(),
+                created_at: Utc::now().naive_utc(),
+                finished_at: None,
+            });
+
+            number += 1;
         }
 
         Ok(pieces)
     }
 
-    // calculate_numbers_by_range calculates the piece numbers to download.
-    pub fn calculate_numbers_by_range(&self, piece_length: i32, range: Range) -> Vec<i32> {
-        let mut numbers = Vec::new();
-        let mut number = 0;
-        let mut current_length = 0;
-        while current_length < range.start + range.length {
-            current_length = i64::from((number + 1) * piece_length);
-            if current_length > range.start {
-                numbers.push(number);
-            }
-
-            number += 1;
-        }
-
-        numbers
+    // remove_finished_from_interested removes the finished pieces from interested pieces.
+    pub fn remove_finished_from_interested(
+        &self,
+        finished_pieces: Vec<metadata::Piece>,
+        interested_pieces: Vec<metadata::Piece>,
+    ) -> Vec<metadata::Piece> {
+        interested_pieces
+            .iter()
+            .filter(|piece| {
+                !finished_pieces
+                    .iter()
+                    .any(|finished_piece| finished_piece.number == piece.number)
+            })
+            .cloned()
+            .collect::<Vec<metadata::Piece>>()
     }
 
-    // download_from_local_peer downloads a piece from a local peer.
+    // collect_interested_from_remote_peer collects the interested pieces from remote peers.
+    pub async fn collect_interested_from_remote_peer(
+        &self,
+        task_id: &str,
+        interested_pieces: Vec<metadata::Piece>,
+        candidate_parents: Vec<Peer>,
+    ) -> Vec<CollectPiece> {
+        let mut collect_pieces: Vec<CollectPiece> = Vec::new();
+        for candidate_parent in candidate_parents {
+            // If candidate_parent.host is None, skip it.
+            let Some(candidate_parent_host) = candidate_parent.host.clone() else {
+                error!("peer {:?} host is empty", candidate_parent);
+                continue;
+            };
+
+            // Create a dfdaemon client.
+            let dfdaemon_client = match DfdaemonClient::new(format!(
+                "http://{}:{}",
+                candidate_parent_host.ip, candidate_parent_host.port
+            ))
+            .await
+            {
+                Ok(client) => client,
+                Err(err) => {
+                    error!("create dfdaemon client failed: {}", err);
+                    continue;
+                }
+            };
+
+            // Get the piece numbers from the candidate parent.
+            let collect_piece_numbers = match dfdaemon_client
+                .get_piece_numbers(GetPieceNumbersRequest {
+                    task_id: task_id.to_string(),
+                })
+                .await
+            {
+                Ok(response) => response,
+                Err(err) => {
+                    error!("get piece numbers failed: {}", err);
+                    continue;
+                }
+            };
+
+            // Construct the collect pieces.
+            for collect_piece_number in collect_piece_numbers {
+                collect_pieces.push(CollectPiece {
+                    number: collect_piece_number,
+                    parent: candidate_parent.clone(),
+                });
+            }
+        }
+
+        // Shuffle the collect pieces.
+        collect_pieces.shuffle(&mut rand::thread_rng());
+
+        // Filter the collect pieces and remove the duplicate pieces.
+        let mut visited: Vec<i32> = Vec::new();
+        collect_pieces.retain(|collect_piece| {
+            interested_pieces
+                .iter()
+                .any(|interested_piece| interested_piece.number != collect_piece.number)
+                || match visited.contains(&collect_piece.number) {
+                    true => false,
+                    false => {
+                        visited.push(collect_piece.number);
+                        true
+                    }
+                }
+        });
+
+        collect_pieces
+    }
+
+    // download_from_local_peer downloads a single piece from a local peer.
     pub async fn download_from_local_peer(
         &self,
         task_id: &str,
@@ -108,7 +309,7 @@ impl Piece {
         self.storage.upload_piece(task_id, number).await
     }
 
-    // download_from_remote_peer downloads a piece from a remote peer.
+    // download_from_remote_peer downloads a single piece from a remote peer.
     pub async fn download_from_remote_peer(
         &self,
         task_id: &str,
@@ -145,14 +346,17 @@ impl Piece {
             )) = message.response
             {
                 if let Some(piece) = piece {
+                    // Get the piece content.
+                    let content = piece.content.ok_or(Error::InvalidParameter())?;
+
                     // Record the finish of downloading piece.
                     self.storage
                         .download_piece_from_remote_peer_finished(
                             task_id,
                             number,
                             piece.offset,
-                            piece.digest.clone(),
-                            &mut piece.content.as_slice(),
+                            piece.digest.as_str(),
+                            &mut content.as_slice(),
                         )
                         .await
                         .map_err(|err| {
@@ -192,7 +396,7 @@ impl Piece {
         Err(Error::UnexpectedResponse())
     }
 
-    // download_from_source downloads a piece from the source.
+    // download_from_source downloads a single piece from the source.
     #[allow(clippy::too_many_arguments)]
     pub async fn download_from_source(
         &self,
@@ -202,7 +406,7 @@ impl Piece {
         offset: u64,
         length: u64,
         header: HeaderMap,
-        timeout: Duration,
+        timeout: Option<Duration>,
     ) -> Result<impl AsyncRead> {
         // Record the start of downloading piece.
         self.storage.download_piece_started(task_id, number)?;
@@ -213,7 +417,7 @@ impl Piece {
             .get(Request {
                 url: url.to_string(),
                 header,
-                timeout: Some(timeout),
+                timeout,
             })
             .await
             .map_err(|err| {

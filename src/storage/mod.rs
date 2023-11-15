@@ -45,6 +45,11 @@ impl Storage {
         self.metadata.download_task_started(id, piece_length)
     }
 
+    // set_task_content_length sets the content length of the task.
+    pub fn set_task_content_length(&self, id: &str, content_length: i64) -> Result<()> {
+        self.metadata.set_task_content_length(id, content_length)
+    }
+
     // download_task_failed updates the metadata of the task when the task downloads failed.
     pub fn download_task_failed(&self, id: &str) -> Result<()> {
         self.metadata.download_task_failed(id)
@@ -95,7 +100,7 @@ impl Storage {
         task_id: &str,
         number: i32,
         offset: u64,
-        expected_digest: String,
+        expected_digest: &str,
         reader: &mut R,
     ) -> Result<u64> {
         let response = self.content.write_piece(task_id, offset, reader).await?;
@@ -103,8 +108,8 @@ impl Storage {
         let digest = Digest::new(Algorithm::Sha256, response.hash);
 
         // Check the digest of the piece.
-        if digest.to_string() != expected_digest {
-            return Err(Error::PieceDigestMismatch(self.piece_id(task_id, number)));
+        if expected_digest != digest.to_string() {
+            return Err(Error::PieceDigestMismatch());
         }
 
         self.metadata.download_piece_finished(
