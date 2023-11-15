@@ -22,7 +22,7 @@ use dragonfly_api::dfdaemon::v2::{
     dfdaemon_client::DfdaemonClient as DfdaemonGRPCClient,
     dfdaemon_server::{Dfdaemon, DfdaemonServer as DfdaemonGRPCServer},
     sync_pieces_request, sync_pieces_response, DeleteTaskRequest, DownloadTaskRequest,
-    GetPieceNumbersRequest, GetPieceNumbersResponse, InterestedPiecesRequest,
+    DownloadTaskResponse, GetPieceNumbersRequest, GetPieceNumbersResponse, InterestedPiecesRequest,
     InterestedPiecesResponse, StatTaskRequest as DfdaemonStatTaskRequest, SyncPiecesRequest,
     SyncPiecesResponse, UploadTaskRequest,
 };
@@ -219,11 +219,15 @@ impl Dfdaemon for DfdaemonServerHandler {
         ))
     }
 
+    // DownloadTaskStream is the stream of the download task response.
+    type DownloadTaskStream =
+        Pin<Box<dyn Stream<Item = Result<DownloadTaskResponse, Status>> + Send + 'static>>;
+
     // download_task tells the dfdaemon to download the task.
     async fn download_task(
         &self,
         request: Request<DownloadTaskRequest>,
-    ) -> Result<Response<()>, Status> {
+    ) -> Result<Response<Self::DownloadTaskStream>, Status> {
         println!("download_task: {:?}", request);
         Err(Status::unimplemented("not implemented"))
     }
