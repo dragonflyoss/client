@@ -20,8 +20,8 @@ use crate::{Error, Result};
 use dragonfly_api::common::v2::{Peer, Task};
 use dragonfly_api::scheduler::v2::{
     scheduler_client::SchedulerClient as SchedulerGRPCClient, AnnounceHostRequest,
-    ExchangePeerRequest, ExchangePeerResponse, LeaveHostRequest, LeavePeerRequest, StatPeerRequest,
-    StatTaskRequest,
+    AnnouncePeerRequest, AnnouncePeerResponse, ExchangePeerRequest, ExchangePeerResponse,
+    LeaveHostRequest, LeavePeerRequest, StatPeerRequest, StatTaskRequest,
 };
 use std::str::FromStr;
 use std::sync::Arc;
@@ -35,7 +35,7 @@ pub struct SchedulerClient {
     dynconfig: Arc<Dynconfig>,
 
     // client is the grpc client of the scehduler.
-    pub client: Option<SchedulerGRPCClient<Channel>>,
+    client: Option<SchedulerGRPCClient<Channel>>,
 }
 
 // SchedulerClient implements the grpc client of the scheduler.
@@ -49,6 +49,15 @@ impl SchedulerClient {
 
         client.refresh_scheduler_client().await?;
         Ok(client)
+    }
+
+    // announce_peer announces the peer to the scheduler.
+    pub async fn announce_peer(
+        &self,
+        request: impl tonic::IntoStreamingRequest<Message = AnnouncePeerRequest>,
+    ) -> Result<tonic::Response<tonic::codec::Streaming<AnnouncePeerResponse>>> {
+        let response = self.client()?.announce_peer(request).await?;
+        Ok(response)
     }
 
     // stat_peer gets the status of the peer.
