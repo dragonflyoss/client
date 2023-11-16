@@ -327,20 +327,19 @@ impl Piece {
         // Record the start of downloading piece.
         self.storage.download_piece_started(task_id, number)?;
 
-        // Construct the interested pieces request.
-        let in_stream = tokio_stream::once(SyncPiecesRequest {
-            task_id: task_id.to_string(),
-            request: Some(sync_pieces_request::Request::InterestedPiecesRequest(
-                InterestedPiecesRequest {
-                    piece_numbers: vec![number],
-                },
-            )),
-        });
-
         // Send the interested pieces request.
-        let response = dfdaemon_client.sync_pieces(in_stream).await?;
-        let mut resp_stream = response.into_inner();
-        if let Some(message) = resp_stream.message().await? {
+        let response = dfdaemon_client
+            .sync_pieces(SyncPiecesRequest {
+                task_id: task_id.to_string(),
+                request: Some(sync_pieces_request::Request::InterestedPiecesRequest(
+                    InterestedPiecesRequest {
+                        piece_numbers: vec![number],
+                    },
+                )),
+            })
+            .await?;
+        let mut out_stream = response.into_inner();
+        if let Some(message) = out_stream.message().await? {
             if let Some(sync_pieces_response::Response::InterestedPiecesResponse(
                 InterestedPiecesResponse { piece },
             )) = message.response
