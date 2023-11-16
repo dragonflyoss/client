@@ -29,6 +29,7 @@ use dragonfly_api::dfdaemon::v2::{
 use dragonfly_api::scheduler::v2::StatTaskRequest as SchedulerStatTaskRequest;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -54,7 +55,6 @@ pub struct DfdaemonServer {
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-// TODO Implement security feature for the dfdaemon grpc server.
 // DfdaemonServer implements the grpc server of the dfdaemon.
 impl DfdaemonServer {
     pub fn new(
@@ -390,12 +390,32 @@ impl DfdaemonClient {
     }
 
     // download_task tells the dfdaemon to download the task.
-    pub async fn download_task(&self, request: DownloadTaskRequest) -> ClientResult<()> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
+    pub async fn download_task(
+        &self,
+        request: DownloadTaskRequest,
+    ) -> ClientResult<tonic::Response<tonic::codec::Streaming<DownloadTaskResponse>>> {
+        // Get the timeout from the request.
+        let timeout = request
+            .clone()
+            .download
+            .ok_or_else(|| {
+                tonic::Status::invalid_argument("missing download in download task request")
+            })?
+            .timeout;
 
-        self.client.clone().download_task(request).await?;
-        Ok(())
+        // Initialize the request.
+        let mut request = tonic::Request::new(request);
+
+        // Set the timeout to the request.
+        if let Some(timeout) = timeout {
+            request.set_timeout(
+                Duration::try_from(timeout)
+                    .map_err(|_| tonic::Status::invalid_argument("invalid timeout"))?,
+            );
+        }
+
+        let response = self.client.clone().download_task(request).await?;
+        Ok(response)
     }
 
     // upload_task tells the dfdaemon to upload the task.
