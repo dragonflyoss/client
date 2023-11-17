@@ -32,14 +32,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
-use tokio::net::UnixListener;
+use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
 use tonic::codec::CompressionEncoding;
 use tonic::{
-    transport::{Channel, Server},
+    transport::{Channel, Endpoint, Server, Uri},
     Request, Response, Status,
 };
+use tower::service_fn;
 use tracing::{error, info};
 
 // DfdaemonServer is the grpc server of the dfdaemon.
@@ -90,7 +91,10 @@ impl DfdaemonServer {
         // Initialize the grpc service.
         let service = DfdaemonGRPCServer::new(DfdaemonServerHandler {
             task: self.task.clone(),
-        });
+        })
+        .send_compressed(CompressionEncoding::Gzip)
+        .accept_compressed(CompressionEncoding::Gzip)
+        .max_decoding_message_size(usize::MAX);
 
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -389,6 +393,22 @@ impl DfdaemonClient {
     pub async fn new(addr: String) -> ClientResult<Self> {
         let channel = Channel::from_static(Box::leak(addr.into_boxed_str()))
             .connect()
+            .await?;
+        let client = DfdaemonGRPCClient::new(channel)
+            .send_compressed(CompressionEncoding::Gzip)
+            .accept_compressed(CompressionEncoding::Gzip)
+            .max_decoding_message_size(usize::MAX);
+        Ok(Self { client })
+    }
+
+    // new_unix creates a new DfdaemonClient with unix domain socket.
+    pub async fn new_unix(socket_path: PathBuf) -> ClientResult<Self> {
+        // Ignore the uri because it is not used.
+        let channel = Endpoint::try_from("http://[::]:50051")
+            .unwrap()
+            .connect_with_connector(service_fn(move |_: Uri| {
+                UnixStream::connect(socket_path.clone())
+            }))
             .await?;
         let client = DfdaemonGRPCClient::new(channel)
             .send_compressed(CompressionEncoding::Gzip)
