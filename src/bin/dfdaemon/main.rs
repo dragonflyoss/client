@@ -171,7 +171,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Initialize dfdaemon grpc server.
     let dfdaemon_grpc = DfdaemonServer::new(
-        SocketAddr::new(config.server.ip.unwrap(), config.server.port),
+        SocketAddr::new(config.upload.server.ip.unwrap(), config.upload.server.port),
+        config.download.server.socket_path.clone(),
         task.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
