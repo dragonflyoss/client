@@ -28,11 +28,13 @@ use dragonfly_api::dfdaemon::v2::{
 };
 use dragonfly_api::scheduler::v2::StatTaskRequest as SchedulerStatTaskRequest;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
+use tokio::net::UnixListener;
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
 use tonic::codec::CompressionEncoding;
 use tonic::{
     transport::{Channel, Server},
@@ -44,6 +46,9 @@ use tracing::{error, info};
 pub struct DfdaemonServer {
     // addr is the address of the grpc server.
     addr: SocketAddr,
+
+    // socket_path is the path of the unix domain socket.
+    socket_path: PathBuf,
 
     // task is the task manager.
     task: Arc<task::Task>,
@@ -57,14 +62,17 @@ pub struct DfdaemonServer {
 
 // DfdaemonServer implements the grpc server of the dfdaemon.
 impl DfdaemonServer {
+    // new creates a new DfdaemonServer.
     pub fn new(
         addr: SocketAddr,
+        socket_path: PathBuf,
         task: Arc<task::Task>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
         Self {
             addr,
+            socket_path,
             task,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
@@ -73,26 +81,50 @@ impl DfdaemonServer {
 
     // run starts the metrics server.
     pub async fn run(&self) {
-        // Clone the shutdown channel.
-        let mut shutdown = self.shutdown.clone();
-
         // Register the reflection service.
         let reflection = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
             .build()
             .unwrap();
 
-        // Start the grpc server.
-        info!("listening on {}", self.addr);
+        // Initialize the grpc service.
+        let service = DfdaemonGRPCServer::new(DfdaemonServerHandler {
+            task: self.task.clone(),
+        });
+
+        // Clone the shutdown channel.
+        let mut shutdown = self.shutdown.clone();
+
+        // Start upload grpc server.
+        info!("upload server listening on {}", self.addr);
         Server::builder()
-            .add_service(reflection)
-            .add_service(DfdaemonGRPCServer::new(DfdaemonServerHandler {
-                task: self.task.clone(),
-            }))
+            .add_service(reflection.clone())
+            .add_service(service.clone())
             .serve_with_shutdown(self.addr, async move {
-                // Dfdaemon grpc server shutting down with signals.
+                // Upload grpc server shutting down with signals.
                 let _ = shutdown.recv().await;
-                info!("dfdaemon grpc server shutting down");
+                info!("upload grpc server shutting down");
+            })
+            .await
+            .unwrap();
+
+        // Clone the shutdown channel.
+        let mut shutdown_unix = self.shutdown.clone();
+
+        // Start download grpc server with unix domain socket.
+        info!(
+            "download server listening on {}",
+            self.socket_path.display()
+        );
+        let uds = UnixListener::bind(&self.socket_path).unwrap();
+        let uds_stream = UnixListenerStream::new(uds);
+        Server::builder()
+            .add_service(reflection.clone())
+            .add_service(service.clone())
+            .serve_with_incoming_shutdown(uds_stream, async move {
+                // Download grpc server shutting down with signals.
+                let _ = shutdown_unix.recv().await;
+                info!("download grpc server shutting down");
             })
             .await
             .unwrap();
