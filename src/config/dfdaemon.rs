@@ -149,17 +149,8 @@ pub struct Server {
     // cache_dir is the directory to store cache files.
     pub cache_dir: PathBuf,
 
-    // root_dir is the root directory for dfdaemon.
-    pub root_dir: PathBuf,
-
     // lock_path is the file lock path for dfdaemon service.
     pub lock_dir: PathBuf,
-
-    // ip is the listen ip of the grpc server.
-    pub ip: Option<IpAddr>,
-
-    // port is the port to the grpc server.
-    pub port: u16,
 }
 
 // Server implements default value for Server.
@@ -169,12 +160,63 @@ impl Default for Server {
             data_dir: super::default_data_dir(),
             plugin_dir: default_dfdaemon_plugin_dir(),
             cache_dir: default_dfdaemon_cache_dir(),
-            root_dir: super::default_root_dir(),
             lock_dir: super::default_lock_dir(),
+        }
+    }
+}
+
+// DwonloadServer is the download server configuration for dfdaemon.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DwonloadServer {
+    // socket_path is the unix socket path for dfdaemon GRPC service.
+    pub socket_path: PathBuf,
+}
+
+// DwonloadServer implements default value for DwonloadServer.
+impl Default for DwonloadServer {
+    fn default() -> Self {
+        Self {
+            socket_path: default_dfdaemon_unix_socket_path(),
+        }
+    }
+}
+
+// Server is the server configuration for dfdaemon.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Download {
+    // server is the download server configuration for dfdaemon.
+    pub server: DwonloadServer,
+}
+
+// UploadServer is the upload server configuration for dfdaemon.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UploadServer {
+    // ip is the listen ip of the grpc server.
+    pub ip: Option<IpAddr>,
+
+    // port is the port to the grpc server.
+    pub port: u16,
+}
+
+// UploadServer implements default value for UploadServer.
+impl Default for UploadServer {
+    fn default() -> Self {
+        Self {
             ip: None,
             port: DEFAULT_GRPC_SERVER_PORT,
         }
     }
+}
+
+// Server is the server configuration for dfdaemon.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Upload {
+    // server is the upload server configuration for dfdaemon.
+    pub server: UploadServer,
 }
 
 // Manager is the manager configuration for dfdaemon.
@@ -406,6 +448,12 @@ pub struct Config {
     // server is the server configuration for dfdaemon.
     pub server: Server,
 
+    // download is the download configuration for dfdaemon.
+    pub download: Download,
+
+    // upload is the upload configuration for dfdaemon.
+    pub upload: Upload,
+
     // manager is the manager configuration for dfdaemon.
     pub manager: Manager,
 
@@ -479,9 +527,9 @@ impl Config {
             }
         }
 
-        // Convert grpc server listen ip.
-        if self.server.ip.is_none() {
-            self.server.ip = if self.network.enable_ipv6 {
+        // Convert upload grpc server listen ip.
+        if self.upload.server.ip.is_none() {
+            self.upload.server.ip = if self.network.enable_ipv6 {
                 Some(Ipv6Addr::UNSPECIFIED.into())
             } else {
                 Some(Ipv4Addr::UNSPECIFIED.into())
