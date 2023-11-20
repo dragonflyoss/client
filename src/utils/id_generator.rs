@@ -43,15 +43,15 @@ impl IDGenerator {
     // task_id generates the task id.
     pub fn task_id(
         &self,
-        url: String,
-        digest: Option<String>,
-        tag: Option<String>,
-        application: Option<String>,
-        piece_length: i32,
+        url: &str,
+        digest: Option<&str>,
+        tag: Option<&str>,
+        application: Option<&str>,
+        piece_length: u64,
         filters: Vec<String>,
     ) -> Result<String> {
         // Filter the query parameters.
-        let url = Url::parse(url.as_str())?;
+        let url = Url::parse(url)?;
         let query = url
             .query_pairs()
             .filter(|(k, _)| filters.contains(&k.to_string()));
