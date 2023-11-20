@@ -314,9 +314,7 @@ impl Dfdaemon for DfdaemonServerHandler {
                                     digest: finished_piece.clone().digest,
                                     content: None,
                                     traffic_type: None,
-                                    cost: finished_piece
-                                        .cost()
-                                        .map(prost_wkt_types::Duration::from),
+                                    cost: finished_piece.prost_cost(),
                                     created_at: Some(prost_wkt_types::Timestamp::from(
                                         finished_piece.created_at,
                                     )),

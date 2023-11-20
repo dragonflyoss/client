@@ -405,9 +405,7 @@ impl Task {
                                                 digest: metadata.digest.clone(),
                                                 content: None,
                                                 traffic_type: Some(TrafficType::RemotePeer as i32),
-                                                cost: metadata
-                                                    .cost()
-                                                    .map(prost_wkt_types::Duration::from),
+                                                cost: metadata.prost_cost(),
                                                 created_at: Some(prost_wkt_types::Timestamp::from(
                                                     metadata.created_at,
                                                 )),
