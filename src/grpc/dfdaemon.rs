@@ -16,6 +16,7 @@
 
 use crate::shutdown;
 use crate::task;
+use crate::utils::http::hashmap_to_headermap;
 use crate::Result as ClientResult;
 use dragonfly_api::common::v2::{Piece, Task};
 use dragonfly_api::dfdaemon::v2::{
@@ -154,7 +155,7 @@ impl Dfdaemon for DfdaemonServerHandler {
         let task = self.task.clone();
 
         // Get the piece numbers from the local storage.
-        let piece_numbers: Vec<i32> = task
+        let piece_numbers: Vec<u32> = task
             .piece
             .get_all(task_id.as_str())
             .map_err(|e| {
@@ -298,14 +299,67 @@ impl Dfdaemon for DfdaemonServerHandler {
         // Clone the task.
         let task = self.task.clone();
 
+        // Generate the task id.
+        let task_id = task
+            .id_generator
+            .task_id(
+                download.url.as_str(),
+                download.digest.as_deref(),
+                download.tag.as_deref(),
+                download.application.as_deref(),
+                download.piece_length,
+                download.filters.clone(),
+            )
+            .map_err(|e| {
+                error!("generate task id: {}", e);
+                Status::invalid_argument(e.to_string())
+            })?;
+
+        // Generate the host id.
+        let host_id = task.id_generator.host_id();
+
+        // Generate the peer id.
+        let peer_id = task.id_generator.peer_id();
+
+        // Convert the header.
+        let header = hashmap_to_headermap(&download.header).map_err(|e| {
+            error!("convert header: {}", e);
+            Status::invalid_argument(e.to_string())
+        })?;
+
+        // Get the content length.
+        let content_length = task
+            .get_content_length(
+                task_id.as_str(),
+                download.url.as_str(),
+                header.clone(),
+                None,
+            )
+            .await
+            .map_err(|e| {
+                error!("get content length: {}", e);
+                Status::internal(e.to_string())
+            })?;
+
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
         tokio::spawn(async move {
-            match task.download_into_file(download).await {
+            match task
+                .download_into_file(
+                    task_id.as_str(),
+                    host_id.as_str(),
+                    peer_id.as_str(),
+                    content_length,
+                    header.clone(),
+                    download.clone(),
+                )
+                .await
+            {
                 Ok(mut download_progress_rx) => {
                     while let Some(finished_piece) = download_progress_rx.recv().await {
                         out_stream_tx
                             .send(Ok(DownloadTaskResponse {
+                                content_length,
                                 piece: Some(Piece {
                                     number: finished_piece.number,
                                     parent_id: None,
@@ -419,7 +473,7 @@ impl DfdaemonClient {
     pub async fn get_piece_numbers(
         &self,
         request: GetPieceNumbersRequest,
-    ) -> ClientResult<Vec<i32>> {
+    ) -> ClientResult<Vec<u32>> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
 

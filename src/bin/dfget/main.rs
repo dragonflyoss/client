@@ -23,9 +23,11 @@ use dragonfly_client::config::dfget;
 use dragonfly_client::grpc::dfdaemon::DfdaemonClient;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client::Error;
+use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::{cmp::min, fmt::Write};
 use tracing::Level;
 use url::Url;
 
@@ -69,7 +71,7 @@ struct Args {
         default_value_t = 4194304,
         help = "Set the byte length of the piece"
     )]
-    piece_length: i32,
+    piece_length: u64,
 
     #[arg(
         long = "download-rate-limit",
@@ -178,13 +180,32 @@ async fn main() -> Result<(), anyhow::Error> {
         })
         .await?;
 
-    // TODO: Support to print progress.
+    // Initialize progress bar.
+    let pb = ProgressBar::new(0);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "[{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})",
+        )
+        .unwrap()
+        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
+            write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+        })
+        .progress_chars("#>-"),
+    );
+
+    //  Dwonload file.
+    let mut downloaded = 0;
     let mut out_stream = response.into_inner();
     while let Some(message) = out_stream.message().await? {
         let piece = message.piece.ok_or(Error::InvalidParameter())?;
-        println!("{:?}", piece)
+        pb.set_length(message.content_length);
+
+        downloaded += piece.length;
+        let position = min(downloaded + piece.length, message.content_length);
+        pb.set_position(position);
     }
 
+    pb.finish_with_message("downloaded");
     Ok(())
 }
 
