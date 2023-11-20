@@ -51,13 +51,13 @@ pub struct Task {
     pub id: String,
 
     // piece_length is the length of the piece.
-    pub piece_length: i32,
+    pub piece_length: u64,
 
     // uploaded_count is the count of the task uploaded by other peers.
     pub uploaded_count: u64,
 
     // content_length is the length of the task.
-    pub content_length: Option<i64>,
+    pub content_length: Option<u64>,
 
     // updated_at is the time when the task metadata is updated. If the task is downloaded
     // by other peers, it will also update updated_at.
@@ -87,7 +87,7 @@ impl Task {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Piece {
     // number is the piece number.
-    pub number: i32,
+    pub number: u32,
 
     // offset is the offset of the piece in the task.
     pub offset: u64,
@@ -203,7 +203,7 @@ impl Metadata {
     }
 
     // download_task_started updates the metadata of the task when the task downloads started.
-    pub fn download_task_started(&self, id: &str, piece_length: i32) -> Result<()> {
+    pub fn download_task_started(&self, id: &str, piece_length: u64) -> Result<()> {
         let task = match self.get_task(id)? {
             // If the task exists, update the updated_at.
             Some(mut task) => {
@@ -224,7 +224,7 @@ impl Metadata {
     }
 
     // set_task_content_length sets the content length of the task.
-    pub fn set_task_content_length(&self, id: &str, content_length: i64) -> Result<()> {
+    pub fn set_task_content_length(&self, id: &str, content_length: u64) -> Result<()> {
         if let Some(mut task) = self.get_task(id)? {
             task.content_length = Some(content_length);
             return self.put_task(id, &task);
@@ -278,7 +278,7 @@ impl Metadata {
     }
 
     // download_piece_started updates the metadata of the piece when the piece downloads started.
-    pub fn download_piece_started(&self, task_id: &str, number: i32) -> Result<()> {
+    pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<()> {
         self.put_piece(
             task_id,
             &Piece {
@@ -294,7 +294,7 @@ impl Metadata {
     pub fn download_piece_finished(
         &self,
         task_id: &str,
-        number: i32,
+        number: u32,
         offset: u64,
         length: u64,
         digest: &str,
@@ -313,7 +313,7 @@ impl Metadata {
     }
 
     // download_piece_failed updates the metadata of the piece when the piece downloads failed.
-    pub fn download_piece_failed(&self, task_id: &str, number: i32) -> Result<()> {
+    pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
         match self.get_piece(task_id, number)? {
             Some(_piece) => self.delete_piece(task_id, number),
             None => Err(Error::PieceNotFound(self.piece_id(task_id, number))),
@@ -321,7 +321,7 @@ impl Metadata {
     }
 
     // upload_piece_finished updates the metadata of the piece when piece uploads finished.
-    pub fn upload_piece_finished(&self, task_id: &str, number: i32) -> Result<()> {
+    pub fn upload_piece_finished(&self, task_id: &str, number: u32) -> Result<()> {
         match self.get_piece(task_id, number)? {
             Some(mut piece) => {
                 piece.uploaded_count += 1;
@@ -333,7 +333,7 @@ impl Metadata {
     }
 
     // get_piece gets the piece metadata.
-    pub fn get_piece(&self, task_id: &str, number: i32) -> Result<Option<Piece>> {
+    pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<Piece>> {
         let id = self.piece_id(task_id, number);
         let handle = self.cf_handle(PIECE_CF_NAME)?;
         match self.db.get_cf(handle, id.as_bytes())? {
@@ -368,7 +368,7 @@ impl Metadata {
     }
 
     // delete_piece deletes the piece metadata.
-    fn delete_piece(&self, task_id: &str, number: i32) -> Result<()> {
+    fn delete_piece(&self, task_id: &str, number: u32) -> Result<()> {
         let id = self.piece_id(task_id, number);
         let handle = self.cf_handle(PIECE_CF_NAME)?;
         self.db.delete_cf(handle, id.as_bytes())?;
@@ -376,7 +376,7 @@ impl Metadata {
     }
 
     // piece_id returns the piece id.
-    pub fn piece_id(&self, task_id: &str, number: i32) -> String {
+    pub fn piece_id(&self, task_id: &str, number: u32) -> String {
         format!("{}-{}", task_id, number)
     }
 

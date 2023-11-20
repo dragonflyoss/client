@@ -17,7 +17,7 @@
 use crate::backend::http::{Request as HTTPRequest, HTTP};
 use crate::grpc::scheduler::SchedulerClient;
 use crate::storage::{metadata, Storage};
-use crate::utils::http::{hashmap_to_headermap, headermap_to_hashmap};
+use crate::utils::http::headermap_to_hashmap;
 use crate::utils::id_generator::IDGenerator;
 use crate::{Error, Result};
 use dragonfly_api::common::v2::{Download, Piece, TrafficType};
@@ -44,7 +44,7 @@ pub mod piece;
 // Task represents a task manager.
 pub struct Task {
     // id_generator is the id generator.
-    id_generator: Arc<IDGenerator>,
+    pub id_generator: Arc<IDGenerator>,
 
     // manager_client is the grpc client of the manager.
     storage: Arc<Storage>,
@@ -92,32 +92,15 @@ impl Task {
     // download_into_file downloads a task into a file.
     pub async fn download_into_file(
         &self,
+        task_id: &str,
+        host_id: &str,
+        peer_id: &str,
+        content_length: u64,
+        header: HeaderMap,
         download: Download,
     ) -> Result<Receiver<metadata::Piece>> {
         // Initialize the download progress channel.
         let (download_progress_tx, download_progress_rx) = mpsc::channel(128);
-
-        // Generate the host id.
-        let host_id = self.id_generator.host_id();
-
-        // Generate the task id.
-        let task_id = self.id_generator.task_id(
-            download.url.clone(),
-            download.digest.clone(),
-            download.tag.clone(),
-            download.application.clone(),
-            download.piece_length,
-            download.filters.clone(),
-        )?;
-
-        // Generate the peer id.
-        let peer_id = self.id_generator.peer_id();
-
-        // Get the output path.
-        let output_path = download.output_path.clone();
-
-        // Convert the header.
-        let header = hashmap_to_headermap(&download.header)?;
 
         // Convert the timeout.
         let timeout: Option<Duration> = match download.timeout.clone() {
@@ -130,17 +113,7 @@ impl Task {
         // Open the file.
         let mut f = OpenOptions::new()
             .write(true)
-            .open(output_path.as_str())
-            .await?;
-
-        // Get the content length of the task.
-        let content_length = self
-            .get_content_length(
-                task_id.as_str(),
-                download.url.as_str(),
-                header.clone(),
-                timeout,
-            )
+            .open(download.output_path.as_str())
             .await?;
 
         // Calculate the interested pieces to download.
@@ -151,7 +124,7 @@ impl Task {
         )?;
 
         // Get the task from the local storage.
-        let task = self.get(task_id.as_str())?;
+        let task = self.get(task_id)?;
         match task {
             Some(task) => {
                 // If the task is finished, return the file.
@@ -160,7 +133,7 @@ impl Task {
                     return self
                         .download_partial_from_local_peer_into_file(
                             &mut f,
-                            task_id.as_str(),
+                            task_id,
                             interested_pieces,
                         )
                         .await;
@@ -171,7 +144,7 @@ impl Task {
                 while let Some(finished_piece) = self
                     .download_partial_from_local_peer_into_file(
                         &mut f,
-                        task_id.as_str(),
+                        task_id,
                         interested_pieces.clone(),
                     )
                     .await?
@@ -199,9 +172,9 @@ impl Task {
                 match self
                     .download_partial_with_scheduler_into_file(
                         &mut f,
-                        task_id.as_str(),
-                        host_id.as_str(),
-                        peer_id.as_str(),
+                        task_id,
+                        host_id,
+                        peer_id,
                         interested_pieces.clone(),
                         download.clone(),
                     )
@@ -215,7 +188,7 @@ impl Task {
                         self.download_partial_from_source_into_file(
                             &mut f,
                             interested_pieces,
-                            task_id.as_str(),
+                            task_id,
                             download.url.clone(),
                             header.clone(),
                             timeout,
@@ -229,9 +202,9 @@ impl Task {
                 match self
                     .download_partial_with_scheduler_into_file(
                         &mut f,
-                        task_id.as_str(),
-                        host_id.as_str(),
-                        peer_id.as_str(),
+                        task_id,
+                        host_id,
+                        peer_id,
                         interested_pieces.clone(),
                         download.clone(),
                     )
@@ -245,7 +218,7 @@ impl Task {
                         self.download_partial_from_source_into_file(
                             &mut f,
                             interested_pieces,
-                            task_id.as_str(),
+                            task_id,
                             download.url.clone(),
                             header.clone(),
                             timeout,
@@ -653,13 +626,13 @@ impl Task {
     }
 
     // get_content_length gets the content length of the task.
-    async fn get_content_length(
+    pub async fn get_content_length(
         &self,
         task_id: &str,
         url: &str,
         header: HeaderMap,
         timeout: Option<Duration>,
-    ) -> Result<i64> {
+    ) -> Result<u64> {
         let task = self
             .storage
             .get_task(task_id)?
@@ -686,7 +659,7 @@ impl Task {
             .ok_or(Error::InvalidContentLength())?
             .to_str()
             .map_err(|_| Error::InvalidContentLength())?
-            .parse::<i64>()
+            .parse::<u64>()
             .map_err(|_| Error::InvalidContentLength())?;
 
         // Set the content length of the task.

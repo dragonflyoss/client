@@ -41,12 +41,12 @@ impl Storage {
     }
 
     // download_task_started updates the metadata of the task when the task downloads started.
-    pub fn download_task_started(&self, id: &str, piece_length: i32) -> Result<()> {
+    pub fn download_task_started(&self, id: &str, piece_length: u64) -> Result<()> {
         self.metadata.download_task_started(id, piece_length)
     }
 
     // set_task_content_length sets the content length of the task.
-    pub fn set_task_content_length(&self, id: &str, content_length: i64) -> Result<()> {
+    pub fn set_task_content_length(&self, id: &str, content_length: u64) -> Result<()> {
         self.metadata.set_task_content_length(id, content_length)
     }
 
@@ -68,7 +68,7 @@ impl Storage {
 
     // download_piece_started updates the metadata of the piece and writes
     // the data of piece to file when the piece downloads started.
-    pub fn download_piece_started(&self, task_id: &str, number: i32) -> Result<()> {
+    pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<()> {
         self.metadata.download_piece_started(task_id, number)
     }
 
@@ -76,7 +76,7 @@ impl Storage {
     pub async fn download_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
-        number: i32,
+        number: u32,
         offset: u64,
         length: u64,
         reader: &mut R,
@@ -98,7 +98,7 @@ impl Storage {
     pub async fn download_piece_from_remote_peer_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
-        number: i32,
+        number: u32,
         offset: u64,
         expected_digest: &str,
         reader: &mut R,
@@ -123,13 +123,13 @@ impl Storage {
     }
 
     // download_piece_failed updates the metadata of the piece when the piece downloads failed.
-    pub fn download_piece_failed(&self, task_id: &str, number: i32) -> Result<()> {
+    pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
         self.metadata.download_piece_failed(task_id, number)
     }
 
     // upload_piece updates the metadata of the piece and
     // returns the data of the piece.
-    pub async fn upload_piece(&self, task_id: &str, number: i32) -> Result<impl AsyncRead> {
+    pub async fn upload_piece(&self, task_id: &str, number: u32) -> Result<impl AsyncRead> {
         match self.metadata.get_piece(task_id, number)? {
             Some(piece) => {
                 let reader = self
@@ -144,7 +144,7 @@ impl Storage {
     }
 
     // get_piece returns the piece metadata.
-    pub fn get_piece(&self, task_id: &str, number: i32) -> Result<Option<metadata::Piece>> {
+    pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<metadata::Piece>> {
         let piece = self.metadata.get_piece(task_id, number)?;
         Ok(piece)
     }
@@ -155,7 +155,7 @@ impl Storage {
     }
 
     // piece_id returns the piece id.
-    pub fn piece_id(&self, task_id: &str, number: i32) -> String {
+    pub fn piece_id(&self, task_id: &str, number: u32) -> String {
         self.metadata.piece_id(task_id, number)
     }
 }

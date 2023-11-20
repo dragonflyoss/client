@@ -40,7 +40,7 @@ use tracing::error;
 // CollectPiece represents a piece to collect.
 pub struct CollectPiece {
     // number is the piece number.
-    pub number: i32,
+    pub number: u32,
 
     // parent is the parent peer.
     pub parent: Peer,
@@ -74,7 +74,7 @@ impl Piece {
     }
 
     // get gets a piece from the local storage.
-    pub fn get(&self, task_id: &str, number: i32) -> Result<Option<metadata::Piece>> {
+    pub fn get(&self, task_id: &str, number: u32) -> Result<Option<metadata::Piece>> {
         self.storage.get_piece(task_id, number)
     }
 
@@ -116,20 +116,10 @@ impl Piece {
     // calculate_interested calculates the interested pieces by content_length and range.
     pub fn calculate_interested(
         &self,
-        piece_length: i32,
-        content_length: i64,
+        piece_length: u64,
+        content_length: u64,
         range: Option<Range>,
     ) -> Result<Vec<metadata::Piece>> {
-        // piece_length must be greater than 0.
-        if piece_length <= 0 {
-            return Err(Error::InvalidParameter());
-        }
-
-        // content_length must be greater than 0.
-        if content_length < 0 {
-            return Err(Error::InvalidContentLength());
-        }
-
         // If content_length is 0, return empty piece.
         if content_length == 0 {
             return Ok(Vec::new());
@@ -137,7 +127,7 @@ impl Piece {
 
         // If range is not None, calculate the pieces by range.
         if let Some(range) = range {
-            if range.start < 0 || range.length <= 0 {
+            if range.length == 0 {
                 return Err(Error::InvalidParameter());
             }
 
@@ -148,8 +138,7 @@ impl Piece {
                 // If offset is greater than content_length, break the loop.
                 if offset >= content_length {
                     let mut piece = pieces.pop().ok_or(Error::InvalidParameter())?;
-                    piece.length =
-                        (piece_length + content_length as i32 - piece.offset as i32) as u64;
+                    piece.length = piece_length + content_length - piece.offset;
                     pieces.push(piece);
                     break;
                 }
@@ -159,12 +148,12 @@ impl Piece {
                     break;
                 }
 
-                offset = i64::from((number + 1) * piece_length);
+                offset = (number + 1) * piece_length;
                 if offset > range.start {
                     pieces.push(metadata::Piece {
-                        number,
-                        offset: offset as u64,
-                        length: piece_length as u64,
+                        number: number as u32,
+                        offset,
+                        length: piece_length,
                         digest: "".to_string(),
                         uploaded_count: 0,
                         updated_at: Utc::now().naive_utc(),
@@ -187,16 +176,16 @@ impl Piece {
             // If offset is greater than content_length, break the loop.
             if offset >= content_length {
                 let mut piece = pieces.pop().ok_or(Error::InvalidParameter())?;
-                piece.length = (piece_length + content_length as i32 - piece.offset as i32) as u64;
+                piece.length = piece_length + content_length - piece.offset;
                 pieces.push(piece);
                 break;
             }
 
-            offset = i64::from((number + 1) * piece_length);
+            offset = (number + 1) * piece_length;
             pieces.push(metadata::Piece {
-                number,
-                offset: offset as u64,
-                length: piece_length as u64,
+                number: number as u32,
+                offset,
+                length: piece_length,
                 digest: "".to_string(),
                 uploaded_count: 0,
                 updated_at: Utc::now().naive_utc(),
@@ -283,7 +272,7 @@ impl Piece {
         collect_pieces.shuffle(&mut rand::thread_rng());
 
         // Filter the collect pieces and remove the duplicate pieces.
-        let mut visited: Vec<i32> = Vec::new();
+        let mut visited: Vec<u32> = Vec::new();
         collect_pieces.retain(|collect_piece| {
             interested_pieces
                 .iter()
@@ -304,7 +293,7 @@ impl Piece {
     pub async fn download_from_local_peer(
         &self,
         task_id: &str,
-        number: i32,
+        number: u32,
     ) -> Result<impl AsyncRead> {
         self.storage.upload_piece(task_id, number).await
     }
@@ -313,7 +302,7 @@ impl Piece {
     pub async fn download_from_remote_peer(
         &self,
         task_id: &str,
-        number: i32,
+        number: u32,
         remote_peer: Peer,
     ) -> Result<impl AsyncRead> {
         // Create a dfdaemon client.
@@ -400,7 +389,7 @@ impl Piece {
     pub async fn download_from_source(
         &self,
         task_id: &str,
-        number: i32,
+        number: u32,
         url: &str,
         offset: u64,
         length: u64,
