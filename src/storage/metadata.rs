@@ -16,11 +16,12 @@
 
 use crate::config;
 use crate::{Error, Result};
-use chrono::{Duration, NaiveDateTime, Utc};
+use chrono::{NaiveDateTime, Utc};
 use rocksdb::{BlockBasedOptions, Cache, ColumnFamily, Options, DB};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use tracing::info;
+use std::time::Duration;
+use tracing::{error, info};
 
 // DEFAULT_DIR_NAME is the default directory name to store metadata.
 const DEFAULT_DIR_NAME: &str = "metadata";
@@ -125,8 +126,33 @@ impl Piece {
 
     // cost returns the cost of the piece downloaded.
     pub fn cost(&self) -> Option<Duration> {
-        self.finished_at
+        match self
+            .finished_at
             .map(|finished_at| finished_at - self.created_at)
+        {
+            Some(cost) => match cost.to_std() {
+                Ok(cost) => Some(cost),
+                Err(err) => {
+                    error!("convert cost error: {:?}", err);
+                    None
+                }
+            },
+            None => None,
+        }
+    }
+
+    // prost_cost returns the prost cost of the piece downloaded.
+    pub fn prost_cost(&self) -> Option<prost_wkt_types::Duration> {
+        match self.cost() {
+            Some(cost) => match prost_wkt_types::Duration::try_from(cost) {
+                Ok(cost) => Some(cost),
+                Err(err) => {
+                    error!("convert cost error: {:?}", err);
+                    None
+                }
+            },
+            None => None,
+        }
     }
 }
 

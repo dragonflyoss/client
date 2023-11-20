@@ -59,10 +59,24 @@ struct Args {
     #[arg(
         long = "timeout",
         value_parser= humantime::parse_duration,
-        default_value = "0s",
+        default_value = "2h",
         help = "Set the timeout for downloading a file"
     )]
     timeout: Duration,
+
+    #[arg(
+        long = "piece-length",
+        default_value_t = 4194304,
+        help = "Set the byte length of the piece"
+    )]
+    piece_length: i32,
+
+    #[arg(
+        long = "download-rate-limit",
+        default_value_t = 2147483648,
+        help = "Set the rate limit of the downloading in bytes per second"
+    )]
+    download_rate_limit: u64,
 
     #[arg(
         short = 'd',
@@ -100,14 +114,14 @@ struct Args {
         required = false,
         help = "Set the header for downloading file, e.g. --header='Content-Type: application/json' --header='Accept: application/json'"
     )]
-    headers: Vec<String>,
+    header: Option<Vec<String>>,
 
     #[arg(
         long = "filter",
         required = false,
         help = "Filter the query parameters of the downloaded URL. If the download URL is the same, it will be scheduled as the same task, e.g. --filter='signature' --filter='timeout'"
     )]
-    filters: Vec<String>,
+    filters: Option<Vec<String>>,
 
     #[arg(
         long = "disable-back-to-source",
@@ -153,16 +167,12 @@ async fn main() -> Result<(), anyhow::Error> {
                 tag: Some(args.tag),
                 application: Some(args.application),
                 priority: args.priority,
-                filters: args.filters,
-                // TODO: Support to parse headers with clap.
-                header: HashMap::new(),
-                // TODO: Support to set piece_length.
-                piece_length: 0,
+                filters: args.filters.unwrap_or_default(),
+                header: parse_header(args.header.unwrap_or_default())?,
+                piece_length: args.piece_length,
                 output_path: args.output.into_os_string().into_string().unwrap(),
-                // TODO: Support to set timeout.
-                timeout: None,
-                // TODO: Support to set download_rate_limit.
-                download_rate_limit: None,
+                timeout: Some(prost_wkt_types::Duration::try_from(args.timeout)?),
+                download_rate_limit: Some(args.download_rate_limit),
                 need_back_to_source: false,
             }),
         })
@@ -176,4 +186,17 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     Ok(())
+}
+
+// parse_header parses the header strings to a hash map.
+fn parse_header(raw_header: Vec<String>) -> Result<HashMap<String, String>, Error> {
+    let mut header = HashMap::new();
+    for h in raw_header {
+        let mut parts = h.splitn(2, ':');
+        let key = parts.next().unwrap().trim();
+        let value = parts.next().unwrap().trim();
+        header.insert(key.to_string(), value.to_string());
+    }
+
+    Ok(header)
 }
