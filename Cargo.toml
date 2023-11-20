@@ -66,6 +66,6 @@ anyhow = "1.0.75"
 base16ct = { version = "0.2", features = ["alloc"] }
 http = "0.2"
 rand = "0.8.5"
-prost-wkt-types = "0.4"
+prost-wkt-types = "0.5"
 tower = "0.4.13"
 indicatif = "0.17.7"
