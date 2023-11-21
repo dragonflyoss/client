@@ -89,6 +89,16 @@ impl Task {
         self.storage.get_task(task_id)
     }
 
+    // download_task_started updates the metadata of the task when the task downloads started.
+    pub fn download_task_started(&self, id: &str, piece_length: u64) -> Result<()> {
+        self.storage.download_task_started(id, piece_length)
+    }
+
+    // download_task_failed updates the metadata of the task when the task downloads failed.
+    pub fn download_task_failed(&self, id: &str) -> Result<()> {
+        self.storage.download_task_failed(id)
+    }
+
     // download_into_file downloads a task into a file.
     pub async fn download_into_file(
         &self,
@@ -112,6 +122,7 @@ impl Task {
 
         // Open the file.
         let mut f = OpenOptions::new()
+            .create(true)
             .write(true)
             .open(download.output_path.as_str())
             .await?;
@@ -124,108 +135,69 @@ impl Task {
         )?;
 
         // Get the task from the local storage.
-        let task = self.get(task_id)?;
-        match task {
-            Some(task) => {
-                // If the task is finished, return the file.
-                if task.is_finished() {
-                    // Download the pieces from the local peer.
-                    return self
-                        .download_partial_from_local_peer_into_file(
-                            &mut f,
-                            task_id,
-                            interested_pieces,
-                        )
-                        .await;
-                }
+        let task = self
+            .get(task_id)?
+            .ok_or(Error::TaskNotFound(task_id.to_string()))?;
 
-                // Download the pieces from the local peer.
-                let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
-                while let Some(finished_piece) = self
-                    .download_partial_from_local_peer_into_file(
-                        &mut f,
-                        task_id,
-                        interested_pieces.clone(),
-                    )
-                    .await?
-                    .recv()
-                    .await
-                {
-                    // Send the download progress.
-                    download_progress_tx.send(finished_piece.clone()).await?;
+        // If the task is finished, return the file.
+        if task.is_finished() {
+            // Download the pieces from the local peer.
+            return self
+                .download_partial_from_local_peer_into_file(&mut f, task_id, interested_pieces)
+                .await;
+        }
 
-                    // Store the finished piece.
-                    finished_pieces.push(finished_piece);
-                }
+        // Download the pieces from the local peer.
+        let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
+        while let Some(finished_piece) = self
+            .download_partial_from_local_peer_into_file(&mut f, task_id, interested_pieces.clone())
+            .await?
+            .recv()
+            .await
+        {
+            // Send the download progress.
+            download_progress_tx.send(finished_piece.clone()).await?;
 
-                // Remove the finished pieces from the pieces.
-                let interested_pieces = self
-                    .piece
-                    .remove_finished_from_interested(finished_pieces, interested_pieces);
+            // Store the finished piece.
+            finished_pieces.push(finished_piece);
+        }
 
-                // Check if all pieces are downloaded.
-                if interested_pieces.is_empty() {
-                    return Ok(download_progress_rx);
-                };
+        // Remove the finished pieces from the pieces.
+        let interested_pieces = self
+            .piece
+            .remove_finished_from_interested(finished_pieces, interested_pieces);
 
-                // Download the pieces with scheduler.
-                match self
-                    .download_partial_with_scheduler_into_file(
-                        &mut f,
-                        task_id,
-                        host_id,
-                        peer_id,
-                        interested_pieces.clone(),
-                        download.clone(),
-                    )
-                    .await
-                {
-                    Ok(download_progress_rx) => Ok(download_progress_rx),
-                    Err(err) => {
-                        error!("download partial with scheduler into file error: {:?}", err);
+        // Check if all pieces are downloaded.
+        if interested_pieces.is_empty() {
+            return Ok(download_progress_rx);
+        };
 
-                        // Download the pieces from the source.
-                        self.download_partial_from_source_into_file(
-                            &mut f,
-                            interested_pieces,
-                            task_id,
-                            download.url.clone(),
-                            header.clone(),
-                            timeout,
-                        )
-                        .await
-                    }
-                }
-            }
-            None => {
-                // Download the pieces with scheduler.
-                match self
-                    .download_partial_with_scheduler_into_file(
-                        &mut f,
-                        task_id,
-                        host_id,
-                        peer_id,
-                        interested_pieces.clone(),
-                        download.clone(),
-                    )
-                    .await
-                {
-                    Ok(download_progress_rx) => Ok(download_progress_rx),
-                    Err(err) => {
-                        error!("download partial with scheduler into file error: {:?}", err);
+        // Download the pieces with scheduler.
+        match self
+            .download_partial_with_scheduler_into_file(
+                &mut f,
+                task_id,
+                host_id,
+                peer_id,
+                interested_pieces.clone(),
+                download.clone(),
+            )
+            .await
+        {
+            Ok(download_progress_rx) => Ok(download_progress_rx),
+            Err(err) => {
+                error!("download partial with scheduler into file error: {:?}", err);
 
-                        // Download the pieces from the source.
-                        self.download_partial_from_source_into_file(
-                            &mut f,
-                            interested_pieces,
-                            task_id,
-                            download.url.clone(),
-                            header.clone(),
-                            timeout,
-                        )
-                        .await
-                    }
-                }
+                // Download the pieces from the source.
+                self.download_partial_from_source_into_file(
+                    &mut f,
+                    interested_pieces,
+                    task_id,
+                    download.url.clone(),
+                    header.clone(),
+                    timeout,
+                )
+                .await
             }
         }
     }
