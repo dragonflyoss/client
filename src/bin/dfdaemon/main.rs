@@ -21,7 +21,9 @@ use dragonfly_client::backend::http::HTTP;
 use dragonfly_client::config::dfdaemon;
 use dragonfly_client::dynconfig::Dynconfig;
 use dragonfly_client::grpc::{
-    dfdaemon::DfdaemonServer, manager::ManagerClient, scheduler::SchedulerClient,
+    dfdaemon::{DfdaemonDownloadServer, DfdaemonUploadServer},
+    manager::ManagerClient,
+    scheduler::SchedulerClient,
 };
 use dragonfly_client::health::Health;
 use dragonfly_client::metrics::Metrics;
@@ -169,9 +171,16 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     );
 
-    // Initialize dfdaemon grpc server.
-    let dfdaemon_grpc = DfdaemonServer::new(
+    // Initialize upload grpc server.
+    let dfdaemon_upload_grpc = DfdaemonUploadServer::new(
         SocketAddr::new(config.upload.server.ip.unwrap(), config.upload.server.port),
+        task.clone(),
+        shutdown.clone(),
+        shutdown_complete_tx.clone(),
+    );
+
+    // Initialize download grpc server.
+    let dfdaemon_download_grpc = DfdaemonDownloadServer::new(
         config.download.server.socket_path.clone(),
         task.clone(),
         shutdown.clone(),
@@ -200,8 +209,12 @@ async fn main() -> Result<(), anyhow::Error> {
             info!("announcer scheduler exited");
         },
 
-        _ = tokio::spawn(async move { dfdaemon_grpc.run().await }) => {
-            info!("dfdaemon grpc server exited");
+        _ = tokio::spawn(async move { dfdaemon_upload_grpc.run().await }) => {
+            info!("dfdaemon upload grpc server exited");
+        },
+
+        _ = tokio::spawn(async move { dfdaemon_download_grpc.run().await }) => {
+            info!("dfdaemon download grpc unix server exited");
         },
 
         _ = shutdown::shutdown_signal() => {},
@@ -210,12 +223,16 @@ async fn main() -> Result<(), anyhow::Error> {
     // Trigger shutdown signal to other servers.
     shutdown.trigger();
 
-    // Drop shutdown_complete_rx to wait for the other server to exit.
-    drop(shutdown_complete_tx);
+    // Drop task to release scheduler_client. when drop the task, it will release the Arc reference
+    // of scheduler_client, so scheduler_client can be released normally.
+    drop(task);
 
     // Drop scheduler_client to release dynconfig. when drop the scheduler_client, it will release the
     // Arc reference of dynconfig, so dynconfig can be released normally.
     drop(scheduler_client);
+
+    // Drop shutdown_complete_rx to wait for the other server to exit.
+    drop(shutdown_complete_tx);
 
     // Wait for the other server to exit.
     let _ = shutdown_complete_rx.recv().await;
