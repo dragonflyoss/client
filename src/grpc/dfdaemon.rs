@@ -42,7 +42,7 @@ use tonic::{
     Request, Response, Status,
 };
 use tower::service_fn;
-use tracing::{error, info};
+use tracing::{error, info, instrument, Span};
 
 // DfdaemonUploadServer is the grpc server of the upload.
 pub struct DfdaemonUploadServer {
@@ -83,6 +83,7 @@ impl DfdaemonUploadServer {
     }
 
     // run starts the upload server.
+    #[instrument(skip_all)]
     pub async fn run(&self) {
         // Register the reflection service.
         let reflection = tonic_reflection::server::Builder::configure()
@@ -147,6 +148,7 @@ impl DfdaemonDownloadServer {
     }
 
     // run starts the download server with unix domain socket.
+    #[instrument(skip_all)]
     pub async fn run(&self) {
         // Register the reflection service.
         let reflection = tonic_reflection::server::Builder::configure()
@@ -191,12 +193,21 @@ pub struct DfdaemonServerHandler {
 #[tonic::async_trait]
 impl Dfdaemon for DfdaemonServerHandler {
     // get_piece_numbers gets the piece numbers.
+    #[instrument(skip_all, fields(task_id))]
     async fn get_piece_numbers(
         &self,
         request: Request<GetPieceNumbersRequest>,
     ) -> Result<Response<GetPieceNumbersResponse>, Status> {
+        // Clone the request.
         let request = request.into_inner();
+
+        // Get the task id from the request.
         let task_id = request.task_id.clone();
+
+        // Span record the task id.
+        Span::current().record("task_id", task_id.as_str());
+
+        // Clone the task.
         let task = self.task.clone();
 
         // Get the piece numbers from the local storage.
@@ -210,6 +221,7 @@ impl Dfdaemon for DfdaemonServerHandler {
             .iter()
             .map(|piece| piece.number)
             .collect();
+        info!("piece numbers: {:?}", piece_numbers);
 
         // Check whether the piece numbers is empty.
         if piece_numbers.is_empty() {
@@ -224,6 +236,7 @@ impl Dfdaemon for DfdaemonServerHandler {
     type SyncPiecesStream = ReceiverStream<Result<SyncPiecesResponse, Status>>;
 
     // sync_pieces syncs the pieces.
+    #[instrument(skip_all, fields(task_id))]
     async fn sync_pieces(
         &self,
         request: Request<SyncPiecesRequest>,
@@ -237,6 +250,9 @@ impl Dfdaemon for DfdaemonServerHandler {
         // Get the task id from the request.
         let task_id = request.task_id.clone();
 
+        // Span record the task id.
+        Span::current().record("task_id", task_id.as_str());
+
         // Get the interested piece numbers from the request.
         let interested_piece_numbers = match request.request {
             Some(sync_pieces_request::Request::InterestedPiecesRequest(
@@ -249,6 +265,7 @@ impl Dfdaemon for DfdaemonServerHandler {
                 ));
             }
         };
+        info!("interested piece numbers: {:?}", interested_piece_numbers);
 
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
@@ -275,7 +292,7 @@ impl Dfdaemon for DfdaemonServerHandler {
                 // Get the piece content from the local storage.
                 let mut reader = match task
                     .piece
-                    .download_from_local_peer(&task_id, interested_piece_number)
+                    .download_from_local_peer(&task_id, None, interested_piece_number)
                     .await
                 {
                     Ok(reader) => reader,
@@ -318,6 +335,8 @@ impl Dfdaemon for DfdaemonServerHandler {
                     .unwrap_or_else(|e| {
                         error!("send to out stream: {}", e);
                     });
+
+                info!("send interested piece {}", interested_piece_number);
             }
         });
 
@@ -328,6 +347,7 @@ impl Dfdaemon for DfdaemonServerHandler {
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
     // download_task tells the dfdaemon to download the task.
+    #[instrument(skip_all, fields(task_id, peer_id), ret)]
     async fn download_task(
         &self,
         request: Request<DownloadTaskRequest>,
@@ -338,14 +358,11 @@ impl Dfdaemon for DfdaemonServerHandler {
         // Check whether the download is empty.
         let download = request
             .download
-            .ok_or(Status::invalid_argument("missing download"))?
-            .clone();
-
-        // Clone the task.
-        let task = self.task.clone();
+            .ok_or(Status::invalid_argument("missing download"))?;
 
         // Generate the task id.
-        let task_id = task
+        let task_id = self
+            .task
             .id_generator
             .task_id(
                 download.url.as_str(),
@@ -361,10 +378,10 @@ impl Dfdaemon for DfdaemonServerHandler {
             })?;
 
         // Generate the host id.
-        let host_id = task.id_generator.host_id();
+        let host_id = self.task.id_generator.host_id();
 
         // Generate the peer id.
-        let peer_id = task.id_generator.peer_id();
+        let peer_id = self.task.id_generator.peer_id();
 
         // Convert the header.
         let header = hashmap_to_headermap(&download.header).map_err(|e| {
@@ -372,15 +389,22 @@ impl Dfdaemon for DfdaemonServerHandler {
             Status::invalid_argument(e.to_string())
         })?;
 
+        // Span record the task id and peer id.
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record("peer_id", peer_id.as_str());
+
         // Download task started.
-        task.download_task_started(task_id.as_str(), download.piece_length)
+        info!("download task started: {:?}", download);
+        self.task
+            .download_task_started(task_id.as_str(), download.piece_length)
             .map_err(|e| {
                 error!("download task started: {}", e);
                 Status::internal(e.to_string())
             })?;
 
         // Get the content length.
-        let content_length = task
+        let content_length = self
+            .task
             .get_content_length(
                 task_id.as_str(),
                 download.url.as_str(),
@@ -390,7 +414,8 @@ impl Dfdaemon for DfdaemonServerHandler {
             .await
             .map_err(|e| {
                 // Download task failed.
-                task.download_task_failed(task_id.as_str())
+                self.task
+                    .download_task_failed(task_id.as_str())
                     .unwrap_or_else(|e| {
                         error!("download task failed: {}", e);
                     });
@@ -398,6 +423,10 @@ impl Dfdaemon for DfdaemonServerHandler {
                 error!("get content length: {}", e);
                 Status::internal(e.to_string())
             })?;
+        info!("content length: {}", content_length);
+
+        // Clone the task.
+        let task = self.task.clone();
 
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
@@ -460,6 +489,7 @@ impl Dfdaemon for DfdaemonServerHandler {
     }
 
     // upload_task tells the dfdaemon to upload the task.
+    #[instrument(skip_all)]
     async fn upload_task(
         &self,
         request: Request<UploadTaskRequest>,
@@ -469,13 +499,21 @@ impl Dfdaemon for DfdaemonServerHandler {
     }
 
     // stat_task gets the status of the task.
+    #[instrument(skip_all, fields(task_id))]
     async fn stat_task(
         &self,
         request: Request<DfdaemonStatTaskRequest>,
     ) -> Result<Response<Task>, Status> {
-        let mut request = tonic::Request::new(SchedulerStatTaskRequest {
-            id: request.into_inner().task_id.clone(),
-        });
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Get the task id from the request.
+        let task_id = request.task_id.clone();
+
+        // Span record the task id and peer id.
+        Span::current().record("task_id", task_id.as_str());
+
+        let mut request = tonic::Request::new(SchedulerStatTaskRequest { id: task_id });
         request.set_timeout(super::REQUEST_TIMEOUT);
 
         self.task
@@ -487,6 +525,7 @@ impl Dfdaemon for DfdaemonServerHandler {
     }
 
     // delete_task tells the dfdaemon to delete the task.
+    #[instrument(skip_all)]
     async fn delete_task(
         &self,
         request: Request<DeleteTaskRequest>,
@@ -534,6 +573,7 @@ impl DfdaemonClient {
     }
 
     // get_piece_numbers gets the piece numbers.
+    #[instrument(skip_all)]
     pub async fn get_piece_numbers(
         &self,
         request: GetPieceNumbersRequest,
@@ -546,6 +586,7 @@ impl DfdaemonClient {
     }
 
     // sync_pieces syncs the pieces.
+    #[instrument(skip_all)]
     pub async fn sync_pieces(
         &self,
         request: SyncPiecesRequest,
@@ -558,6 +599,7 @@ impl DfdaemonClient {
     }
 
     // download_task tells the dfdaemon to download the task.
+    #[instrument(skip_all)]
     pub async fn download_task(
         &self,
         request: DownloadTaskRequest,
@@ -587,6 +629,7 @@ impl DfdaemonClient {
     }
 
     // upload_task tells the dfdaemon to upload the task.
+    #[instrument(skip_all)]
     pub async fn upload_task(&self, request: UploadTaskRequest) -> ClientResult<()> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
@@ -596,6 +639,7 @@ impl DfdaemonClient {
     }
 
     // stat_task gets the status of the task.
+    #[instrument(skip_all)]
     pub async fn stat_task(&self, request: DfdaemonStatTaskRequest) -> ClientResult<Task> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
@@ -605,6 +649,7 @@ impl DfdaemonClient {
     }
 
     // delete_task tells the dfdaemon to delete the task.
+    #[instrument(skip_all)]
     pub async fn delete_task(&self, request: DeleteTaskRequest) -> ClientResult<()> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
