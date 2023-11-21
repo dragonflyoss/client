@@ -372,6 +372,13 @@ impl Dfdaemon for DfdaemonServerHandler {
             Status::invalid_argument(e.to_string())
         })?;
 
+        // Download task started.
+        task.download_task_started(task_id.as_str(), download.piece_length)
+            .map_err(|e| {
+                error!("download task started: {}", e);
+                Status::internal(e.to_string())
+            })?;
+
         // Get the content length.
         let content_length = task
             .get_content_length(
@@ -382,6 +389,12 @@ impl Dfdaemon for DfdaemonServerHandler {
             )
             .await
             .map_err(|e| {
+                // Download task failed.
+                task.download_task_failed(task_id.as_str())
+                    .unwrap_or_else(|e| {
+                        error!("download task failed: {}", e);
+                    });
+
                 error!("get content length: {}", e);
                 Status::internal(e.to_string())
             })?;
@@ -432,6 +445,12 @@ impl Dfdaemon for DfdaemonServerHandler {
                         .await
                         .unwrap_or_else(|e| {
                             error!("send to out stream: {}", e);
+                        });
+
+                    // Download task failed.
+                    task.download_task_failed(task_id.as_str())
+                        .unwrap_or_else(|e| {
+                            error!("download task failed: {}", e);
                         });
                 }
             }
