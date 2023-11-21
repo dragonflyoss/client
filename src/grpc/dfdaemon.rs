@@ -44,16 +44,13 @@ use tonic::{
 use tower::service_fn;
 use tracing::{error, info};
 
-// DfdaemonServer is the grpc server of the dfdaemon.
-pub struct DfdaemonServer {
+// DfdaemonUploadServer is the grpc server of the upload.
+pub struct DfdaemonUploadServer {
     // addr is the address of the grpc server.
     addr: SocketAddr,
 
-    // socket_path is the path of the unix domain socket.
-    socket_path: PathBuf,
-
-    // task is the task manager.
-    task: Arc<task::Task>,
+    // service is the grpc service of the dfdaemon.
+    service: DfdaemonGRPCServer<DfdaemonServerHandler>,
 
     // shutdown is used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
@@ -62,40 +59,36 @@ pub struct DfdaemonServer {
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-// DfdaemonServer implements the grpc server of the dfdaemon.
-impl DfdaemonServer {
-    // new creates a new DfdaemonServer.
+// DfdaemonUploadServer implements the grpc server of the upload.
+impl DfdaemonUploadServer {
+    // new creates a new DfdaemonUploadServer.
     pub fn new(
         addr: SocketAddr,
-        socket_path: PathBuf,
         task: Arc<task::Task>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
+        // Initialize the grpc service.
+        let service = DfdaemonGRPCServer::new(DfdaemonServerHandler { task })
+            .send_compressed(CompressionEncoding::Gzip)
+            .accept_compressed(CompressionEncoding::Gzip)
+            .max_decoding_message_size(usize::MAX);
+
         Self {
             addr,
-            socket_path,
-            task,
+            service,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
     }
 
-    // run starts the metrics server.
+    // run starts the upload server.
     pub async fn run(&self) {
         // Register the reflection service.
         let reflection = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
             .build()
             .unwrap();
-
-        // Initialize the grpc service.
-        let service = DfdaemonGRPCServer::new(DfdaemonServerHandler {
-            task: self.task.clone(),
-        })
-        .send_compressed(CompressionEncoding::Gzip)
-        .accept_compressed(CompressionEncoding::Gzip)
-        .max_decoding_message_size(usize::MAX);
 
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -104,7 +97,7 @@ impl DfdaemonServer {
         info!("upload server listening on {}", self.addr);
         Server::builder()
             .add_service(reflection.clone())
-            .add_service(service.clone())
+            .add_service(self.service.clone())
             .serve_with_shutdown(self.addr, async move {
                 // Upload grpc server shutting down with signals.
                 let _ = shutdown.recv().await;
@@ -112,9 +105,57 @@ impl DfdaemonServer {
             })
             .await
             .unwrap();
+    }
+}
+
+// DfdaemonDownloadServer is the grpc unix server of the download.
+pub struct DfdaemonDownloadServer {
+    // socket_path is the path of the unix domain socket.
+    socket_path: PathBuf,
+
+    // service is the grpc service of the dfdaemon.
+    service: DfdaemonGRPCServer<DfdaemonServerHandler>,
+
+    // shutdown is used to shutdown the grpc server.
+    shutdown: shutdown::Shutdown,
+
+    // _shutdown_complete is used to notify the grpc server is shutdown.
+    _shutdown_complete: mpsc::UnboundedSender<()>,
+}
+
+// DfdaemonDownloadServer implements the grpc server of the download.
+impl DfdaemonDownloadServer {
+    // new creates a new DfdaemonServer.
+    pub fn new(
+        socket_path: PathBuf,
+        task: Arc<task::Task>,
+        shutdown: shutdown::Shutdown,
+        shutdown_complete_tx: mpsc::UnboundedSender<()>,
+    ) -> Self {
+        // Initialize the grpc service.
+        let service = DfdaemonGRPCServer::new(DfdaemonServerHandler { task: task.clone() })
+            .send_compressed(CompressionEncoding::Gzip)
+            .accept_compressed(CompressionEncoding::Gzip)
+            .max_decoding_message_size(usize::MAX);
+
+        Self {
+            socket_path,
+            service,
+            shutdown,
+            _shutdown_complete: shutdown_complete_tx,
+        }
+    }
+
+    // run starts the download server with unix domain socket.
+    pub async fn run(&self) {
+        // Register the reflection service.
+        let reflection = tonic_reflection::server::Builder::configure()
+            .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
+            .build()
+            .unwrap();
 
         // Clone the shutdown channel.
-        let mut shutdown_unix = self.shutdown.clone();
+        let mut shutdown = self.shutdown.clone();
 
         // Start download grpc server with unix domain socket.
         info!(
@@ -125,14 +166,18 @@ impl DfdaemonServer {
         let uds_stream = UnixListenerStream::new(uds);
         Server::builder()
             .add_service(reflection.clone())
-            .add_service(service.clone())
+            .add_service(self.service.clone())
             .serve_with_incoming_shutdown(uds_stream, async move {
                 // Download grpc server shutting down with signals.
-                let _ = shutdown_unix.recv().await;
+                let _ = shutdown.recv().await;
                 info!("download grpc server shutting down");
             })
             .await
             .unwrap();
+
+        // Remove the unix domain socket file.
+        std::fs::remove_file(&self.socket_path).unwrap();
+        info!("remove the unix domain socket file of the download server");
     }
 }
 
