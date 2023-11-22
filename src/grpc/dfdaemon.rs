@@ -292,7 +292,7 @@ impl Dfdaemon for DfdaemonServerHandler {
                 // Get the piece content from the local storage.
                 let mut reader = match task
                     .piece
-                    .download_from_local_peer(&task_id, None, interested_piece_number)
+                    .download_from_local_peer(&task_id, interested_piece_number)
                     .await
                 {
                     Ok(reader) => reader,
@@ -347,7 +347,7 @@ impl Dfdaemon for DfdaemonServerHandler {
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
     // download_task tells the dfdaemon to download the task.
-    #[instrument(skip_all, fields(task_id, peer_id), ret)]
+    #[instrument(skip_all, fields(task_id, peer_id))]
     async fn download_task(
         &self,
         request: Request<DownloadTaskRequest>,
@@ -431,58 +431,17 @@ impl Dfdaemon for DfdaemonServerHandler {
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
         tokio::spawn(async move {
-            match task
-                .download_into_file(
-                    task_id.as_str(),
-                    host_id.as_str(),
-                    peer_id.as_str(),
-                    content_length,
-                    header.clone(),
-                    download.clone(),
-                )
-                .await
-            {
-                Ok(mut download_progress_rx) => {
-                    while let Some(finished_piece) = download_progress_rx.recv().await {
-                        out_stream_tx
-                            .send(Ok(DownloadTaskResponse {
-                                content_length,
-                                piece: Some(Piece {
-                                    number: finished_piece.number,
-                                    parent_id: None,
-                                    offset: finished_piece.offset,
-                                    length: finished_piece.length,
-                                    digest: finished_piece.clone().digest,
-                                    content: None,
-                                    traffic_type: None,
-                                    cost: finished_piece.prost_cost(),
-                                    created_at: Some(prost_wkt_types::Timestamp::from(
-                                        finished_piece.created_at,
-                                    )),
-                                }),
-                            }))
-                            .await
-                            .unwrap_or_else(|e| {
-                                error!("send to out stream: {}", e);
-                            });
-                    }
-                }
-                Err(e) => {
-                    error!("download task: {}", e);
-                    out_stream_tx
-                        .send(Err(Status::internal(e.to_string())))
-                        .await
-                        .unwrap_or_else(|e| {
-                            error!("send to out stream: {}", e);
-                        });
-
-                    // Download task failed.
-                    task.download_task_failed(task_id.as_str())
-                        .unwrap_or_else(|e| {
-                            error!("download task failed: {}", e);
-                        });
-                }
-            }
+            task.download_into_file(
+                task_id.as_str(),
+                host_id.as_str(),
+                peer_id.as_str(),
+                content_length,
+                header.clone(),
+                download.clone(),
+                out_stream_tx.clone(),
+            )
+            .await;
+            drop(out_stream_tx);
         });
 
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))

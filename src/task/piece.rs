@@ -117,11 +117,9 @@ impl Piece {
     }
 
     // calculate_interested calculates the interested pieces by content_length and range.
-    #[instrument(skip(self, piece_length, content_length, range))]
+    #[instrument(skip(self))]
     pub fn calculate_interested(
         &self,
-        task_id: &str,
-        peer_id: &str,
         piece_length: u64,
         content_length: u64,
         range: Option<Range>,
@@ -146,7 +144,7 @@ impl Piece {
                 // If offset is greater than content_length, break the loop.
                 if offset >= content_length {
                     let mut piece = pieces.pop().ok_or(Error::InvalidParameter())?;
-                    piece.length = piece_length + content_length - piece.offset;
+                    piece.length = piece_length + content_length - offset;
                     pieces.push(piece);
                     break;
                 }
@@ -156,7 +154,6 @@ impl Piece {
                     break;
                 }
 
-                offset = (number + 1) * piece_length;
                 if offset > range.start {
                     pieces.push(metadata::Piece {
                         number: number as u32,
@@ -170,6 +167,7 @@ impl Piece {
                     });
                 }
 
+                offset = (number + 1) * piece_length;
                 number += 1;
             }
 
@@ -188,12 +186,11 @@ impl Piece {
             // If offset is greater than content_length, break the loop.
             if offset >= content_length {
                 let mut piece = pieces.pop().ok_or(Error::InvalidParameter())?;
-                piece.length = piece_length + content_length - piece.offset;
+                piece.length = piece_length + content_length - offset;
                 pieces.push(piece);
                 break;
             }
 
-            offset = (number + 1) * piece_length;
             pieces.push(metadata::Piece {
                 number: number as u32,
                 offset,
@@ -205,6 +202,7 @@ impl Piece {
                 finished_at: None,
             });
 
+            offset = (number + 1) * piece_length;
             number += 1;
         }
 
@@ -234,11 +232,10 @@ impl Piece {
     }
 
     // collect_interested_from_remote_peer collects the interested pieces from remote peers.
-    #[instrument(skip(self, interested_pieces, candidate_parents))]
+    #[instrument(skip_all)]
     pub async fn collect_interested_from_remote_peer(
         &self,
         task_id: &str,
-        peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
         candidate_parents: Vec<Peer>,
     ) -> Vec<CollectPiece> {
@@ -309,22 +306,20 @@ impl Piece {
     }
 
     // download_from_local_peer downloads a single piece from a local peer.
-    #[instrument(skip(self))]
+    #[instrument(skip_all, fields(number))]
     pub async fn download_from_local_peer(
         &self,
         task_id: &str,
-        peer_id: Option<&str>,
         number: u32,
     ) -> Result<impl AsyncRead> {
         self.storage.upload_piece(task_id, number).await
     }
 
     // download_from_remote_peer downloads a single piece from a remote peer.
-    #[instrument(skip(self, remote_peer))]
+    #[instrument(skip_all, fields(number))]
     pub async fn download_from_remote_peer(
         &self,
         task_id: &str,
-        peer_id: &str,
         number: u32,
         remote_peer: Peer,
     ) -> Result<impl AsyncRead> {
@@ -408,12 +403,11 @@ impl Piece {
     }
 
     // download_from_source downloads a single piece from the source.
-    #[instrument(skip(self, url, offset, length, header, timeout))]
+    #[instrument(skip_all, fields(number))]
     #[allow(clippy::too_many_arguments)]
     pub async fn download_from_source(
         &self,
         task_id: &str,
-        peer_id: &str,
         number: u32,
         url: &str,
         offset: u64,

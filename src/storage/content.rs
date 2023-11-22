@@ -54,7 +54,7 @@ impl Content {
     }
 
     // read_piece reads the piece from the content.
-    #[instrument(skip(self, offset, length))]
+    #[instrument(skip_all)]
     pub async fn read_piece(
         &self,
         task_id: &str,
@@ -67,7 +67,7 @@ impl Content {
     }
 
     // write_piece writes the piece to the content.
-    #[instrument(skip(self, offset, reader))]
+    #[instrument(skip_all)]
     pub async fn write_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
