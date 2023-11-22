@@ -21,6 +21,7 @@ use dragonfly_api::manager::v2::{
     SeedPeer, UpdateSeedPeerRequest,
 };
 use tonic::transport::Channel;
+use tracing::instrument;
 
 // ManagerClient is a wrapper of ManagerGRPCClient.
 #[derive(Clone)]
@@ -42,6 +43,7 @@ impl ManagerClient {
     }
 
     // list_schedulers lists all schedulers that best match the client.
+    #[instrument(skip_all)]
     pub async fn list_schedulers(
         &self,
         request: ListSchedulersRequest,
@@ -52,6 +54,7 @@ impl ManagerClient {
     }
 
     // get_object_storage provides the object storage information.
+    #[instrument(skip_all)]
     pub async fn get_object_storage(
         &self,
         request: GetObjectStorageRequest,
@@ -62,6 +65,7 @@ impl ManagerClient {
     }
 
     // update_seed_peer updates the seed peer information.
+    #[instrument(skip_all)]
     pub async fn update_seed_peer(&self, request: UpdateSeedPeerRequest) -> Result<SeedPeer> {
         let request = Self::make_request(request);
         let response = self.client.clone().update_seed_peer(request).await?;
@@ -69,6 +73,7 @@ impl ManagerClient {
     }
 
     // delete_seed_peer deletes the seed peer information.
+    #[instrument(skip_all)]
     pub async fn delete_seed_peer(&self, request: DeleteSeedPeerRequest) -> Result<()> {
         let request = Self::make_request(request);
         self.client.clone().delete_seed_peer(request).await?;

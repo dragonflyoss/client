@@ -37,7 +37,7 @@ use tokio::{
 };
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
 pub mod piece;
 
@@ -85,21 +85,25 @@ impl Task {
     }
 
     // get gets a task metadata.
+    #[instrument(skip(self))]
     pub fn get(&self, task_id: &str) -> Result<Option<metadata::Task>> {
         self.storage.get_task(task_id)
     }
 
     // download_task_started updates the metadata of the task when the task downloads started.
+    #[instrument(skip(self, piece_length))]
     pub fn download_task_started(&self, id: &str, piece_length: u64) -> Result<()> {
         self.storage.download_task_started(id, piece_length)
     }
 
     // download_task_failed updates the metadata of the task when the task downloads failed.
+    #[instrument(skip(self))]
     pub fn download_task_failed(&self, id: &str) -> Result<()> {
         self.storage.download_task_failed(id)
     }
 
     // download_into_file downloads a task into a file.
+    #[instrument(skip(self, content_length, header, download))]
     pub async fn download_into_file(
         &self,
         task_id: &str,
@@ -129,10 +133,13 @@ impl Task {
 
         // Calculate the interested pieces to download.
         let interested_pieces = self.piece.calculate_interested(
+            task_id,
+            peer_id,
             download.piece_length,
             content_length,
             download.range.clone(),
         )?;
+        info!("interested pieces: {:?}", interested_pieces);
 
         // Get the task from the local storage.
         let task = self
@@ -141,20 +148,36 @@ impl Task {
 
         // If the task is finished, return the file.
         if task.is_finished() {
+            info!("task is finished, download the pieces from the local peer");
+
             // Download the pieces from the local peer.
             return self
-                .download_partial_from_local_peer_into_file(&mut f, task_id, interested_pieces)
+                .download_partial_from_local_peer_into_file(
+                    &mut f,
+                    task_id,
+                    peer_id,
+                    interested_pieces,
+                )
                 .await;
         }
+
+        info!("download the pieces from local peer");
 
         // Download the pieces from the local peer.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
         while let Some(finished_piece) = self
-            .download_partial_from_local_peer_into_file(&mut f, task_id, interested_pieces.clone())
+            .download_partial_from_local_peer_into_file(
+                &mut f,
+                task_id,
+                peer_id,
+                interested_pieces.clone(),
+            )
             .await?
             .recv()
             .await
         {
+            info!("finished piece from local peer: {:?}", finished_piece);
+
             // Send the download progress.
             download_progress_tx.send(finished_piece.clone()).await?;
 
@@ -166,11 +189,18 @@ impl Task {
         let interested_pieces = self
             .piece
             .remove_finished_from_interested(finished_pieces, interested_pieces);
+        info!(
+            "interested pieces after removing the finished piece: {:?}",
+            interested_pieces
+        );
 
         // Check if all pieces are downloaded.
         if interested_pieces.is_empty() {
+            info!("all pieces are downloaded from local peer");
             return Ok(download_progress_rx);
         };
+
+        info!("download the pieces with scheduler");
 
         // Download the pieces with scheduler.
         match self
@@ -193,6 +223,7 @@ impl Task {
                     &mut f,
                     interested_pieces,
                     task_id,
+                    peer_id,
                     download.url.clone(),
                     header.clone(),
                     timeout,
@@ -203,6 +234,7 @@ impl Task {
     }
 
     // download_partial_with_scheduler_into_file downloads a partial task with scheduler into a file.
+    #[instrument(skip(self, f, interested_pieces, download))]
     async fn download_partial_with_scheduler_into_file(
         &self,
         f: &mut fs::File,
@@ -275,6 +307,7 @@ impl Task {
                         .piece
                         .collect_interested_from_remote_peer(
                             task_id,
+                            peer_id,
                             interested_pieces.clone(),
                             candidate_parents,
                         )
@@ -285,6 +318,7 @@ impl Task {
                             .piece
                             .download_from_remote_peer(
                                 task_id,
+                                peer_id,
                                 collect_interested_piece.number,
                                 collect_interested_piece.parent.clone(),
                             )
@@ -388,6 +422,7 @@ impl Task {
                             .piece
                             .download_from_source(
                                 task_id,
+                                peer_id,
                                 interested_piece.number,
                                 download.url.clone().as_str(),
                                 interested_piece.offset,
@@ -483,10 +518,12 @@ impl Task {
     }
 
     // download_partial_from_local_peer_into_file downloads a partial task from a local peer into a file.
+    #[instrument(skip(self, f, interested_pieces))]
     async fn download_partial_from_local_peer_into_file(
         &self,
         f: &mut fs::File,
         task_id: &str,
+        peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
     ) -> Result<Receiver<metadata::Piece>> {
         // Initialize the download progress channel.
@@ -505,7 +542,7 @@ impl Task {
             // Download the piece from the local peer.
             let mut reader = match self
                 .piece
-                .download_from_local_peer(task_id, interested_piece.number)
+                .download_from_local_peer(task_id, Some(peer_id), interested_piece.number)
                 .await
             {
                 Ok(reader) => reader,
@@ -537,11 +574,14 @@ impl Task {
     }
 
     // download_partial_from_source_into_file downloads a partial task from the source into a file.
+    #[instrument(skip(self, f, interested_pieces, url, header, timeout))]
+    #[allow(clippy::too_many_arguments)]
     async fn download_partial_from_source_into_file(
         &self,
         f: &mut fs::File,
         interested_pieces: Vec<metadata::Piece>,
         task_id: &str,
+        peer_id: &str,
         url: String,
         header: HeaderMap,
         timeout: Option<Duration>,
@@ -559,6 +599,7 @@ impl Task {
                 .piece
                 .download_from_source(
                     task_id,
+                    peer_id,
                     interested_piece.number,
                     url.as_str(),
                     interested_piece.offset,
@@ -598,6 +639,7 @@ impl Task {
     }
 
     // get_content_length gets the content length of the task.
+    #[instrument(skip(self, url, header, timeout))]
     pub async fn get_content_length(
         &self,
         task_id: &str,
