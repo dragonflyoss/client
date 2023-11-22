@@ -42,7 +42,7 @@ use tonic::{
     Request, Response, Status,
 };
 use tower::service_fn;
-use tracing::{error, info, instrument, Span};
+use tracing::{error, info, instrument, Instrument, Span};
 
 // DfdaemonUploadServer is the grpc server of the upload.
 pub struct DfdaemonUploadServer {
@@ -269,76 +269,81 @@ impl Dfdaemon for DfdaemonServerHandler {
 
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
-        tokio::spawn(async move {
-            for interested_piece_number in interested_piece_numbers {
-                // Get the piece metadata from the local storage.
-                let piece = match task.piece.get(&task_id, interested_piece_number) {
-                    Ok(piece) => piece,
-                    Err(e) => {
-                        error!("get piece metadata from local storage: {}", e);
-                        continue;
-                    }
-                };
+        tokio::spawn(
+            async move {
+                for interested_piece_number in interested_piece_numbers {
+                    // Get the piece metadata from the local storage.
+                    let piece = match task.piece.get(&task_id, interested_piece_number) {
+                        Ok(piece) => piece,
+                        Err(e) => {
+                            error!("get piece metadata from local storage: {}", e);
+                            continue;
+                        }
+                    };
 
-                // Check whether the piece exists.
-                let piece = match piece {
-                    Some(piece) => piece,
-                    None => {
-                        error!("piece {} not found", interested_piece_number);
-                        continue;
-                    }
-                };
+                    // Check whether the piece exists.
+                    let piece = match piece {
+                        Some(piece) => piece,
+                        None => {
+                            error!("piece {} not found", interested_piece_number);
+                            continue;
+                        }
+                    };
 
-                // Get the piece content from the local storage.
-                let mut reader = match task
-                    .piece
-                    .download_from_local_peer(&task_id, interested_piece_number)
-                    .await
-                {
-                    Ok(reader) => reader,
-                    Err(e) => {
-                        error!("get piece content from local peer: {}", e);
-                        continue;
-                    }
-                };
+                    // Get the piece content from the local storage.
+                    let mut reader = match task
+                        .piece
+                        .download_from_local_peer(&task_id, interested_piece_number)
+                        .await
+                    {
+                        Ok(reader) => reader,
+                        Err(e) => {
+                            error!("get piece content from local peer: {}", e);
+                            continue;
+                        }
+                    };
 
-                // Read the content of the piece.
-                let mut content = Vec::new();
-                match reader.read_to_end(&mut content).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        error!("read piece content: {}", e);
-                        continue;
-                    }
-                };
+                    // Read the content of the piece.
+                    let mut content = Vec::new();
+                    match reader.read_to_end(&mut content).await {
+                        Ok(_) => {}
+                        Err(e) => {
+                            error!("read piece content: {}", e);
+                            continue;
+                        }
+                    };
 
-                // Send the interested pieces response.
-                out_stream_tx
-                    .send(Ok(SyncPiecesResponse {
-                        response: Some(sync_pieces_response::Response::InterestedPiecesResponse(
-                            InterestedPiecesResponse {
-                                piece: Some(Piece {
-                                    number: piece.number,
-                                    parent_id: None,
-                                    offset: piece.offset,
-                                    length: piece.length,
-                                    digest: piece.digest,
-                                    content: Some(content),
-                                    traffic_type: None,
-                                    cost: None,
-                                    created_at: None,
-                                }),
-                            },
-                        )),
-                    }))
-                    .await
-                    .unwrap_or_else(|e| {
-                        error!("send to out stream: {}", e);
-                    });
+                    // Send the interested pieces response.
+                    out_stream_tx
+                        .send(Ok(SyncPiecesResponse {
+                            response: Some(
+                                sync_pieces_response::Response::InterestedPiecesResponse(
+                                    InterestedPiecesResponse {
+                                        piece: Some(Piece {
+                                            number: piece.number,
+                                            parent_id: None,
+                                            offset: piece.offset,
+                                            length: piece.length,
+                                            digest: piece.digest,
+                                            content: Some(content),
+                                            traffic_type: None,
+                                            cost: None,
+                                            created_at: None,
+                                        }),
+                                    },
+                                ),
+                            ),
+                        }))
+                        .await
+                        .unwrap_or_else(|e| {
+                            error!("send to out stream: {}", e);
+                        });
 
-                info!("send interested piece {}", interested_piece_number);
+                    info!("send interested piece {}", interested_piece_number);
+                }
             }
-        });
+            .in_current_span(),
+        );
 
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
@@ -383,12 +388,6 @@ impl Dfdaemon for DfdaemonServerHandler {
         // Generate the peer id.
         let peer_id = self.task.id_generator.peer_id();
 
-        // Convert the header.
-        let header = hashmap_to_headermap(&download.header).map_err(|e| {
-            error!("convert header: {}", e);
-            Status::invalid_argument(e.to_string())
-        })?;
-
         // Span record the task id and peer id.
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
@@ -401,6 +400,12 @@ impl Dfdaemon for DfdaemonServerHandler {
                 error!("download task started: {}", e);
                 Status::internal(e.to_string())
             })?;
+
+        // Convert the header.
+        let header = hashmap_to_headermap(&download.header).map_err(|e| {
+            error!("convert header: {}", e);
+            Status::invalid_argument(e.to_string())
+        })?;
 
         // Get the content length.
         let content_length = self
@@ -430,19 +435,48 @@ impl Dfdaemon for DfdaemonServerHandler {
 
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
-        tokio::spawn(async move {
-            task.download_into_file(
-                task_id.as_str(),
-                host_id.as_str(),
-                peer_id.as_str(),
-                content_length,
-                header.clone(),
-                download.clone(),
-                out_stream_tx.clone(),
-            )
-            .await;
-            drop(out_stream_tx);
-        });
+        tokio::spawn(
+            async move {
+                match task
+                    .download_into_file(
+                        task_id.as_str(),
+                        host_id.as_str(),
+                        peer_id.as_str(),
+                        content_length,
+                        download.clone(),
+                        out_stream_tx.clone(),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        // Download task succeeded.
+                        if download.range.is_none() {
+                            info!("download complete task succeeded");
+                            task.download_task_finished(task_id.as_str())
+                                .unwrap_or_else(|e| {
+                                    error!("download task complete succeeded: {}", e);
+                                });
+                            return;
+                        }
+
+                        info!("download range task succeeded");
+                    }
+                    Err(e) => {
+                        // Download task failed.
+                        info!("download task failed: {:?}", download);
+                        task.download_task_failed(task_id.as_str())
+                            .unwrap_or_else(|e| {
+                                error!("download task failed: {}", e);
+                            });
+
+                        error!("download into file: {}", e);
+                    }
+                }
+
+                drop(out_stream_tx);
+            }
+            .in_current_span(),
+        );
 
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }

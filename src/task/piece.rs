@@ -74,13 +74,13 @@ impl Piece {
     }
 
     // get gets a piece from the local storage.
-    #[instrument(skip(self))]
+    #[instrument(skip(self, task_id))]
     pub fn get(&self, task_id: &str, number: u32) -> Result<Option<metadata::Piece>> {
         self.storage.get_piece(task_id, number)
     }
 
     // get_all gets all pieces from the local storage.
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     pub fn get_all(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
         self.storage.get_pieces(task_id)
     }

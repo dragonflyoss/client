@@ -53,6 +53,11 @@ impl Storage {
         self.metadata.set_task_content_length(id, content_length)
     }
 
+    // download_task_finished updates the metadata of the task when the task downloads finished.
+    pub fn download_task_finished(&self, id: &str) -> Result<()> {
+        self.metadata.download_task_finished(id)
+    }
+
     // download_task_failed updates the metadata of the task when the task downloads failed.
     #[instrument(skip_all)]
     pub fn download_task_failed(&self, id: &str) -> Result<()> {
