@@ -20,6 +20,7 @@ use dragonfly_api::security::{
     CertificateResponse,
 };
 use tonic::transport::Channel;
+use tracing::instrument;
 
 // CertificateClient is a wrapper of CertificateGRPCClient.
 #[derive(Clone)]
@@ -40,6 +41,7 @@ impl CertificateClient {
     }
 
     // issue_certificate issues a certificate for the peer.
+    #[instrument(skip_all)]
     pub async fn issue_certificate(
         &self,
         request: CertificateRequest,

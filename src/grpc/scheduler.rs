@@ -26,7 +26,7 @@ use dragonfly_api::scheduler::v2::{
 use std::str::FromStr;
 use std::sync::Arc;
 use tonic::transport::{Channel, Endpoint, Uri};
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
 // SchedulerClient is a wrapper of SchedulerGRPCClient.
 #[derive(Clone)]
@@ -52,6 +52,7 @@ impl SchedulerClient {
     }
 
     // announce_peer announces the peer to the scheduler.
+    #[instrument(skip(self, request))]
     pub async fn announce_peer(
         &self,
         request: impl tonic::IntoStreamingRequest<Message = AnnouncePeerRequest>,
@@ -61,6 +62,7 @@ impl SchedulerClient {
     }
 
     // stat_peer gets the status of the peer.
+    #[instrument(skip(self))]
     pub async fn stat_peer(&self, request: StatPeerRequest) -> Result<Peer> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
@@ -70,6 +72,7 @@ impl SchedulerClient {
     }
 
     // leave_peer tells the scheduler that the peer is leaving.
+    #[instrument(skip(self))]
     pub async fn leave_peer(&self, request: LeavePeerRequest) -> Result<()> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
@@ -79,6 +82,7 @@ impl SchedulerClient {
     }
 
     // exchange_peer exchanges the peer with the scheduler.
+    #[instrument(skip(self))]
     pub async fn exchange_peer(
         &self,
         request: ExchangePeerRequest,
@@ -91,6 +95,7 @@ impl SchedulerClient {
     }
 
     // stat_task gets the status of the task.
+    #[instrument(skip(self))]
     pub async fn stat_task(&self, request: StatTaskRequest) -> Result<Task> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
@@ -100,6 +105,7 @@ impl SchedulerClient {
     }
 
     // announce_host announces the host to the scheduler.
+    #[instrument(skip(self))]
     pub async fn announce_host(&self, request: AnnounceHostRequest) -> Result<()> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
@@ -109,6 +115,7 @@ impl SchedulerClient {
     }
 
     // leave_host tells the scheduler that the host is leaving.
+    #[instrument(skip(self))]
     pub async fn leave_host(&self, request: LeaveHostRequest) -> Result<()> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
@@ -118,6 +125,7 @@ impl SchedulerClient {
     }
 
     // client gets the grpc client of the scheduler.
+    #[instrument(skip(self))]
     pub fn client(&self) -> Result<SchedulerGRPCClient<Channel>> {
         match self.client.clone() {
             Some(client) => Ok(client),
@@ -126,6 +134,7 @@ impl SchedulerClient {
     }
 
     // get_endpoints gets the endpoints of available schedulers.
+    #[instrument(skip(self))]
     async fn refresh_scheduler_client(&mut self) -> Result<()> {
         // Refresh the dynamic configuration.
         self.dynconfig.refresh().await?;

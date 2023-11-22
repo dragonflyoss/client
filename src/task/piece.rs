@@ -35,7 +35,7 @@ use tokio::{
     io::{self, AsyncRead, AsyncReadExt},
 };
 use tokio_util::io::InspectReader;
-use tracing::error;
+use tracing::{error, info, instrument};
 
 // CollectPiece represents a piece to collect.
 pub struct CollectPiece {
@@ -74,16 +74,19 @@ impl Piece {
     }
 
     // get gets a piece from the local storage.
+    #[instrument(skip(self))]
     pub fn get(&self, task_id: &str, number: u32) -> Result<Option<metadata::Piece>> {
         self.storage.get_piece(task_id, number)
     }
 
     // get_all gets all pieces from the local storage.
+    #[instrument(skip(self))]
     pub fn get_all(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
         self.storage.get_pieces(task_id)
     }
 
     // write_into_file_and_verify writes the piece into the file and verifies the digest of the piece.
+    #[instrument(skip_all)]
     pub async fn write_into_file_and_verify<R: AsyncRead + Unpin + ?Sized>(
         &self,
         reader: &mut R,
@@ -114,20 +117,25 @@ impl Piece {
     }
 
     // calculate_interested calculates the interested pieces by content_length and range.
+    #[instrument(skip(self, piece_length, content_length, range))]
     pub fn calculate_interested(
         &self,
+        task_id: &str,
+        peer_id: &str,
         piece_length: u64,
         content_length: u64,
         range: Option<Range>,
     ) -> Result<Vec<metadata::Piece>> {
         // If content_length is 0, return empty piece.
         if content_length == 0 {
+            info!("content length is 0");
             return Ok(Vec::new());
         }
 
         // If range is not None, calculate the pieces by range.
         if let Some(range) = range {
             if range.length == 0 {
+                info!("range length is 0");
                 return Err(Error::InvalidParameter());
             }
 
@@ -165,6 +173,10 @@ impl Piece {
                 number += 1;
             }
 
+            info!(
+                "calculate interested pieces by range: {:?}, {:?}",
+                range, pieces
+            );
             return Ok(pieces);
         }
 
@@ -196,10 +208,15 @@ impl Piece {
             number += 1;
         }
 
+        info!(
+            "calculate interested pieces by content length: {:?}",
+            pieces
+        );
         Ok(pieces)
     }
 
     // remove_finished_from_interested removes the finished pieces from interested pieces.
+    #[instrument(skip_all)]
     pub fn remove_finished_from_interested(
         &self,
         finished_pieces: Vec<metadata::Piece>,
@@ -217,9 +234,11 @@ impl Piece {
     }
 
     // collect_interested_from_remote_peer collects the interested pieces from remote peers.
+    #[instrument(skip(self, interested_pieces, candidate_parents))]
     pub async fn collect_interested_from_remote_peer(
         &self,
         task_id: &str,
+        peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
         candidate_parents: Vec<Peer>,
     ) -> Vec<CollectPiece> {
@@ -290,18 +309,22 @@ impl Piece {
     }
 
     // download_from_local_peer downloads a single piece from a local peer.
+    #[instrument(skip(self))]
     pub async fn download_from_local_peer(
         &self,
         task_id: &str,
+        peer_id: Option<&str>,
         number: u32,
     ) -> Result<impl AsyncRead> {
         self.storage.upload_piece(task_id, number).await
     }
 
     // download_from_remote_peer downloads a single piece from a remote peer.
+    #[instrument(skip(self, remote_peer))]
     pub async fn download_from_remote_peer(
         &self,
         task_id: &str,
+        peer_id: &str,
         number: u32,
         remote_peer: Peer,
     ) -> Result<impl AsyncRead> {
@@ -385,10 +408,12 @@ impl Piece {
     }
 
     // download_from_source downloads a single piece from the source.
+    #[instrument(skip(self, url, offset, length, header, timeout))]
     #[allow(clippy::too_many_arguments)]
     pub async fn download_from_source(
         &self,
         task_id: &str,
+        peer_id: &str,
         number: u32,
         url: &str,
         offset: u64,
