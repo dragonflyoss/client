@@ -237,13 +237,13 @@ impl Metadata {
         Err(Error::TaskNotFound(id.to_string()))
     }
 
-    // upload_task_finished updates the metadata of the task when task uploads finished.
+    // download_task_finished updates the metadata of the task when the task downloads finished.
     #[instrument(skip_all)]
-    pub fn upload_task_finished(&self, id: &str) -> Result<()> {
+    pub fn download_task_finished(&self, id: &str) -> Result<()> {
         match self.get_task(id)? {
             Some(mut task) => {
-                task.uploaded_count += 1;
                 task.updated_at = Utc::now().naive_utc();
+                task.finished_at = Some(Utc::now().naive_utc());
                 self.put_task(id, &task)
             }
             None => Err(Error::TaskNotFound(id.to_string())),
@@ -255,6 +255,19 @@ impl Metadata {
     pub fn download_task_failed(&self, id: &str) -> Result<()> {
         match self.get_task(id)? {
             Some(_piece) => self.delete_task(id),
+            None => Err(Error::TaskNotFound(id.to_string())),
+        }
+    }
+
+    // upload_task_finished updates the metadata of the task when task uploads finished.
+    #[instrument(skip_all)]
+    pub fn upload_task_finished(&self, id: &str) -> Result<()> {
+        match self.get_task(id)? {
+            Some(mut task) => {
+                task.uploaded_count += 1;
+                task.updated_at = Utc::now().naive_utc();
+                self.put_task(id, &task)
+            }
             None => Err(Error::TaskNotFound(id.to_string())),
         }
     }
