@@ -41,7 +41,7 @@ use tokio::{
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 use tonic::Status;
-use tracing::{error, info, instrument};
+use tracing::{error, info};
 
 pub mod piece;
 
@@ -89,31 +89,26 @@ impl Task {
     }
 
     // get gets a task metadata.
-    #[instrument(skip_all)]
     pub fn get(&self, task_id: &str) -> ClientResult<Option<metadata::Task>> {
         self.storage.get_task(task_id)
     }
 
     // download_task_started updates the metadata of the task when the task downloads started.
-    #[instrument(skip_all)]
     pub fn download_task_started(&self, id: &str, piece_length: u64) -> ClientResult<()> {
         self.storage.download_task_started(id, piece_length)
     }
 
     // download_task_finished updates the metadata of the task when the task downloads finished.
-    #[instrument(skip_all)]
     pub fn download_task_finished(&self, id: &str) -> ClientResult<()> {
         self.storage.download_task_finished(id)
     }
 
     // download_task_failed updates the metadata of the task when the task downloads failed.
-    #[instrument(skip_all)]
     pub fn download_task_failed(&self, id: &str) -> ClientResult<()> {
         self.storage.download_task_failed(id)
     }
 
     // download_into_file downloads a task into a file.
-    #[instrument(skip_all)]
     #[allow(clippy::too_many_arguments)]
     pub async fn download_into_file(
         &self,
@@ -322,7 +317,6 @@ impl Task {
     }
 
     // download_partial_with_scheduler_into_file downloads a partial task with scheduler into a file.
-    #[instrument(skip_all)]
     #[allow(clippy::too_many_arguments)]
     async fn download_partial_with_scheduler_into_file(
         &self,
@@ -525,7 +519,6 @@ impl Task {
     }
 
     // download_partial_with_scheduler_from_remote_peer_into_file downloads a partial task with scheduler from a remote peer into a file.
-    #[instrument(skip_all)]
     #[allow(clippy::too_many_arguments)]
     async fn download_partial_with_scheduler_from_remote_peer_into_file(
         &self,
@@ -646,7 +639,6 @@ impl Task {
     }
 
     // download_partial_with_scheduler_from_source_into_file downloads a partial task with scheduler from the source into a file.
-    #[instrument(skip_all)]
     #[allow(clippy::too_many_arguments)]
     async fn download_partial_with_scheduler_from_source_into_file(
         &self,
@@ -798,7 +790,6 @@ impl Task {
     }
 
     // download_partial_from_local_peer_into_file downloads a partial task from a local peer into a file.
-    #[instrument(skip_all)]
     async fn download_partial_from_local_peer_into_file(
         &self,
         f: &mut fs::File,
@@ -875,7 +866,6 @@ impl Task {
     }
 
     // download_partial_from_source_into_file downloads a partial task from the source into a file.
-    #[instrument(skip_all)]
     #[allow(clippy::too_many_arguments)]
     async fn download_partial_from_source_into_file(
         &self,
@@ -967,7 +957,6 @@ impl Task {
     }
 
     // get_content_length gets the content length of the task.
-    #[instrument(skip_all)]
     pub async fn get_content_length(
         &self,
         task_id: &str,

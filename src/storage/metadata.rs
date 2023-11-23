@@ -21,7 +21,7 @@ use rocksdb::{BlockBasedOptions, Cache, ColumnFamily, Options, DB};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::Duration;
-use tracing::{error, info, instrument};
+use tracing::{error, info};
 
 // DEFAULT_DIR_NAME is the default directory name to store metadata.
 const DEFAULT_DIR_NAME: &str = "metadata";
@@ -125,7 +125,6 @@ impl Piece {
     }
 
     // cost returns the cost of the piece downloaded.
-    #[instrument(skip_all)]
     pub fn cost(&self) -> Option<Duration> {
         match self
             .finished_at
@@ -143,7 +142,6 @@ impl Piece {
     }
 
     // prost_cost returns the prost cost of the piece downloaded.
-    #[instrument(skip_all)]
     pub fn prost_cost(&self) -> Option<prost_wkt_types::Duration> {
         match self.cost() {
             Some(cost) => match prost_wkt_types::Duration::try_from(cost) {
@@ -205,7 +203,6 @@ impl Metadata {
     }
 
     // download_task_started updates the metadata of the task when the task downloads started.
-    #[instrument(skip_all)]
     pub fn download_task_started(&self, id: &str, piece_length: u64) -> Result<()> {
         let task = match self.get_task(id)? {
             // If the task exists, update the updated_at.
@@ -227,7 +224,6 @@ impl Metadata {
     }
 
     // set_task_content_length sets the content length of the task.
-    #[instrument(skip_all)]
     pub fn set_task_content_length(&self, id: &str, content_length: u64) -> Result<()> {
         if let Some(mut task) = self.get_task(id)? {
             task.content_length = Some(content_length);
@@ -238,7 +234,6 @@ impl Metadata {
     }
 
     // download_task_finished updates the metadata of the task when the task downloads finished.
-    #[instrument(skip_all)]
     pub fn download_task_finished(&self, id: &str) -> Result<()> {
         match self.get_task(id)? {
             Some(mut task) => {
@@ -251,7 +246,6 @@ impl Metadata {
     }
 
     // download_task_failed updates the metadata of the task when the task downloads failed.
-    #[instrument(skip_all)]
     pub fn download_task_failed(&self, id: &str) -> Result<()> {
         match self.get_task(id)? {
             Some(_piece) => self.delete_task(id),
@@ -260,7 +254,6 @@ impl Metadata {
     }
 
     // upload_task_finished updates the metadata of the task when task uploads finished.
-    #[instrument(skip_all)]
     pub fn upload_task_finished(&self, id: &str) -> Result<()> {
         match self.get_task(id)? {
             Some(mut task) => {
@@ -273,7 +266,6 @@ impl Metadata {
     }
 
     // get_task gets the task metadata.
-    #[instrument(skip_all)]
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         let handle = self.cf_handle(TASK_CF_NAME)?;
         match self.db.get_cf(handle, id)? {
@@ -283,7 +275,6 @@ impl Metadata {
     }
 
     // put_task puts the task metadata.
-    #[instrument(skip_all)]
     fn put_task(&self, id: &str, task: &Task) -> Result<()> {
         let handle = self.cf_handle(TASK_CF_NAME)?;
         let json = serde_json::to_string(&task)?;
@@ -292,7 +283,6 @@ impl Metadata {
     }
 
     // delete_task deletes the task metadata.
-    #[instrument(skip_all)]
     fn delete_task(&self, id: &str) -> Result<()> {
         let handle = self.cf_handle(TASK_CF_NAME)?;
         self.db.delete_cf(handle, id.as_bytes())?;
@@ -300,7 +290,6 @@ impl Metadata {
     }
 
     // download_piece_started updates the metadata of the piece when the piece downloads started.
-    #[instrument(skip_all)]
     pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<()> {
         self.put_piece(
             task_id,
@@ -314,7 +303,6 @@ impl Metadata {
     }
 
     // download_piece_finished updates the metadata of the piece when the piece downloads finished.
-    #[instrument(skip_all)]
     pub fn download_piece_finished(
         &self,
         task_id: &str,
@@ -337,7 +325,6 @@ impl Metadata {
     }
 
     // download_piece_failed updates the metadata of the piece when the piece downloads failed.
-    #[instrument(skip_all)]
     pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
         match self.get_piece(task_id, number)? {
             Some(_piece) => self.delete_piece(task_id, number),
@@ -346,7 +333,6 @@ impl Metadata {
     }
 
     // upload_piece_finished updates the metadata of the piece when piece uploads finished.
-    #[instrument(skip_all)]
     pub fn upload_piece_finished(&self, task_id: &str, number: u32) -> Result<()> {
         match self.get_piece(task_id, number)? {
             Some(mut piece) => {
@@ -359,7 +345,6 @@ impl Metadata {
     }
 
     // get_piece gets the piece metadata.
-    #[instrument(skip_all)]
     pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<Piece>> {
         let id = self.piece_id(task_id, number);
         let handle = self.cf_handle(PIECE_CF_NAME)?;
@@ -370,7 +355,6 @@ impl Metadata {
     }
 
     // get_pieces gets the pieces metadata.
-    #[instrument(skip_all)]
     pub fn get_pieces(&self, task_id: &str) -> Result<Vec<Piece>> {
         let handle = self.cf_handle(PIECE_CF_NAME)?;
         let iter = self.db.prefix_iterator_cf(handle, task_id.as_bytes());
@@ -387,7 +371,6 @@ impl Metadata {
     }
 
     // put_piece puts the piece metadata.
-    #[instrument(skip_all)]
     fn put_piece(&self, task_id: &str, piece: &Piece) -> Result<()> {
         let id = self.piece_id(task_id, piece.number);
         let handle = self.cf_handle(PIECE_CF_NAME)?;
@@ -397,7 +380,6 @@ impl Metadata {
     }
 
     // delete_piece deletes the piece metadata.
-    #[instrument(skip_all)]
     fn delete_piece(&self, task_id: &str, number: u32) -> Result<()> {
         let id = self.piece_id(task_id, number);
         let handle = self.cf_handle(PIECE_CF_NAME)?;
@@ -406,13 +388,11 @@ impl Metadata {
     }
 
     // piece_id returns the piece id.
-    #[instrument(skip_all)]
     pub fn piece_id(&self, task_id: &str, number: u32) -> String {
         format!("{}-{}", task_id, number)
     }
 
     // cf_handle returns the column family handle.
-    #[instrument(skip_all)]
     fn cf_handle(&self, cf_name: &str) -> Result<&ColumnFamily> {
         self.db
             .cf_handle(cf_name)
