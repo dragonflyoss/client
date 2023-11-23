@@ -24,8 +24,9 @@ use dragonfly_api::common::v2::{Download, Piece, TrafficType};
 use dragonfly_api::dfdaemon::v2::DownloadTaskResponse;
 use dragonfly_api::scheduler::v2::{
     announce_peer_request, announce_peer_response, download_piece_back_to_source_failed_request,
-    AnnouncePeerRequest, DownloadPeerStartedRequest, DownloadPieceBackToSourceFailedRequest,
-    DownloadPieceFailedRequest, DownloadPieceFinishedRequest, HttpResponse, RegisterPeerRequest,
+    AnnouncePeerRequest, DownloadPeerBackToSourceStartedRequest, DownloadPeerFinishedRequest,
+    DownloadPeerStartedRequest, DownloadPieceBackToSourceFailedRequest, DownloadPieceFailedRequest,
+    DownloadPieceFinishedRequest, HttpResponse, RegisterPeerRequest,
 };
 use mpsc::Sender;
 use reqwest::header::{self, HeaderMap};
@@ -380,6 +381,24 @@ impl Task {
                 announce_peer_response::Response::EmptyTaskResponse(response) => {
                     // If the task is empty, return an empty vector.
                     info!("empty task response: {:?}", response);
+
+                    // Send the download peer finished request.
+                    in_stream_tx
+                        .send(AnnouncePeerRequest {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                            request: Some(
+                                announce_peer_request::Request::DownloadPeerFinishedRequest(
+                                    DownloadPeerFinishedRequest {
+                                        content_length: 0,
+                                        piece_count: 0,
+                                    },
+                                ),
+                            ),
+                        })
+                        .await?;
+
                     drop(in_stream_tx);
                     return Ok(Vec::new());
                 }
@@ -411,6 +430,23 @@ impl Task {
 
                     // Check if all pieces are downloaded.
                     if finished_pieces.len() == interested_pieces.len() {
+                        // Send the download peer finished request.
+                        in_stream_tx
+                            .send(AnnouncePeerRequest {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.to_string(),
+                                peer_id: peer_id.to_string(),
+                                request: Some(
+                                    announce_peer_request::Request::DownloadPeerFinishedRequest(
+                                        DownloadPeerFinishedRequest {
+                                            content_length,
+                                            piece_count: interested_pieces.len() as u32,
+                                        },
+                                    ),
+                                ),
+                            })
+                            .await?;
+
                         drop(in_stream_tx);
                         return Ok(finished_pieces);
                     }
@@ -418,7 +454,25 @@ impl Task {
                 announce_peer_response::Response::NeedBackToSourceResponse(response) => {
                     // If the task need back to source, download the pieces from the source.
                     info!("need back to source response: {:?}", response);
-                    let interested_pieces = self.piece.remove_finished_from_interested(
+
+                    // Send the download peer back-to-source request.
+                    in_stream_tx
+                            .send(AnnouncePeerRequest {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.to_string(),
+                                peer_id: peer_id.to_string(),
+                                request: Some(
+                                    announce_peer_request::Request::DownloadPeerBackToSourceStartedRequest(
+                                        DownloadPeerBackToSourceStartedRequest {
+                                            description: None,
+                                        },
+                                    ),
+                                ),
+                            })
+                            .await?;
+
+                    // Remove the finished pieces from the pieces.
+                    let remaining_interested_pieces = self.piece.remove_finished_from_interested(
                         finished_pieces.clone(),
                         interested_pieces.clone(),
                     );
@@ -430,7 +484,7 @@ impl Task {
                             task_id,
                             host_id,
                             peer_id,
-                            interested_pieces.clone(),
+                            remaining_interested_pieces.clone(),
                             download.url.clone(),
                             download.header.clone(),
                             content_length,
@@ -439,7 +493,24 @@ impl Task {
                         )
                         .await?;
 
-                    if finished_pieces.len() == interested_pieces.len() {
+                    if finished_pieces.len() == remaining_interested_pieces.len() {
+                        // Send the download peer finished request.
+                        in_stream_tx
+                            .send(AnnouncePeerRequest {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.to_string(),
+                                peer_id: peer_id.to_string(),
+                                request: Some(
+                                    announce_peer_request::Request::DownloadPeerFinishedRequest(
+                                        DownloadPeerFinishedRequest {
+                                            content_length,
+                                            piece_count: interested_pieces.len() as u32,
+                                        },
+                                    ),
+                                ),
+                            })
+                            .await?;
+
                         drop(in_stream_tx);
                         return Ok(finished_pieces);
                     }
@@ -482,7 +553,10 @@ impl Task {
             {
                 Ok(reader) => reader,
                 Err(err) => {
-                    error!("download from remote peer error: {:?}", err);
+                    error!(
+                        "download piece {} from remote peer error: {:?}",
+                        collect_interested_piece.number, err
+                    );
 
                     // Send the download piece failed request.
                     in_stream_tx
@@ -616,7 +690,10 @@ impl Task {
             {
                 Ok(reader) => reader,
                 Err(Error::HTTP(err)) => {
-                    error!("download from source error: {:?}", err);
+                    error!(
+                        "download piece {} from source error: {:?}",
+                        interested_piece.number, err
+                    );
 
                     // Send the download piece failed request.
                     in_stream_tx.send(AnnouncePeerRequest {
@@ -748,7 +825,10 @@ impl Task {
             {
                 Ok(reader) => reader,
                 Err(err) => {
-                    error!("download from local peer error: {:?}", err);
+                    error!(
+                        "download piece {} from local peer error: {:?}",
+                        interested_piece.number, err
+                    );
                     continue;
                 }
             };
@@ -828,7 +908,14 @@ impl Task {
                     header.clone(),
                     timeout,
                 )
-                .await?;
+                .await
+                .map_err(|err| {
+                    error!(
+                        "download piece {} from source error: {:?}",
+                        interested_piece.number, err
+                    );
+                    err
+                })?;
 
             // Get the piece metadata from the local storage.
             let metadata = self
