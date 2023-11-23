@@ -33,11 +33,8 @@ use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::fs::{self, OpenOptions};
 use tokio::sync::mpsc;
-use tokio::{
-    fs::{self, OpenOptions},
-    io::{AsyncSeekExt, SeekFrom},
-};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 use tonic::Status;
@@ -586,7 +583,12 @@ impl Task {
 
             // Write the piece into the file.
             self.piece
-                .write_into_file_and_verify(&mut reader, f, metadata.digest.as_str())
+                .write_into_file_and_verify(
+                    &mut reader,
+                    f,
+                    metadata.offset,
+                    metadata.digest.as_str(),
+                )
                 .await?;
 
             info!(
@@ -660,12 +662,6 @@ impl Task {
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
         for interested_piece in interested_pieces.clone() {
-            // Seek to the offset of the piece.
-            if let Err(err) = f.seek(SeekFrom::Start(interested_piece.offset)).await {
-                error!("seek error: {:?}", err);
-                continue;
-            }
-
             // Download the piece from the local peer.
             let mut reader = match self
                 .piece
@@ -740,7 +736,12 @@ impl Task {
 
             // Write the piece into the file.
             self.piece
-                .write_into_file_and_verify(&mut reader, f, metadata.digest.as_str())
+                .write_into_file_and_verify(
+                    &mut reader,
+                    f,
+                    metadata.offset,
+                    metadata.digest.as_str(),
+                )
                 .await?;
 
             info!("finished piece {} from source", metadata.number);
@@ -802,12 +803,6 @@ impl Task {
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
         for interested_piece in interested_pieces {
-            // Seek to the offset of the piece.
-            if let Err(err) = f.seek(SeekFrom::Start(interested_piece.offset)).await {
-                error!("seek error: {:?}", err);
-                continue;
-            }
-
             // Download the piece from the local peer.
             let mut reader = match self
                 .piece
@@ -832,7 +827,12 @@ impl Task {
 
             // Write the piece into the file.
             self.piece
-                .write_into_file_and_verify(&mut reader, f, metadata.digest.as_str())
+                .write_into_file_and_verify(
+                    &mut reader,
+                    f,
+                    metadata.offset,
+                    metadata.digest.as_str(),
+                )
                 .await?;
 
             info!("finished piece {} from local peer", metadata.number);
@@ -915,7 +915,12 @@ impl Task {
 
             // Write the piece into the file.
             self.piece
-                .write_into_file_and_verify(&mut reader, f, metadata.digest.as_str())
+                .write_into_file_and_verify(
+                    &mut reader,
+                    f,
+                    metadata.offset,
+                    metadata.digest.as_str(),
+                )
                 .await?;
 
             info!("finished piece {} from source", metadata.number);

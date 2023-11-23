@@ -26,13 +26,13 @@ use dragonfly_api::dfdaemon::v2::{
     InterestedPiecesResponse, SyncPiecesRequest,
 };
 use rand::prelude::*;
-use reqwest::header::HeaderMap;
+use reqwest::header::{self, HeaderMap};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::{
     fs,
-    io::{self, AsyncRead, AsyncReadExt},
+    io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, SeekFrom},
 };
 use tokio_util::io::InspectReader;
 use tracing::{error, info};
@@ -88,6 +88,7 @@ impl Piece {
         &self,
         reader: &mut R,
         f: &mut fs::File,
+        offset: u64,
         expected_digest: &str,
     ) -> Result<()> {
         // Sha256 is used to calculate the hash of the piece.
@@ -95,6 +96,9 @@ impl Piece {
 
         // InspectReader is used to calculate the hash of the piece.
         let mut tee = InspectReader::new(reader, |bytes| hasher.update(bytes));
+
+        // Seek the file to the offset.
+        f.seek(SeekFrom::Start(offset)).await?;
 
         // Copy the piece to the file.
         io::copy(&mut tee, f).await?;
@@ -107,6 +111,11 @@ impl Piece {
 
         // Check the digest of the piece.
         if expected_digest != digest.to_string() {
+            error!(
+                "piece digest mismatch: expected {}, got {}",
+                expected_digest,
+                digest.to_string()
+            );
             return Err(Error::PieceDigestMismatch());
         }
 
@@ -409,12 +418,21 @@ impl Piece {
         // Record the start of downloading piece.
         self.storage.download_piece_started(task_id, number)?;
 
+        // Add range header to the request by offset and length.
+        let mut header = header.clone();
+        header.insert(
+            header::RANGE,
+            format!("bytes={}-{}", offset, offset + length - 1)
+                .parse()
+                .unwrap(),
+        );
+
         // Download the piece from the source.
         let mut response = self
             .http_client
             .get(Request {
                 url: url.to_string(),
-                header,
+                header: header.to_owned(),
                 timeout,
             })
             .await
