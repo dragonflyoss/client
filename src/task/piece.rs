@@ -35,7 +35,7 @@ use tokio::{
     io::{self, AsyncRead, AsyncReadExt},
 };
 use tokio_util::io::InspectReader;
-use tracing::{error, info, instrument};
+use tracing::{error, info};
 
 // CollectPiece represents a piece to collect.
 pub struct CollectPiece {
@@ -74,19 +74,16 @@ impl Piece {
     }
 
     // get gets a piece from the local storage.
-    #[instrument(skip(self, task_id))]
     pub fn get(&self, task_id: &str, number: u32) -> Result<Option<metadata::Piece>> {
         self.storage.get_piece(task_id, number)
     }
 
     // get_all gets all pieces from the local storage.
-    #[instrument(skip_all)]
     pub fn get_all(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
         self.storage.get_pieces(task_id)
     }
 
     // write_into_file_and_verify writes the piece into the file and verifies the digest of the piece.
-    #[instrument(skip_all)]
     pub async fn write_into_file_and_verify<R: AsyncRead + Unpin + ?Sized>(
         &self,
         reader: &mut R,
@@ -117,7 +114,6 @@ impl Piece {
     }
 
     // calculate_interested calculates the interested pieces by content_length and range.
-    #[instrument(skip(self))]
     pub fn calculate_interested(
         &self,
         piece_length: u64,
@@ -214,7 +210,6 @@ impl Piece {
     }
 
     // remove_finished_from_interested removes the finished pieces from interested pieces.
-    #[instrument(skip_all)]
     pub fn remove_finished_from_interested(
         &self,
         finished_pieces: Vec<metadata::Piece>,
@@ -232,7 +227,6 @@ impl Piece {
     }
 
     // collect_interested_from_remote_peer collects the interested pieces from remote peers.
-    #[instrument(skip_all)]
     pub async fn collect_interested_from_remote_peer(
         &self,
         task_id: &str,
@@ -306,7 +300,6 @@ impl Piece {
     }
 
     // download_from_local_peer downloads a single piece from a local peer.
-    #[instrument(skip_all, fields(number))]
     pub async fn download_from_local_peer(
         &self,
         task_id: &str,
@@ -316,7 +309,6 @@ impl Piece {
     }
 
     // download_from_remote_peer downloads a single piece from a remote peer.
-    #[instrument(skip_all, fields(number))]
     pub async fn download_from_remote_peer(
         &self,
         task_id: &str,
@@ -403,7 +395,6 @@ impl Piece {
     }
 
     // download_from_source downloads a single piece from the source.
-    #[instrument(skip_all, fields(number))]
     #[allow(clippy::too_many_arguments)]
     pub async fn download_from_source(
         &self,
