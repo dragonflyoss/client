@@ -33,15 +33,12 @@ use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::fs::{self, OpenOptions};
 use tokio::sync::mpsc;
-use tokio::{
-    fs::{self, OpenOptions},
-    io::{AsyncSeekExt, SeekFrom},
-};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 use tonic::Status;
-use tracing::{error, info, instrument};
+use tracing::{error, info};
 
 pub mod piece;
 
@@ -89,31 +86,26 @@ impl Task {
     }
 
     // get gets a task metadata.
-    #[instrument(skip_all)]
     pub fn get(&self, task_id: &str) -> ClientResult<Option<metadata::Task>> {
         self.storage.get_task(task_id)
     }
 
     // download_task_started updates the metadata of the task when the task downloads started.
-    #[instrument(skip_all)]
     pub fn download_task_started(&self, id: &str, piece_length: u64) -> ClientResult<()> {
         self.storage.download_task_started(id, piece_length)
     }
 
     // download_task_finished updates the metadata of the task when the task downloads finished.
-    #[instrument(skip_all)]
     pub fn download_task_finished(&self, id: &str) -> ClientResult<()> {
         self.storage.download_task_finished(id)
     }
 
     // download_task_failed updates the metadata of the task when the task downloads failed.
-    #[instrument(skip_all)]
     pub fn download_task_failed(&self, id: &str) -> ClientResult<()> {
         self.storage.download_task_failed(id)
     }
 
     // download_into_file downloads a task into a file.
-    #[instrument(skip_all)]
     #[allow(clippy::too_many_arguments)]
     pub async fn download_into_file(
         &self,
@@ -322,7 +314,6 @@ impl Task {
     }
 
     // download_partial_with_scheduler_into_file downloads a partial task with scheduler into a file.
-    #[instrument(skip_all)]
     #[allow(clippy::too_many_arguments)]
     async fn download_partial_with_scheduler_into_file(
         &self,
@@ -525,7 +516,6 @@ impl Task {
     }
 
     // download_partial_with_scheduler_from_remote_peer_into_file downloads a partial task with scheduler from a remote peer into a file.
-    #[instrument(skip_all)]
     #[allow(clippy::too_many_arguments)]
     async fn download_partial_with_scheduler_from_remote_peer_into_file(
         &self,
@@ -593,7 +583,12 @@ impl Task {
 
             // Write the piece into the file.
             self.piece
-                .write_into_file_and_verify(&mut reader, f, metadata.digest.as_str())
+                .write_into_file_and_verify(
+                    &mut reader,
+                    f,
+                    metadata.offset,
+                    metadata.digest.as_str(),
+                )
                 .await?;
 
             info!(
@@ -646,7 +641,6 @@ impl Task {
     }
 
     // download_partial_with_scheduler_from_source_into_file downloads a partial task with scheduler from the source into a file.
-    #[instrument(skip_all)]
     #[allow(clippy::too_many_arguments)]
     async fn download_partial_with_scheduler_from_source_into_file(
         &self,
@@ -668,12 +662,6 @@ impl Task {
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
         for interested_piece in interested_pieces.clone() {
-            // Seek to the offset of the piece.
-            if let Err(err) = f.seek(SeekFrom::Start(interested_piece.offset)).await {
-                error!("seek error: {:?}", err);
-                continue;
-            }
-
             // Download the piece from the local peer.
             let mut reader = match self
                 .piece
@@ -748,7 +736,12 @@ impl Task {
 
             // Write the piece into the file.
             self.piece
-                .write_into_file_and_verify(&mut reader, f, metadata.digest.as_str())
+                .write_into_file_and_verify(
+                    &mut reader,
+                    f,
+                    metadata.offset,
+                    metadata.digest.as_str(),
+                )
                 .await?;
 
             info!("finished piece {} from source", metadata.number);
@@ -798,7 +791,6 @@ impl Task {
     }
 
     // download_partial_from_local_peer_into_file downloads a partial task from a local peer into a file.
-    #[instrument(skip_all)]
     async fn download_partial_from_local_peer_into_file(
         &self,
         f: &mut fs::File,
@@ -811,12 +803,6 @@ impl Task {
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
         for interested_piece in interested_pieces {
-            // Seek to the offset of the piece.
-            if let Err(err) = f.seek(SeekFrom::Start(interested_piece.offset)).await {
-                error!("seek error: {:?}", err);
-                continue;
-            }
-
             // Download the piece from the local peer.
             let mut reader = match self
                 .piece
@@ -841,7 +827,12 @@ impl Task {
 
             // Write the piece into the file.
             self.piece
-                .write_into_file_and_verify(&mut reader, f, metadata.digest.as_str())
+                .write_into_file_and_verify(
+                    &mut reader,
+                    f,
+                    metadata.offset,
+                    metadata.digest.as_str(),
+                )
                 .await?;
 
             info!("finished piece {} from local peer", metadata.number);
@@ -875,7 +866,6 @@ impl Task {
     }
 
     // download_partial_from_source_into_file downloads a partial task from the source into a file.
-    #[instrument(skip_all)]
     #[allow(clippy::too_many_arguments)]
     async fn download_partial_from_source_into_file(
         &self,
@@ -925,7 +915,12 @@ impl Task {
 
             // Write the piece into the file.
             self.piece
-                .write_into_file_and_verify(&mut reader, f, metadata.digest.as_str())
+                .write_into_file_and_verify(
+                    &mut reader,
+                    f,
+                    metadata.offset,
+                    metadata.digest.as_str(),
+                )
                 .await?;
 
             info!("finished piece {} from source", metadata.number);
@@ -967,7 +962,6 @@ impl Task {
     }
 
     // get_content_length gets the content length of the task.
-    #[instrument(skip_all)]
     pub async fn get_content_length(
         &self,
         task_id: &str,
