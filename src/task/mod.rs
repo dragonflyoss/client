@@ -15,6 +15,7 @@
  */
 
 use crate::backend::http::{Request as HTTPRequest, HTTP};
+use crate::config::dfdaemon::Config;
 use crate::grpc::scheduler::SchedulerClient;
 use crate::storage::{metadata, Storage};
 use crate::utils::http::headermap_to_hashmap;
@@ -32,7 +33,6 @@ use mpsc::Sender;
 use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::fs::{self, OpenOptions};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -44,6 +44,9 @@ pub mod piece;
 
 // Task represents a task manager.
 pub struct Task {
+    // config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
     // id_generator is the id generator.
     pub id_generator: Arc<IDGenerator>,
 
@@ -64,12 +67,14 @@ pub struct Task {
 impl Task {
     // new returns a new Task.
     pub fn new(
+        config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
         http_client: Arc<HTTP>,
     ) -> Self {
         let piece = piece::Piece::new(
+            config.clone(),
             storage.clone(),
             scheduler_client.clone(),
             http_client.clone(),
@@ -77,6 +82,7 @@ impl Task {
         let piece = Arc::new(piece);
 
         Self {
+            config,
             id_generator,
             storage: storage.clone(),
             scheduler_client: scheduler_client.clone(),
@@ -116,23 +122,6 @@ impl Task {
         download: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<()> {
-        // Convert the timeout.
-        let timeout: Option<Duration> = match download.timeout.clone() {
-            Some(timeout) => match Duration::try_from(timeout) {
-                Ok(timeout) => Some(timeout),
-                Err(err) => {
-                    error!("convert timeout error: {:?}", err);
-                    download_progress_tx
-                        .send(Err(Status::invalid_argument("invalid timeout")))
-                        .await
-                        .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
-                    return Err(Error::InvalidParameter());
-                }
-            },
-            None => None,
-        };
-
         // Open the file.
         let mut f = match OpenOptions::new()
             .create(true)
@@ -291,7 +280,6 @@ impl Task {
                     download.url.clone(),
                     download.header.clone(),
                     content_length,
-                    timeout,
                     download_progress_tx.clone(),
                 )
                 .await
@@ -672,7 +660,6 @@ impl Task {
                     interested_piece.offset,
                     interested_piece.length,
                     header.clone(),
-                    None,
                 )
                 .await
             {
@@ -811,7 +798,7 @@ impl Task {
             {
                 Ok(reader) => reader,
                 Err(err) => {
-                    error!(
+                    info!(
                         "download piece {} from local peer error: {:?}",
                         interested_piece.number, err
                     );
@@ -875,7 +862,6 @@ impl Task {
         url: String,
         header: HashMap<String, String>,
         content_length: u64,
-        timeout: Option<Duration>,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Convert the header.
@@ -896,7 +882,6 @@ impl Task {
                     interested_piece.offset,
                     interested_piece.length,
                     header.clone(),
-                    timeout,
                 )
                 .await
                 .map_err(|err| {
@@ -967,7 +952,6 @@ impl Task {
         task_id: &str,
         url: &str,
         header: HeaderMap,
-        timeout: Option<Duration>,
     ) -> ClientResult<u64> {
         let task = self
             .storage
@@ -984,7 +968,7 @@ impl Task {
             .head(HTTPRequest {
                 url: url.to_string(),
                 header,
-                timeout,
+                timeout: self.config.download.piece_timeout,
             })
             .await?;
 

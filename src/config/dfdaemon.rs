@@ -26,8 +26,8 @@ use validator::Validate;
 // NAME is the name of dfdaemon.
 pub const NAME: &str = "dfdaemon";
 
-// DEFAULT_GRPC_SERVER_PORT is the default port of the grpc server.
-const DEFAULT_GRPC_SERVER_PORT: u16 = 65000;
+// DEFAULT_UPLOAD_GRPC_SERVER_PORT is the default port of the upload grpc server.
+const DEFAULT_UPLOAD_GRPC_SERVER_PORT: u16 = 65000;
 
 // DEFAULT_PROXY_SERVER_PORT is the default port of the proxy server.
 // const DEFAULT_PROXY_SERVER_PORT: u16 = 65001;
@@ -61,9 +61,14 @@ pub fn default_dfdaemon_cache_dir() -> PathBuf {
     super::default_cache_dir().join(NAME)
 }
 
-// default_dfdaemon_unix_socket_path is the default unix socket path for dfdaemon GRPC service.
-pub fn default_dfdaemon_unix_socket_path() -> PathBuf {
+// default_download_unix_socket_path is the default unix socket path for download GRPC service.
+pub fn default_download_unix_socket_path() -> PathBuf {
     super::default_root_dir().join("dfdaemon.sock")
+}
+
+// default_download_piece_timeout is the default timeout for downloading a piece from source.
+pub fn default_download_piece_timeout() -> Duration {
+    Duration::from_secs(120)
 }
 
 // default_dfdaemon_lock_path is the default file lock path for dfdaemon service.
@@ -177,19 +182,31 @@ pub struct DwonloadServer {
 impl Default for DwonloadServer {
     fn default() -> Self {
         Self {
-            socket_path: default_dfdaemon_unix_socket_path(),
+            socket_path: default_download_unix_socket_path(),
         }
     }
 }
 
 // Server is the server configuration for dfdaemon.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Download {
     // server is the download server configuration for dfdaemon.
     pub server: DwonloadServer,
+
+    // piece_timeout is the timeout for downloading a piece from source.
+    pub piece_timeout: Duration,
 }
 
+// Server implements default value for Server.
+impl Default for Download {
+    fn default() -> Self {
+        Self {
+            server: DwonloadServer::default(),
+            piece_timeout: default_download_piece_timeout(),
+        }
+    }
+}
 // UploadServer is the upload server configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -206,7 +223,7 @@ impl Default for UploadServer {
     fn default() -> Self {
         Self {
             ip: None,
-            port: DEFAULT_GRPC_SERVER_PORT,
+            port: DEFAULT_UPLOAD_GRPC_SERVER_PORT,
         }
     }
 }

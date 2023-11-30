@@ -53,7 +53,7 @@ struct Args {
     #[arg(
         short = 'e',
         long = "endpoint",
-        default_value_os_t = dfdaemon::default_dfdaemon_unix_socket_path(),
+        default_value_os_t = dfdaemon::default_download_unix_socket_path(),
         help = "Endpoint of dfdaemon's GRPC server"
     )]
     endpoint: PathBuf,
@@ -158,7 +158,6 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Create dfdaemon client.
     let client = DfdaemonClient::new_unix(args.endpoint).await.unwrap();
-
     let response = client
         .download_task(DownloadTaskRequest {
             download: Some(Download {

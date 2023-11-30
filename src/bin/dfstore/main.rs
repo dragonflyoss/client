@@ -36,7 +36,7 @@ struct Args {
     #[arg(
         short = 'e',
         long = "endpoint",
-        default_value_os_t = dfdaemon::default_dfdaemon_unix_socket_path(),
+        default_value_os_t = dfdaemon::default_download_unix_socket_path(),
         help = "Endpoint of dfdaemon's GRPC server"
     )]
     endpoint: PathBuf,
