@@ -571,9 +571,7 @@ impl DfdaemonClient {
         &self,
         request: GetPieceNumbersRequest,
     ) -> ClientResult<Vec<u32>> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
+        let request = Self::make_request(request);
         let response = self.client.clone().get_piece_numbers(request).await?;
         Ok(response.into_inner().piece_numbers)
     }
@@ -584,9 +582,7 @@ impl DfdaemonClient {
         &self,
         request: SyncPiecesRequest,
     ) -> ClientResult<tonic::Response<tonic::codec::Streaming<SyncPiecesResponse>>> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
+        let request = Self::make_request(request);
         let response = self.client.clone().sync_pieces(request).await?;
         Ok(response)
     }
@@ -624,9 +620,7 @@ impl DfdaemonClient {
     // upload_task tells the dfdaemon to upload the task.
     #[instrument(skip_all)]
     pub async fn upload_task(&self, request: UploadTaskRequest) -> ClientResult<()> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
+        let request = Self::make_request(request);
         self.client.clone().upload_task(request).await?;
         Ok(())
     }
@@ -634,9 +628,7 @@ impl DfdaemonClient {
     // stat_task gets the status of the task.
     #[instrument(skip_all)]
     pub async fn stat_task(&self, request: DfdaemonStatTaskRequest) -> ClientResult<Task> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
+        let request = Self::make_request(request);
         let response = self.client.clone().stat_task(request).await?;
         Ok(response.into_inner())
     }
@@ -644,10 +636,15 @@ impl DfdaemonClient {
     // delete_task tells the dfdaemon to delete the task.
     #[instrument(skip_all)]
     pub async fn delete_task(&self, request: DeleteTaskRequest) -> ClientResult<()> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
+        let request = Self::make_request(request);
         self.client.clone().delete_task(request).await?;
         Ok(())
+    }
+
+    // make_request creates a new request with timeout.
+    fn make_request<T>(request: T) -> tonic::Request<T> {
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(super::REQUEST_TIMEOUT);
+        request
     }
 }
