@@ -46,10 +46,15 @@ impl CertificateClient {
         &self,
         request: CertificateRequest,
     ) -> Result<CertificateResponse> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
+        let request = Self::make_request(request);
         let response = self.client.clone().issue_certificate(request).await?;
         Ok(response.into_inner())
+    }
+
+    // make_request creates a new request with timeout.
+    fn make_request<T>(request: T) -> tonic::Request<T> {
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(super::REQUEST_TIMEOUT);
+        request
     }
 }

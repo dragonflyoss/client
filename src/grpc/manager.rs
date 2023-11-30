@@ -80,8 +80,9 @@ impl ManagerClient {
         Ok(())
     }
 
-    fn make_request<T>(req: T) -> tonic::Request<T> {
-        let mut request = tonic::Request::new(req);
+    // make_request creates a new request with timeout.
+    fn make_request<T>(request: T) -> tonic::Request<T> {
+        let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
         request
     }
