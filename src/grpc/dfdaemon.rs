@@ -410,12 +410,7 @@ impl Dfdaemon for DfdaemonServerHandler {
         // Get the content length.
         let content_length = self
             .task
-            .get_content_length(
-                task_id.as_str(),
-                download.url.as_str(),
-                header.clone(),
-                None,
-            )
+            .get_content_length(task_id.as_str(), download.url.as_str(), header.clone())
             .await
             .map_err(|e| {
                 // Download task failed.

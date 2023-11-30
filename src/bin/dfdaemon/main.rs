@@ -133,6 +133,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Initialize task manager.
     let task = Task::new(
+        config.clone(),
         id_generator.clone(),
         storage.clone(),
         scheduler_client.clone(),
