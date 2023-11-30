@@ -30,7 +30,7 @@ pub struct Request {
     pub header: HeaderMap,
 
     // timeout is the timeout of the request.
-    pub timeout: Option<Duration>,
+    pub timeout: Duration,
 }
 
 // HeadResponse is the head response for HTTP backend.
@@ -70,13 +70,9 @@ impl HTTP {
     }
 
     // Head gets the header of the request.
-    pub async fn head(&self, req: Request) -> Result<HeadResponse> {
-        let mut request_builder = self.client.head(&req.url).headers(req.header);
-        if let Some(timeout) = req.timeout {
-            request_builder = request_builder.timeout(timeout);
-        } else {
-            request_builder = request_builder.timeout(super::REQUEST_TIMEOUT);
-        }
+    pub async fn head(&self, request: Request) -> Result<HeadResponse> {
+        let mut request_builder = self.client.head(&request.url).headers(request.header);
+        request_builder = request_builder.timeout(request.timeout);
 
         let response = request_builder.send().await?;
         let header = response.headers().clone();
@@ -89,13 +85,9 @@ impl HTTP {
     }
 
     // Get gets the content of the request.
-    pub async fn get(&self, req: Request) -> Result<GetResponse<impl AsyncRead>> {
-        let mut request_builder = self.client.get(&req.url).headers(req.header);
-        if let Some(timeout) = req.timeout {
-            request_builder = request_builder.timeout(timeout);
-        } else {
-            request_builder = request_builder.timeout(super::REQUEST_TIMEOUT);
-        }
+    pub async fn get(&self, request: Request) -> Result<GetResponse<impl AsyncRead>> {
+        let mut request_builder = self.client.get(&request.url).headers(request.header);
+        request_builder = request_builder.timeout(request.timeout);
 
         let response = request_builder.send().await?;
         let header = response.headers().clone();

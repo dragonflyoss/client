@@ -15,6 +15,7 @@
  */
 
 use crate::backend::http::{Request, HTTP};
+use crate::config::dfdaemon::Config;
 use crate::grpc::{dfdaemon::DfdaemonClient, scheduler::SchedulerClient};
 use crate::storage::{metadata, Storage};
 use crate::utils::digest::{Algorithm, Digest as UtilsDigest};
@@ -29,7 +30,6 @@ use rand::prelude::*;
 use reqwest::header::{self, HeaderMap};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::{
     fs,
     io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, SeekFrom},
@@ -48,6 +48,9 @@ pub struct CollectPiece {
 
 // Piece represents a piece manager.
 pub struct Piece {
+    // config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
     // manager_client is the grpc client of the manager.
     storage: Arc<Storage>,
 
@@ -62,11 +65,13 @@ pub struct Piece {
 impl Piece {
     // new returns a new Piece.
     pub fn new(
+        config: Arc<Config>,
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
         http_client: Arc<HTTP>,
     ) -> Self {
         Self {
+            config,
             storage,
             scheduler_client,
             http_client,
@@ -413,7 +418,6 @@ impl Piece {
         offset: u64,
         length: u64,
         header: HeaderMap,
-        timeout: Option<Duration>,
     ) -> Result<impl AsyncRead> {
         // Record the start of downloading piece.
         self.storage.download_piece_started(task_id, number)?;
@@ -433,7 +437,7 @@ impl Piece {
             .get(Request {
                 url: url.to_string(),
                 header: header.to_owned(),
-                timeout,
+                timeout: self.config.download.piece_timeout,
             })
             .await
             .map_err(|err| {

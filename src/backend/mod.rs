@@ -15,7 +15,3 @@
  */
 
 pub mod http;
-use std::time::Duration;
-
-// REQUEST_TIMEOUT is the timeout for requests.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
