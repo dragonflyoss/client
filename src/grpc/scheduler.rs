@@ -64,9 +64,7 @@ impl SchedulerClient {
     // stat_peer gets the status of the peer.
     #[instrument(skip(self))]
     pub async fn stat_peer(&self, request: StatPeerRequest) -> Result<Peer> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
+        let request = Self::make_request(request);
         let response = self.client()?.stat_peer(request).await?;
         Ok(response.into_inner())
     }
@@ -74,9 +72,7 @@ impl SchedulerClient {
     // leave_peer tells the scheduler that the peer is leaving.
     #[instrument(skip(self))]
     pub async fn leave_peer(&self, request: LeavePeerRequest) -> Result<()> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
+        let request = Self::make_request(request);
         self.client()?.leave_peer(request).await?;
         Ok(())
     }
@@ -87,9 +83,7 @@ impl SchedulerClient {
         &self,
         request: ExchangePeerRequest,
     ) -> Result<ExchangePeerResponse> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
+        let request = Self::make_request(request);
         let response = self.client()?.exchange_peer(request).await?;
         Ok(response.into_inner())
     }
@@ -97,9 +91,7 @@ impl SchedulerClient {
     // stat_task gets the status of the task.
     #[instrument(skip(self))]
     pub async fn stat_task(&self, request: StatTaskRequest) -> Result<Task> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
+        let request = Self::make_request(request);
         let response = self.client()?.stat_task(request).await?;
         Ok(response.into_inner())
     }
@@ -107,9 +99,7 @@ impl SchedulerClient {
     // announce_host announces the host to the scheduler.
     #[instrument(skip(self))]
     pub async fn announce_host(&self, request: AnnounceHostRequest) -> Result<()> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
+        let request = Self::make_request(request);
         self.client()?.announce_host(request).await?;
         Ok(())
     }
@@ -117,9 +107,7 @@ impl SchedulerClient {
     // leave_host tells the scheduler that the host is leaving.
     #[instrument(skip(self))]
     pub async fn leave_host(&self, request: LeaveHostRequest) -> Result<()> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
+        let request = Self::make_request(request);
         self.client()?.leave_host(request).await?;
         Ok(())
     }
@@ -161,5 +149,12 @@ impl SchedulerClient {
                 endpoints.into_iter(),
             )));
         Ok(())
+    }
+
+    // make_request creates a new request with timeout.
+    fn make_request<T>(request: T) -> tonic::Request<T> {
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(super::REQUEST_TIMEOUT);
+        request
     }
 }

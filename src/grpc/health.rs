@@ -41,11 +41,16 @@ impl HealthClient {
 
     // check checks the health of the server.
     pub async fn check(&self, request: HealthCheckRequest) -> Result<HealthCheckResponse> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
+        let request = Self::make_request(request);
         let response = self.client.clone().check(request).await?;
         Ok(response.into_inner())
+    }
+
+    // make_request creates a new request with timeout.
+    fn make_request<T>(request: T) -> tonic::Request<T> {
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(super::REQUEST_TIMEOUT);
+        request
     }
 }
 
