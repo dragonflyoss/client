@@ -191,7 +191,7 @@ impl Task {
 
             // Download the pieces from the local peer.
             if let Err(err) = self
-                .download_partial_from_local_peer_into_file(
+                .download_from_local_peer_into_file(
                     &mut f,
                     task_id,
                     interested_pieces.clone(),
@@ -775,6 +775,41 @@ impl Task {
         }
 
         Ok(finished_pieces)
+    }
+
+    // download_from_local_peer_into_file downloads a task from a local peer into a file.
+    async fn download_from_local_peer_into_file(
+        &self,
+        f: &mut fs::File,
+        task_id: &str,
+        interested_pieces: Vec<metadata::Piece>,
+        content_length: u64,
+        download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
+    ) -> ClientResult<()> {
+        let finished_pieces = self
+            .download_partial_from_local_peer_into_file(
+                f,
+                task_id,
+                interested_pieces.clone(),
+                content_length,
+                download_progress_tx.clone(),
+            )
+            .await?;
+
+        // Check if all pieces are downloaded.
+        if finished_pieces.len() == interested_pieces.len() {
+            return Ok(());
+        }
+
+        // Send the download progress.
+        download_progress_tx
+            .send(Err(Status::internal("not all pieces are downloaded")))
+            .await?;
+
+        // If not all pieces are downloaded, return an error.
+        Err(Error::Unknown(
+            "not all pieces are downloaded from source".to_string(),
+        ))
     }
 
     // download_partial_from_local_peer_into_file downloads a partial task from a local peer into a file.
