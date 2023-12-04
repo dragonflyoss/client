@@ -133,7 +133,7 @@ impl Task {
             Err(err) => {
                 error!("open file error: {:?}", err);
                 download_progress_tx
-                    .send(Err(Status::internal("open file error")))
+                    .send(Err(Status::internal(format!("open file error: {:?}", err))))
                     .await
                     .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
 
@@ -151,9 +151,10 @@ impl Task {
             Err(err) => {
                 error!("calculate interested pieces error: {:?}", err);
                 download_progress_tx
-                    .send(Err(Status::invalid_argument(
-                        "calculate interested pieces error",
-                    )))
+                    .send(Err(Status::invalid_argument(format!(
+                        "calculate interested pieces error: {:?}",
+                        err
+                    ))))
                     .await
                     .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
 
@@ -177,7 +178,7 @@ impl Task {
             Err(err) => {
                 error!("get task error: {:?}", err);
                 download_progress_tx
-                    .send(Err(Status::internal("get task error")))
+                    .send(Err(Status::internal(format!("get task error: {:?}", err))))
                     .await
                     .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
 
@@ -202,7 +203,10 @@ impl Task {
             {
                 error!("download from local peer error: {:?}", err);
                 download_progress_tx
-                    .send(Err(Status::internal("download from local peer error")))
+                    .send(Err(Status::internal(format!(
+                        "download from local peer error: {:?}",
+                        err
+                    ))))
                     .await
                     .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
 
@@ -286,7 +290,10 @@ impl Task {
             {
                 error!("download from source error: {:?}", err);
                 download_progress_tx
-                    .send(Err(Status::internal("download from source error")))
+                    .send(Err(Status::internal(format!(
+                        "download from source error: {}",
+                        err
+                    ))))
                     .await
                     .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
 

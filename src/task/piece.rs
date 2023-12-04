@@ -462,7 +462,6 @@ impl Piece {
             return Err(Error::HTTP(HttpError {
                 status_code: response.status_code,
                 header: response.header,
-                body: buffer,
             }));
         }
 
