@@ -151,16 +151,13 @@ impl<T> From<tokio::sync::mpsc::error::SendError<T>> for Error {
 
 // HttpError is the error for http.
 #[derive(Debug, thiserror::Error)]
-#[error("http error {status_code}: {body}")]
+#[error("http error {status_code}")]
 pub struct HttpError {
     // status_code is the status code of the response.
     pub status_code: reqwest::StatusCode,
 
     // header is the headers of the response.
     pub header: HeaderMap,
-
-    // body is the body of the response.
-    pub body: String,
 }
 
 // Result is the result for Client.
