@@ -293,7 +293,7 @@ impl Dfdaemon for DfdaemonServerHandler {
                     // Get the piece content from the local storage.
                     let mut reader = match task
                         .piece
-                        .download_from_local_peer(&task_id, interested_piece_number)
+                        .download_from_local_peer_into_async_read(&task_id, interested_piece_number)
                         .await
                     {
                         Ok(reader) => reader,

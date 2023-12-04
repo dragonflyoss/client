@@ -34,7 +34,8 @@ use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::fs::{self, OpenOptions};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
+use tokio::task::JoinSet;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 use tonic::Status;
@@ -529,7 +530,7 @@ impl Task {
         for collect_interested_piece in collect_interested_pieces {
             let mut reader = match self
                 .piece
-                .download_from_remote_peer(
+                .download_from_remote_peer_into_async_read(
                     task_id,
                     collect_interested_piece.number,
                     collect_interested_piece.parent.clone(),
@@ -660,7 +661,7 @@ impl Task {
             // Download the piece from the local peer.
             let mut reader = match self
                 .piece
-                .download_from_source(
+                .download_from_source_into_async_read(
                     task_id,
                     interested_piece.number,
                     url.as_str(),
@@ -831,11 +832,11 @@ impl Task {
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
+        // Download the piece from the local peer.
         for interested_piece in interested_pieces {
-            // Download the piece from the local peer.
             let mut reader = match self
                 .piece
-                .download_from_local_peer(task_id, interested_piece.number)
+                .download_from_local_peer_into_async_read(task_id, interested_piece.number)
                 .await
             {
                 Ok(reader) => reader,
@@ -913,68 +914,101 @@ impl Task {
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
         // Download the pieces.
+        let mut join_set = JoinSet::new();
+        let semaphore = Arc::new(Semaphore::new(
+            self.config.download.concurrent_pieces as usize,
+        ));
         for interested_piece in &interested_pieces {
-            // Download the piece from the source.
-            let mut reader = self
-                .piece
-                .download_from_source(
-                    task_id,
-                    interested_piece.number,
-                    url.as_str(),
-                    interested_piece.offset,
-                    interested_piece.length,
-                    header.clone(),
-                )
-                .await
-                .map_err(|err| {
-                    error!(
-                        "download piece {} from source error: {:?}",
-                        interested_piece.number, err
-                    );
-                    err
-                })?;
+            let semaphore = semaphore.clone();
+            async fn download_from_source(
+                task_id: String,
+                number: u32,
+                url: String,
+                offset: u64,
+                length: u64,
+                header: HeaderMap,
+                piece: Arc<piece::Piece>,
+                semaphore: Arc<Semaphore>,
+            ) -> ClientResult<metadata::Piece> {
+                let _permit = semaphore.acquire().await?;
 
-            // Get the piece metadata from the local storage.
-            let metadata = self
-                .piece
-                .get(task_id, interested_piece.number)?
-                .ok_or(Error::PieceNotFound(interested_piece.number.to_string()))?;
+                let metadata = piece
+                    .download_from_source(
+                        task_id.as_str(),
+                        number,
+                        url.as_str(),
+                        offset,
+                        length,
+                        header,
+                    )
+                    .await?;
 
-            // Write the piece into the file.
-            self.piece
-                .write_into_file_and_verify(
-                    &mut reader,
-                    f,
-                    metadata.offset,
-                    metadata.digest.as_str(),
-                )
-                .await?;
+                Ok(metadata)
+            }
 
-            info!("finished piece {} from source", metadata.number);
+            join_set.spawn(download_from_source(
+                task_id.to_string(),
+                interested_piece.number,
+                url.clone(),
+                interested_piece.offset,
+                interested_piece.length,
+                header.clone(),
+                self.piece.clone(),
+                semaphore.clone(),
+            ));
+        }
 
-            // Construct the piece.
-            let piece = Piece {
-                number: metadata.number,
-                parent_id: None,
-                offset: metadata.offset,
-                length: metadata.length,
-                digest: metadata.digest.clone(),
-                content: None,
-                traffic_type: Some(TrafficType::LocalPeer as i32),
-                cost: metadata.prost_cost(),
-                created_at: Some(prost_wkt_types::Timestamp::from(metadata.created_at)),
-            };
+        // Wait for the pieces to be downloaded.
+        while let Some(message) = join_set.join_next().await {
+            match message {
+                Ok(Ok(metadata)) => {
+                    // Get the piece content from the local storage.
+                    let mut reader = self.storage.upload_piece(task_id, metadata.number).await?;
 
-            // Send the download progress.
-            download_progress_tx
-                .send(Ok(DownloadTaskResponse {
-                    content_length,
-                    piece: Some(piece.clone()),
-                }))
-                .await?;
+                    // Write the piece into the file.
+                    self.piece
+                        .write_into_file_and_verify(
+                            &mut reader,
+                            f,
+                            metadata.offset,
+                            metadata.digest.as_str(),
+                        )
+                        .await?;
 
-            // Store the finished piece.
-            finished_pieces.push(metadata.clone());
+                    info!("finished piece {} from source", metadata.number);
+
+                    // Construct the piece.
+                    let piece = Piece {
+                        number: metadata.number,
+                        parent_id: None,
+                        offset: metadata.offset,
+                        length: metadata.length,
+                        digest: metadata.digest.clone(),
+                        content: None,
+                        traffic_type: Some(TrafficType::BackToSource as i32),
+                        cost: metadata.prost_cost(),
+                        created_at: Some(prost_wkt_types::Timestamp::from(metadata.created_at)),
+                    };
+
+                    // Send the download progress.
+                    download_progress_tx
+                        .send(Ok(DownloadTaskResponse {
+                            content_length,
+                            piece: Some(piece.clone()),
+                        }))
+                        .await?;
+
+                    // Store the finished piece.
+                    finished_pieces.push(metadata.clone());
+                }
+                Ok(Err(err)) => {
+                    join_set.abort_all();
+                    return Err(err);
+                }
+                Err(err) => {
+                    return Err(Error::Unknown(err.to_string()));
+                }
+            }
         }
 
         // Check if all pieces are downloaded.

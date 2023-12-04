@@ -313,8 +313,8 @@ impl Piece {
         collect_pieces
     }
 
-    // download_from_local_peer downloads a single piece from a local peer.
-    pub async fn download_from_local_peer(
+    // download_from_local_peer_into_async_read downloads a single piece from a local peer.
+    pub async fn download_from_local_peer_into_async_read(
         &self,
         task_id: &str,
         number: u32,
@@ -328,7 +328,7 @@ impl Piece {
         task_id: &str,
         number: u32,
         remote_peer: Peer,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<metadata::Piece> {
         // Create a dfdaemon client.
         let host = remote_peer
             .host
@@ -383,8 +383,13 @@ impl Piece {
                             err
                         })?;
 
+                    let metadata = self
+                        .storage
+                        .get_piece(task_id, number)?
+                        .ok_or(Error::PieceNotFound(number.to_string()))?;
+
                     // Return reader of the piece.
-                    return self.storage.upload_piece(task_id, number).await;
+                    return Ok(metadata);
                 }
 
                 // Record the failure of downloading piece,
@@ -408,6 +413,21 @@ impl Piece {
         Err(Error::UnexpectedResponse())
     }
 
+    // download_from_remote_peer_into_async_read downloads a single piece from a remote peer.
+    pub async fn download_from_remote_peer_into_async_read(
+        &self,
+        task_id: &str,
+        number: u32,
+        remote_peer: Peer,
+    ) -> Result<impl AsyncRead> {
+        // Download the piece from the remote peer.
+        self.download_from_remote_peer(task_id, number, remote_peer)
+            .await?;
+
+        // Return reader of the piece.
+        self.storage.upload_piece(task_id, number).await
+    }
+
     // download_from_source downloads a single piece from the source.
     #[allow(clippy::too_many_arguments)]
     pub async fn download_from_source(
@@ -418,7 +438,7 @@ impl Piece {
         offset: u64,
         length: u64,
         header: HeaderMap,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<metadata::Piece> {
         // Record the start of downloading piece.
         self.storage.download_piece_started(task_id, number)?;
 
@@ -484,6 +504,29 @@ impl Piece {
                 };
                 err
             })?;
+
+        let metadata = self
+            .storage
+            .get_piece(task_id, number)?
+            .ok_or(Error::PieceNotFound(number.to_string()))?;
+
+        Ok(metadata)
+    }
+
+    // download_from_source_into_async_read downloads a single piece from the source.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn download_from_source_into_async_read(
+        &self,
+        task_id: &str,
+        number: u32,
+        url: &str,
+        offset: u64,
+        length: u64,
+        header: HeaderMap,
+    ) -> Result<impl AsyncRead> {
+        // Download the piece from the source.
+        self.download_from_source(task_id, number, url, offset, length, header)
+            .await?;
 
         // Return reader of the piece.
         self.storage.upload_piece(task_id, number).await
