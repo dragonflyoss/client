@@ -42,7 +42,7 @@ const DEFAULT_HEALTH_SERVER_PORT: u16 = 40901;
 const DEFAULT_DOWNLOAD_PIECE_TIMEOUT: Duration = Duration::from_secs(120);
 
 // DEFAULT_DOWNLOAD_CONCURRENT_PIECES is the default number of concurrent pieces to download from source.
-const DEFAULT_DOWNLOAD_CONCURRENT_PIECES: u32 = 10;
+const DEFAULT_DOWNLOAD_CONCURRENT_PIECES: u32 = 20;
 
 // DEFAULT_SCHEDULER_ANNOUNCE_INTERVAL is the default interval to announce peer to the scheduler.
 const DEFAULT_SCHEDULER_ANNOUNCE_INTERVAL: Duration = Duration::from_secs(30);

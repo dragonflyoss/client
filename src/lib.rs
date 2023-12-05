@@ -69,9 +69,16 @@ pub enum Error {
     #[error("acquiring semaphore: {0}")]
     AcquireError(#[from] tokio::sync::AcquireError),
 
+    // JoinError is the error for join.
+    #[error(transparent)]
+    JoinError(#[from] tokio::task::JoinError),
+
+    #[error("send timeout")]
+    SendTimeoutError(),
+
     // Reqwest is the error for reqwest.
     #[error(transparent)]
-    HTTP(HttpError),
+    HTTP(HTTPError),
 
     // HTTPResponseBuilding is the error for http response building.
     #[error(transparent)]
@@ -96,6 +103,10 @@ pub enum Error {
     // AvailableSchedulersNotFound is the error when the available schedulers is not found.
     #[error{"available schedulers not found"}]
     AvailableSchedulersNotFound(),
+
+    // DownloadFromRemotePeerFailed is the error when the download from remote peer is failed.
+    #[error(transparent)]
+    DownloadFromRemotePeerFailed(DownloadFromRemotePeerFailed),
 
     // ColumnFamilyNotFound is the error when the column family is not found.
     #[error{"column family {0} not found"}]
@@ -153,15 +164,36 @@ impl<T> From<tokio::sync::mpsc::error::SendError<T>> for Error {
     }
 }
 
+// SendTimeoutError is the error for send timeout.
+impl<T> From<tokio::sync::mpsc::error::SendTimeoutError<T>> for Error {
+    fn from(err: tokio::sync::mpsc::error::SendTimeoutError<T>) -> Self {
+        match err {
+            tokio::sync::mpsc::error::SendTimeoutError::Timeout(_) => Error::SendTimeoutError(),
+            tokio::sync::mpsc::error::SendTimeoutError::Closed(_) => Error::SendTimeoutError(),
+        }
+    }
+}
+
 // HttpError is the error for http.
 #[derive(Debug, thiserror::Error)]
 #[error("http error {status_code}")]
-pub struct HttpError {
+pub struct HTTPError {
     // status_code is the status code of the response.
     pub status_code: reqwest::StatusCode,
 
     // header is the headers of the response.
     pub header: HeaderMap,
+}
+
+// DownloadFromRemotePeerFailed is the error when the download from remote peer is failed.
+#[derive(Debug, thiserror::Error)]
+#[error("download piece {piece_number} from remote peer {parent_id} failed")]
+pub struct DownloadFromRemotePeerFailed {
+    // piece_number is the number of the piece.
+    pub piece_number: u32,
+
+    // parent_id is the parent id of the piece.
+    pub parent_id: String,
 }
 
 // Result is the result for Client.
