@@ -95,6 +95,7 @@ impl Storage {
             offset,
             length,
             digest.to_string().as_str(),
+            None,
         )?;
         Ok(length)
     }
@@ -106,6 +107,7 @@ impl Storage {
         number: u32,
         offset: u64,
         expected_digest: &str,
+        parent_id: &str,
         reader: &mut R,
     ) -> Result<u64> {
         let response = self.content.write_piece(task_id, offset, reader).await?;
@@ -123,6 +125,7 @@ impl Storage {
             offset,
             length,
             digest.to_string().as_str(),
+            Some(parent_id.to_string()),
         )?;
         Ok(length)
     }
