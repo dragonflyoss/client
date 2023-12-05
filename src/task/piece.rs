@@ -30,6 +30,7 @@ use rand::prelude::*;
 use reqwest::header::{self, HeaderMap};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
+use tokio::task::JoinSet;
 use tokio::{
     fs,
     io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, SeekFrom},
@@ -249,48 +250,73 @@ impl Piece {
         interested_pieces: Vec<metadata::Piece>,
         candidate_parents: Vec<Peer>,
     ) -> Vec<CollectPiece> {
+        // Initialize the collect pieces.
         let mut collect_pieces: Vec<CollectPiece> = Vec::new();
+
+        let mut join_set = JoinSet::new();
         for candidate_parent in candidate_parents {
-            // If candidate_parent.host is None, skip it.
-            let Some(candidate_parent_host) = candidate_parent.host.clone() else {
-                error!("peer {:?} host is empty", candidate_parent);
-                continue;
-            };
+            async fn get_piece_numbers(
+                task_id: String,
+                candidate_parent: Peer,
+            ) -> Result<Vec<CollectPiece>> {
+                // If candidate_parent.host is None, skip it.
+                let candidate_parent_host = candidate_parent.host.clone().ok_or_else(|| {
+                    error!("peer {:?} host is empty", candidate_parent);
+                    Error::InvalidPeer(candidate_parent.id.clone())
+                })?;
 
-            // Create a dfdaemon client.
-            let dfdaemon_client = match DfdaemonClient::new(format!(
-                "http://{}:{}",
-                candidate_parent_host.ip, candidate_parent_host.port
-            ))
-            .await
-            {
-                Ok(client) => client,
-                Err(err) => {
-                    error!("create dfdaemon client failed: {}", err);
-                    continue;
-                }
-            };
+                // Initialize the collect pieces.
+                let mut collect_pieces: Vec<CollectPiece> = Vec::new();
 
-            // Get the piece numbers from the candidate parent.
-            let collect_piece_numbers = match dfdaemon_client
-                .get_piece_numbers(GetPieceNumbersRequest {
-                    task_id: task_id.to_string(),
-                })
+                // Create a dfdaemon client.
+                let dfdaemon_client = DfdaemonClient::new(format!(
+                    "http://{}:{}",
+                    candidate_parent_host.ip, candidate_parent_host.port
+                ))
                 .await
-            {
-                Ok(response) => response,
-                Err(err) => {
-                    error!("get piece numbers failed: {}", err);
-                    continue;
-                }
-            };
+                .map_err(|err| {
+                    error!("create dfdaemon client failed: {}", err);
+                    err
+                })?;
 
-            // Construct the collect pieces.
-            for collect_piece_number in collect_piece_numbers {
-                collect_pieces.push(CollectPiece {
-                    number: collect_piece_number,
-                    parent: candidate_parent.clone(),
-                });
+                let collect_piece_numbers = dfdaemon_client
+                    .get_piece_numbers(GetPieceNumbersRequest {
+                        task_id: task_id.to_string(),
+                    })
+                    .await
+                    .map_err(|err| {
+                        error!("get piece numbers failed: {}", err);
+                        err
+                    })?;
+
+                // Construct the collect pieces.
+                for collect_piece_number in collect_piece_numbers {
+                    collect_pieces.push(CollectPiece {
+                        number: collect_piece_number,
+                        parent: candidate_parent.clone(),
+                    });
+                }
+
+                Ok(collect_pieces)
+            }
+
+            join_set.spawn(get_piece_numbers(
+                task_id.to_string(),
+                candidate_parent.clone(),
+            ));
+        }
+
+        while let Some(message) = join_set.join_next().await {
+            match message {
+                Ok(Ok(new_collect_pieces)) => {
+                    collect_pieces.extend(new_collect_pieces);
+                }
+                Ok(Err(err)) => {
+                    error!("get piece numbers failed: {}", err);
+                }
+                Err(err) => {
+                    error!("join set failed: {}", err);
+                }
             }
         }
 
