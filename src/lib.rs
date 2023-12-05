@@ -65,6 +65,10 @@ pub enum Error {
     #[error("mpsc send: {0}")]
     MpscSend(String),
 
+    // AcquireError is the error for acquire.
+    #[error("acquiring semaphore: {0}")]
+    AcquireError(#[from] tokio::sync::AcquireError),
+
     // Reqwest is the error for reqwest.
     #[error(transparent)]
     HTTP(HttpError),

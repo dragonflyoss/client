@@ -29,9 +29,6 @@ pub const NAME: &str = "dfdaemon";
 // DEFAULT_UPLOAD_GRPC_SERVER_PORT is the default port of the upload grpc server.
 const DEFAULT_UPLOAD_GRPC_SERVER_PORT: u16 = 65000;
 
-// DEFAULT_PROXY_SERVER_PORT is the default port of the proxy server.
-// const DEFAULT_PROXY_SERVER_PORT: u16 = 65001;
-
 // DEFAULT_OBJECT_STORAGE_SERVER_PORT is the default port of the object storage server.
 const DEFAULT_OBJECT_STORAGE_SERVER_PORT: u16 = 65002;
 
@@ -40,6 +37,24 @@ const DEFAULT_METRICS_SERVER_PORT: u16 = 8000;
 
 // DEFAULT_HEALTH_SERVER_PORT is the default port of the health server.
 const DEFAULT_HEALTH_SERVER_PORT: u16 = 40901;
+
+// DEFAULT_DOWNLOAD_PIECE_TIMEOUT is the default timeout for downloading a piece from source.
+const DEFAULT_DOWNLOAD_PIECE_TIMEOUT: Duration = Duration::from_secs(120);
+
+// DEFAULT_DOWNLOAD_CONCURRENT_PIECES is the default number of concurrent pieces to download from source.
+const DEFAULT_DOWNLOAD_CONCURRENT_PIECES: u32 = 10;
+
+// DEFAULT_SCHEDULER_ANNOUNCE_INTERVAL is the default interval to announce peer to the scheduler.
+const DEFAULT_SCHEDULER_ANNOUNCE_INTERVAL: Duration = Duration::from_secs(30);
+
+// DEFAULT_SCHEDULER_SCHEDULE_TIMEOUT is the default timeout for scheduling.
+const DEFAULT_SCHEDULER_SCHEDULE_TIMEOUT: Duration = Duration::from_secs(300);
+
+// DEFAULT_DYNCONFIG_REFRESH_INTERVAL is the default interval to refresh dynamic configuration from manager.
+const DEFAULT_DYNCONFIG_REFRESH_INTERVAL: Duration = Duration::from_secs(1800);
+
+// DEFAULT_SEED_PEER_KEEPALIVE_INTERVAL is the default interval to keepalive with manager.
+const DEFAULT_SEED_PEER_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
 // default_dfdaemon_config_path is the default config path for dfdaemon.
 pub fn default_dfdaemon_config_path() -> PathBuf {
@@ -66,35 +81,9 @@ pub fn default_download_unix_socket_path() -> PathBuf {
     super::default_root_dir().join("dfdaemon.sock")
 }
 
-// default_download_piece_timeout is the default timeout for downloading a piece from source.
-pub fn default_download_piece_timeout() -> Duration {
-    Duration::from_secs(120)
-}
-
 // default_dfdaemon_lock_path is the default file lock path for dfdaemon service.
 pub fn default_dfdaemon_lock_path() -> PathBuf {
     super::default_lock_dir().join("dfdaemon.lock")
-}
-
-// default_scheduler_announce_interval is the default interval to announce peer to the scheduler.
-pub fn default_scheduler_announce_interval() -> Duration {
-    Duration::from_secs(30)
-}
-
-// default_scheduler_schedule_timeout is the default timeout for scheduling.
-pub fn default_scheduler_schedule_timeout() -> Duration {
-    Duration::from_secs(300)
-}
-
-// default_dynconfig_refresh_interval is the default interval to
-// refresh dynamic configuration from manager.
-pub fn default_dynconfig_refresh_interval() -> Duration {
-    Duration::from_secs(1800)
-}
-
-// default_seed_peer_keepalive_interval is the default interval to keepalive with manager.
-pub fn default_seed_peer_keepalive_interval() -> Duration {
-    Duration::from_secs(15)
 }
 
 // Error is the error for Config.
@@ -196,6 +185,9 @@ pub struct Download {
 
     // piece_timeout is the timeout for downloading a piece from source.
     pub piece_timeout: Duration,
+
+    // concurrent_pieces is the number of concurrent pieces to download.
+    pub concurrent_pieces: u32,
 }
 
 // Server implements default value for Server.
@@ -203,7 +195,8 @@ impl Default for Download {
     fn default() -> Self {
         Self {
             server: DwonloadServer::default(),
-            piece_timeout: default_download_piece_timeout(),
+            piece_timeout: DEFAULT_DOWNLOAD_PIECE_TIMEOUT,
+            concurrent_pieces: DEFAULT_DOWNLOAD_CONCURRENT_PIECES,
         }
     }
 }
@@ -265,8 +258,8 @@ pub struct Scheduler {
 impl Default for Scheduler {
     fn default() -> Self {
         Self {
-            announce_interval: default_scheduler_announce_interval(),
-            schedule_timeout: default_scheduler_schedule_timeout(),
+            announce_interval: DEFAULT_SCHEDULER_ANNOUNCE_INTERVAL,
+            schedule_timeout: DEFAULT_SCHEDULER_SCHEDULE_TIMEOUT,
             enable_back_to_source: true,
         }
     }
@@ -329,7 +322,7 @@ impl Default for SeedPeer {
             enable: false,
             kind: HostType::Super,
             cluster_id: 1,
-            keepalive_interval: default_seed_peer_keepalive_interval(),
+            keepalive_interval: DEFAULT_SEED_PEER_KEEPALIVE_INTERVAL,
         }
     }
 }
@@ -346,7 +339,7 @@ pub struct Dynconfig {
 impl Default for Dynconfig {
     fn default() -> Self {
         Self {
-            refresh_interval: default_dynconfig_refresh_interval(),
+            refresh_interval: DEFAULT_DYNCONFIG_REFRESH_INTERVAL,
         }
     }
 }
