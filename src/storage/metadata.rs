@@ -98,6 +98,9 @@ pub struct Piece {
     // digest is the digest of the piece.
     pub digest: String,
 
+    // parent_id is the parent id of the piece.
+    pub parent_id: Option<String>,
+
     // uploaded_count is the count of the piece uploaded by other peers.
     pub uploaded_count: u64,
 
@@ -310,12 +313,14 @@ impl Metadata {
         offset: u64,
         length: u64,
         digest: &str,
+        parent_id: Option<String>,
     ) -> Result<()> {
         match self.get_piece(task_id, number)? {
             Some(mut piece) => {
                 piece.offset = offset;
                 piece.length = length;
                 piece.digest = digest.to_string();
+                piece.parent_id = parent_id;
                 piece.updated_at = Utc::now().naive_utc();
                 piece.finished_at = Some(Utc::now().naive_utc());
                 self.put_piece(task_id, &piece)

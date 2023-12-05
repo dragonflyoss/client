@@ -23,4 +23,4 @@ pub mod scheduler;
 pub mod security;
 
 // REQUEST_TIMEOUT is the timeout for GRPC requests.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);

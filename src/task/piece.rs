@@ -19,7 +19,7 @@ use crate::config::dfdaemon::Config;
 use crate::grpc::{dfdaemon::DfdaemonClient, scheduler::SchedulerClient};
 use crate::storage::{metadata, Storage};
 use crate::utils::digest::{Algorithm, Digest as UtilsDigest};
-use crate::{Error, HttpError, Result};
+use crate::{Error, HTTPError, Result};
 use chrono::Utc;
 use dragonfly_api::common::v2::{Peer, Range};
 use dragonfly_api::dfdaemon::v2::{
@@ -170,6 +170,7 @@ impl Piece {
                         offset,
                         length: piece_length,
                         digest: "".to_string(),
+                        parent_id: None,
                         uploaded_count: 0,
                         updated_at: Utc::now().naive_utc(),
                         created_at: Utc::now().naive_utc(),
@@ -206,6 +207,7 @@ impl Piece {
                 offset,
                 length: piece_length,
                 digest: "".to_string(),
+                parent_id: None,
                 uploaded_count: 0,
                 updated_at: Utc::now().naive_utc(),
                 created_at: Utc::now().naive_utc(),
@@ -333,7 +335,7 @@ impl Piece {
         let host = remote_peer
             .host
             .clone()
-            .ok_or(Error::InvalidPeer(remote_peer.id))?;
+            .ok_or(Error::InvalidPeer(remote_peer.id.clone()))?;
         let dfdaemon_client =
             DfdaemonClient::new(format!("http://{}:{}", host.ip, host.port)).await?;
 
@@ -368,6 +370,7 @@ impl Piece {
                             number,
                             piece.offset,
                             piece.digest.as_str(),
+                            remote_peer.id.as_str(),
                             &mut content.as_slice(),
                         )
                         .await
@@ -479,7 +482,7 @@ impl Piece {
             let mut buffer = String::new();
             response.reader.read_to_string(&mut buffer).await?;
             error!("http error {}: {}", response.status_code, buffer.as_str());
-            return Err(Error::HTTP(HttpError {
+            return Err(Error::HTTP(HTTPError {
                 status_code: response.status_code,
                 header: response.header,
             }));

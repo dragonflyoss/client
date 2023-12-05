@@ -315,25 +315,28 @@ impl Dfdaemon for DfdaemonServerHandler {
 
                     // Send the interested pieces response.
                     out_stream_tx
-                        .send(Ok(SyncPiecesResponse {
-                            response: Some(
-                                sync_pieces_response::Response::InterestedPiecesResponse(
-                                    InterestedPiecesResponse {
-                                        piece: Some(Piece {
-                                            number: piece.number,
-                                            parent_id: None,
-                                            offset: piece.offset,
-                                            length: piece.length,
-                                            digest: piece.digest,
-                                            content: Some(content),
-                                            traffic_type: None,
-                                            cost: None,
-                                            created_at: None,
-                                        }),
-                                    },
+                        .send_timeout(
+                            Ok(SyncPiecesResponse {
+                                response: Some(
+                                    sync_pieces_response::Response::InterestedPiecesResponse(
+                                        InterestedPiecesResponse {
+                                            piece: Some(Piece {
+                                                number: piece.number,
+                                                parent_id: None,
+                                                offset: piece.offset,
+                                                length: piece.length,
+                                                digest: piece.digest,
+                                                content: Some(content),
+                                                traffic_type: None,
+                                                cost: None,
+                                                created_at: None,
+                                            }),
+                                        },
+                                    ),
                                 ),
-                            ),
-                        }))
+                            }),
+                            super::REQUEST_TIMEOUT,
+                        )
                         .await
                         .unwrap_or_else(|e| {
                             error!("send to out stream: {}", e);
