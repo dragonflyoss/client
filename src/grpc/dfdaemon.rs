@@ -22,10 +22,9 @@ use dragonfly_api::common::v2::{Piece, Task};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_client::DfdaemonClient as DfdaemonGRPCClient,
     dfdaemon_server::{Dfdaemon, DfdaemonServer as DfdaemonGRPCServer},
-    sync_pieces_request, sync_pieces_response, DeleteTaskRequest, DownloadTaskRequest,
-    DownloadTaskResponse, GetPieceNumbersRequest, GetPieceNumbersResponse, InterestedPiecesRequest,
-    InterestedPiecesResponse, StatTaskRequest as DfdaemonStatTaskRequest, SyncPiecesRequest,
-    SyncPiecesResponse, UploadTaskRequest,
+    DeleteTaskRequest, DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest,
+    DownloadTaskResponse, GetPieceNumbersRequest, GetPieceNumbersResponse,
+    StatTaskRequest as DfdaemonStatTaskRequest, UploadTaskRequest,
 };
 use dragonfly_api::scheduler::v2::StatTaskRequest as SchedulerStatTaskRequest;
 use std::net::SocketAddr;
@@ -232,15 +231,12 @@ impl Dfdaemon for DfdaemonServerHandler {
         Ok(Response::new(GetPieceNumbersResponse { piece_numbers }))
     }
 
-    // SyncPiecesStream is the stream of the sync pieces response.
-    type SyncPiecesStream = ReceiverStream<Result<SyncPiecesResponse, Status>>;
-
     // sync_pieces syncs the pieces.
-    #[instrument(skip_all, fields(task_id))]
-    async fn sync_pieces(
+    #[instrument(skip_all, fields(task_id, piece_number))]
+    async fn download_piece(
         &self,
-        request: Request<SyncPiecesRequest>,
-    ) -> Result<Response<Self::SyncPiecesStream>, Status> {
+        request: Request<DownloadPieceRequest>,
+    ) -> Result<Response<DownloadPieceResponse>, Status> {
         // Clone the request.
         let request = request.into_inner();
 
@@ -248,107 +244,61 @@ impl Dfdaemon for DfdaemonServerHandler {
         let task = self.task.clone();
 
         // Get the task id from the request.
-        let task_id = request.task_id.clone();
+        let task_id = request.task_id;
 
         // Span record the task id.
         Span::current().record("task_id", task_id.as_str());
 
-        // Get the interested piece numbers from the request.
-        let interested_piece_numbers = match request.request {
-            Some(sync_pieces_request::Request::InterestedPiecesRequest(
-                InterestedPiecesRequest { piece_numbers },
-            )) => piece_numbers,
-            _ => {
-                error!("missing interested pieces request");
-                return Err(Status::invalid_argument(
-                    "missing interested pieces request",
-                ));
-            }
-        };
-        info!("interested piece numbers: {:?}", interested_piece_numbers);
+        // Get the interested piece number from the request.
+        let piece_number = request.piece_number;
 
-        // Initialize stream channel.
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
-        tokio::spawn(
-            async move {
-                for interested_piece_number in interested_piece_numbers {
-                    // Get the piece metadata from the local storage.
-                    let piece = match task.piece.get(&task_id, interested_piece_number) {
-                        Ok(piece) => piece,
-                        Err(e) => {
-                            error!("get piece metadata from local storage: {}", e);
-                            continue;
-                        }
-                    };
+        // Span record the piece number.
+        Span::current().record("piece_number", piece_number);
 
-                    // Check whether the piece exists.
-                    let piece = match piece {
-                        Some(piece) => piece,
-                        None => {
-                            error!("piece {} not found", interested_piece_number);
-                            continue;
-                        }
-                    };
+        // Get the piece metadata from the local storage.
+        let piece = task
+            .piece
+            .get(task_id.as_str(), piece_number)
+            .map_err(|err| {
+                error!("get piece metadata from local storage: {}", err);
+                Status::internal(err.to_string())
+            })?
+            .ok_or_else(|| {
+                error!("piece metadata not found");
+                Status::not_found("piece metadata not found")
+            })?;
 
-                    // Get the piece content from the local storage.
-                    let mut reader = match task
-                        .piece
-                        .download_from_local_peer_into_async_read(&task_id, interested_piece_number)
-                        .await
-                    {
-                        Ok(reader) => reader,
-                        Err(e) => {
-                            error!("get piece content from local peer: {}", e);
-                            continue;
-                        }
-                    };
+        // Get the piece content from the local storage.
+        let mut reader = task
+            .piece
+            .download_from_local_peer_into_async_read(task_id.as_str(), piece_number)
+            .await
+            .map_err(|err| {
+                error!("read piece content from local storage: {}", err);
+                Status::internal(err.to_string())
+            })?;
 
-                    // Read the content of the piece.
-                    let mut content = Vec::new();
-                    match reader.read_to_end(&mut content).await {
-                        Ok(_) => {}
-                        Err(e) => {
-                            error!("read piece content: {}", e);
-                            continue;
-                        }
-                    };
+        // Read the content of the piece.
+        let mut content = Vec::new();
+        reader.read_to_end(&mut content).await.map_err(|err| {
+            error!("read piece content: {}", err);
+            Status::internal(err.to_string())
+        })?;
 
-                    // Send the interested pieces response.
-                    out_stream_tx
-                        .send_timeout(
-                            Ok(SyncPiecesResponse {
-                                response: Some(
-                                    sync_pieces_response::Response::InterestedPiecesResponse(
-                                        InterestedPiecesResponse {
-                                            piece: Some(Piece {
-                                                number: piece.number,
-                                                parent_id: None,
-                                                offset: piece.offset,
-                                                length: piece.length,
-                                                digest: piece.digest,
-                                                content: Some(content),
-                                                traffic_type: None,
-                                                cost: None,
-                                                created_at: None,
-                                            }),
-                                        },
-                                    ),
-                                ),
-                            }),
-                            super::REQUEST_TIMEOUT,
-                        )
-                        .await
-                        .unwrap_or_else(|e| {
-                            error!("send to out stream: {}", e);
-                        });
-
-                    info!("send interested piece {}", interested_piece_number);
-                }
-            }
-            .in_current_span(),
-        );
-
-        Ok(Response::new(ReceiverStream::new(out_stream_rx)))
+        // Return the piece.
+        Ok(Response::new(DownloadPieceResponse {
+            piece: Some(Piece {
+                number: piece.number,
+                parent_id: piece.parent_id,
+                offset: piece.offset,
+                length: piece.length,
+                digest: piece.digest,
+                content: Some(content),
+                traffic_type: None,
+                cost: None,
+                created_at: None,
+            }),
+        }))
     }
 
     // DownloadTaskStream is the stream of the download task response.
@@ -576,13 +526,16 @@ impl DfdaemonClient {
 
     // sync_pieces syncs the pieces.
     #[instrument(skip_all)]
-    pub async fn sync_pieces(
+    pub async fn download_piece(
         &self,
-        request: SyncPiecesRequest,
-    ) -> ClientResult<tonic::Response<tonic::codec::Streaming<SyncPiecesResponse>>> {
-        let request = Self::make_request(request);
-        let response = self.client.clone().sync_pieces(request).await?;
-        Ok(response)
+        request: DownloadPieceRequest,
+        timeout: Duration,
+    ) -> ClientResult<DownloadPieceResponse> {
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(timeout);
+
+        let response = self.client.clone().download_piece(request).await?;
+        Ok(response.into_inner())
     }
 
     // download_task tells the dfdaemon to download the task.

@@ -22,10 +22,7 @@ use crate::utils::digest::{Algorithm, Digest as UtilsDigest};
 use crate::{Error, HTTPError, Result};
 use chrono::Utc;
 use dragonfly_api::common::v2::{Peer, Range};
-use dragonfly_api::dfdaemon::v2::{
-    sync_pieces_request, sync_pieces_response, GetPieceNumbersRequest, InterestedPiecesRequest,
-    InterestedPiecesResponse, SyncPiecesRequest,
-};
+use dragonfly_api::dfdaemon::v2::{DownloadPieceRequest, GetPieceNumbersRequest};
 use rand::prelude::*;
 use reqwest::header::{self, HeaderMap};
 use sha2::{Digest, Sha256};
@@ -370,76 +367,67 @@ impl Piece {
 
         // Send the interested pieces request.
         let response = dfdaemon_client
-            .sync_pieces(SyncPiecesRequest {
-                task_id: task_id.to_string(),
-                request: Some(sync_pieces_request::Request::InterestedPiecesRequest(
-                    InterestedPiecesRequest {
-                        piece_numbers: vec![number],
-                    },
-                )),
-            })
-            .await?;
-        let mut out_stream = response.into_inner();
-        if let Some(message) = out_stream.message().await? {
-            if let Some(sync_pieces_response::Response::InterestedPiecesResponse(
-                InterestedPiecesResponse { piece },
-            )) = message.response
-            {
-                if let Some(piece) = piece {
-                    // Get the piece content.
-                    let content = piece.content.ok_or(Error::InvalidParameter())?;
+            .download_piece(
+                DownloadPieceRequest {
+                    task_id: task_id.to_string(),
+                    piece_number: number,
+                },
+                self.config.download.piece_timeout,
+            )
+            .await
+            .map_err(|err| {
+                error!("download piece failed: {}", err);
+                if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                    error!("set piece metadata failed: {}", err)
+                };
+                err
+            })?;
 
-                    // Record the finish of downloading piece.
-                    self.storage
-                        .download_piece_from_remote_peer_finished(
-                            task_id,
-                            number,
-                            piece.offset,
-                            piece.digest.as_str(),
-                            remote_peer.id.as_str(),
-                            &mut content.as_slice(),
-                        )
-                        .await
-                        .map_err(|err| {
-                            // Record the failure of downloading piece,
-                            // If storage fails to record piece.
-                            error!("download piece finished: {}", err);
-                            if let Some(err) =
-                                self.storage.download_piece_failed(task_id, number).err()
-                            {
-                                error!("download piece failed: {}", err)
-                            };
-                            err
-                        })?;
+        let piece = response.piece.ok_or_else(|| {
+            error!("piece is empty");
+            if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                error!("set piece metadata failed: {}", err)
+            };
+            Error::InvalidParameter()
+        })?;
 
-                    let metadata = self
-                        .storage
-                        .get_piece(task_id, number)?
-                        .ok_or(Error::PieceNotFound(number.to_string()))?;
+        // Get the piece content.
+        let content = piece.content.ok_or_else(|| {
+            error!("piece content is empty");
+            if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                error!("set piece metadata failed: {}", err)
+            };
+            Error::InvalidParameter()
+        })?;
 
-                    // Return reader of the piece.
-                    return Ok(metadata);
-                }
-
+        // Record the finish of downloading piece.
+        self.storage
+            .download_piece_from_remote_peer_finished(
+                task_id,
+                number,
+                piece.offset,
+                piece.digest.as_str(),
+                remote_peer.id.as_str(),
+                &mut content.as_slice(),
+            )
+            .await
+            .map_err(|err| {
                 // Record the failure of downloading piece,
-                // if the piece is not found.
-                error!("piece not found");
-                self.storage.download_piece_failed(task_id, number)?;
-                return Err(Error::UnexpectedResponse());
-            }
+                // If storage fails to record piece.
+                error!("download piece finished: {}", err);
+                if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                    error!("set piece metadata failed: {}", err)
+                };
+                err
+            })?;
 
-            // Record the failure of downloading piece,
-            // if the response is not found.
-            error!("response not found");
-            self.storage.download_piece_failed(task_id, number)?;
-            return Err(Error::UnexpectedResponse());
-        }
+        let metadata = self
+            .storage
+            .get_piece(task_id, number)?
+            .ok_or(Error::PieceNotFound(number.to_string()))?;
 
-        // Record the failure of downloading piece,
-        // if the message is not found.
-        error!("message not found");
-        self.storage.download_piece_failed(task_id, number)?;
-        Err(Error::UnexpectedResponse())
+        // Return reader of the piece.
+        Ok(metadata)
     }
 
     // download_from_remote_peer_into_async_read downloads a single piece from a remote peer.
@@ -494,7 +482,7 @@ impl Piece {
                 // if the request is failed.
                 error!("http error: {}", err);
                 if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
-                    error!("download piece failed: {}", err)
+                    error!("set piece metadata failed: {}", err)
                 };
                 err
             })?;
@@ -529,7 +517,7 @@ impl Piece {
                 // If storage fails to record piece.
                 error!("download piece finished: {}", err);
                 if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
-                    error!("download piece failed: {}", err)
+                    error!("set piece metadata failed: {}", err)
                 };
                 err
             })?;
