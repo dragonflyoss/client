@@ -34,9 +34,11 @@ use mpsc::Sender;
 use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::fs::{self, OpenOptions};
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinSet;
+use tokio::time::sleep;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 use tonic::Status;
@@ -411,6 +413,8 @@ impl Task {
                         )
                         .await?;
 
+                    // Wait for the latest message to be sent.
+                    sleep(Duration::from_millis(1)).await;
                     return Ok(Vec::new());
                 }
                 announce_peer_response::Response::NormalTaskResponse(response) => {
@@ -461,6 +465,8 @@ impl Task {
                             )
                             .await?;
 
+                        // Wait for the latest message to be sent.
+                        sleep(Duration::from_millis(1)).await;
                         return Ok(finished_pieces);
                     }
                 }
@@ -527,12 +533,13 @@ impl Task {
                                     error!("send download peer back-to-source failed request error: {:?}", err)
                                 });
 
+                            // Wait for the latest message to be sent.
+                            sleep(Duration::from_millis(1)).await;
                             return Err(err);
                         }
                     };
 
                     if finished_pieces.len() == remaining_interested_pieces.len() {
-                        info!("all pieces are downloaded from source");
                         // Send the download peer finished request.
                         in_stream_tx
                             .send_timeout(
@@ -554,6 +561,9 @@ impl Task {
                             .await?;
 
                         info!("all pieces are downloaded from source");
+
+                        // Wait for the latest message to be sent.
+                        sleep(Duration::from_millis(1)).await;
                         return Ok(finished_pieces);
                     }
 
@@ -572,6 +582,8 @@ impl Task {
                         }, REQUEST_TIMEOUT)
                         .await?;
 
+                    // Wait for the latest message to be sent.
+                    sleep(Duration::from_millis(1)).await;
                     return Err(Error::Unknown(
                         "not all pieces are downloaded from source".to_string(),
                     ));
