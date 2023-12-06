@@ -100,6 +100,10 @@ pub enum Error {
     #[error{"piece {0} state is failed"}]
     PieceStateIsFailed(String),
 
+    // WaitForPieceFinishedTimeout is the error when the wait for piece finished timeout.
+    #[error{"wait for piece {0} finished timeout"}]
+    WaitForPieceFinishedTimeout(String),
+
     // AvailableSchedulersNotFound is the error when the available schedulers is not found.
     #[error{"available schedulers not found"}]
     AvailableSchedulersNotFound(),

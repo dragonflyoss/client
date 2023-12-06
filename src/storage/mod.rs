@@ -14,16 +14,25 @@
  * limitations under the License.
  */
 
+use crate::config::dfdaemon::Config;
 use crate::utils::digest::{Algorithm, Digest};
 use crate::{Error, Result};
 use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::AsyncRead;
 
 pub mod content;
 pub mod metadata;
 
+// DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.
+const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(500);
+
 // Storage is the storage of the task.
 pub struct Storage {
+    // config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
     // metadata implements the metadata storage.
     metadata: metadata::Metadata,
 
@@ -34,10 +43,14 @@ pub struct Storage {
 // Storage implements the storage.
 impl Storage {
     // new returns a new storage.
-    pub fn new(data_dir: &Path) -> Result<Self> {
+    pub fn new(config: Arc<Config>, data_dir: &Path) -> Result<Self> {
         let metadata = metadata::Metadata::new(data_dir)?;
         let content = content::Content::new(data_dir)?;
-        Ok(Storage { metadata, content })
+        Ok(Storage {
+            config,
+            metadata,
+            content,
+        })
     }
 
     // download_task_started updates the metadata of the task when the task downloads started.
@@ -73,8 +86,13 @@ impl Storage {
 
     // download_piece_started updates the metadata of the piece and writes
     // the data of piece to file when the piece downloads started.
-    pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<()> {
-        self.metadata.download_piece_started(task_id, number)
+    pub async fn download_piece_started(&self, task_id: &str, number: u32) -> Result<()> {
+        // Wait for the piece to be finished.
+        match self.wait_for_piece_finished(task_id, number).await {
+            Ok(_) => Ok(()),
+            // If piece is not found or wait timeout, create piece metadata.
+            Err(_) => self.metadata.download_piece_started(task_id, number),
+        }
     }
 
     // download_piece_from_source_finished is used for downloading piece from source.
@@ -138,6 +156,10 @@ impl Storage {
     // upload_piece updates the metadata of the piece and
     // returns the data of the piece.
     pub async fn upload_piece(&self, task_id: &str, number: u32) -> Result<impl AsyncRead> {
+        // Wait for the piece to be finished.
+        self.wait_for_piece_finished(task_id, number).await?;
+
+        // Get the piece metadata and return the content of the piece.
         match self.metadata.get_piece(task_id, number)? {
             Some(piece) => {
                 let reader = self
@@ -165,5 +187,32 @@ impl Storage {
     // piece_id returns the piece id.
     pub fn piece_id(&self, task_id: &str, number: u32) -> String {
         self.metadata.piece_id(task_id, number)
+    }
+
+    // wait_for_piece_finished waits for the piece to be finished.
+    async fn wait_for_piece_finished(&self, task_id: &str, number: u32) -> Result<()> {
+        // Initialize the timeout of piece.
+        let piece_timeout = tokio::time::sleep(self.config.download.piece_timeout);
+        tokio::pin!(piece_timeout);
+
+        // Initialize the interval of piece.
+        let mut interval = tokio::time::interval(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL);
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let piece = self
+                        .get_piece(task_id, number)?
+                        .ok_or_else(|| Error::PieceNotFound(self.piece_id(task_id, number)))?;
+
+                    // If the piece is finished, return.
+                    if piece.is_finished() {
+                        return Ok(());
+                    }
+                }
+                _ = &mut piece_timeout => {
+                    return Err(Error::WaitForPieceFinishedTimeout(self.piece_id(task_id, number)));
+                }
+            }
+        }
     }
 }

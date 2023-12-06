@@ -344,6 +344,7 @@ impl Piece {
         task_id: &str,
         number: u32,
     ) -> Result<impl AsyncRead> {
+        // Upload the piece content.
         self.storage.upload_piece(task_id, number).await
     }
 
@@ -354,6 +355,9 @@ impl Piece {
         number: u32,
         remote_peer: Peer,
     ) -> Result<metadata::Piece> {
+        // Record the start of downloading piece.
+        self.storage.download_piece_started(task_id, number).await?;
+
         // Create a dfdaemon client.
         let host = remote_peer
             .host
@@ -361,9 +365,6 @@ impl Piece {
             .ok_or(Error::InvalidPeer(remote_peer.id.clone()))?;
         let dfdaemon_client =
             DfdaemonClient::new(format!("http://{}:{}", host.ip, host.port)).await?;
-
-        // Record the start of downloading piece.
-        self.storage.download_piece_started(task_id, number)?;
 
         // Send the interested pieces request.
         let response = dfdaemon_client
@@ -457,7 +458,7 @@ impl Piece {
         header: HeaderMap,
     ) -> Result<metadata::Piece> {
         // Record the start of downloading piece.
-        self.storage.download_piece_started(task_id, number)?;
+        self.storage.download_piece_started(task_id, number).await?;
 
         // Add range header to the request by offset and length.
         let mut header = header.clone();
