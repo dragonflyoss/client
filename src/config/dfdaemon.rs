@@ -44,6 +44,9 @@ const DEFAULT_DOWNLOAD_PIECE_TIMEOUT: Duration = Duration::from_secs(120);
 // DEFAULT_DOWNLOAD_CONCURRENT_PIECES is the default number of concurrent pieces to download from source.
 const DEFAULT_DOWNLOAD_CONCURRENT_PIECES: u32 = 20;
 
+// DEFAULT_DOWNLOAD_MAX_SCHEDULE_COUNT is the default max count of schedule.
+const DEFAULT_DOWNLOAD_MAX_SCHEDULE_COUNT: u32 = 5;
+
 // DEFAULT_SCHEDULER_ANNOUNCE_INTERVAL is the default interval to announce peer to the scheduler.
 const DEFAULT_SCHEDULER_ANNOUNCE_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -188,6 +191,9 @@ pub struct Download {
 
     // concurrent_pieces is the number of concurrent pieces to download.
     pub concurrent_pieces: u32,
+
+    // max_schedule_count is the max count of schedule.
+    pub max_schedule_count: u32,
 }
 
 // Server implements default value for Server.
@@ -197,6 +203,7 @@ impl Default for Download {
             server: DwonloadServer::default(),
             piece_timeout: DEFAULT_DOWNLOAD_PIECE_TIMEOUT,
             concurrent_pieces: DEFAULT_DOWNLOAD_CONCURRENT_PIECES,
+            max_schedule_count: DEFAULT_DOWNLOAD_MAX_SCHEDULE_COUNT,
         }
     }
 }

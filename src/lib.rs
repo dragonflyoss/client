@@ -140,6 +140,10 @@ pub enum Error {
     #[error{"piece digest mismatch"}]
     PieceDigestMismatch(),
 
+    // MaxScheduleCountExceeded is the error when the max schedule count is exceeded.
+    #[error("max schedule count {0} exceeded")]
+    MaxScheduleCountExceeded(u32),
+
     // InvalidContentLength is the error when the content length is invalid.
     #[error("invalid content length")]
     InvalidContentLength(),
