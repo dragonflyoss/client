@@ -91,7 +91,7 @@ async fn main() -> Result<(), anyhow::Error> {
     );
 
     // Initialize storage.
-    let storage = Storage::new(&config.server.data_dir)?;
+    let storage = Storage::new(config.clone(), config.server.data_dir.as_path())?;
     let storage = Arc::new(storage);
 
     // Initialize id generator.
