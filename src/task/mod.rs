@@ -26,7 +26,7 @@ use dragonfly_api::dfdaemon::v2::DownloadTaskResponse;
 use dragonfly_api::scheduler::v2::{
     announce_peer_request, announce_peer_response, download_piece_back_to_source_failed_request,
     AnnouncePeerRequest, DownloadPeerBackToSourceFailedRequest,
-    DownloadPeerBackToSourceStartedRequest, DownloadPeerFinishedRequest,
+    DownloadPeerBackToSourceStartedRequest, DownloadPeerFailedRequest, DownloadPeerFinishedRequest,
     DownloadPeerStartedRequest, DownloadPieceBackToSourceFailedRequest, DownloadPieceFailedRequest,
     DownloadPieceFinishedRequest, HttpResponse, RegisterPeerRequest,
 };
@@ -340,6 +340,9 @@ impl Task {
         download: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<Vec<metadata::Piece>> {
+        // Initialize the schedule count.
+        let mut schedule_count = 0;
+
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
@@ -387,6 +390,39 @@ impl Task {
 
         let mut out_stream = response.into_inner();
         while let Some(message) = out_stream.message().await? {
+            // Check if the schedule count is exceeded.
+            schedule_count += 1;
+            if schedule_count >= self.config.download.max_schedule_count {
+                in_stream_tx
+                    .send_timeout(
+                        AnnouncePeerRequest {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                            request: Some(
+                                announce_peer_request::Request::DownloadPeerFailedRequest(
+                                    DownloadPeerFailedRequest {
+                                        description: Some(
+                                            "max schedule count exceeded".to_string(),
+                                        ),
+                                    },
+                                ),
+                            ),
+                        },
+                        REQUEST_TIMEOUT,
+                    )
+                    .await
+                    .unwrap_or_else(|err| {
+                        error!("send download peer failed request error: {:?}", err)
+                    });
+
+                // Wait for the latest message to be sent.
+                sleep(Duration::from_millis(1)).await;
+                return Err(Error::MaxScheduleCountExceeded(
+                    self.config.download.max_schedule_count,
+                ));
+            }
+
             let response = message.response.ok_or(Error::UnexpectedResponse())?;
             match response {
                 announce_peer_response::Response::EmptyTaskResponse(response) => {
@@ -514,7 +550,6 @@ impl Task {
                     {
                         Ok(finished_pieces) => finished_pieces,
                         Err(err) => {
-                            error!("download from source error: {:?}", err);
                             in_stream_tx
                                 .send_timeout(AnnouncePeerRequest {
                                     host_id: host_id.to_string(),
@@ -559,8 +594,6 @@ impl Task {
                                 REQUEST_TIMEOUT,
                             )
                             .await?;
-
-                        info!("all pieces are downloaded from source");
 
                         // Wait for the latest message to be sent.
                         sleep(Duration::from_millis(1)).await;
