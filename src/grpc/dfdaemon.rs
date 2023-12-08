@@ -23,8 +23,8 @@ use dragonfly_api::dfdaemon::v2::{
     dfdaemon_client::DfdaemonClient as DfdaemonGRPCClient,
     dfdaemon_server::{Dfdaemon, DfdaemonServer as DfdaemonGRPCServer},
     DeleteTaskRequest, DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest,
-    DownloadTaskResponse, GetPieceNumbersRequest, GetPieceNumbersResponse,
-    StatTaskRequest as DfdaemonStatTaskRequest, UploadTaskRequest,
+    DownloadTaskResponse, StatTaskRequest as DfdaemonStatTaskRequest, SyncPiecesRequest,
+    SyncPiecesResponse, UploadTaskRequest,
 };
 use dragonfly_api::scheduler::v2::StatTaskRequest as SchedulerStatTaskRequest;
 use std::net::SocketAddr;
@@ -42,6 +42,9 @@ use tonic::{
 };
 use tower::service_fn;
 use tracing::{error, info, instrument, Instrument, Span};
+
+// DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.
+const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(500);
 
 // DfdaemonUploadServer is the grpc server of the upload.
 pub struct DfdaemonUploadServer {
@@ -191,12 +194,15 @@ pub struct DfdaemonServerHandler {
 // DfdaemonServerHandler implements the dfdaemon grpc service.
 #[tonic::async_trait]
 impl Dfdaemon for DfdaemonServerHandler {
+    // SyncPiecesStream is the stream of the sync pieces response.
+    type SyncPiecesStream = ReceiverStream<Result<SyncPiecesResponse, Status>>;
+
     // get_piece_numbers gets the piece numbers.
     #[instrument(skip_all, fields(task_id))]
-    async fn get_piece_numbers(
+    async fn sync_pieces(
         &self,
-        request: Request<GetPieceNumbersRequest>,
-    ) -> Result<Response<GetPieceNumbersResponse>, Status> {
+        request: Request<SyncPiecesRequest>,
+    ) -> Result<Response<Self::SyncPiecesStream>, Status> {
         // Clone the request.
         let request = request.into_inner();
 
@@ -208,6 +214,18 @@ impl Dfdaemon for DfdaemonServerHandler {
 
         // Clone the task.
         let task = self.task.clone();
+
+        // Initialize stream channel.
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
+        tokio::spawn(
+            async move {
+                // 先搜索一遍本地的 piece，如果有就直接返回。
+                //
+                // 如果有新的 Piece，并且为刚开始下载，轮训，刷新 timeout 时间为 Piece Download Timeout。
+                // 并定时获取 piece。其他情况都不刷新 timeout 时间。
+            }
+            .in_current_span(),
+        );
 
         // Get the piece numbers from the local storage.
         let piece_numbers: Vec<u32> = task
@@ -228,7 +246,7 @@ impl Dfdaemon for DfdaemonServerHandler {
             return Err(Status::not_found("piece numbers not found"));
         }
 
-        Ok(Response::new(GetPieceNumbersResponse { piece_numbers }))
+        Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
     // sync_pieces syncs the pieces.
@@ -515,13 +533,13 @@ impl DfdaemonClient {
 
     // get_piece_numbers gets the piece numbers.
     #[instrument(skip_all)]
-    pub async fn get_piece_numbers(
+    pub async fn sync_pieces(
         &self,
-        request: GetPieceNumbersRequest,
-    ) -> ClientResult<Vec<u32>> {
+        request: SyncPiecesRequest,
+    ) -> ClientResult<tonic::Response<tonic::codec::Streaming<SyncPiecesResponse>>> {
         let request = Self::make_request(request);
-        let response = self.client.clone().get_piece_numbers(request).await?;
-        Ok(response.into_inner().piece_numbers)
+        let response = self.client.clone().sync_pieces(request).await?;
+        Ok(response)
     }
 
     // sync_pieces syncs the pieces.

@@ -45,6 +45,7 @@ use tonic::Status;
 use tracing::{error, info};
 
 pub mod piece;
+pub mod piece_collector;
 
 // Task represents a task manager.
 pub struct Task {
@@ -456,14 +457,7 @@ impl Task {
                 announce_peer_response::Response::NormalTaskResponse(response) => {
                     // If the task is normal, download the pieces from the remote peer.
                     info!("normal task response: {:?}", response);
-                    let collect_interested_pieces = self
-                        .piece
-                        .collect_interested_from_remote_peer(
-                            task_id,
-                            interested_pieces.clone(),
-                            response.candidate_parents,
-                        )
-                        .await;
+                    let collect_interested_pieces = Vec::new();
 
                     // Download the pieces from the remote peer.
                     finished_pieces = self
