@@ -30,13 +30,15 @@ use dragonfly_api::scheduler::v2::{
     DownloadPeerStartedRequest, DownloadPieceBackToSourceFailedRequest, DownloadPieceFailedRequest,
     DownloadPieceFinishedRequest, HttpResponse, RegisterPeerRequest,
 };
-use mpsc::Sender;
 use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs::{self, OpenOptions};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{
+    mpsc::{self, Sender},
+    Semaphore,
+};
 use tokio::task::JoinSet;
 use tokio::time::sleep;
 use tokio_stream::wrappers::ReceiverStream;

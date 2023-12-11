@@ -44,7 +44,7 @@ use tower::service_fn;
 use tracing::{error, info, instrument, Instrument, Span};
 
 // DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.
-const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(500);
+const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(800);
 
 // DfdaemonUploadServer is the grpc server of the upload.
 pub struct DfdaemonUploadServer {
@@ -206,11 +206,14 @@ impl Dfdaemon for DfdaemonServerHandler {
         // Clone the request.
         let request = request.into_inner();
 
-        // Get the task id from the request.
-        let task_id = request.task_id.clone();
+        // Get the task id from tae request.
+        let task_id = request.task_id;
 
         // Span record the task id.
-        Span::current().record("task_id", task_id.as_str());
+        Span::current().record("task_id", task_id.clone());
+
+        // Get the interested piece numbers from the request.
+        let mut interested_piece_numbers = request.interested_piece_numbers.clone();
 
         // Clone the task.
         let task = self.task.clone();
@@ -219,32 +222,75 @@ impl Dfdaemon for DfdaemonServerHandler {
         let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
         tokio::spawn(
             async move {
-                // 先搜索一遍本地的 piece，如果有就直接返回。
-                //
-                // 如果有新的 Piece，并且为刚开始下载，轮训，刷新 timeout 时间为 Piece Download Timeout。
-                // 并定时获取 piece。其他情况都不刷新 timeout 时间。
+                loop {
+                    let mut has_started_piece = false;
+                    let mut finished_piece_numbers = Vec::new();
+                    for interested_piece_number in interested_piece_numbers.iter() {
+                        let piece = match task.piece.get(task_id.as_str(), *interested_piece_number)
+                        {
+                            Ok(Some(piece)) => piece,
+                            Ok(None) => continue,
+                            Err(err) => {
+                                error!("get piece metadata: {}", err);
+                                out_stream_tx
+                                    .send(Err(Status::internal(err.to_string())))
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        error!("send piece metadata to stream: {}", err);
+                                    });
+
+                                drop(out_stream_tx);
+                                return;
+                            }
+                        };
+
+                        // Send the piece metadata to the stream.
+                        if piece.is_finished() {
+                            info!("piece {} is finished", piece.number);
+                            out_stream_tx
+                                .send(Ok(SyncPiecesResponse {
+                                    piece_number: piece.number,
+                                }))
+                                .await
+                                .unwrap_or_else(|err| {
+                                    error!("send finished pieces to stream: {}", err);
+                                });
+
+                            // Add the finished piece number to the finished piece numbers.
+                            finished_piece_numbers.push(piece.number);
+                            continue;
+                        }
+
+                        // Check whether the piece is started.
+                        if piece.is_started() {
+                            has_started_piece = true;
+                        }
+                    }
+
+                    // Remove the finished piece numbers from the interested piece numbers.
+                    interested_piece_numbers
+                        .retain(|number| !finished_piece_numbers.contains(number));
+
+                    // If all the interested pieces are finished, return.
+                    if interested_piece_numbers.is_empty() {
+                        info!("all the interested pieces are finished");
+                        drop(out_stream_tx);
+                        return;
+                    }
+
+                    // If there is no started piece, return.
+                    if !has_started_piece {
+                        info!("there is no started piece");
+                        drop(out_stream_tx);
+                        return;
+                    }
+
+                    // Wait for the piece to be finished.
+                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL).await;
+                }
             }
             .in_current_span(),
         );
-
-        // Get the piece numbers from the local storage.
-        let piece_numbers: Vec<u32> = task
-            .piece
-            .get_all(task_id.as_str())
-            .map_err(|e| {
-                error!("get piece numbers from local storage: {}", e);
-                Status::internal(e.to_string())
-            })?
-            .iter()
-            .map(|piece| piece.number)
-            .collect();
-        info!("piece numbers: {:?}", piece_numbers);
-
-        // Check whether the piece numbers is empty.
-        if piece_numbers.is_empty() {
-            error!("piece numbers not found");
-            return Err(Status::not_found("piece numbers not found"));
-        }
 
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }

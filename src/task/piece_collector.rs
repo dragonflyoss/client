@@ -17,8 +17,11 @@
 use crate::grpc::dfdaemon::DfdaemonClient;
 use crate::storage::metadata;
 use crate::{Error, Result};
+use dashmap::{DashMap, DashSet};
 use dragonfly_api::common::v2::Peer;
-use std::collections::{HashMap, HashSet};
+use dragonfly_api::dfdaemon::v2::SyncPiecesRequest;
+use std::sync::Arc;
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
 use tracing::{error, info};
 
@@ -36,44 +39,76 @@ pub struct PieceCollector {
     // task_id is the id of the task.
     task_id: String,
 
-    // parents is the parent peers.
-    parents: Vec<Peer>,
+    // peers is the peers to collect pieces from.
+    peers: Vec<Peer>,
 
     // interested_pieces is the pieces interested by the collector.
     interested_pieces: Vec<metadata::Piece>,
 
-    // collected_pieces is the pieces collected from parents.
-    collected_pieces: HashMap<u32, HashSet<Peer>>,
+    // collected_pieces is the pieces collected from peers.
+    collected_pieces: Arc<DashMap<u32, DashSet<String>>>,
 }
 
 impl PieceCollector {
     // NewPieceCollector returns a new PieceCollector.
-    pub fn new(task_id: &str, interested_pieces: Vec<metadata::Piece>, parents: Vec<Peer>) -> Self {
+    pub fn new(task_id: &str, interested_pieces: Vec<metadata::Piece>, peers: Vec<Peer>) -> Self {
         // Initialize collected_pieces.
-        let mut collected_pieces = HashMap::new();
-        interested_pieces.into_iter().for_each(|interested_piece| {
-            collected_pieces.insert(interested_piece.number, HashSet::new());
-        });
+        let collected_pieces = Arc::new(DashMap::new());
+        interested_pieces
+            .clone()
+            .into_iter()
+            .for_each(|interested_piece| {
+                collected_pieces.insert(interested_piece.number, DashSet::new());
+            });
 
         Self {
             task_id: task_id.to_string(),
-            parents,
+            peers,
             interested_pieces,
             collected_pieces,
         }
     }
 
     // Run runs the collector.
-    pub async fn run(&self) {
-        // Create a task to collect pieces from parents.
+    pub async fn collect(&self) -> Receiver<CollectedPiece> {
+        let task_id = self.task_id.clone();
+        let peers = self.peers.clone();
+        let interested_pieces = self.interested_pieces.clone();
+        let collected_pieces = self.collected_pieces.clone();
+        let (collected_piece_tx, collected_piece_rx) = mpsc::channel(128);
+        tokio::spawn(async move {
+            Self::collect_from_remote_peers(
+                task_id.clone(),
+                peers.clone(),
+                interested_pieces.clone(),
+                collected_pieces.clone(),
+                collected_piece_tx,
+            )
+            .await;
+        });
+
+        collected_piece_rx
+    }
+
+    // collect collects a piece from peers.
+    pub async fn collect_from_remote_peers(
+        task_id: String,
+        peers: Vec<Peer>,
+        interested_pieces: Vec<metadata::Piece>,
+        collected_pieces: Arc<DashMap<u32, DashSet<String>>>,
+        collected_piece_tx: Sender<CollectedPiece>,
+    ) {
+        // Create a task to collect pieces from peers.
         let mut join_set = JoinSet::new();
-        for parent in self.parents {
+        for peer in peers.iter() {
             async fn sync_pieces(
-                task_id: &str,
+                task_id: String,
                 peer: Peer,
+                peers: Vec<Peer>,
                 interested_pieces: Vec<metadata::Piece>,
-                collected_pieces: HashMap<u32, HashSet<Peer>>,
-            ) -> Result<()> {
+                collected_pieces: Arc<DashMap<u32, DashSet<String>>>,
+                collected_piece_tx: Sender<CollectedPiece>,
+            ) -> Result<Peer> {
                 // If candidate_parent.host is None, skip it.
                 let host = peer.host.clone().ok_or_else(|| {
                     error!("peer {:?} host is empty", peer);
@@ -84,16 +119,81 @@ impl PieceCollector {
                 let dfdaemon_client =
                     DfdaemonClient::new(format!("http://{}:{}", host.ip, host.port)).await?;
 
-                Ok(())
+                let response = dfdaemon_client
+                    .sync_pieces(SyncPiecesRequest {
+                        task_id: task_id.to_string(),
+                        interested_piece_numbers: interested_pieces
+                            .iter()
+                            .map(|piece| piece.number)
+                            .collect(),
+                    })
+                    .await?;
+
+                let mut out_stream = response.into_inner();
+                while let Some(message) = out_stream.message().await? {
+                    collected_pieces
+                        .entry(message.piece_number)
+                        .and_modify(|peers| {
+                            peers.insert(peer.id.clone());
+                        });
+
+                    match collected_pieces.get(&message.piece_number) {
+                        Some(parents) => {
+                            if let Some(parent) = parents.iter().next() {
+                                let number = message.piece_number;
+                                let parent = peers
+                                    .iter()
+                                    .find(|peer| peer.id == parent.as_str())
+                                    .ok_or_else(|| {
+                                    error!("parent {} not found", parent.as_str());
+                                    Error::InvalidPeer(parent.clone())
+                                })?;
+
+                                collected_piece_tx
+                                    .send(CollectedPiece {
+                                        number,
+                                        parent: parent.clone(),
+                                    })
+                                    .await?;
+
+                                collected_pieces.remove(&number);
+                            }
+                        }
+                        None => continue,
+                    };
+                }
+
+                Ok(peer)
+            }
+
+            join_set.spawn(sync_pieces(
+                task_id.clone(),
+                peer.clone(),
+                peers.clone(),
+                interested_pieces.clone(),
+                collected_pieces.clone(),
+                collected_piece_tx.clone(),
+            ));
+        }
+
+        // Wait for all tasks to finish.
+        while let Some(message) = join_set.join_next().await {
+            match message {
+                Ok(Ok(peer)) => {
+                    info!("peer {} sync pieces finished", peer.id);
+                }
+                Ok(Err(err)) => {
+                    error!("sync pieces failed: {}", err);
+                }
+                Err(err) => {
+                    error!("sync pieces failed: {}", err);
+                }
+            }
+
+            // If all pieces are collected, abort all tasks.
+            if collected_pieces.len() == 0 {
+                join_set.abort_all();
             }
         }
-    }
-
-    // Pop pops a piece from the collector.
-    pub async fn pop(&self) -> Result<Option<CollectedPiece>> {
-        // 如果没有 Sync Pieces 连接存在的时候，直接返回完成收集。
-        // Sync Pieces 断掉一个就从 parents vec 里面删除掉对应的 Parent。 如果 parents vec 为空，直接返回完成收集。
-        // 返回过的 Piece，直接在 HashMap 里面删除掉。一个 Piece 只会返回一次。HashMap key 为空，直接返回完成收集。
-        Err(Error::Unimplemented())
     }
 }
