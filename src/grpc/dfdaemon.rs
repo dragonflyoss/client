@@ -23,8 +23,8 @@ use dragonfly_api::dfdaemon::v2::{
     dfdaemon_client::DfdaemonClient as DfdaemonGRPCClient,
     dfdaemon_server::{Dfdaemon, DfdaemonServer as DfdaemonGRPCServer},
     DeleteTaskRequest, DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest,
-    DownloadTaskResponse, GetPieceNumbersRequest, GetPieceNumbersResponse,
-    StatTaskRequest as DfdaemonStatTaskRequest, UploadTaskRequest,
+    DownloadTaskResponse, StatTaskRequest as DfdaemonStatTaskRequest, SyncPiecesRequest,
+    SyncPiecesResponse, UploadTaskRequest,
 };
 use dragonfly_api::scheduler::v2::StatTaskRequest as SchedulerStatTaskRequest;
 use std::net::SocketAddr;
@@ -42,6 +42,9 @@ use tonic::{
 };
 use tower::service_fn;
 use tracing::{error, info, instrument, Instrument, Span};
+
+// DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.
+const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(800);
 
 // DfdaemonUploadServer is the grpc server of the upload.
 pub struct DfdaemonUploadServer {
@@ -191,44 +194,105 @@ pub struct DfdaemonServerHandler {
 // DfdaemonServerHandler implements the dfdaemon grpc service.
 #[tonic::async_trait]
 impl Dfdaemon for DfdaemonServerHandler {
+    // SyncPiecesStream is the stream of the sync pieces response.
+    type SyncPiecesStream = ReceiverStream<Result<SyncPiecesResponse, Status>>;
+
     // get_piece_numbers gets the piece numbers.
     #[instrument(skip_all, fields(task_id))]
-    async fn get_piece_numbers(
+    async fn sync_pieces(
         &self,
-        request: Request<GetPieceNumbersRequest>,
-    ) -> Result<Response<GetPieceNumbersResponse>, Status> {
+        request: Request<SyncPiecesRequest>,
+    ) -> Result<Response<Self::SyncPiecesStream>, Status> {
         // Clone the request.
         let request = request.into_inner();
 
-        // Get the task id from the request.
-        let task_id = request.task_id.clone();
+        // Get the task id from tae request.
+        let task_id = request.task_id;
 
         // Span record the task id.
-        Span::current().record("task_id", task_id.as_str());
+        Span::current().record("task_id", task_id.clone());
+
+        // Get the interested piece numbers from the request.
+        let mut interested_piece_numbers = request.interested_piece_numbers.clone();
 
         // Clone the task.
         let task = self.task.clone();
 
-        // Get the piece numbers from the local storage.
-        let piece_numbers: Vec<u32> = task
-            .piece
-            .get_all(task_id.as_str())
-            .map_err(|e| {
-                error!("get piece numbers from local storage: {}", e);
-                Status::internal(e.to_string())
-            })?
-            .iter()
-            .map(|piece| piece.number)
-            .collect();
-        info!("piece numbers: {:?}", piece_numbers);
+        // Initialize stream channel.
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
+        tokio::spawn(
+            async move {
+                loop {
+                    let mut has_started_piece = false;
+                    let mut finished_piece_numbers = Vec::new();
+                    for interested_piece_number in interested_piece_numbers.iter() {
+                        let piece = match task.piece.get(task_id.as_str(), *interested_piece_number)
+                        {
+                            Ok(Some(piece)) => piece,
+                            Ok(None) => continue,
+                            Err(err) => {
+                                error!("get piece metadata: {}", err);
+                                out_stream_tx
+                                    .send(Err(Status::internal(err.to_string())))
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        error!("send piece metadata to stream: {}", err);
+                                    });
 
-        // Check whether the piece numbers is empty.
-        if piece_numbers.is_empty() {
-            error!("piece numbers not found");
-            return Err(Status::not_found("piece numbers not found"));
-        }
+                                drop(out_stream_tx);
+                                return;
+                            }
+                        };
 
-        Ok(Response::new(GetPieceNumbersResponse { piece_numbers }))
+                        // Send the piece metadata to the stream.
+                        if piece.is_finished() {
+                            info!("piece {} is finished", piece.number);
+                            out_stream_tx
+                                .send(Ok(SyncPiecesResponse {
+                                    piece_number: piece.number,
+                                }))
+                                .await
+                                .unwrap_or_else(|err| {
+                                    error!("send finished pieces to stream: {}", err);
+                                });
+
+                            // Add the finished piece number to the finished piece numbers.
+                            finished_piece_numbers.push(piece.number);
+                            continue;
+                        }
+
+                        // Check whether the piece is started.
+                        if piece.is_started() {
+                            has_started_piece = true;
+                        }
+                    }
+
+                    // Remove the finished piece numbers from the interested piece numbers.
+                    interested_piece_numbers
+                        .retain(|number| !finished_piece_numbers.contains(number));
+
+                    // If all the interested pieces are finished, return.
+                    if interested_piece_numbers.is_empty() {
+                        info!("all the interested pieces are finished");
+                        drop(out_stream_tx);
+                        return;
+                    }
+
+                    // If there is no started piece, return.
+                    if !has_started_piece {
+                        info!("there is no started piece");
+                        drop(out_stream_tx);
+                        return;
+                    }
+
+                    // Wait for the piece to be finished.
+                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL).await;
+                }
+            }
+            .in_current_span(),
+        );
+
+        Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
     // sync_pieces syncs the pieces.
@@ -515,13 +579,13 @@ impl DfdaemonClient {
 
     // get_piece_numbers gets the piece numbers.
     #[instrument(skip_all)]
-    pub async fn get_piece_numbers(
+    pub async fn sync_pieces(
         &self,
-        request: GetPieceNumbersRequest,
-    ) -> ClientResult<Vec<u32>> {
+        request: SyncPiecesRequest,
+    ) -> ClientResult<tonic::Response<tonic::codec::Streaming<SyncPiecesResponse>>> {
         let request = Self::make_request(request);
-        let response = self.client.clone().get_piece_numbers(request).await?;
-        Ok(response.into_inner().piece_numbers)
+        let response = self.client.clone().sync_pieces(request).await?;
+        Ok(response)
     }
 
     // sync_pieces syncs the pieces.

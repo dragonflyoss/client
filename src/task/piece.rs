@@ -22,12 +22,10 @@ use crate::utils::digest::{Algorithm, Digest as UtilsDigest};
 use crate::{Error, HTTPError, Result};
 use chrono::Utc;
 use dragonfly_api::common::v2::{Peer, Range};
-use dragonfly_api::dfdaemon::v2::{DownloadPieceRequest, GetPieceNumbersRequest};
-use rand::prelude::*;
+use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
 use reqwest::header::{self, HeaderMap};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tokio::task::JoinSet;
 use tokio::{
     fs,
     io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, SeekFrom},
@@ -238,104 +236,6 @@ impl Piece {
             })
             .cloned()
             .collect::<Vec<metadata::Piece>>()
-    }
-
-    // collect_interested_from_remote_peer collects the interested pieces from remote peers.
-    pub async fn collect_interested_from_remote_peer(
-        &self,
-        task_id: &str,
-        interested_pieces: Vec<metadata::Piece>,
-        candidate_parents: Vec<Peer>,
-    ) -> Vec<CollectPiece> {
-        // Initialize the collect pieces.
-        let mut collect_pieces: Vec<CollectPiece> = Vec::new();
-
-        let mut join_set = JoinSet::new();
-        for candidate_parent in candidate_parents {
-            async fn get_piece_numbers(
-                task_id: String,
-                candidate_parent: Peer,
-            ) -> Result<Vec<CollectPiece>> {
-                // If candidate_parent.host is None, skip it.
-                let candidate_parent_host = candidate_parent.host.clone().ok_or_else(|| {
-                    error!("peer {:?} host is empty", candidate_parent);
-                    Error::InvalidPeer(candidate_parent.id.clone())
-                })?;
-
-                // Initialize the collect pieces.
-                let mut collect_pieces: Vec<CollectPiece> = Vec::new();
-
-                // Create a dfdaemon client.
-                let dfdaemon_client = DfdaemonClient::new(format!(
-                    "http://{}:{}",
-                    candidate_parent_host.ip, candidate_parent_host.port
-                ))
-                .await
-                .map_err(|err| {
-                    error!("create dfdaemon client failed: {}", err);
-                    err
-                })?;
-
-                let collect_piece_numbers = dfdaemon_client
-                    .get_piece_numbers(GetPieceNumbersRequest {
-                        task_id: task_id.to_string(),
-                    })
-                    .await
-                    .map_err(|err| {
-                        error!("get piece numbers failed: {}", err);
-                        err
-                    })?;
-
-                // Construct the collect pieces.
-                for collect_piece_number in collect_piece_numbers {
-                    collect_pieces.push(CollectPiece {
-                        number: collect_piece_number,
-                        parent: candidate_parent.clone(),
-                    });
-                }
-
-                Ok(collect_pieces)
-            }
-
-            join_set.spawn(get_piece_numbers(
-                task_id.to_string(),
-                candidate_parent.clone(),
-            ));
-        }
-
-        while let Some(message) = join_set.join_next().await {
-            match message {
-                Ok(Ok(new_collect_pieces)) => {
-                    collect_pieces.extend(new_collect_pieces);
-                }
-                Ok(Err(err)) => {
-                    error!("get piece numbers failed: {}", err);
-                }
-                Err(err) => {
-                    error!("join set failed: {}", err);
-                }
-            }
-        }
-
-        // Shuffle the collect pieces.
-        collect_pieces.shuffle(&mut rand::thread_rng());
-
-        // Filter the collect pieces and remove the duplicate pieces.
-        let mut visited: Vec<u32> = Vec::new();
-        collect_pieces.retain(|collect_piece| {
-            interested_pieces
-                .iter()
-                .any(|interested_piece| interested_piece.number != collect_piece.number)
-                || match visited.contains(&collect_piece.number) {
-                    true => false,
-                    false => {
-                        visited.push(collect_piece.number);
-                        true
-                    }
-                }
-        });
-
-        collect_pieces
     }
 
     // download_from_local_peer_into_async_read downloads a single piece from a local peer.
