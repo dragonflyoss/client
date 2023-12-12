@@ -41,7 +41,7 @@ use tokio::sync::{
 };
 use tokio::task::JoinSet;
 use tokio::time::sleep;
-use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::Request;
 use tonic::Status;
 use tracing::{error, info};
@@ -392,7 +392,7 @@ impl Task {
             .await?;
 
         let mut out_stream = response.into_inner();
-        while let Some(message) = out_stream.message().await? {
+        while let Some(message) = out_stream.try_next().await? {
             // Check if the schedule count is exceeded.
             schedule_count += 1;
             if schedule_count >= self.config.download.max_schedule_count {
@@ -459,7 +459,6 @@ impl Task {
                 announce_peer_response::Response::NormalTaskResponse(response) => {
                     // If the task is normal, download the pieces from the remote peer.
                     info!("normal task response: {:?}", response);
-                    let collect_interested_pieces = Vec::new();
 
                     // Download the pieces from the remote peer.
                     finished_pieces = self
@@ -468,7 +467,8 @@ impl Task {
                             task_id,
                             host_id,
                             peer_id,
-                            collect_interested_pieces,
+                            response.candidate_parents.clone(),
+                            interested_pieces.clone(),
                             content_length,
                             download_progress_tx.clone(),
                             in_stream_tx.clone(),
@@ -632,64 +632,88 @@ impl Task {
         task_id: &str,
         host_id: &str,
         peer_id: &str,
-        collect_interested_pieces: Vec<piece::CollectPiece>,
+        remote_peers: Vec<Peer>,
+        interested_pieces: Vec<metadata::Piece>,
         content_length: u64,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
         in_stream_tx: Sender<AnnouncePeerRequest>,
     ) -> ClientResult<Vec<metadata::Piece>> {
+        // Initialize the piece collector.
+        let piece_collector = piece_collector::PieceCollector::new(
+            self.config.clone(),
+            task_id,
+            interested_pieces.clone(),
+            remote_peers.clone(),
+        );
+
+        // Initialize the join set.
+        let mut join_set = JoinSet::new();
+        let semaphore = Arc::new(Semaphore::new(
+            self.config.download.concurrent_piece_count as usize,
+        ));
+
+        // Download the pieces from the remote peers.
+        loop {
+            match piece_collector.run().await.recv().await {
+                Some(collect_piece) => {
+                    let semaphore = semaphore.clone();
+                    async fn download_from_remote_peer(
+                        task_id: String,
+                        number: u32,
+                        remote_peer: Peer,
+                        piece: Arc<piece::Piece>,
+                        semaphore: Arc<Semaphore>,
+                    ) -> ClientResult<metadata::Piece> {
+                        let _permit = semaphore.acquire().await.map_err(|err| {
+                            error!("acquire semaphore error: {:?}", err);
+                            Error::DownloadFromRemotePeerFailed(DownloadFromRemotePeerFailed {
+                                piece_number: number,
+                                parent_id: remote_peer.id.clone(),
+                            })
+                        })?;
+
+                        let metadata = piece
+                            .download_from_remote_peer(
+                                task_id.as_str(),
+                                number,
+                                remote_peer.clone(),
+                            )
+                            .await
+                            .map_err(|err| {
+                                error!(
+                                    "download piece {} from remote peer {:?} error: {:?}",
+                                    number,
+                                    remote_peer.id.clone(),
+                                    err
+                                );
+                                Error::DownloadFromRemotePeerFailed(DownloadFromRemotePeerFailed {
+                                    piece_number: number,
+                                    parent_id: remote_peer.id.clone(),
+                                })
+                            })?;
+
+                        Ok(metadata)
+                    }
+
+                    join_set.spawn(download_from_remote_peer(
+                        task_id.to_string(),
+                        collect_piece.number,
+                        collect_piece.parent.clone(),
+                        self.piece.clone(),
+                        semaphore.clone(),
+                    ));
+                }
+                None => {
+                    info!("piece collector is closed");
+                    break;
+                }
+            }
+        }
+
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
-        // Download the piece from the remote peer.
-        let mut join_set = JoinSet::new();
-        let semaphore = Arc::new(Semaphore::new(
-            self.config.download.concurrent_pieces as usize,
-        ));
-        for collect_interested_piece in collect_interested_pieces {
-            let semaphore = semaphore.clone();
-            async fn download_from_remote_peer(
-                task_id: String,
-                number: u32,
-                remote_peer: Peer,
-                piece: Arc<piece::Piece>,
-                semaphore: Arc<Semaphore>,
-            ) -> ClientResult<metadata::Piece> {
-                let _permit = semaphore.acquire().await.map_err(|err| {
-                    error!("acquire semaphore error: {:?}", err);
-                    Error::DownloadFromRemotePeerFailed(DownloadFromRemotePeerFailed {
-                        piece_number: number,
-                        parent_id: remote_peer.id.clone(),
-                    })
-                })?;
-
-                let metadata = piece
-                    .download_from_remote_peer(task_id.as_str(), number, remote_peer.clone())
-                    .await
-                    .map_err(|err| {
-                        error!(
-                            "download piece {} from remote peer {:?} error: {:?}",
-                            number,
-                            remote_peer.id.clone(),
-                            err
-                        );
-                        Error::DownloadFromRemotePeerFailed(DownloadFromRemotePeerFailed {
-                            piece_number: number,
-                            parent_id: remote_peer.id.clone(),
-                        })
-                    })?;
-
-                Ok(metadata)
-            }
-
-            join_set.spawn(download_from_remote_peer(
-                task_id.to_string(),
-                collect_interested_piece.number,
-                collect_interested_piece.parent.clone(),
-                self.piece.clone(),
-                semaphore.clone(),
-            ));
-        }
-
+        // Wait for the pieces to be downloaded.
         while let Some(message) = join_set.join_next().await {
             match message {
                 Ok(Ok(metadata)) => {
@@ -826,7 +850,7 @@ impl Task {
         // Download the piece from the local peer.
         let mut join_set = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(
-            self.config.download.concurrent_pieces as usize,
+            self.config.download.concurrent_piece_count as usize,
         ));
         for interested_piece in interested_pieces {
             let semaphore = semaphore.clone();
@@ -1122,7 +1146,7 @@ impl Task {
         // Download the pieces.
         let mut join_set = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(
-            self.config.download.concurrent_pieces as usize,
+            self.config.download.concurrent_piece_count as usize,
         ));
         for interested_piece in &interested_pieces {
             let semaphore = semaphore.clone();

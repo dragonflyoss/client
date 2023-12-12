@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::config::dfdaemon::Config;
 use crate::grpc::dfdaemon::DfdaemonClient;
 use crate::storage::metadata;
 use crate::{Error, Result};
@@ -21,8 +22,10 @@ use dashmap::{DashMap, DashSet};
 use dragonfly_api::common::v2::Peer;
 use dragonfly_api::dfdaemon::v2::SyncPiecesRequest;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
+use tokio_stream::StreamExt;
 use tracing::{error, info};
 
 // CollectedPiece is the piece collected from a peer.
@@ -36,6 +39,9 @@ pub struct CollectedPiece {
 
 // PieceCollector is used to collect pieces from peers.
 pub struct PieceCollector {
+    // config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
     // task_id is the id of the task.
     task_id: String,
 
@@ -51,7 +57,12 @@ pub struct PieceCollector {
 
 impl PieceCollector {
     // NewPieceCollector returns a new PieceCollector.
-    pub fn new(task_id: &str, interested_pieces: Vec<metadata::Piece>, peers: Vec<Peer>) -> Self {
+    pub fn new(
+        config: Arc<Config>,
+        task_id: &str,
+        interested_pieces: Vec<metadata::Piece>,
+        peers: Vec<Peer>,
+    ) -> Self {
         // Initialize collected_pieces.
         let collected_pieces = Arc::new(DashMap::new());
         interested_pieces
@@ -62,6 +73,7 @@ impl PieceCollector {
             });
 
         Self {
+            config,
             task_id: task_id.to_string(),
             peers,
             interested_pieces,
@@ -70,34 +82,40 @@ impl PieceCollector {
     }
 
     // Run runs the collector.
-    pub async fn collect(&self) -> Receiver<CollectedPiece> {
+    pub async fn run(&self) -> Receiver<CollectedPiece> {
         let task_id = self.task_id.clone();
         let peers = self.peers.clone();
         let interested_pieces = self.interested_pieces.clone();
         let collected_pieces = self.collected_pieces.clone();
+        let collected_piece_timeout = self.config.download.piece_timeout;
         let (collected_piece_tx, collected_piece_rx) = mpsc::channel(128);
         tokio::spawn(async move {
-            Self::collect_from_remote_peers(
-                task_id.clone(),
-                peers.clone(),
-                interested_pieces.clone(),
-                collected_pieces.clone(),
+            Self::collect_from_peers(
+                task_id,
+                peers,
+                interested_pieces,
+                collected_pieces,
                 collected_piece_tx,
+                collected_piece_timeout,
             )
-            .await;
+            .await
+            .unwrap_or_else(|err| {
+                error!("collect pieces failed: {}", err);
+            })
         });
 
         collected_piece_rx
     }
 
     // collect collects a piece from peers.
-    pub async fn collect_from_remote_peers(
+    async fn collect_from_peers(
         task_id: String,
         peers: Vec<Peer>,
         interested_pieces: Vec<metadata::Piece>,
         collected_pieces: Arc<DashMap<u32, DashSet<String>>>,
         collected_piece_tx: Sender<CollectedPiece>,
-    ) {
+        collected_piece_timeout: Duration,
+    ) -> Result<()> {
         // Create a task to collect pieces from peers.
         let mut join_set = JoinSet::new();
         for peer in peers.iter() {
@@ -108,6 +126,7 @@ impl PieceCollector {
                 interested_pieces: Vec<metadata::Piece>,
                 collected_pieces: Arc<DashMap<u32, DashSet<String>>>,
                 collected_piece_tx: Sender<CollectedPiece>,
+                collected_piece_timeout: Duration,
             ) -> Result<Peer> {
                 // If candidate_parent.host is None, skip it.
                 let host = peer.host.clone().ok_or_else(|| {
@@ -129,8 +148,14 @@ impl PieceCollector {
                     })
                     .await?;
 
-                let mut out_stream = response.into_inner();
-                while let Some(message) = out_stream.message().await? {
+                // If the response repeating timeout exceeds the piece download timeout, the stream will return error.
+                let out_stream = response
+                    .into_inner()
+                    .timeout_repeating(tokio::time::interval(collected_piece_timeout));
+                tokio::pin!(out_stream);
+
+                while let Some(message) = out_stream.try_next().await? {
+                    let message = message?;
                     collected_pieces
                         .entry(message.piece_number)
                         .and_modify(|peers| {
@@ -173,6 +198,7 @@ impl PieceCollector {
                 interested_pieces.clone(),
                 collected_pieces.clone(),
                 collected_piece_tx.clone(),
+                collected_piece_timeout,
             ));
         }
 
@@ -192,8 +218,11 @@ impl PieceCollector {
 
             // If all pieces are collected, abort all tasks.
             if collected_pieces.len() == 0 {
+                info!("all pieces are collected, abort all tasks");
                 join_set.abort_all();
             }
         }
+
+        Ok(())
     }
 }

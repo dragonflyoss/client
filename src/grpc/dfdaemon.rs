@@ -15,6 +15,7 @@
  */
 
 use crate::shutdown;
+use crate::storage;
 use crate::task;
 use crate::utils::http::hashmap_to_headermap;
 use crate::Result as ClientResult;
@@ -42,9 +43,6 @@ use tonic::{
 };
 use tower::service_fn;
 use tracing::{error, info, instrument, Instrument, Span};
-
-// DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.
-const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(800);
 
 // DfdaemonUploadServer is the grpc server of the upload.
 pub struct DfdaemonUploadServer {
@@ -286,7 +284,7 @@ impl Dfdaemon for DfdaemonServerHandler {
                     }
 
                     // Wait for the piece to be finished.
-                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL).await;
+                    tokio::time::sleep(storage::DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL).await;
                 }
             }
             .in_current_span(),
