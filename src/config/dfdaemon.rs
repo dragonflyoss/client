@@ -39,10 +39,10 @@ const DEFAULT_METRICS_SERVER_PORT: u16 = 8000;
 const DEFAULT_HEALTH_SERVER_PORT: u16 = 40901;
 
 // DEFAULT_DOWNLOAD_PIECE_TIMEOUT is the default timeout for downloading a piece from source.
-const DEFAULT_DOWNLOAD_PIECE_TIMEOUT: Duration = Duration::from_secs(120);
+const DEFAULT_DOWNLOAD_PIECE_TIMEOUT: Duration = Duration::from_secs(30);
 
-// DEFAULT_DOWNLOAD_CONCURRENT_PIECES is the default number of concurrent pieces to download from source.
-const DEFAULT_DOWNLOAD_CONCURRENT_PIECES: u32 = 20;
+// DEFAULT_DOWNLOAD_CONCURRENT_PIECE_COUNT is the default number of concurrent pieces to download.
+const DEFAULT_DOWNLOAD_CONCURRENT_PIECE_COUNT: u32 = 10;
 
 // DEFAULT_DOWNLOAD_MAX_SCHEDULE_COUNT is the default max count of schedule.
 const DEFAULT_DOWNLOAD_MAX_SCHEDULE_COUNT: u32 = 5;
@@ -189,8 +189,8 @@ pub struct Download {
     // piece_timeout is the timeout for downloading a piece from source.
     pub piece_timeout: Duration,
 
-    // concurrent_pieces is the number of concurrent pieces to download.
-    pub concurrent_pieces: u32,
+    // concurrent_piece_count is the number of concurrent pieces to download.
+    pub concurrent_piece_count: u32,
 
     // max_schedule_count is the max count of schedule.
     pub max_schedule_count: u32,
@@ -202,7 +202,7 @@ impl Default for Download {
         Self {
             server: DwonloadServer::default(),
             piece_timeout: DEFAULT_DOWNLOAD_PIECE_TIMEOUT,
-            concurrent_pieces: DEFAULT_DOWNLOAD_CONCURRENT_PIECES,
+            concurrent_piece_count: DEFAULT_DOWNLOAD_CONCURRENT_PIECE_COUNT,
             max_schedule_count: DEFAULT_DOWNLOAD_MAX_SCHEDULE_COUNT,
         }
     }
