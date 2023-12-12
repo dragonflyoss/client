@@ -632,7 +632,7 @@ impl Task {
         task_id: &str,
         host_id: &str,
         peer_id: &str,
-        remote_peers: Vec<Peer>,
+        parents: Vec<Peer>,
         interested_pieces: Vec<metadata::Piece>,
         content_length: u64,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
@@ -643,7 +643,7 @@ impl Task {
             self.config.clone(),
             task_id,
             interested_pieces.clone(),
-            remote_peers.clone(),
+            parents.clone(),
         );
 
         // Initialize the join set.
@@ -660,7 +660,7 @@ impl Task {
                     async fn download_from_remote_peer(
                         task_id: String,
                         number: u32,
-                        remote_peer: Peer,
+                        parent: Peer,
                         piece: Arc<piece::Piece>,
                         semaphore: Arc<Semaphore>,
                     ) -> ClientResult<metadata::Piece> {
@@ -668,27 +668,23 @@ impl Task {
                             error!("acquire semaphore error: {:?}", err);
                             Error::DownloadFromRemotePeerFailed(DownloadFromRemotePeerFailed {
                                 piece_number: number,
-                                parent_id: remote_peer.id.clone(),
+                                parent_id: parent.id.clone(),
                             })
                         })?;
 
                         let metadata = piece
-                            .download_from_remote_peer(
-                                task_id.as_str(),
-                                number,
-                                remote_peer.clone(),
-                            )
+                            .download_from_remote_peer(task_id.as_str(), number, parent.clone())
                             .await
                             .map_err(|err| {
                                 error!(
                                     "download piece {} from remote peer {:?} error: {:?}",
                                     number,
-                                    remote_peer.id.clone(),
+                                    parent.id.clone(),
                                     err
                                 );
                                 Error::DownloadFromRemotePeerFailed(DownloadFromRemotePeerFailed {
                                     piece_number: number,
-                                    parent_id: remote_peer.id.clone(),
+                                    parent_id: parent.id.clone(),
                                 })
                             })?;
 

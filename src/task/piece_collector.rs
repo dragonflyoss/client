@@ -45,8 +45,8 @@ pub struct PieceCollector {
     // task_id is the id of the task.
     task_id: String,
 
-    // peers is the peers to collect pieces from.
-    peers: Vec<Peer>,
+    // parents is the parent peers.
+    parents: Vec<Peer>,
 
     // interested_pieces is the pieces interested by the collector.
     interested_pieces: Vec<metadata::Piece>,
@@ -56,12 +56,12 @@ pub struct PieceCollector {
 }
 
 impl PieceCollector {
-    // NewPieceCollector returns a new PieceCollector.
+    // new creates a new PieceCollector.
     pub fn new(
         config: Arc<Config>,
         task_id: &str,
         interested_pieces: Vec<metadata::Piece>,
-        peers: Vec<Peer>,
+        parents: Vec<Peer>,
     ) -> Self {
         // Initialize collected_pieces.
         let collected_pieces = Arc::new(DashMap::new());
@@ -75,24 +75,24 @@ impl PieceCollector {
         Self {
             config,
             task_id: task_id.to_string(),
-            peers,
+            parents,
             interested_pieces,
             collected_pieces,
         }
     }
 
-    // Run runs the collector.
+    // run runs the piece collector.
     pub async fn run(&self) -> Receiver<CollectedPiece> {
         let task_id = self.task_id.clone();
-        let peers = self.peers.clone();
+        let parents = self.parents.clone();
         let interested_pieces = self.interested_pieces.clone();
         let collected_pieces = self.collected_pieces.clone();
         let collected_piece_timeout = self.config.download.piece_timeout;
         let (collected_piece_tx, collected_piece_rx) = mpsc::channel(128);
         tokio::spawn(async move {
-            Self::collect_from_peers(
+            Self::collect_from_remote_peers(
                 task_id,
-                peers,
+                parents,
                 interested_pieces,
                 collected_pieces,
                 collected_piece_tx,
@@ -107,10 +107,10 @@ impl PieceCollector {
         collected_piece_rx
     }
 
-    // collect collects a piece from peers.
-    async fn collect_from_peers(
+    // collect_from_remote_peers collects pieces from remote peers.
+    async fn collect_from_remote_peers(
         task_id: String,
-        peers: Vec<Peer>,
+        parents: Vec<Peer>,
         interested_pieces: Vec<metadata::Piece>,
         collected_pieces: Arc<DashMap<u32, DashSet<String>>>,
         collected_piece_tx: Sender<CollectedPiece>,
@@ -118,20 +118,20 @@ impl PieceCollector {
     ) -> Result<()> {
         // Create a task to collect pieces from peers.
         let mut join_set = JoinSet::new();
-        for peer in peers.iter() {
+        for parent in parents.iter() {
             async fn sync_pieces(
                 task_id: String,
-                peer: Peer,
-                peers: Vec<Peer>,
+                parent: Peer,
+                parents: Vec<Peer>,
                 interested_pieces: Vec<metadata::Piece>,
                 collected_pieces: Arc<DashMap<u32, DashSet<String>>>,
                 collected_piece_tx: Sender<CollectedPiece>,
                 collected_piece_timeout: Duration,
             ) -> Result<Peer> {
                 // If candidate_parent.host is None, skip it.
-                let host = peer.host.clone().ok_or_else(|| {
-                    error!("peer {:?} host is empty", peer);
-                    Error::InvalidPeer(peer.id.clone())
+                let host = parent.host.clone().ok_or_else(|| {
+                    error!("peer {:?} host is empty", parent);
+                    Error::InvalidPeer(parent.id.clone())
                 })?;
 
                 // Create a dfdaemon client.
@@ -159,20 +159,20 @@ impl PieceCollector {
                     collected_pieces
                         .entry(message.piece_number)
                         .and_modify(|peers| {
-                            peers.insert(peer.id.clone());
+                            peers.insert(parent.id.clone());
                         });
 
                     match collected_pieces.get(&message.piece_number) {
-                        Some(parents) => {
-                            if let Some(parent) = parents.iter().next() {
+                        Some(parent_ids) => {
+                            if let Some(parent_id) = parent_ids.iter().next() {
                                 let number = message.piece_number;
-                                let parent = peers
+                                let parent = parents
                                     .iter()
-                                    .find(|peer| peer.id == parent.as_str())
+                                    .find(|parent| parent.id == parent_id.as_str())
                                     .ok_or_else(|| {
-                                    error!("parent {} not found", parent.as_str());
-                                    Error::InvalidPeer(parent.clone())
-                                })?;
+                                        error!("parent {} not found", parent_id.as_str());
+                                        Error::InvalidPeer(parent_id.clone())
+                                    })?;
 
                                 collected_piece_tx
                                     .send(CollectedPiece {
@@ -188,13 +188,13 @@ impl PieceCollector {
                     };
                 }
 
-                Ok(peer)
+                Ok(parent)
             }
 
             join_set.spawn(sync_pieces(
                 task_id.clone(),
-                peer.clone(),
-                peers.clone(),
+                parent.clone(),
+                parents.clone(),
                 interested_pieces.clone(),
                 collected_pieces.clone(),
                 collected_piece_tx.clone(),

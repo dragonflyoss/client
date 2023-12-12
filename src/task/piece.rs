@@ -253,16 +253,16 @@ impl Piece {
         &self,
         task_id: &str,
         number: u32,
-        remote_peer: Peer,
+        parent: Peer,
     ) -> Result<metadata::Piece> {
         // Record the start of downloading piece.
         self.storage.download_piece_started(task_id, number).await?;
 
         // Create a dfdaemon client.
-        let host = remote_peer
+        let host = parent
             .host
             .clone()
-            .ok_or(Error::InvalidPeer(remote_peer.id.clone()))?;
+            .ok_or(Error::InvalidPeer(parent.id.clone()))?;
         let dfdaemon_client =
             DfdaemonClient::new(format!("http://{}:{}", host.ip, host.port)).await?;
 
@@ -308,7 +308,7 @@ impl Piece {
                 number,
                 piece.offset,
                 piece.digest.as_str(),
-                remote_peer.id.as_str(),
+                parent.id.as_str(),
                 &mut content.as_slice(),
             )
             .await
@@ -336,10 +336,10 @@ impl Piece {
         &self,
         task_id: &str,
         number: u32,
-        remote_peer: Peer,
+        parent: Peer,
     ) -> Result<impl AsyncRead> {
         // Download the piece from the remote peer.
-        self.download_from_remote_peer(task_id, number, remote_peer)
+        self.download_from_remote_peer(task_id, number, parent)
             .await?;
 
         // Return reader of the piece.
