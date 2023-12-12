@@ -84,6 +84,10 @@ pub enum Error {
     #[error(transparent)]
     HttpResponseBuilding(#[from] warp::http::Error),
 
+    // Elapsed is the error for elapsed.
+    #[error(transparent)]
+    Elapsed(#[from] tokio_stream::Elapsed),
+
     // HostNotFound is the error when the host is not found.
     #[error{"host {0} not found"}]
     HostNotFound(String),
