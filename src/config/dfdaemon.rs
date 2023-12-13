@@ -59,6 +59,18 @@ const DEFAULT_DYNCONFIG_REFRESH_INTERVAL: Duration = Duration::from_secs(1800);
 // DEFAULT_SEED_PEER_KEEPALIVE_INTERVAL is the default interval to keepalive with manager.
 const DEFAULT_SEED_PEER_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
+// DEFAULT_GC_INTERVAL is the default interval to do gc.
+const DEFAULT_GC_INTERVAL: Duration = Duration::from_secs(120);
+
+// DEFAULT_GC_POLICY_TASK_TTL is the default ttl of the task.
+const DEFAULT_GC_POLICY_TASK_TTL: Duration = Duration::from_secs(21_600);
+
+// DEFAULT_GC_POLICY_DIST_HIGH_THRESHOLD_PERCENT is the default high threshold percent of the disk usage.
+const DEFAULT_GC_POLICY_DIST_HIGH_THRESHOLD_PERCENT: u8 = 80;
+
+// DEFAULT_GC_POLICY_DIST_LOW_THRESHOLD_PERCENT is the default low threshold percent of the disk usage.
+const DEFAULT_GC_POLICY_DIST_LOW_THRESHOLD_PERCENT: u8 = 70;
+
 // default_dfdaemon_config_path is the default config path for dfdaemon.
 pub fn default_dfdaemon_config_path() -> PathBuf {
     super::default_config_dir().join("dfdaemon.yaml")
@@ -356,6 +368,54 @@ impl Default for Dynconfig {
 #[serde(default, rename_all = "camelCase")]
 pub struct Storage {}
 
+// Policy is the policy configuration for gc.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Policy {
+    // task_ttl is the ttl of the task.
+    pub task_ttl: Duration,
+
+    // dist_high_threshold_percent is the high threshold percent of the disk usage.
+    // If the disk usage is greater than the threshold, dfdaemon will do gc.
+    pub dist_high_threshold_percent: u8,
+
+    // dist_low_threshold_percent is the low threshold percent of the disk usage.
+    // If the disk usage is less than the threshold, dfdaemon will stop gc.
+    pub dist_low_threshold_percent: u8,
+}
+
+// Policy implements default value for Policy.
+impl Default for Policy {
+    fn default() -> Self {
+        Self {
+            task_ttl: DEFAULT_GC_POLICY_TASK_TTL,
+            dist_high_threshold_percent: DEFAULT_GC_POLICY_DIST_HIGH_THRESHOLD_PERCENT,
+            dist_low_threshold_percent: DEFAULT_GC_POLICY_DIST_LOW_THRESHOLD_PERCENT,
+        }
+    }
+}
+
+// GC is the gc configuration for dfdaemon.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct GC {
+    // interval is the interval to do gc.
+    pub interval: Duration,
+
+    // policy is the gc policy.
+    pub policy: Policy,
+}
+
+// GC implements default value for GC.
+impl Default for GC {
+    fn default() -> Self {
+        Self {
+            interval: DEFAULT_GC_INTERVAL,
+            policy: Policy::default(),
+        }
+    }
+}
+
 // Proxy is the proxy configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -485,6 +545,9 @@ pub struct Config {
 
     // storage is the storage configuration for dfdaemon.
     pub storage: Storage,
+
+    // gc is the gc configuration for dfdaemon.
+    pub gc: GC,
 
     // proxy is the proxy configuration for dfdaemon.
     pub proxy: Proxy,
