@@ -156,6 +156,12 @@ impl Storage {
     // upload_piece updates the metadata of the piece and
     // returns the data of the piece.
     pub async fn upload_piece(&self, task_id: &str, number: u32) -> Result<impl AsyncRead> {
+        // Start uploading the task.
+        self.metadata.upload_task_started(task_id)?;
+
+        // Start uploading the piece.
+        self.metadata.upload_piece_started(task_id, number)?;
+
         // Wait for the piece to be finished.
         self.wait_for_piece_finished(task_id, number).await?;
 
@@ -166,10 +172,22 @@ impl Storage {
                     .content
                     .read_piece(task_id, piece.offset, piece.length)
                     .await?;
+
+                // Finish uploading the piece.
                 self.metadata.upload_piece_finished(task_id, number)?;
+
+                // Finish uploading the task.
+                self.metadata.upload_task_finished(task_id)?;
                 Ok(reader)
             }
-            None => Err(Error::PieceNotFound(self.piece_id(task_id, number))),
+            None => {
+                // Failed uploading the piece.
+                self.metadata.upload_piece_failed(task_id, number)?;
+
+                // Failed uploading the task.
+                self.metadata.upload_task_failed(task_id)?;
+                Err(Error::PieceNotFound(self.piece_id(task_id, number)))
+            }
         }
     }
 
