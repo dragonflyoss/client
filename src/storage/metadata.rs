@@ -18,7 +18,8 @@ use crate::config;
 use crate::{Error, Result};
 use chrono::{NaiveDateTime, Utc};
 use rocksdb::{
-    BlockBasedOptions, Cache, ColumnFamily, Options, TransactionDB, TransactionDBOptions,
+    BlockBasedOptions, Cache, ColumnFamily, IteratorMode, Options, TransactionDB,
+    TransactionDBOptions,
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -80,6 +81,16 @@ impl Task {
     // is_started returns whether the task downloads started.
     pub fn is_started(&self) -> bool {
         self.finished_at.is_none()
+    }
+
+    // is_downloading returns whether the task is downloading.
+    pub fn is_uploading(&self) -> bool {
+        self.uploading_count > 0
+    }
+
+    // is_expired returns whether the task is expired.
+    pub fn is_expired(&self, ttl: Duration) -> bool {
+        self.created_at + ttl > Utc::now().naive_utc()
     }
 
     // is_finished returns whether the task downloads finished.
@@ -396,6 +407,38 @@ impl Metadata {
         }
     }
 
+    // get_tasks gets the task metadatas.
+    pub fn get_tasks(&self) -> Result<Vec<Task>> {
+        // Get the column family handle of task.
+        let handle = self.cf_handle(TASK_CF_NAME)?;
+
+        // Transaction is used to get the task metadatas.
+        let txn = self.db.transaction();
+        let iter = txn.iterator_cf(handle, IteratorMode::Start);
+
+        // Iterate the task metadatas.
+        let mut tasks = Vec::new();
+        for ele in iter {
+            let (_, value) = ele?;
+            let task: Task = serde_json::from_slice(&value)?;
+            tasks.push(task);
+        }
+
+        Ok(tasks)
+    }
+
+    // delete_task deletes the task metadata.
+    pub fn delete_task(&self, task_id: &str) -> Result<()> {
+        // Get the column family handle of task.
+        let handle = self.cf_handle(TASK_CF_NAME)?;
+
+        // Transaction is used to delete the task metadata.
+        let txn = self.db.transaction();
+        txn.delete_cf(handle, task_id)?;
+        txn.commit()?;
+        Ok(())
+    }
+
     // download_piece_started updates the metadata of the piece when the piece downloads started.
     pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<()> {
         // Get the column family handle of piece.
@@ -580,16 +623,16 @@ impl Metadata {
         }
     }
 
-    // get_pieces gets the pieces metadata.
+    // get_pieces gets the piece metadatas.
     pub fn get_pieces(&self, task_id: &str) -> Result<Vec<Piece>> {
         // Get the column family handle of piece.
         let handle = self.cf_handle(PIECE_CF_NAME)?;
 
-        // Transaction is used to get the pieces metadata.
+        // Transaction is used to get the piece metadatas.
         let txn = self.db.transaction();
         let iter = txn.prefix_iterator_cf(handle, task_id.as_bytes());
 
-        // Iterate the pieces metadata.
+        // Iterate the piece metadatas.
         let mut pieces = Vec::new();
         for ele in iter {
             let (_, value) = ele?;
@@ -598,6 +641,26 @@ impl Metadata {
         }
 
         Ok(pieces)
+    }
+
+    // delete_pieces deletes the piece metadatas.
+    pub fn delete_pieces(&self, task_id: &str) -> Result<()> {
+        // Get the column family handle of piece.
+        let handle = self.cf_handle(PIECE_CF_NAME)?;
+
+        // Transaction is used to delete the piece metadatas.
+        let txn = self.db.transaction();
+        let iter = txn.prefix_iterator_cf(handle, task_id.as_bytes());
+
+        // Iterate the piece metadatas.
+        for ele in iter {
+            let (key, _) = ele?;
+            txn.delete_cf(handle, key)?;
+        }
+
+        // Commit the transaction.
+        txn.commit()?;
+        Ok(())
     }
 
     // piece_id returns the piece id.

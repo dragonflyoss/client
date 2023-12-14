@@ -80,8 +80,20 @@ impl Storage {
 
     // get_task returns the task metadata.
     pub fn get_task(&self, id: &str) -> Result<Option<metadata::Task>> {
-        let task = self.metadata.get_task(id)?;
-        Ok(task)
+        self.metadata.get_task(id)
+    }
+
+    // get_tasks returns the task metadatas.
+    pub fn get_tasks(&self) -> Result<Vec<metadata::Task>> {
+        self.metadata.get_tasks()
+    }
+
+    // delete_task deletes the task metadatas, task content and piece metadatas.
+    pub fn delete_task(&self, id: &str) -> Result<()> {
+        self.metadata.delete_task(id)?;
+        self.metadata.delete_pieces(id)?;
+        self.content.delete_task(id)?;
+        Ok(())
     }
 
     // download_piece_started updates the metadata of the piece and writes
@@ -193,11 +205,10 @@ impl Storage {
 
     // get_piece returns the piece metadata.
     pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<metadata::Piece>> {
-        let piece = self.metadata.get_piece(task_id, number)?;
-        Ok(piece)
+        self.metadata.get_piece(task_id, number)
     }
 
-    // get_pieces returns the pieces metadata.
+    // get_pieces returns the piece metadatas.
     pub fn get_pieces(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
         self.metadata.get_pieces(task_id)
     }
