@@ -20,7 +20,7 @@ use crate::storage::Storage;
 use crate::Result;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{error, info};
 
 // GC is the garbage collector of dfdaemon.
 pub struct GC {
@@ -63,13 +63,14 @@ impl GC {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    // Evict the cache by disk usage.
-                    self.evict_by_disk_usage();
-
-
                     // Evict the cache by task ttl.
                     if let Err(err) = self.evict_by_task_ttl() {
                         info!("failed to evict by task ttl: {}", err);
+                    }
+
+                    // Evict the cache by disk usage.
+                    if let Err(err) = self.evict_by_disk_usage() {
+                        info!("failed to evict by disk usage: {}", err);
                     }
                 }
                 _ = shutdown.recv() => {
@@ -98,5 +99,75 @@ impl GC {
     }
 
     // evict_by_disk_usage evicts the cache by disk usage.
-    fn evict_by_disk_usage(&self) {}
+    fn evict_by_disk_usage(&self) -> Result<()> {
+        let stats = fs2::statvfs(self.config.server.data_dir.as_path())?;
+        let available_space = stats.available_space();
+        let total_space = stats.total_space();
+
+        // Calculate the usage percent.
+        let usage_percent = (100 - available_space * 100 / total_space) as u8;
+        if usage_percent >= self.config.gc.policy.dist_high_threshold_percent {
+            info!(
+                "disk usage {}% is higher than high threshold {}%, start to evict",
+                usage_percent, self.config.gc.policy.dist_high_threshold_percent
+            );
+
+            // Calculate the need evict space.
+            let need_evict_space = total_space
+                * ((usage_percent - self.config.gc.policy.dist_low_threshold_percent) / 100) as u64;
+
+            // Evict the cache by the need evict space.
+            if let Err(err) = self.evict_space(need_evict_space) {
+                info!("failed to evict by disk usage: {}", err);
+            }
+        }
+
+        Ok(())
+    }
+
+    // evict_space evicts the cache by the given space.
+    fn evict_space(&self, need_evict_space: u64) -> Result<()> {
+        let mut tasks = self.storage.get_tasks()?;
+        tasks.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
+
+        let mut evicted_space = 0;
+        for task in tasks {
+            // Evict enough space.
+            if evicted_space >= need_evict_space {
+                break;
+            }
+
+            // If the task is started, skip it.
+            if task.is_started() {
+                continue;
+            }
+
+            // If the task is uploading, skip it.
+            if task.is_uploading() {
+                continue;
+            }
+
+            // If the task has no content length, skip it.
+            let task_space = match task.content_length {
+                Some(content_length) => content_length,
+                None => {
+                    error!("task {} has no content length", task.id);
+                    continue;
+                }
+            };
+
+            // Evict the task.
+            if let Err(err) = self.storage.delete_task(&task.id) {
+                info!("failed to evict task {}: {}", task.id, err);
+                continue;
+            }
+
+            // Update the evicted space.
+            evicted_space += task_space;
+            info!("evict task {} size {}", task.id, task_space);
+        }
+
+        info!("evict size {}", evicted_space);
+        Ok(())
+    }
 }

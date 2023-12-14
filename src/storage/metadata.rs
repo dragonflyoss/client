@@ -299,25 +299,6 @@ impl Metadata {
         Ok(())
     }
 
-    // download_task_failed updates the metadata of the task when the task downloads failed.
-    pub fn download_task_failed(&self, id: &str) -> Result<()> {
-        // Get the column family handle of task.
-        let handle = self.cf_handle(TASK_CF_NAME)?;
-
-        // Transaction is used to update the task metadata.
-        let txn = self.db.transaction();
-        match txn.get_for_update_cf(handle, id, true)? {
-            // If the task exists, delete the task metadata.
-            Some(_) => txn.delete_cf(handle, id.as_bytes())?,
-            // If the task does not exist, return error.
-            None => return Err(Error::TaskNotFound(id.to_string())),
-        };
-
-        // Commit the transaction.
-        txn.commit()?;
-        Ok(())
-    }
-
     // upload_task_started updates the metadata of the task when task uploads started.
     pub fn upload_task_started(&self, id: &str) -> Result<()> {
         // Get the column family handle of task.
