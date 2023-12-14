@@ -53,6 +53,12 @@ impl Content {
         Ok(Content { dir })
     }
 
+    // delete_task deletes the task content.
+    pub fn delete_task(&self, task_id: &str) -> Result<()> {
+        fs::remove_file(self.dir.join(task_id))?;
+        Ok(())
+    }
+
     // read_piece reads the piece from the content.
     pub async fn read_piece(
         &self,
