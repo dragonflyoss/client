@@ -70,7 +70,7 @@ impl Storage {
 
     // download_task_failed updates the metadata of the task when the task downloads failed.
     pub fn download_task_failed(&self, id: &str) -> Result<()> {
-        self.metadata.download_task_failed(id)
+        self.delete_task(id)
     }
 
     // upload_task_finished updates the metadata of the task when task uploads finished.

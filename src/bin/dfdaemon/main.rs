@@ -20,6 +20,7 @@ use dragonfly_client::announcer::{ManagerAnnouncer, SchedulerAnnouncer};
 use dragonfly_client::backend::http::HTTP;
 use dragonfly_client::config::dfdaemon;
 use dragonfly_client::dynconfig::Dynconfig;
+use dragonfly_client::gc::GC;
 use dragonfly_client::grpc::{
     dfdaemon::{DfdaemonDownloadServer, DfdaemonUploadServer},
     manager::ManagerClient,
@@ -188,6 +189,14 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     );
 
+    // Initialize garbage collector.
+    let gc = GC::new(
+        config.clone(),
+        storage.clone(),
+        shutdown.clone(),
+        shutdown_complete_tx.clone(),
+    );
+
     // Wait for servers to exit or shutdown signal.
     tokio::select! {
         _ = tokio::spawn(async move { dynconfig.run().await }) => {
@@ -216,6 +225,10 @@ async fn main() -> Result<(), anyhow::Error> {
 
         _ = tokio::spawn(async move { dfdaemon_download_grpc.run().await }) => {
             info!("dfdaemon download grpc unix server exited");
+        },
+
+        _ = tokio::spawn(async move { gc.run().await }) => {
+            info!("garbage collector exited");
         },
 
         _ = shutdown::shutdown_signal() => {},
