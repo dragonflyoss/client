@@ -86,7 +86,7 @@ impl Dynconfig {
     }
 
     // run starts the dynconfig server.
-    pub async fn run(&self) -> Result<()> {
+    pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
 
@@ -102,7 +102,7 @@ impl Dynconfig {
                 _ = shutdown.recv() => {
                     // Dynconfig server shutting down with signals.
                     info!("dynconfig server shutting down");
-                    return Ok(());
+                    return
                 }
             }
         }

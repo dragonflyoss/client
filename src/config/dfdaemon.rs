@@ -60,7 +60,7 @@ const DEFAULT_DYNCONFIG_REFRESH_INTERVAL: Duration = Duration::from_secs(1800);
 const DEFAULT_SEED_PEER_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
 // DEFAULT_GC_INTERVAL is the default interval to do gc.
-const DEFAULT_GC_INTERVAL: Duration = Duration::from_secs(120);
+const DEFAULT_GC_INTERVAL: Duration = Duration::from_secs(900);
 
 // DEFAULT_GC_POLICY_TASK_TTL is the default ttl of the task.
 const DEFAULT_GC_POLICY_TASK_TTL: Duration = Duration::from_secs(21_600);

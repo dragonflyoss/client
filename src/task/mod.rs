@@ -57,7 +57,7 @@ pub struct Task {
     // id_generator is the id generator.
     pub id_generator: Arc<IDGenerator>,
 
-    // manager_client is the grpc client of the manager.
+    // storage is the local storage.
     storage: Arc<Storage>,
 
     // scheduler_client is the grpc client of the scheduler.
