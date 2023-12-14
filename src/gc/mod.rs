@@ -17,6 +17,7 @@
 use crate::config::dfdaemon::Config;
 use crate::shutdown;
 use crate::storage::Storage;
+use crate::Result;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::info;
@@ -62,9 +63,14 @@ impl GC {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    // Run the garbage collector.
-                    // TODO: implement the garbage collector.
-                    info!("garbage collector running {:?} {:?}", self.config.gc, self.storage.get_task("1"));
+                    // Evict the cache by disk usage.
+                    self.evict_by_disk_usage();
+
+
+                    // Evict the cache by task ttl.
+                    if let Err(err) = self.evict_by_task_ttl() {
+                        info!("failed to evict by task ttl: {}", err);
+                    }
                 }
                 _ = shutdown.recv() => {
                     // Shutdown the garbage collector.
@@ -76,10 +82,21 @@ impl GC {
     }
 
     // evict_by_task_ttl evicts the cache by task ttl.
-    // fn evict_by_task_ttl(&self) {
-    // }
+    fn evict_by_task_ttl(&self) -> Result<()> {
+        info!("start to evict by task ttl");
+        for task in self.storage.get_tasks()? {
+            // If the task is expired and not uploading, evict the task.
+            if task.is_expired(self.config.gc.policy.task_ttl) && !task.is_uploading() {
+                self.storage.delete_task(&task.id).unwrap_or_else(|err| {
+                    info!("failed to evict task {}: {}", task.id, err);
+                });
+                info!("evict task {}", task.id);
+            }
+        }
+
+        Ok(())
+    }
 
     // evict_by_disk_usage evicts the cache by disk usage.
-    // fn evict_by_disk_usage(&self) {
-    // }
+    fn evict_by_disk_usage(&self) {}
 }
