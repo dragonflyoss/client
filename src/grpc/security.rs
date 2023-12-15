@@ -34,6 +34,7 @@ impl CertificateClient {
     // new creates a new CertificateClient.
     pub async fn new(addr: String) -> Result<Self> {
         let channel = Channel::from_static(Box::leak(addr.into_boxed_str()))
+            .connect_timeout(super::CONNECT_TIMEOUT)
             .connect()
             .await?;
         let client = CertificateGRPCClient::new(channel);

@@ -23,10 +23,25 @@ use dragonfly_api::scheduler::v2::{
     AnnouncePeerRequest, AnnouncePeerResponse, ExchangePeerRequest, ExchangePeerResponse,
     LeaveHostRequest, LeavePeerRequest, StatPeerRequest, StatTaskRequest,
 };
+use hashring::HashRing;
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
-use tonic::transport::{Channel, Endpoint, Uri};
+use tokio::sync::RwLock;
+use tokio::task::JoinSet;
+use tonic::transport::Channel;
 use tracing::{error, info, instrument};
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq)]
+struct VNode {
+    addr: SocketAddr,
+}
+
+impl ToString for VNode {
+    fn to_string(&self) -> String {
+        format!("{}", self.addr)
+    }
+}
 
 // SchedulerClient is a wrapper of SchedulerGRPCClient.
 #[derive(Clone)]
@@ -34,8 +49,11 @@ pub struct SchedulerClient {
     // dynconfig is the dynamic configuration of the dfdaemon.
     dynconfig: Arc<Dynconfig>,
 
-    // client is the grpc client of the scehduler.
-    client: Option<SchedulerGRPCClient<Channel>>,
+    // available_schedulers is the endpoints of available schedulers.
+    available_schedulers: Arc<RwLock<Vec<SocketAddr>>>,
+
+    // hashring is the hashring of the scheduler.
+    hashring: Arc<HashRing<VNode>>,
 }
 
 // SchedulerClient implements the grpc client of the scheduler.
@@ -44,7 +62,8 @@ impl SchedulerClient {
     pub async fn new(dynconfig: Arc<Dynconfig>) -> Result<Self> {
         let mut client = Self {
             dynconfig,
-            client: None,
+            available_schedulers: Arc::new(RwLock::new(Vec::new())),
+            hashring: Arc::new(HashRing::new()),
         };
 
         client.refresh_scheduler_client().await?;
@@ -55,25 +74,37 @@ impl SchedulerClient {
     #[instrument(skip(self, request))]
     pub async fn announce_peer(
         &self,
+        task_id: &str,
         request: impl tonic::IntoStreamingRequest<Message = AnnouncePeerRequest>,
     ) -> Result<tonic::Response<tonic::codec::Streaming<AnnouncePeerResponse>>> {
-        let response = self.client()?.announce_peer(request).await?;
+        let response = self
+            .client(task_id.to_string())
+            .await?
+            .announce_peer(request)
+            .await?;
         Ok(response)
     }
 
     // stat_peer gets the status of the peer.
     #[instrument(skip(self))]
-    pub async fn stat_peer(&self, request: StatPeerRequest) -> Result<Peer> {
+    pub async fn stat_peer(&self, task_id: &str, request: StatPeerRequest) -> Result<Peer> {
         let request = Self::make_request(request);
-        let response = self.client()?.stat_peer(request).await?;
+        let response = self
+            .client(task_id.to_string())
+            .await?
+            .stat_peer(request)
+            .await?;
         Ok(response.into_inner())
     }
 
     // leave_peer tells the scheduler that the peer is leaving.
     #[instrument(skip(self))]
-    pub async fn leave_peer(&self, request: LeavePeerRequest) -> Result<()> {
+    pub async fn leave_peer(&self, task_id: &str, request: LeavePeerRequest) -> Result<()> {
         let request = Self::make_request(request);
-        self.client()?.leave_peer(request).await?;
+        self.client(task_id.to_string())
+            .await?
+            .leave_peer(request)
+            .await?;
         Ok(())
     }
 
@@ -81,44 +112,152 @@ impl SchedulerClient {
     #[instrument(skip(self))]
     pub async fn exchange_peer(
         &self,
+        task_id: &str,
         request: ExchangePeerRequest,
     ) -> Result<ExchangePeerResponse> {
         let request = Self::make_request(request);
-        let response = self.client()?.exchange_peer(request).await?;
+        let response = self
+            .client(task_id.to_string())
+            .await?
+            .exchange_peer(request)
+            .await?;
         Ok(response.into_inner())
     }
 
     // stat_task gets the status of the task.
     #[instrument(skip(self))]
-    pub async fn stat_task(&self, request: StatTaskRequest) -> Result<Task> {
+    pub async fn stat_task(&self, task_id: &str, request: StatTaskRequest) -> Result<Task> {
         let request = Self::make_request(request);
-        let response = self.client()?.stat_task(request).await?;
+        let response = self
+            .client(task_id.to_string())
+            .await?
+            .stat_task(request)
+            .await?;
         Ok(response.into_inner())
+    }
+
+    // init_announce_host announces the host to the scheduler.
+    #[instrument(skip(self))]
+    pub async fn init_announce_host(&self, request: AnnounceHostRequest) -> Result<()> {
+        let mut join_set = JoinSet::new();
+        let available_schedulers = self.available_schedulers.read().await;
+        for available_scheduler in available_schedulers.iter() {
+            let request = Self::make_request(request.clone());
+            async fn announce_host(
+                addr: SocketAddr,
+                request: tonic::Request<AnnounceHostRequest>,
+            ) -> Result<()> {
+                // Connect to the scheduler.
+                let channel = Channel::from_shared(format!("http://{}", addr))
+                    .map_err(|_| Error::InvalidURI(addr.to_string()))?
+                    .connect_timeout(super::CONNECT_TIMEOUT)
+                    .connect()
+                    .await?;
+
+                let mut client = SchedulerGRPCClient::new(channel);
+                client.announce_host(request).await?;
+                Ok(())
+            }
+
+            join_set.spawn(announce_host(*available_scheduler, request));
+        }
+
+        while let Some(message) = join_set.join_next().await {
+            if let Err(err) = message? {
+                error!("failed to init announce host: {}", err);
+                return Err(err);
+            }
+        }
+
+        Ok(())
     }
 
     // announce_host announces the host to the scheduler.
     #[instrument(skip(self))]
     pub async fn announce_host(&self, request: AnnounceHostRequest) -> Result<()> {
-        let request = Self::make_request(request);
-        self.client()?.announce_host(request).await?;
+        let mut join_set = JoinSet::new();
+        let available_schedulers = self.available_schedulers.read().await;
+        for available_scheduler in available_schedulers.iter() {
+            let request = Self::make_request(request.clone());
+            async fn announce_host(
+                addr: SocketAddr,
+                request: tonic::Request<AnnounceHostRequest>,
+            ) -> Result<()> {
+                // Connect to the scheduler.
+                let channel = Channel::from_shared(format!("http://{}", addr))
+                    .map_err(|_| Error::InvalidURI(addr.to_string()))?
+                    .connect_timeout(super::CONNECT_TIMEOUT)
+                    .connect()
+                    .await?;
+
+                let mut client = SchedulerGRPCClient::new(channel);
+                client.announce_host(request).await?;
+                Ok(())
+            }
+
+            join_set.spawn(announce_host(*available_scheduler, request));
+        }
+
+        while let Some(message) = join_set.join_next().await {
+            if let Err(err) = message? {
+                error!("failed to announce host: {}", err);
+            }
+        }
+
         Ok(())
     }
 
     // leave_host tells the scheduler that the host is leaving.
     #[instrument(skip(self))]
     pub async fn leave_host(&self, request: LeaveHostRequest) -> Result<()> {
-        let request = Self::make_request(request);
-        self.client()?.leave_host(request).await?;
+        let mut join_set = JoinSet::new();
+        let available_schedulers = self.available_schedulers.read().await;
+        for available_scheduler in available_schedulers.iter() {
+            let request = Self::make_request(request.clone());
+            async fn leave_host(
+                addr: SocketAddr,
+                request: tonic::Request<LeaveHostRequest>,
+            ) -> Result<()> {
+                // Connect to the scheduler.
+                let channel = Channel::from_shared(format!("http://{}", addr))
+                    .map_err(|_| Error::InvalidURI(addr.to_string()))?
+                    .connect_timeout(super::CONNECT_TIMEOUT)
+                    .connect()
+                    .await?;
+
+                let mut client = SchedulerGRPCClient::new(channel);
+                client.leave_host(request).await?;
+                Ok(())
+            }
+
+            join_set.spawn(leave_host(*available_scheduler, request));
+        }
+
+        while let Some(message) = join_set.join_next().await {
+            if let Err(err) = message? {
+                error!("failed to leave host: {}", err);
+            }
+        }
+
         Ok(())
     }
 
     // client gets the grpc client of the scheduler.
     #[instrument(skip(self))]
-    pub fn client(&self) -> Result<SchedulerGRPCClient<Channel>> {
-        match self.client.clone() {
-            Some(client) => Ok(client),
-            None => Err(Error::SchedulerClientNotFound()),
-        }
+    async fn client(&self, key: String) -> Result<SchedulerGRPCClient<Channel>> {
+        let addr = self
+            .hashring
+            .get(&key)
+            .ok_or_else(|| Error::HashRing(key.clone()))?;
+        info!("{} picked {:?}", key, addr);
+
+        let channel = Channel::from_shared(format!("http://{}", addr.to_string()))
+            .map_err(|_| Error::InvalidURI(addr.to_string()))?
+            .connect_timeout(super::CONNECT_TIMEOUT)
+            .connect()
+            .await?;
+
+        Ok(SchedulerGRPCClient::new(channel))
     }
 
     // get_endpoints gets the endpoints of available schedulers.
@@ -129,25 +268,38 @@ impl SchedulerClient {
 
         // Get the endpoints of available schedulers.
         let data = self.dynconfig.data.read().await;
-        let mut endpoints: Vec<Endpoint> = Vec::new();
-        for scheduler in data.available_schedulers.iter() {
-            match Uri::from_str(format!("http://{}:{}", scheduler.ip, scheduler.port).as_str()) {
-                Ok(uri) => endpoints.push(Endpoint::from(uri)),
-                Err(e) => {
-                    error!("failed to parse uri: {}", e);
-                }
-            }
-        }
-        info!(
-            "available schedulers: {:?}",
-            endpoints.iter().map(|e| e.uri()).collect::<Vec<_>>()
-        );
 
-        // Refresh the scheduler client.
-        self.client
-            .replace(SchedulerGRPCClient::new(Channel::balance_list(
-                endpoints.into_iter(),
-            )));
+        // Check if the available schedulers is empty.
+        if data.available_schedulers.is_empty() {
+            return Err(Error::AvailableSchedulersNotFound());
+        }
+
+        // Get the available schedulers.
+        let mut available_schedulers = self.available_schedulers.write().await;
+
+        // Refresh the hashring.
+        let mut new_hashring = HashRing::new();
+        for available_scheduler in data.available_schedulers.iter() {
+            let ip = match IpAddr::from_str(&available_scheduler.ip) {
+                Ok(ip) => ip,
+                Err(err) => {
+                    error!("failed to parse ip: {}", err);
+                    continue;
+                }
+            };
+
+            // Add the scheduler to the available schedulers.
+            available_schedulers.push(SocketAddr::new(ip, available_scheduler.port as u16));
+
+            // Add the scheduler to the hashring.
+            new_hashring.add(VNode {
+                addr: SocketAddr::new(ip, available_scheduler.port as u16),
+            });
+        }
+
+        // Update the hashring.
+        self.hashring = Arc::new(new_hashring);
+        info!("refresh available schedulers: {:?}", available_schedulers);
         Ok(())
     }
 

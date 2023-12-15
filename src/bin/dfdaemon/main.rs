@@ -80,7 +80,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let args = Args::parse();
 
     // Load config.
-    let config = dfdaemon::Config::load(&args.config)?;
+    let config = dfdaemon::Config::load(&args.config).unwrap();
     let config = Arc::new(config);
 
     // Initialize tracing.
@@ -92,7 +92,7 @@ async fn main() -> Result<(), anyhow::Error> {
     );
 
     // Initialize storage.
-    let storage = Storage::new(config.clone(), config.server.data_dir.as_path())?;
+    let storage = Storage::new(config.clone(), config.server.data_dir.as_path()).unwrap();
     let storage = Arc::new(storage);
 
     // Initialize id generator.
@@ -109,7 +109,8 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize manager client.
     let manager_client = ManagerClient::new(config.manager.addr.as_ref().unwrap())
         .await
-        .context("failed to initialize manager client")?;
+        .context("failed to initialize manager client")
+        .unwrap();
     let manager_client = Arc::new(manager_client);
 
     // Initialize channel for graceful shutdown.
@@ -123,13 +124,15 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     )
-    .await?;
+    .await
+    .unwrap();
     let dynconfig = Arc::new(dynconfig);
 
     // Initialize scheduler client.
     let scheduler_client = SchedulerClient::new(dynconfig.clone())
         .await
-        .context("failed to initialize scheduler client")?;
+        .context("failed to initialize scheduler client")
+        .unwrap();
     let scheduler_client = Arc::new(scheduler_client);
 
     // Initialize task manager.
@@ -171,7 +174,11 @@ async fn main() -> Result<(), anyhow::Error> {
         scheduler_client.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
-    );
+    )
+    .await
+    .unwrap();
+
+    println!("dfdaemon is running");
 
     // Initialize upload grpc server.
     let dfdaemon_upload_grpc = DfdaemonUploadServer::new(
