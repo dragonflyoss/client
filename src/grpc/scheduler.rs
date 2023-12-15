@@ -53,17 +53,17 @@ pub struct SchedulerClient {
     available_schedulers: Arc<RwLock<Vec<SocketAddr>>>,
 
     // hashring is the hashring of the scheduler.
-    hashring: Arc<HashRing<VNode>>,
+    hashring: Arc<RwLock<HashRing<VNode>>>,
 }
 
 // SchedulerClient implements the grpc client of the scheduler.
 impl SchedulerClient {
     // new creates a new SchedulerClient.
     pub async fn new(dynconfig: Arc<Dynconfig>) -> Result<Self> {
-        let mut client = Self {
+        let client = Self {
             dynconfig,
             available_schedulers: Arc::new(RwLock::new(Vec::new())),
-            hashring: Arc::new(HashRing::new()),
+            hashring: Arc::new(RwLock::new(HashRing::new())),
         };
 
         client.refresh_scheduler_client().await?;
@@ -245,24 +245,33 @@ impl SchedulerClient {
     // client gets the grpc client of the scheduler.
     #[instrument(skip(self))]
     async fn client(&self, key: String) -> Result<SchedulerGRPCClient<Channel>> {
-        let addr = self
-            .hashring
-            .get(&key)
-            .ok_or_else(|| Error::HashRing(key.clone()))?;
+        let addr = self.hashring.read().await;
+        let addr = addr.get(&key).ok_or_else(|| Error::HashRing(key.clone()))?;
         info!("{} picked {:?}", key, addr);
 
-        let channel = Channel::from_shared(format!("http://{}", addr.to_string()))
+        let channel = match Channel::from_shared(format!("http://{}", addr.to_string()))
             .map_err(|_| Error::InvalidURI(addr.to_string()))?
             .connect_timeout(super::CONNECT_TIMEOUT)
             .connect()
-            .await?;
+            .await
+        {
+            Ok(channel) => channel,
+            Err(err) => {
+                error!("failed to connect to {:?}: {}", addr, err);
+                if let Err(err) = self.refresh_scheduler_client().await {
+                    error!("failed to refresh scheduler client: {}", err);
+                };
+
+                return Err(Error::TonicTransport(err));
+            }
+        };
 
         Ok(SchedulerGRPCClient::new(channel))
     }
 
     // get_endpoints gets the endpoints of available schedulers.
     #[instrument(skip(self))]
-    async fn refresh_scheduler_client(&mut self) -> Result<()> {
+    async fn refresh_scheduler_client(&self) -> Result<()> {
         // Refresh the dynamic configuration.
         self.dynconfig.refresh().await?;
 
@@ -298,7 +307,8 @@ impl SchedulerClient {
         }
 
         // Update the hashring.
-        self.hashring = Arc::new(new_hashring);
+        let mut hashring = self.hashring.write().await;
+        *hashring = new_hashring;
         info!("refresh available schedulers: {:?}", available_schedulers);
         Ok(())
     }
