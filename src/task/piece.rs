@@ -16,7 +16,7 @@
 
 use crate::backend::http::{Request, HTTP};
 use crate::config::dfdaemon::Config;
-use crate::grpc::{dfdaemon::DfdaemonClient, scheduler::SchedulerClient};
+use crate::grpc::dfdaemon::DfdaemonClient;
 use crate::storage::{metadata, Storage};
 use crate::utils::digest::{Algorithm, Digest as UtilsDigest};
 use crate::{Error, HTTPError, Result};
@@ -50,9 +50,6 @@ pub struct Piece {
     // manager_client is the grpc client of the manager.
     storage: Arc<Storage>,
 
-    // scheduler_client is the grpc client of the scheduler.
-    pub scheduler_client: Arc<SchedulerClient>,
-
     // http_client is the http client.
     http_client: Arc<HTTP>,
 }
@@ -60,16 +57,10 @@ pub struct Piece {
 // Piece implements the piece manager.
 impl Piece {
     // new returns a new Piece.
-    pub fn new(
-        config: Arc<Config>,
-        storage: Arc<Storage>,
-        scheduler_client: Arc<SchedulerClient>,
-        http_client: Arc<HTTP>,
-    ) -> Self {
+    pub fn new(config: Arc<Config>, storage: Arc<Storage>, http_client: Arc<HTTP>) -> Self {
         Self {
             config,
             storage,
-            scheduler_client,
             http_client,
         }
     }

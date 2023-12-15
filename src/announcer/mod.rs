@@ -136,20 +136,27 @@ pub struct SchedulerAnnouncer {
 // SchedulerAnnouncer implements the scheduler announcer of the dfdaemon.
 impl SchedulerAnnouncer {
     // new creates a new scheduler announcer.
-    pub fn new(
+    pub async fn new(
         config: Arc<Config>,
         host_id: String,
         scheduler_client: Arc<SchedulerClient>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let announcer = Self {
             config,
             host_id,
             scheduler_client,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
-        }
+        };
+
+        // Initialize the scheduler announcer.
+        announcer
+            .scheduler_client
+            .init_announce_host(announcer.make_announce_host_request()?)
+            .await?;
+        Ok(announcer)
     }
 
     // run announces the dfdaemon information to the scheduler.
@@ -162,7 +169,15 @@ impl SchedulerAnnouncer {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    if let Err(err) = self.announce_host().await {
+                    let request = match self.make_announce_host_request() {
+                        Ok(request) => request,
+                        Err(err) => {
+                            error!("make announce host request failed: {}", err);
+                            continue;
+                        }
+                    };
+
+                    if let Err(err) = self.scheduler_client.init_announce_host(request).await {
                         error!("announce host to scheduler failed: {}", err);
                     };
                 }
@@ -175,8 +190,8 @@ impl SchedulerAnnouncer {
         }
     }
 
-    // announce_host announces the dfdaemon information to the scheduler.
-    async fn announce_host(&self) -> Result<()> {
+    // make_announce_host_request makes the announce host request.
+    fn make_announce_host_request(&self) -> Result<AnnounceHostRequest> {
         // If the seed peer is enabled, we should announce the seed peer to the scheduler.
         let host_type = if self.config.seed_peer.enable {
             self.config.seed_peer.kind
@@ -260,11 +275,6 @@ impl SchedulerAnnouncer {
             scheduler_cluster_id: 0,
         };
 
-        // Announce the host to the scheduler.
-        self.scheduler_client
-            .announce_host(AnnounceHostRequest { host: Some(host) })
-            .await?;
-
-        Ok(())
+        Ok(AnnounceHostRequest { host: Some(host) })
     }
 }

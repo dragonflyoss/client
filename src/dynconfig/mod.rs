@@ -24,7 +24,7 @@ use dragonfly_api::manager::v2::{
     Scheduler, SourceType,
 };
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tonic_health::pb::{health_check_response::ServingStatus, HealthCheckRequest};
 use tracing::{error, info};
 
@@ -55,6 +55,9 @@ pub struct Dynconfig {
     // manager_client is the grpc client of the manager.
     manager_client: Arc<ManagerClient>,
 
+    // mutex is used to protect refresh.
+    mutex: Mutex<()>,
+
     // shutdown is used to shutdown the dynconfig.
     shutdown: shutdown::Shutdown,
 
@@ -76,6 +79,7 @@ impl Dynconfig {
             config,
             data: RwLock::new(Data::default()),
             manager_client,
+            mutex: Mutex::new(()),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         };
@@ -110,6 +114,12 @@ impl Dynconfig {
 
     // refresh refreshes the dynamic configuration of the dfdaemon.
     pub async fn refresh(&self) -> Result<()> {
+        // Only one refresh can be running at a time.
+        let Ok(_guard) = self.mutex.try_lock() else {
+            info!("refresh is already running");
+            return Ok(());
+        };
+
         // refresh the object storage configuration.
         let object_storage = self.get_object_storage().await.ok();
 
