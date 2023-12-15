@@ -80,12 +80,7 @@ impl Task {
         scheduler_client: Arc<SchedulerClient>,
         http_client: Arc<HTTP>,
     ) -> Self {
-        let piece = piece::Piece::new(
-            config.clone(),
-            storage.clone(),
-            scheduler_client.clone(),
-            http_client.clone(),
-        );
+        let piece = piece::Piece::new(config.clone(), storage.clone(), http_client.clone());
         let piece = Arc::new(piece);
 
         Self {
@@ -388,7 +383,7 @@ impl Task {
         let in_stream = ReceiverStream::new(in_stream_rx);
         let response = self
             .scheduler_client
-            .announce_peer(Request::new(in_stream))
+            .announce_peer(task_id, Request::new(in_stream))
             .await?;
 
         let mut out_stream = response.into_inner();

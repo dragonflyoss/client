@@ -36,6 +36,7 @@ impl ManagerClient {
     pub async fn new(addr: &str) -> Result<Self> {
         let channel = Channel::from_shared(addr.to_string())
             .map_err(|_| Error::InvalidURI(addr.into()))?
+            .connect_timeout(super::CONNECT_TIMEOUT)
             .connect()
             .await?;
         let client = ManagerGRPCClient::new(channel);

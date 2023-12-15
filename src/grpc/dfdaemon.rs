@@ -511,20 +511,28 @@ impl Dfdaemon for DfdaemonServerHandler {
         let request = request.into_inner();
 
         // Get the task id from the request.
-        let task_id = request.task_id.clone();
+        let task_id = request.task_id;
 
         // Span record the task id and peer id.
         Span::current().record("task_id", task_id.as_str());
 
-        let mut request = tonic::Request::new(SchedulerStatTaskRequest { id: task_id });
-        request.set_timeout(super::REQUEST_TIMEOUT);
-
-        self.task
+        // Get the task from the scheduler.
+        let task = self
+            .task
             .scheduler_client
-            .client()
-            .map_err(|e| Status::internal(e.to_string()))?
-            .stat_task(request)
+            .stat_task(
+                task_id.as_str(),
+                SchedulerStatTaskRequest {
+                    id: task_id.clone(),
+                },
+            )
             .await
+            .map_err(|e| {
+                error!("stat task: {}", e);
+                Status::internal(e.to_string())
+            })?;
+
+        Ok(Response::new(task))
     }
 
     // delete_task tells the dfdaemon to delete the task.
@@ -550,6 +558,7 @@ impl DfdaemonClient {
     // new creates a new DfdaemonClient.
     pub async fn new(addr: String) -> ClientResult<Self> {
         let channel = Channel::from_static(Box::leak(addr.into_boxed_str()))
+            .connect_timeout(super::CONNECT_TIMEOUT)
             .connect()
             .await?;
         let client = DfdaemonGRPCClient::new(channel)
