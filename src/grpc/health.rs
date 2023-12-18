@@ -14,11 +14,76 @@
  * limitations under the License.
  */
 
+use crate::shutdown;
 use crate::{Error, Result};
-use tonic::transport::Channel;
+use std::net::SocketAddr;
+use tokio::sync::mpsc;
+use tonic::transport::{Channel, Server};
 use tonic_health::pb::{
-    health_client::HealthClient as HealthGRPCClient, HealthCheckRequest, HealthCheckResponse,
+    health_client::HealthClient as HealthGRPCClient,
+    health_server::{Health, HealthServer as HealthGRPCServer},
+    HealthCheckRequest, HealthCheckResponse,
 };
+use tracing::{info, instrument};
+
+// HealthServer is the grpc server of the health.
+pub struct HealthServer<T: Health> {
+    // addr is the address of the grpc server.
+    addr: SocketAddr,
+
+    // service is the grpc service of the health.
+    service: HealthGRPCServer<T>,
+
+    // shutdown is used to shutdown the grpc server.
+    shutdown: shutdown::Shutdown,
+
+    // _shutdown_complete is used to notify the grpc server is shutdown.
+    _shutdown_complete: mpsc::UnboundedSender<()>,
+}
+
+// HealthServer implements the grpc server of the health.
+impl<T: Health> HealthServer<T> {
+    // new creates a new HealthServer.
+    pub fn new(
+        addr: SocketAddr,
+        service: HealthGRPCServer<T>,
+        shutdown: shutdown::Shutdown,
+        shutdown_complete_tx: mpsc::UnboundedSender<()>,
+    ) -> Self {
+        Self {
+            addr,
+            service,
+            shutdown,
+            _shutdown_complete: shutdown_complete_tx,
+        }
+    }
+
+    // run starts the health server.
+    #[instrument(skip_all)]
+    pub async fn run(&self) {
+        // Register the reflection service.
+        let reflection = tonic_reflection::server::Builder::configure()
+            .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
+            .build()
+            .unwrap();
+
+        // Clone the shutdown channel.
+        let mut shutdown = self.shutdown.clone();
+
+        // Start health grpc server.
+        info!("health server listening on {}", self.addr);
+        Server::builder()
+            .add_service(reflection.clone())
+            .add_service(self.service.clone())
+            .serve_with_shutdown(self.addr, async move {
+                // Health grpc server shutting down with signals.
+                let _ = shutdown.recv().await;
+                info!("health grpc server shutting down");
+            })
+            .await
+            .unwrap();
+    }
+}
 
 // HealthClient is a wrapper of HealthGRPCClient.
 #[derive(Clone)]

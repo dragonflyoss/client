@@ -28,6 +28,7 @@ use dragonfly_api::dfdaemon::v2::{
     SyncPiecesResponse, UploadTaskRequest,
 };
 use dragonfly_api::scheduler::v2::StatTaskRequest as SchedulerStatTaskRequest;
+use std::borrow::BorrowMut;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -41,6 +42,7 @@ use tonic::{
     transport::{Channel, Endpoint, Server, Uri},
     Request, Response, Status,
 };
+use tonic_health::server::HealthReporter;
 use tower::service_fn;
 use tracing::{error, info, instrument, Instrument, Span};
 
@@ -51,6 +53,9 @@ pub struct DfdaemonUploadServer {
 
     // service is the grpc service of the dfdaemon.
     service: DfdaemonGRPCServer<DfdaemonServerHandler>,
+
+    // health_reporter is the health reporter of the grpc server.
+    health_reporter: HealthReporter,
 
     // shutdown is used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
@@ -65,6 +70,7 @@ impl DfdaemonUploadServer {
     pub fn new(
         addr: SocketAddr,
         task: Arc<task::Task>,
+        health_reporter: HealthReporter,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -77,6 +83,7 @@ impl DfdaemonUploadServer {
         Self {
             addr,
             service,
+            health_reporter,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -84,7 +91,7 @@ impl DfdaemonUploadServer {
 
     // run starts the upload server.
     #[instrument(skip_all)]
-    pub async fn run(&self) {
+    pub async fn run(&mut self) {
         // Register the reflection service.
         let reflection = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
@@ -93,6 +100,14 @@ impl DfdaemonUploadServer {
 
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
+
+        // Borrow the health reporter.
+        let health_reporter = self.health_reporter.borrow_mut();
+
+        // Set the serving status of the upload grpc server.
+        health_reporter
+            .set_serving::<DfdaemonGRPCServer<DfdaemonServerHandler>>()
+            .await;
 
         // Start upload grpc server.
         info!("upload server listening on {}", self.addr);
@@ -117,6 +132,9 @@ pub struct DfdaemonDownloadServer {
     // service is the grpc service of the dfdaemon.
     service: DfdaemonGRPCServer<DfdaemonServerHandler>,
 
+    // health_reporter is the health reporter of the grpc server.
+    health_reporter: HealthReporter,
+
     // shutdown is used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
 
@@ -130,6 +148,7 @@ impl DfdaemonDownloadServer {
     pub fn new(
         socket_path: PathBuf,
         task: Arc<task::Task>,
+        health_reporter: HealthReporter,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -142,6 +161,7 @@ impl DfdaemonDownloadServer {
         Self {
             socket_path,
             service,
+            health_reporter,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -149,7 +169,7 @@ impl DfdaemonDownloadServer {
 
     // run starts the download server with unix domain socket.
     #[instrument(skip_all)]
-    pub async fn run(&self) {
+    pub async fn run(&mut self) {
         // Register the reflection service.
         let reflection = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
@@ -158,6 +178,14 @@ impl DfdaemonDownloadServer {
 
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
+
+        // Borrow the health reporter.
+        let health_reporter = self.health_reporter.borrow_mut();
+
+        // Set the serving status of the download grpc server.
+        health_reporter
+            .set_serving::<DfdaemonGRPCServer<DfdaemonServerHandler>>()
+            .await;
 
         // Start download grpc server with unix domain socket.
         info!(
