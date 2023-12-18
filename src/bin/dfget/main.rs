@@ -146,6 +146,28 @@ struct Args {
         help = "Specify the log directory"
     )]
     log_dir: PathBuf,
+
+    #[arg(
+        short = 'c',
+        long = "dfdaemon-config",
+        default_value_os_t = dfdaemon::default_dfdaemon_config_path(),
+        help = "Specify dfdaemon's config file to use")
+    ]
+    dfdaemon_config: PathBuf,
+
+    #[arg(
+        long = "dfdaemon-log-level",
+        default_value = "info",
+        help = "Set the dfdaemon's logging level [trace, debug, info, warn, error]"
+    )]
+    dfdaemon_log_level: Level,
+
+    #[arg(
+        long = "dfdaemon-log-dir",
+        default_value_os_t = dfdaemon::default_dfdaemon_log_dir(),
+        help = "Specify the dfdaemon's log directory"
+    )]
+    dfdaemon_log_dir: PathBuf,
 }
 
 #[tokio::main]
