@@ -17,14 +17,17 @@
 use crate::shutdown;
 use crate::{Error, Result};
 use std::net::SocketAddr;
+use std::path::PathBuf;
+use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
-use tonic::transport::{Channel, Server};
+use tonic::transport::{Channel, Endpoint, Server, Uri};
 use tonic_health::pb::{
     health_client::HealthClient as HealthGRPCClient,
     health_server::{Health, HealthServer as HealthGRPCServer},
     HealthCheckRequest, HealthCheckResponse,
 };
+use tower::service_fn;
 use tracing::{info, instrument};
 
 // HealthServer is the grpc server of the health.
@@ -103,6 +106,19 @@ impl HealthClient {
             .connect()
             .await?;
         let client = HealthGRPCClient::new(channel);
+        Ok(Self { client })
+    }
+
+    // new_unix creates a new HealthClient with unix domain socket.
+    pub async fn new_unix(socket_path: PathBuf) -> Result<Self> {
+        // Ignore the uri because it is not used.
+        let channel = Endpoint::try_from("http://[::]:50051")
+            .unwrap()
+            .connect_with_connector(service_fn(move |_: Uri| {
+                UnixStream::connect(socket_path.clone())
+            }))
+            .await?;
+        let client = HealthGRPCClient::new(channel).max_decoding_message_size(usize::MAX);
         Ok(Self { client })
     }
 
