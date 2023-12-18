@@ -22,10 +22,8 @@ use dragonfly_client::config::dfdaemon;
 use dragonfly_client::dynconfig::Dynconfig;
 use dragonfly_client::gc::GC;
 use dragonfly_client::grpc::{
-    dfdaemon::{DfdaemonDownloadServer, DfdaemonUploadServer},
-    health::HealthServer,
-    manager::ManagerClient,
-    scheduler::SchedulerClient,
+    dfdaemon_download::DfdaemonDownloadServer, dfdaemon_upload::DfdaemonUploadServer,
+    health::HealthServer, manager::ManagerClient, scheduler::SchedulerClient,
 };
 use dragonfly_client::metrics::Metrics;
 use dragonfly_client::shutdown;
