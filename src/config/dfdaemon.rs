@@ -27,16 +27,16 @@ use validator::Validate;
 pub const NAME: &str = "dfdaemon";
 
 // DEFAULT_UPLOAD_GRPC_SERVER_PORT is the default port of the upload grpc server.
-const DEFAULT_UPLOAD_GRPC_SERVER_PORT: u16 = 65000;
-
-// DEFAULT_OBJECT_STORAGE_SERVER_PORT is the default port of the object storage server.
-const DEFAULT_OBJECT_STORAGE_SERVER_PORT: u16 = 65002;
-
-// DEFAULT_METRICS_SERVER_PORT is the default port of the metrics server.
-const DEFAULT_METRICS_SERVER_PORT: u16 = 8000;
+const DEFAULT_UPLOAD_GRPC_SERVER_PORT: u16 = 4000;
 
 // DEFAULT_HEALTH_SERVER_PORT is the default port of the health server.
-const DEFAULT_HEALTH_SERVER_PORT: u16 = 40901;
+const DEFAULT_HEALTH_SERVER_PORT: u16 = 4001;
+
+// DEFAULT_OBJECT_STORAGE_SERVER_PORT is the default port of the object storage server.
+const DEFAULT_OBJECT_STORAGE_SERVER_PORT: u16 = 4002;
+
+// DEFAULT_METRICS_SERVER_PORT is the default port of the metrics server.
+const DEFAULT_METRICS_SERVER_PORT: u16 = 4003;
 
 // DEFAULT_DOWNLOAD_PIECE_TIMEOUT is the default timeout for downloading a piece from source.
 const DEFAULT_DOWNLOAD_PIECE_TIMEOUT: Duration = Duration::from_secs(30);
