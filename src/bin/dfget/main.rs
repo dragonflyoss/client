@@ -26,8 +26,10 @@ use dragonfly_client::Error;
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::time::Duration;
 use std::{cmp::min, fmt::Write};
+use tokio::process::{Child, Command};
 use tracing::Level;
 use url::Url;
 
@@ -178,6 +180,13 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize tracting.
     let _guards = init_tracing(dfget::NAME, &args.log_dir, args.log_level, None);
 
+    // Spawn dfdaemon process.
+    let _ = spawn_dfdaemon(
+        args.dfdaemon_config,
+        &args.dfdaemon_log_dir,
+        args.dfdaemon_log_level,
+    )?;
+
     // Create dfdaemon client.
     let dfdaemon_download_client = DfdaemonDownloadClient::new_unix(args.endpoint)
         .await
@@ -230,6 +239,40 @@ async fn main() -> Result<(), anyhow::Error> {
 
     pb.finish_with_message("downloaded");
     Ok(())
+}
+
+// spawn_dfdaemon spawns a dfdaemon process in the background.
+fn spawn_dfdaemon(
+    config_path: PathBuf,
+    log_dir: &PathBuf,
+    log_level: Level,
+) -> Result<Child, anyhow::Error> {
+    // Create dfdaemon command.
+    let mut cmd = Command::new("dfdaemon");
+
+    // Set command line arguments.
+    cmd.arg("--config")
+        .arg(config_path)
+        .arg("--log-dir")
+        .arg(log_dir)
+        .arg("--log-level")
+        .arg(log_level.to_string());
+
+    // Redirect stdin, stdout, stderr to /dev/null.
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    // Create a new session for dfdaemon by calling setsid.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+
+    let child = cmd.spawn()?;
+    Ok(child)
 }
 
 // parse_header parses the header strings to a hash map.

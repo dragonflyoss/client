@@ -35,7 +35,6 @@ use std::time::Duration;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
-use tonic::codec::CompressionEncoding;
 use tonic::{
     transport::{Channel, Endpoint, Server, Uri},
     Request, Response, Status,
@@ -75,8 +74,6 @@ impl DfdaemonDownloadServer {
         // Initialize the grpc service.
         let service =
             DfdaemonDownloadGRPCServer::new(DfdaemonDownloadServerHandler { task: task.clone() })
-                .send_compressed(CompressionEncoding::Gzip)
-                .accept_compressed(CompressionEncoding::Gzip)
                 .max_decoding_message_size(usize::MAX);
 
         Self {
@@ -342,10 +339,7 @@ impl DfdaemonDownloadClient {
                 UnixStream::connect(socket_path.clone())
             }))
             .await?;
-        let client = DfdaemonDownloadGRPCClient::new(channel)
-            .send_compressed(CompressionEncoding::Gzip)
-            .accept_compressed(CompressionEncoding::Gzip)
-            .max_decoding_message_size(usize::MAX);
+        let client = DfdaemonDownloadGRPCClient::new(channel).max_decoding_message_size(usize::MAX);
         Ok(Self { client })
     }
 
