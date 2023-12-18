@@ -206,6 +206,9 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     );
 
+    // Log dfdaemon started pid.
+    info!("dfdaemon started at pid {}", std::process::id());
+
     // Wait for servers to exit or shutdown signal.
     tokio::select! {
         _ = tokio::spawn(async move { dynconfig.run().await }) => {
