@@ -25,7 +25,7 @@ use dragonfly_api::manager::v2::{
 };
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
-use tonic_health::pb::{health_check_response::ServingStatus, HealthCheckRequest};
+use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{error, info};
 
 // Data is the dynamic configuration of the dfdaemon.
@@ -205,12 +205,7 @@ impl Dynconfig {
             let health_client =
                 HealthClient::new(&format!("http://{}:{}", scheduler.ip, scheduler.port)).await?;
 
-            match health_client
-                .check(HealthCheckRequest {
-                    service: String::new(),
-                })
-                .await
-            {
+            match health_client.check().await {
                 Ok(resp) => {
                     if resp.status == ServingStatus::Serving as i32 {
                         available_schedulers.push(scheduler.clone());
