@@ -69,13 +69,6 @@ impl ManagerAnnouncer {
 
         // If the seed peer is enabled, we should announce the seed peer to the manager.
         if self.config.seed_peer.enable {
-            // Get the object storage port.
-            let object_storage_port = if self.config.object_storage.enable {
-                self.config.object_storage.port
-            } else {
-                u16::MIN
-            };
-
             // Register the seed peer to the manager.
             self.manager_client
                 .update_seed_peer(UpdateSeedPeerRequest {
