@@ -15,7 +15,7 @@
  */
 
 use crate::config::dfdaemon::Config;
-use crate::grpc::dfdaemon::DfdaemonClient;
+use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::storage::metadata;
 use crate::{Error, Result};
 use dashmap::{DashMap, DashSet};
@@ -135,10 +135,10 @@ impl PieceCollector {
                 })?;
 
                 // Create a dfdaemon client.
-                let dfdaemon_client =
-                    DfdaemonClient::new(format!("http://{}:{}", host.ip, host.port)).await?;
+                let dfdaemon_upload_client =
+                    DfdaemonUploadClient::new(format!("http://{}:{}", host.ip, host.port)).await?;
 
-                let response = dfdaemon_client
+                let response = dfdaemon_upload_client
                     .sync_pieces(SyncPiecesRequest {
                         task_id: task_id.to_string(),
                         interested_piece_numbers: interested_pieces

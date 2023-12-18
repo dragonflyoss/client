@@ -20,7 +20,7 @@ use dragonfly_api::common::v2::TaskType;
 use dragonfly_api::dfdaemon::v2::DownloadTaskRequest;
 use dragonfly_client::config::dfdaemon;
 use dragonfly_client::config::dfget;
-use dragonfly_client::grpc::dfdaemon::DfdaemonClient;
+use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client::Error;
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
@@ -157,8 +157,10 @@ async fn main() -> Result<(), anyhow::Error> {
     let _guards = init_tracing(dfget::NAME, &args.log_dir, args.log_level, None);
 
     // Create dfdaemon client.
-    let client = DfdaemonClient::new_unix(args.endpoint).await.unwrap();
-    let response = client
+    let dfdaemon_download_client = DfdaemonDownloadClient::new_unix(args.endpoint)
+        .await
+        .unwrap();
+    let response = dfdaemon_download_client
         .download_task(DownloadTaskRequest {
             download: Some(Download {
                 url: args.url.to_string(),

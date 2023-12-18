@@ -14,11 +14,77 @@
  * limitations under the License.
  */
 
+use crate::shutdown;
 use crate::{Error, Result};
-use tonic::transport::Channel;
+use std::net::SocketAddr;
+use tokio::sync::mpsc;
+use tokio::task::JoinSet;
+use tonic::transport::{Channel, Server};
 use tonic_health::pb::{
-    health_client::HealthClient as HealthGRPCClient, HealthCheckRequest, HealthCheckResponse,
+    health_client::HealthClient as HealthGRPCClient,
+    health_server::{Health, HealthServer as HealthGRPCServer},
+    HealthCheckRequest, HealthCheckResponse,
 };
+use tracing::{info, instrument};
+
+// HealthServer is the grpc server of the health.
+pub struct HealthServer<T: Health> {
+    // addr is the address of the grpc server.
+    addr: SocketAddr,
+
+    // service is the grpc service of the health.
+    service: HealthGRPCServer<T>,
+
+    // shutdown is used to shutdown the grpc server.
+    shutdown: shutdown::Shutdown,
+
+    // _shutdown_complete is used to notify the grpc server is shutdown.
+    _shutdown_complete: mpsc::UnboundedSender<()>,
+}
+
+// HealthServer implements the grpc server of the health.
+impl<T: Health> HealthServer<T> {
+    // new creates a new HealthServer.
+    pub fn new(
+        addr: SocketAddr,
+        service: HealthGRPCServer<T>,
+        shutdown: shutdown::Shutdown,
+        shutdown_complete_tx: mpsc::UnboundedSender<()>,
+    ) -> Self {
+        Self {
+            addr,
+            service,
+            shutdown,
+            _shutdown_complete: shutdown_complete_tx,
+        }
+    }
+
+    // run starts the health server.
+    #[instrument(skip_all)]
+    pub async fn run(&self) {
+        // Register the reflection service.
+        let reflection = tonic_reflection::server::Builder::configure()
+            .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
+            .build()
+            .unwrap();
+
+        // Clone the shutdown channel.
+        let mut shutdown = self.shutdown.clone();
+
+        // Start health grpc server.
+        info!("health server listening on {}", self.addr);
+        Server::builder()
+            .add_service(reflection.clone())
+            .add_service(self.service.clone())
+            .serve_with_shutdown(self.addr, async move {
+                // Health grpc server shutting down with signals.
+                let _ = shutdown.recv().await;
+                info!("health grpc server shutting down");
+            })
+            .await
+            .unwrap();
+    }
+}
 
 // HealthClient is a wrapper of HealthGRPCClient.
 #[derive(Clone)]
@@ -41,8 +107,53 @@ impl HealthClient {
     }
 
     // check checks the health of the server.
-    pub async fn check(&self, request: HealthCheckRequest) -> Result<HealthCheckResponse> {
-        let request = Self::make_request(request);
+    pub async fn check(&self) -> Result<HealthCheckResponse> {
+        let services = vec![
+            "dfdaemon.v2.DfdaemonDownload".to_string(),
+            "dfdaemon.v2.DfdaemonUpload".to_string(),
+        ];
+
+        let mut join_set = JoinSet::new();
+        for service in services {
+            let client = self.clone();
+            async fn check_service(
+                client: HealthClient,
+                service: String,
+            ) -> Result<HealthCheckResponse> {
+                client.check_service(service).await
+            }
+
+            join_set.spawn(check_service(client, service));
+        }
+
+        // Wait for all tasks to finish.
+        while let Some(message) = join_set.join_next().await {
+            match message {
+                Ok(check) => info!("check: {:?}", check),
+                Err(err) => return Err(err.into()),
+            };
+        }
+
+        Ok(HealthCheckResponse {
+            status: tonic_health::ServingStatus::Serving as i32,
+        })
+    }
+
+    // check_dfdaemon_download checks the health of the dfdaemon download service.
+    pub async fn check_dfdaemon_download(&self) -> Result<HealthCheckResponse> {
+        self.check_service("dfdaemon.v2.DfdaemonDownload".to_string())
+            .await
+    }
+
+    // check_dfdaemon_upload checks the health of the dfdaemon upload service.
+    pub async fn check_dfdaemon_upload(&self) -> Result<HealthCheckResponse> {
+        self.check_service("dfdaemon.v2.DfdaemonUpload".to_string())
+            .await
+    }
+
+    // check_service checks the health of the service.
+    async fn check_service(&self, service: String) -> Result<HealthCheckResponse> {
+        let request = Self::make_request(HealthCheckRequest { service });
         let response = self.client.clone().check(request).await?;
         Ok(response.into_inner())
     }
@@ -52,65 +163,5 @@ impl HealthClient {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
         request
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use std::{net::SocketAddr, time::Duration};
-
-    use tokio::task::JoinHandle;
-    use tonic::transport::Server;
-    use tonic_health::{pb::HealthCheckRequest, ServingStatus};
-
-    use crate::grpc::health::HealthClient;
-
-    struct MockHealthServer {
-        addr: String,
-        handle: JoinHandle<()>,
-    }
-
-    impl Drop for MockHealthServer {
-        fn drop(&mut self) {
-            self.handle.abort()
-        }
-    }
-
-    async fn spawn_mock_app() -> MockHealthServer {
-        let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
-        health_reporter
-            .set_service_status("test", ServingStatus::Serving)
-            .await;
-
-        let addr = SocketAddr::from(([127, 0, 0, 1], 8081));
-        let handle = tokio::spawn(async move {
-            Server::builder()
-                .add_service(health_service)
-                .serve(addr)
-                .await
-                .expect("failed to start server");
-        });
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        return MockHealthServer {
-            handle,
-            addr: addr.to_string(),
-        };
-    }
-
-    #[tokio::test]
-    async fn test_get_avaliable_scheduler() {
-        let app = spawn_mock_app().await;
-        let health_client = HealthClient::new(&format!("http://{}", app.addr))
-            .await
-            .expect("failed to create health client");
-        let Ok(res) = health_client
-            .check(HealthCheckRequest {
-                service: String::new(),
-            })
-            .await
-        else {
-            panic!("failed to check health");
-        };
-        assert_eq!(res.status, ServingStatus::Serving as i32);
     }
 }

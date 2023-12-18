@@ -16,7 +16,7 @@
 
 use crate::backend::http::{Request, HTTP};
 use crate::config::dfdaemon::Config;
-use crate::grpc::dfdaemon::DfdaemonClient;
+use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::storage::{metadata, Storage};
 use crate::utils::digest::{Algorithm, Digest as UtilsDigest};
 use crate::{Error, HTTPError, Result};
@@ -256,11 +256,11 @@ impl Piece {
             .host
             .clone()
             .ok_or(Error::InvalidPeer(parent.id.clone()))?;
-        let dfdaemon_client =
-            DfdaemonClient::new(format!("http://{}:{}", host.ip, host.port)).await?;
+        let dfdaemon_upload_client =
+            DfdaemonUploadClient::new(format!("http://{}:{}", host.ip, host.port)).await?;
 
         // Send the interested pieces request.
-        let response = dfdaemon_client
+        let response = dfdaemon_upload_client
             .download_piece(
                 DownloadPieceRequest {
                     task_id: task_id.to_string(),
