@@ -134,7 +134,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     type SyncPiecesStream = ReceiverStream<Result<SyncPiecesResponse, Status>>;
 
     // get_piece_numbers gets the piece numbers.
-    #[instrument(skip_all, fields(task_id))]
+    #[instrument(skip_all, fields(host_id, task_id))]
     async fn sync_pieces(
         &self,
         request: Request<SyncPiecesRequest>,
@@ -142,10 +142,14 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Clone the request.
         let request = request.into_inner();
 
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
         // Get the task id from tae request.
         let task_id = request.task_id;
 
-        // Span record the task id.
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.clone());
         Span::current().record("task_id", task_id.clone());
 
         // Get the interested piece numbers from the request.
@@ -232,7 +236,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 
     // sync_pieces syncs the pieces.
-    #[instrument(skip_all, fields(task_id, piece_number))]
+    #[instrument(skip_all, fields(host_id, task_id, piece_number))]
     async fn download_piece(
         &self,
         request: Request<DownloadPieceRequest>,
@@ -240,23 +244,23 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Clone the request.
         let request = request.into_inner();
 
-        // Clone the task.
-        let task = self.task.clone();
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
 
         // Get the task id from the request.
         let task_id = request.task_id;
 
-        // Span record the task id.
-        Span::current().record("task_id", task_id.as_str());
-
         // Get the interested piece number from the request.
         let piece_number = request.piece_number;
 
-        // Span record the piece number.
+        // Span record the host id, task id and piece number.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
         Span::current().record("piece_number", piece_number);
 
         // Get the piece metadata from the local storage.
-        let piece = task
+        let piece = self
+            .task
             .piece
             .get(task_id.as_str(), piece_number)
             .map_err(|err| {
@@ -269,7 +273,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             })?;
 
         // Get the piece content from the local storage.
-        let mut reader = task
+        let mut reader = self
+            .task
             .piece
             .download_from_local_peer_into_async_read(task_id.as_str(), piece_number)
             .await
@@ -302,7 +307,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 
     // trigger_download_task triggers the download task.
-    #[instrument(skip_all, fields(url))]
+    #[instrument(skip_all, fields(host_id, url))]
     async fn trigger_download_task(
         &self,
         request: Request<TriggerDownloadTaskRequest>,
@@ -310,13 +315,17 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Clone the request.
         let request = request.into_inner();
 
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
         // Get the download from the request.
         let download = request.download.ok_or_else(|| {
             error!("download not found");
             Status::invalid_argument("download not found")
         })?;
 
-        // Span record the download url.
+        // Span record the host id and download url.
+        Span::current().record("host_id", host_id.as_str());
         Span::current().record("url", download.url.as_str());
 
         // Initialize the dfdaemon download client.
