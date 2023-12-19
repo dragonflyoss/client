@@ -26,17 +26,28 @@ pub struct IDGenerator {
 
     // hostname is the hostname of the host.
     hostname: String,
+
+    // is_seed_peer indicates whether the host is a seed peer.
+    is_seed_peer: bool,
 }
 
 // IDGenerator implements the IDGenerator.
 impl IDGenerator {
     // new creates a new IDGenerator.
-    pub fn new(ip: String, hostname: String) -> Self {
-        IDGenerator { ip, hostname }
+    pub fn new(ip: String, hostname: String, is_seed_peer: bool) -> Self {
+        IDGenerator {
+            ip,
+            hostname,
+            is_seed_peer,
+        }
     }
 
     // host_id generates the host id.
     pub fn host_id(&self) -> String {
+        if self.is_seed_peer {
+            return format!("{}-{}-{}", self.ip, self.hostname, "seed");
+        }
+
         format!("{}-{}", self.ip, self.hostname)
     }
 
@@ -88,6 +99,16 @@ impl IDGenerator {
 
     // peer_id generates the peer id.
     pub fn peer_id(&self) -> String {
+        if self.is_seed_peer {
+            return format!(
+                "{}-{}-{}-{}",
+                self.ip,
+                self.hostname,
+                "seed",
+                Uuid::new_v4()
+            );
+        }
+
         format!("{}-{}-{}", self.ip, self.hostname, Uuid::new_v4())
     }
 }

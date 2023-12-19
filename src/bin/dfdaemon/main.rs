@@ -97,6 +97,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let id_generator = IDGenerator::new(
         config.host.ip.unwrap().to_string(),
         config.host.hostname.clone(),
+        config.seed_peer.enable,
     );
     let id_generator = Arc::new(id_generator);
 
