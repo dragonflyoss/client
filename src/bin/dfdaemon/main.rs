@@ -182,6 +182,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Initialize upload grpc server.
     let mut dfdaemon_upload_grpc = DfdaemonUploadServer::new(
+        config.clone(),
         SocketAddr::new(config.upload.server.ip.unwrap(), config.upload.server.port),
         task.clone(),
         health_reporter.clone(),

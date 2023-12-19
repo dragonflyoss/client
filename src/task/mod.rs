@@ -205,7 +205,9 @@ impl Task {
             if let Err(err) = self
                 .download_from_local_peer_into_file(
                     &mut f,
+                    host_id,
                     task_id,
+                    peer_id,
                     interested_pieces.clone(),
                     content_length,
                     download_progress_tx.clone(),
@@ -237,7 +239,9 @@ impl Task {
         let finished_pieces = match self
             .download_partial_from_local_peer_into_file(
                 &mut f,
+                host_id,
                 task_id,
+                peer_id,
                 interested_pieces.clone(),
                 content_length,
                 download_progress_tx.clone(),
@@ -293,7 +297,9 @@ impl Task {
             if let Err(err) = self
                 .download_partial_from_source_into_file(
                     &mut f,
+                    host_id,
                     task_id,
+                    peer_id,
                     interested_pieces.clone(),
                     download.url.clone(),
                     download.header.clone(),
@@ -762,6 +768,9 @@ impl Task {
                     download_progress_tx
                         .send_timeout(
                             Ok(DownloadTaskResponse {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.to_string(),
+                                peer_id: peer_id.to_string(),
                                 content_length,
                                 piece: Some(piece.clone()),
                             }),
@@ -938,6 +947,9 @@ impl Task {
                     download_progress_tx
                         .send_timeout(
                             Ok(DownloadTaskResponse {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.to_string(),
+                                peer_id: peer_id.to_string(),
                                 content_length,
                                 piece: Some(piece.clone()),
                             }),
@@ -1001,10 +1013,13 @@ impl Task {
     }
 
     // download_from_local_peer_into_file downloads a task from a local peer into a file.
+    #[allow(clippy::too_many_arguments)]
     async fn download_from_local_peer_into_file(
         &self,
         f: &mut fs::File,
+        host_id: &str,
         task_id: &str,
+        peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
         content_length: u64,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
@@ -1012,7 +1027,9 @@ impl Task {
         let finished_pieces = self
             .download_partial_from_local_peer_into_file(
                 f,
+                host_id,
                 task_id,
+                peer_id,
                 interested_pieces.clone(),
                 content_length,
                 download_progress_tx.clone(),
@@ -1039,10 +1056,13 @@ impl Task {
     }
 
     // download_partial_from_local_peer_into_file downloads a partial task from a local peer into a file.
+    #[allow(clippy::too_many_arguments)]
     async fn download_partial_from_local_peer_into_file(
         &self,
         f: &mut fs::File,
+        host_id: &str,
         task_id: &str,
+        peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
         content_length: u64,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
@@ -1102,6 +1122,9 @@ impl Task {
             download_progress_tx
                 .send_timeout(
                     Ok(DownloadTaskResponse {
+                        host_id: host_id.to_string(),
+                        task_id: task_id.to_string(),
+                        peer_id: peer_id.to_string(),
                         content_length,
                         piece: Some(piece.clone()),
                     }),
@@ -1121,7 +1144,9 @@ impl Task {
     async fn download_partial_from_source_into_file(
         &self,
         f: &mut fs::File,
+        host_id: &str,
         task_id: &str,
+        peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
         url: String,
         header: HashMap<String, String>,
@@ -1215,6 +1240,9 @@ impl Task {
                     download_progress_tx
                         .send_timeout(
                             Ok(DownloadTaskResponse {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.to_string(),
+                                peer_id: peer_id.to_string(),
                                 content_length,
                                 piece: Some(piece.clone()),
                             }),

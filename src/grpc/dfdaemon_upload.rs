@@ -14,17 +14,18 @@
  * limitations under the License.
  */
 
+use crate::config::dfdaemon::Config;
+use crate::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use crate::shutdown;
 use crate::storage;
 use crate::task;
-use crate::utils::http::hashmap_to_headermap;
 use crate::Result as ClientResult;
 use dragonfly_api::common::v2::Piece;
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient,
     dfdaemon_upload_server::{DfdaemonUpload, DfdaemonUploadServer as DfdaemonUploadGRPCServer},
-    DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest, DownloadTaskResponse,
-    SyncPiecesRequest, SyncPiecesResponse,
+    DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest, SyncPiecesRequest,
+    SyncPiecesResponse, TriggerDownloadTaskRequest,
 };
 use std::borrow::BorrowMut;
 use std::net::SocketAddr;
@@ -62,6 +63,7 @@ pub struct DfdaemonUploadServer {
 impl DfdaemonUploadServer {
     // new creates a new DfdaemonUploadServer.
     pub fn new(
+        config: Arc<Config>,
         addr: SocketAddr,
         task: Arc<task::Task>,
         health_reporter: HealthReporter,
@@ -69,7 +71,7 @@ impl DfdaemonUploadServer {
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
         // Initialize the grpc service.
-        let service = DfdaemonUploadGRPCServer::new(DfdaemonUploadServerHandler { task })
+        let service = DfdaemonUploadGRPCServer::new(DfdaemonUploadServerHandler { config, task })
             .max_decoding_message_size(usize::MAX);
 
         Self {
@@ -118,6 +120,9 @@ impl DfdaemonUploadServer {
 
 // DfdaemonUploadServerHandler is the handler of the dfdaemon upload grpc service.
 pub struct DfdaemonUploadServerHandler {
+    // config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
     // task is the task manager.
     task: Arc<task::Task>,
 }
@@ -296,132 +301,56 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         }))
     }
 
-    // DownloadTaskStream is the stream of the download task response.
-    type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
-
-    // download_task tells the dfdaemon to download the task.
-    #[instrument(skip_all, fields(task_id, peer_id))]
-    async fn download_task(
+    // trigger_download_task triggers the download task.
+    #[instrument(skip_all, fields(url))]
+    async fn trigger_download_task(
         &self,
-        request: Request<DownloadTaskRequest>,
-    ) -> Result<Response<Self::DownloadTaskStream>, Status> {
+        request: Request<TriggerDownloadTaskRequest>,
+    ) -> Result<Response<()>, Status> {
         // Clone the request.
         let request = request.into_inner();
 
-        // Check whether the download is empty.
-        let download = request
-            .download
-            .ok_or(Status::invalid_argument("missing download"))?;
-
-        // Generate the task id.
-        let task_id = self
-            .task
-            .id_generator
-            .task_id(
-                download.url.as_str(),
-                download.digest.as_deref(),
-                download.tag.as_deref(),
-                download.application.as_deref(),
-                download.piece_length,
-                download.filters.clone(),
-            )
-            .map_err(|e| {
-                error!("generate task id: {}", e);
-                Status::invalid_argument(e.to_string())
-            })?;
-
-        // Generate the host id.
-        let host_id = self.task.id_generator.host_id();
-
-        // Generate the peer id.
-        let peer_id = self.task.id_generator.peer_id();
-
-        // Span record the task id and peer id.
-        Span::current().record("task_id", task_id.as_str());
-        Span::current().record("peer_id", peer_id.as_str());
-
-        // Download task started.
-        info!("download task started: {:?}", download);
-        self.task
-            .download_task_started(task_id.as_str(), download.piece_length)
-            .map_err(|e| {
-                error!("download task started: {}", e);
-                Status::internal(e.to_string())
-            })?;
-
-        // Convert the header.
-        let header = hashmap_to_headermap(&download.header).map_err(|e| {
-            error!("convert header: {}", e);
-            Status::invalid_argument(e.to_string())
+        // Get the download from the request.
+        let download = request.download.ok_or_else(|| {
+            error!("download not found");
+            Status::invalid_argument("download not found")
         })?;
 
-        // Get the content length.
-        let content_length = self
-            .task
-            .get_content_length(task_id.as_str(), download.url.as_str(), header.clone())
+        // Span record the download url.
+        Span::current().record("url", download.url.as_str());
+
+        // Initialize the dfdaemon download client.
+        let dfdaemon_download_client =
+            DfdaemonDownloadClient::new_unix(self.config.download.server.socket_path.clone())
+                .await
+                .map_err(|err| {
+                    error!("create dfdaemon download client: {}", err);
+                    Status::internal(format!("create dfdaemon download client: {}", err))
+                })?;
+
+        // Download task by dfdaemon download client.
+        let response = dfdaemon_download_client
+            .download_task(DownloadTaskRequest {
+                download: Some(download),
+            })
             .await
-            .map_err(|e| {
-                // Download task failed.
-                self.task
-                    .download_task_failed(task_id.as_str())
-                    .unwrap_or_else(|e| {
-                        error!("download task failed: {}", e);
-                    });
-
-                error!("get content length: {}", e);
-                Status::internal(e.to_string())
+            .map_err(|err| {
+                error!("download task: {}", err);
+                Status::internal(format!("download task: {}", err))
             })?;
-        info!("content length: {}", content_length);
 
-        // Clone the task.
-        let task = self.task.clone();
-
-        // Initialize stream channel.
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
+        // Spawn to handle the download task.
         tokio::spawn(
             async move {
-                match task
-                    .download_into_file(
-                        task_id.as_str(),
-                        host_id.as_str(),
-                        peer_id.as_str(),
-                        content_length,
-                        download.clone(),
-                        out_stream_tx.clone(),
-                    )
-                    .await
-                {
-                    Ok(_) => {
-                        // Download task succeeded.
-                        if download.range.is_none() {
-                            info!("download complete task succeeded");
-                            task.download_task_finished(task_id.as_str())
-                                .unwrap_or_else(|e| {
-                                    error!("download task complete succeeded: {}", e);
-                                });
-                            return;
-                        }
-
-                        info!("download range task succeeded");
-                    }
-                    Err(e) => {
-                        // Download task failed.
-                        info!("download task failed: {:?}", download);
-                        task.download_task_failed(task_id.as_str())
-                            .unwrap_or_else(|e| {
-                                error!("download task failed: {}", e);
-                            });
-
-                        error!("download into file: {}", e);
-                    }
+                let mut out_stream = response.into_inner();
+                while let Some(message) = out_stream.message().await.unwrap() {
+                    info!("trigger download task: {:?}", message);
                 }
-
-                drop(out_stream_tx);
             }
             .in_current_span(),
         );
 
-        Ok(Response::new(ReceiverStream::new(out_stream_rx)))
+        Ok(Response::new(()))
     }
 }
 
@@ -469,33 +398,14 @@ impl DfdaemonUploadClient {
         Ok(response.into_inner())
     }
 
-    // download_task tells the dfdaemon to download the task.
+    // trigger_download_task triggers the download task.
     #[instrument(skip_all)]
-    pub async fn download_task(
+    pub async fn trigger_download_task(
         &self,
-        request: DownloadTaskRequest,
-    ) -> ClientResult<tonic::Response<tonic::codec::Streaming<DownloadTaskResponse>>> {
-        // Get the timeout from the request.
-        let timeout = request
-            .clone()
-            .download
-            .ok_or_else(|| {
-                tonic::Status::invalid_argument("missing download in download task request")
-            })?
-            .timeout;
-
-        // Initialize the request.
-        let mut request = tonic::Request::new(request);
-
-        // Set the timeout to the request.
-        if let Some(timeout) = timeout {
-            request.set_timeout(
-                Duration::try_from(timeout)
-                    .map_err(|_| tonic::Status::invalid_argument("invalid timeout"))?,
-            );
-        }
-
-        let response = self.client.clone().download_task(request).await?;
+        request: TriggerDownloadTaskRequest,
+    ) -> Result<Response<()>, Status> {
+        let request = Self::make_request(request);
+        let response = self.client.clone().trigger_download_task(request).await?;
         Ok(response)
     }
 
