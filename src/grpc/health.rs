@@ -124,9 +124,26 @@ impl HealthClient {
         Ok(Self { client })
     }
 
-    // check checks the health of the server.
+    // check checks the health of the grpc service without service name.
     #[instrument(skip_all)]
     pub async fn check(&self) -> Result<HealthCheckResponse> {
+        let request = Self::make_request(HealthCheckRequest {
+            service: "".to_string(),
+        });
+        let response = self.client.clone().check(request).await?;
+        Ok(response.into_inner())
+    }
+
+    // check_service checks the health of the grpc service with service name.
+    pub async fn check_service(&self, service: String) -> Result<HealthCheckResponse> {
+        let request = Self::make_request(HealthCheckRequest { service });
+        let response = self.client.clone().check(request).await?;
+        Ok(response.into_inner())
+    }
+
+    // check_dfdaemon checks the health of the dfdaemon.
+    #[instrument(skip_all)]
+    pub async fn check_dfdaemon(&self) -> Result<HealthCheckResponse> {
         let services = vec![
             "dfdaemon.v2.DfdaemonDownload".to_string(),
             "dfdaemon.v2.DfdaemonUpload".to_string(),
@@ -170,13 +187,6 @@ impl HealthClient {
     pub async fn check_dfdaemon_upload(&self) -> Result<HealthCheckResponse> {
         self.check_service("dfdaemon.v2.DfdaemonUpload".to_string())
             .await
-    }
-
-    // check_service checks the health of the service.
-    async fn check_service(&self, service: String) -> Result<HealthCheckResponse> {
-        let request = Self::make_request(HealthCheckRequest { service });
-        let response = self.client.clone().check(request).await?;
-        Ok(response.into_inner())
     }
 
     // make_request creates a new request with timeout.
