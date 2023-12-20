@@ -142,7 +142,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
     // download_task tells the dfdaemon to download the task.
-    #[instrument(skip_all, fields(task_id, peer_id))]
+    #[instrument(skip_all, fields(host_id, task_id, peer_id))]
     async fn download_task(
         &self,
         request: Request<DownloadTaskRequest>,
@@ -178,7 +178,8 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Generate the peer id.
         let peer_id = self.task.id_generator.peer_id();
 
-        // Span record the task id and peer id.
+        // Span record the host id, task id and peer id.
+        Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
 
@@ -277,7 +278,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 
     // stat_task gets the status of the task.
-    #[instrument(skip_all, fields(task_id))]
+    #[instrument(skip_all, fields(host_id, task_id))]
     async fn stat_task(
         &self,
         request: Request<DfdaemonStatTaskRequest>,
@@ -285,10 +286,14 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Clone the request.
         let request = request.into_inner();
 
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
         // Get the task id from the request.
         let task_id = request.task_id;
 
-        // Span record the task id and peer id.
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
 
         // Get the task from the scheduler.
@@ -349,20 +354,16 @@ impl DfdaemonDownloadClient {
         &self,
         request: DownloadTaskRequest,
     ) -> ClientResult<tonic::Response<tonic::codec::Streaming<DownloadTaskResponse>>> {
-        // Get the timeout from the request.
-        let timeout = request
-            .clone()
-            .download
-            .ok_or_else(|| {
-                tonic::Status::invalid_argument("missing download in download task request")
-            })?
-            .timeout;
+        // Get the download from the request.
+        let download = request.clone().download.ok_or_else(|| {
+            tonic::Status::invalid_argument("missing download in download task request")
+        })?;
 
         // Initialize the request.
         let mut request = tonic::Request::new(request);
 
         // Set the timeout to the request.
-        if let Some(timeout) = timeout {
+        if let Some(timeout) = download.timeout {
             request.set_timeout(
                 Duration::try_from(timeout)
                     .map_err(|_| tonic::Status::invalid_argument("invalid timeout"))?,
