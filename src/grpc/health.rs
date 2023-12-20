@@ -48,6 +48,7 @@ pub struct HealthServer<T: Health> {
 // HealthServer implements the grpc server of the health.
 impl<T: Health> HealthServer<T> {
     // new creates a new HealthServer.
+    #[instrument(skip_all)]
     pub fn new(
         addr: SocketAddr,
         service: HealthGRPCServer<T>,
@@ -110,6 +111,7 @@ impl HealthClient {
     }
 
     // new_unix creates a new HealthClient with unix domain socket.
+    #[instrument(skip_all)]
     pub async fn new_unix(socket_path: PathBuf) -> Result<Self> {
         // Ignore the uri because it is not used.
         let channel = Endpoint::try_from("http://[::]:50051")
@@ -123,6 +125,7 @@ impl HealthClient {
     }
 
     // check checks the health of the server.
+    #[instrument(skip_all)]
     pub async fn check(&self) -> Result<HealthCheckResponse> {
         let services = vec![
             "dfdaemon.v2.DfdaemonDownload".to_string(),
@@ -156,12 +159,14 @@ impl HealthClient {
     }
 
     // check_dfdaemon_download checks the health of the dfdaemon download service.
+    #[instrument(skip_all)]
     pub async fn check_dfdaemon_download(&self) -> Result<HealthCheckResponse> {
         self.check_service("dfdaemon.v2.DfdaemonDownload".to_string())
             .await
     }
 
     // check_dfdaemon_upload checks the health of the dfdaemon upload service.
+    #[instrument(skip_all)]
     pub async fn check_dfdaemon_upload(&self) -> Result<HealthCheckResponse> {
         self.check_service("dfdaemon.v2.DfdaemonUpload".to_string())
             .await
