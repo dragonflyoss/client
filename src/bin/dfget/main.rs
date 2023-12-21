@@ -32,7 +32,7 @@ use std::process::Stdio;
 use std::time::Duration;
 use std::{cmp::min, fmt::Write};
 use tokio::process::{Child, Command};
-use tracing::{debug, info, Level};
+use tracing::{debug, error, info, Level};
 use url::Url;
 
 // DEFAULT_DFDAEMON_CHECK_HEALTH_INTERVAL is the default interval of checking dfdaemon's health.
@@ -203,7 +203,11 @@ async fn main() -> Result<(), anyhow::Error> {
         args.dfdaemon_log_level,
         args.dfdaemon_lock_path,
     )
-    .await?;
+    .await
+    .map_err(|err| {
+        error!("initialize dfdaemon download client failed: {}", err);
+        err
+    })?;
 
     // Create dfdaemon client.
     let response = dfdaemon_download_client
@@ -225,15 +229,18 @@ async fn main() -> Result<(), anyhow::Error> {
                 need_back_to_source: false,
             }),
         })
-        .await?;
+        .await
+        .map_err(|err| {
+            error!("download task failed: {}", err);
+            err
+        })?;
 
     // Initialize progress bar.
     let pb = ProgressBar::new(0);
     pb.set_style(
         ProgressStyle::with_template(
             "[{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})",
-        )
-        .unwrap()
+        )?
         .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
             write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
         })
@@ -314,7 +321,7 @@ async fn get_dfdaemon_download_client(
 ) -> Result<DfdaemonDownloadClient, anyhow::Error> {
     // Check dfdaemon's health.
     let health_client = HealthClient::new_unix(endpoint.clone()).await?;
-    health_client.check().await?;
+    health_client.check_dfdaemon().await?;
 
     // Get dfdaemon download client.
     let dfdaemon_download_client = DfdaemonDownloadClient::new_unix(endpoint).await?;
