@@ -41,6 +41,10 @@ pub enum Error {
     #[error(transparent)]
     JSON(#[from] serde_json::Error),
 
+    // YAML is the error for serde_yaml.
+    #[error(transparent)]
+    Yaml(#[from] serde_yaml::Error),
+
     // IO is the error for IO operation.
     #[error(transparent)]
     IO(#[from] std::io::Error),
@@ -60,6 +64,10 @@ pub enum Error {
     // Reqwest is the error for reqwest.
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
+
+    // ValidationError is the error for validation.
+    #[error(transparent)]
+    ValidationError(#[from] validator::ValidationErrors),
 
     // MpscSend is the error for send.
     #[error("mpsc send: {0}")]
@@ -111,6 +119,10 @@ pub enum Error {
     // WaitForPieceFinishedTimeout is the error when the wait for piece finished timeout.
     #[error{"wait for piece {0} finished timeout"}]
     WaitForPieceFinishedTimeout(String),
+
+    // AvailableManagerNotFound is the error when the available manager is not found.
+    #[error{"available manager not found"}]
+    AvailableManagerNotFound(),
 
     // AvailableSchedulersNotFound is the error when the available schedulers is not found.
     #[error{"available schedulers not found"}]

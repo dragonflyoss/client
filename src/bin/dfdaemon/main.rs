@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-use anyhow::Context;
 use clap::Parser;
 use dragonfly_client::announcer::{ManagerAnnouncer, SchedulerAnnouncer};
 use dragonfly_client::backend::http::HTTP;
@@ -35,7 +34,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{info, Level};
+use tracing::{error, info, Level};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -78,7 +77,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let args = Args::parse();
 
     // Load config.
-    let config = dfdaemon::Config::load(&args.config).unwrap();
+    let config = dfdaemon::Config::load(&args.config)?;
     let config = Arc::new(config);
 
     // Initialize tracing.
@@ -90,7 +89,11 @@ async fn main() -> Result<(), anyhow::Error> {
     );
 
     // Initialize storage.
-    let storage = Storage::new(config.clone(), config.server.data_dir.as_path()).unwrap();
+    let storage =
+        Storage::new(config.clone(), config.server.data_dir.as_path()).map_err(|err| {
+            error!("initialize storage failed: {}", err);
+            err
+        })?;
     let storage = Arc::new(storage);
 
     // Initialize id generator.
@@ -106,10 +109,12 @@ async fn main() -> Result<(), anyhow::Error> {
     let http_client = Arc::new(http_client);
 
     // Initialize manager client.
-    let manager_client = ManagerClient::new(config.manager.addr.as_ref().unwrap())
+    let manager_client = ManagerClient::new(config.manager.addrs.clone())
         .await
-        .context("failed to initialize manager client")
-        .unwrap();
+        .map_err(|err| {
+            error!("initialize manager client failed: {}", err);
+            err
+        })?;
     let manager_client = Arc::new(manager_client);
 
     // Initialize channel for graceful shutdown.
@@ -124,14 +129,19 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     )
     .await
-    .unwrap();
+    .map_err(|err| {
+        error!("initialize dynconfig server failed: {}", err);
+        err
+    })?;
     let dynconfig = Arc::new(dynconfig);
 
     // Initialize scheduler client.
     let scheduler_client = SchedulerClient::new(dynconfig.clone())
         .await
-        .context("failed to initialize scheduler client")
-        .unwrap();
+        .map_err(|err| {
+            error!("initialize scheduler client failed: {}", err);
+            err
+        })?;
     let scheduler_client = Arc::new(scheduler_client);
 
     // Initialize task manager.
@@ -168,7 +178,10 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     )
     .await
-    .unwrap();
+    .map_err(|err| {
+        error!("initialize scheduler announcer failed: {}", err);
+        err
+    })?;
 
     // Initialize health reporter.
     let (health_reporter, health_service) = tonic_health::server::health_reporter();

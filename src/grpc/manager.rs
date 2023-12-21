@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::grpc::health::HealthClient;
 use crate::{Error, Result};
 use dragonfly_api::manager::v2::{
     manager_client::ManagerClient as ManagerGRPCClient, DeleteSeedPeerRequest,
@@ -21,7 +22,8 @@ use dragonfly_api::manager::v2::{
     SeedPeer, UpdateSeedPeerRequest,
 };
 use tonic::transport::Channel;
-use tracing::instrument;
+use tonic_health::pb::health_check_response::ServingStatus;
+use tracing::{info, instrument, warn};
 
 // ManagerClient is a wrapper of ManagerGRPCClient.
 #[derive(Clone)]
@@ -33,9 +35,40 @@ pub struct ManagerClient {
 // ManagerClient implements the grpc client of the manager.
 impl ManagerClient {
     // new creates a new ManagerClient.
-    pub async fn new(addr: &str) -> Result<Self> {
-        let channel = Channel::from_shared(addr.to_string())
-            .map_err(|_| Error::InvalidURI(addr.into()))?
+    pub async fn new(addrs: Vec<String>) -> Result<Self> {
+        // Find the available manager address.
+        let mut available_addr = String::new();
+        for addr in addrs {
+            let health_client = match HealthClient::new(addr.as_str()).await {
+                Ok(client) => client,
+                Err(err) => {
+                    warn!("create {} health client failed: {}", addr, err);
+                    continue;
+                }
+            };
+
+            match health_client.check().await {
+                Ok(resp) => {
+                    if resp.status == ServingStatus::Serving as i32 {
+                        info!("use manager address: {}", addr);
+                        available_addr = addr;
+                    }
+                }
+                Err(err) => {
+                    warn!("check manager health failed: {}", err);
+                    continue;
+                }
+            }
+        }
+
+        // Return error if no available address found.
+        if available_addr.is_empty() {
+            return Err(Error::AvailableManagerNotFound());
+        }
+
+        // Initialize the manager client by the available address.
+        let channel = Channel::from_shared(available_addr.clone())
+            .map_err(|_| Error::InvalidURI(available_addr))?
             .connect_timeout(super::CONNECT_TIMEOUT)
             .connect()
             .await?;
@@ -95,10 +128,11 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_uri_should_fail() {
-        let result = ManagerClient::new("htt:/xxx").await;
+        let addrs = vec!["htt:/xxx".to_string()];
+        let result = ManagerClient::new(addrs).await;
         assert!(result.is_err());
         match result {
-            Err(e) => assert_eq!(e.to_string(), "invalid uri htt:/xxx"),
+            Err(e) => assert_eq!(e.to_string(), "available manager not found"),
             _ => panic!("unexpected error"),
         }
     }

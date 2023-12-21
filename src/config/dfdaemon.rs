@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use crate::Result;
 use local_ip_address::{local_ip, local_ipv6};
 use serde::Deserialize;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -101,21 +101,6 @@ pub fn default_dfdaemon_lock_path() -> PathBuf {
     super::default_lock_dir().join("dfdaemon.lock")
 }
 
-// Error is the error for Config.
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    // IO is the error for IO operation.
-    #[error(transparent)]
-    IO(#[from] std::io::Error),
-
-    // YAML is the error for serde_yaml.
-    #[error(transparent)]
-    YAML(#[from] serde_yaml::Error),
-}
-
-// Result is the result for Config.
-pub type Result<T> = std::result::Result<T, Error>;
-
 // Host is the host configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -202,9 +187,11 @@ pub struct Download {
     pub piece_timeout: Duration,
 
     // concurrent_piece_count is the number of concurrent pieces to download.
+    #[validate(range(min = 1))]
     pub concurrent_piece_count: u32,
 
     // max_schedule_count is the max count of schedule.
+    #[validate(range(min = 1))]
     pub max_schedule_count: u32,
 }
 
@@ -252,8 +239,9 @@ pub struct Upload {
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Manager {
-    // addr is manager address.
-    pub addr: Option<String>,
+    // addrs is manager addresses.
+    #[validate(length(min = 1))]
+    pub addrs: Vec<String>,
 }
 
 // Scheduler is the scheduler configuration for dfdaemon.
@@ -328,6 +316,7 @@ pub struct SeedPeer {
     pub kind: HostType,
 
     // cluster_id is the cluster id of the seed peer cluster.
+    #[validate(range(min = 1))]
     pub cluster_id: u64,
 
     // keepalive_interval is the interval to keep alive with manager.
@@ -377,10 +366,12 @@ pub struct Policy {
 
     // dist_high_threshold_percent is the high threshold percent of the disk usage.
     // If the disk usage is greater than the threshold, dfdaemon will do gc.
+    #[validate(range(min = 1, max = 99))]
     pub dist_high_threshold_percent: u8,
 
     // dist_low_threshold_percent is the low threshold percent of the disk usage.
     // If the disk usage is less than the threshold, dfdaemon will stop gc.
+    #[validate(range(min = 1, max = 99))]
     pub dist_low_threshold_percent: u8,
 }
 
@@ -520,54 +511,71 @@ impl Default for Health {
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
     // host is the host configuration for dfdaemon.
+    #[validate]
     pub host: Host,
 
     // server is the server configuration for dfdaemon.
+    #[validate]
     pub server: Server,
 
     // download is the download configuration for dfdaemon.
+    #[validate]
     pub download: Download,
 
     // upload is the upload configuration for dfdaemon.
+    #[validate]
     pub upload: Upload,
 
     // manager is the manager configuration for dfdaemon.
+    #[validate]
     pub manager: Manager,
 
     // scheduler is the scheduler configuration for dfdaemon.
+    #[validate]
     pub scheduler: Scheduler,
 
     // seed_peer is the seed peer configuration for dfdaemon.
+    #[validate]
     pub seed_peer: SeedPeer,
 
     // dynconfig is the dynconfig configuration for dfdaemon.
+    #[validate]
     pub dynconfig: Dynconfig,
 
     // storage is the storage configuration for dfdaemon.
+    #[validate]
     pub storage: Storage,
 
     // gc is the gc configuration for dfdaemon.
+    #[validate]
     pub gc: GC,
 
     // proxy is the proxy configuration for dfdaemon.
+    #[validate]
     pub proxy: Proxy,
 
     // security is the security configuration for dfdaemon.
+    #[validate]
     pub security: Security,
 
     // object_storage is the object storage configuration for dfdaemon.
+    #[validate]
     pub object_storage: ObjectStorage,
 
     // metrics is the metrics configuration for dfdaemon.
+    #[validate]
     pub metrics: Metrics,
 
     // tracing is the tracing configuration for dfdaemon.
+    #[validate]
     pub tracing: Tracing,
 
     // health is the health configuration for dfdaemon.
+    #[validate]
     pub health: Health,
 
     // network is the network configuration for dfdaemon.
+    #[validate]
     pub network: Network,
 }
 
@@ -576,14 +584,19 @@ impl Config {
     // load loads configuration from file.
     pub fn load(path: &PathBuf) -> Result<Config> {
         if path.exists() {
+            // Load configuration from file.
             let content = fs::read_to_string(path)?;
             let mut config: Config = serde_yaml::from_str(&content)?;
             info!("load config from {}", path.display());
 
             // Convert configuration.
             config.convert();
+
+            // Validate configuration.
+            config.validate()?;
             Ok(config)
         } else {
+            // Create default configuration.
             let mut config = Self::default();
             info!(
                 "config file {} not found, use default config",
@@ -592,6 +605,9 @@ impl Config {
 
             // Convert configuration.
             config.convert();
+
+            // Validate configuration.
+            config.validate()?;
             Ok(config)
         }
     }
