@@ -85,6 +85,7 @@ impl Metrics {
             .and_then(Self::metrics_handler);
 
         // Start the metrics server and wait for it to finish.
+        info!("metrics server listening on {}", self.addr);
         tokio::select! {
             _ = warp::serve(metrics_route).run(self.addr) => {
                 // Metrics server ended.
