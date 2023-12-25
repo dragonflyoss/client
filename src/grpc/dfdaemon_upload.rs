@@ -27,7 +27,6 @@ use dragonfly_api::dfdaemon::v2::{
     DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest, SyncPiecesRequest,
     SyncPiecesResponse, TriggerDownloadTaskRequest,
 };
-use std::borrow::BorrowMut;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,7 +37,6 @@ use tonic::{
     transport::{Channel, Server},
     Request, Response, Status,
 };
-use tonic_health::server::HealthReporter;
 use tracing::{error, info, instrument, Instrument, Span};
 
 // DfdaemonUploadServer is the grpc server of the upload.
@@ -48,9 +46,6 @@ pub struct DfdaemonUploadServer {
 
     // service is the grpc service of the dfdaemon upload.
     service: DfdaemonUploadGRPCServer<DfdaemonUploadServerHandler>,
-
-    // health_reporter is the health reporter of the grpc server.
-    health_reporter: HealthReporter,
 
     // shutdown is used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
@@ -66,7 +61,6 @@ impl DfdaemonUploadServer {
         config: Arc<Config>,
         addr: SocketAddr,
         task: Arc<task::Task>,
-        health_reporter: HealthReporter,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -77,7 +71,6 @@ impl DfdaemonUploadServer {
         Self {
             addr,
             service,
-            health_reporter,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -95,8 +88,8 @@ impl DfdaemonUploadServer {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
 
-        // Borrow the health reporter.
-        let health_reporter = self.health_reporter.borrow_mut();
+        // Initialize health reporter.
+        let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
 
         // Set the serving status of the upload grpc server.
         health_reporter
@@ -107,6 +100,7 @@ impl DfdaemonUploadServer {
         info!("upload server listening on {}", self.addr);
         Server::builder()
             .add_service(reflection.clone())
+            .add_service(health_service)
             .add_service(self.service.clone())
             .serve_with_shutdown(self.addr, async move {
                 // Upload grpc server shutting down with signals.
