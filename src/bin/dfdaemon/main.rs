@@ -22,7 +22,7 @@ use dragonfly_client::dynconfig::Dynconfig;
 use dragonfly_client::gc::GC;
 use dragonfly_client::grpc::{
     dfdaemon_download::DfdaemonDownloadServer, dfdaemon_upload::DfdaemonUploadServer,
-    health::HealthServer, manager::ManagerClient, scheduler::SchedulerClient,
+    manager::ManagerClient, scheduler::SchedulerClient,
 };
 use dragonfly_client::metrics::Metrics;
 use dragonfly_client::shutdown;
@@ -187,23 +187,11 @@ async fn main() -> Result<(), anyhow::Error> {
         err
     })?;
 
-    // Initialize health reporter.
-    let (health_reporter, health_service) = tonic_health::server::health_reporter();
-
-    // Initialize health server.
-    let health_grpc = HealthServer::new(
-        SocketAddr::new(config.health.ip.unwrap(), config.health.port),
-        health_service,
-        shutdown.clone(),
-        shutdown_complete_tx.clone(),
-    );
-
     // Initialize upload grpc server.
     let mut dfdaemon_upload_grpc = DfdaemonUploadServer::new(
         config.clone(),
         SocketAddr::new(config.upload.server.ip.unwrap(), config.upload.server.port),
         task.clone(),
-        health_reporter.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
@@ -212,7 +200,6 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut dfdaemon_download_grpc = DfdaemonDownloadServer::new(
         config.download.server.socket_path.clone(),
         task.clone(),
-        health_reporter.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
@@ -244,10 +231,6 @@ async fn main() -> Result<(), anyhow::Error> {
 
         _ = tokio::spawn(async move { scheduler_announcer.run().await }) => {
             info!("announcer scheduler exited");
-        },
-
-        _ = tokio::spawn(async move { health_grpc.run().await }) => {
-            info!("health reporter exited");
         },
 
         _ = tokio::spawn(async move { dfdaemon_upload_grpc.run().await }) => {

@@ -28,7 +28,6 @@ use dragonfly_api::dfdaemon::v2::{
     StatTaskRequest as DfdaemonStatTaskRequest, UploadTaskRequest,
 };
 use dragonfly_api::scheduler::v2::StatTaskRequest as SchedulerStatTaskRequest;
-use std::borrow::BorrowMut;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,7 +38,6 @@ use tonic::{
     transport::{Channel, Endpoint, Server, Uri},
     Request, Response, Status,
 };
-use tonic_health::server::HealthReporter;
 use tower::service_fn;
 use tracing::{error, info, instrument, Instrument, Span};
 
@@ -50,9 +48,6 @@ pub struct DfdaemonDownloadServer {
 
     // service is the grpc service of the dfdaemon.
     service: DfdaemonDownloadGRPCServer<DfdaemonDownloadServerHandler>,
-
-    // health_reporter is the health reporter of the grpc server.
-    health_reporter: HealthReporter,
 
     // shutdown is used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
@@ -67,7 +62,6 @@ impl DfdaemonDownloadServer {
     pub fn new(
         socket_path: PathBuf,
         task: Arc<task::Task>,
-        health_reporter: HealthReporter,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -79,7 +73,6 @@ impl DfdaemonDownloadServer {
         Self {
             socket_path,
             service,
-            health_reporter,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -97,8 +90,8 @@ impl DfdaemonDownloadServer {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
 
-        // Borrow the health reporter.
-        let health_reporter = self.health_reporter.borrow_mut();
+        // Initialize health reporter.
+        let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
 
         // Set the serving status of the download grpc server.
         health_reporter
@@ -114,6 +107,7 @@ impl DfdaemonDownloadServer {
         let uds_stream = UnixListenerStream::new(uds);
         Server::builder()
             .add_service(reflection.clone())
+            .add_service(health_service)
             .add_service(self.service.clone())
             .serve_with_incoming_shutdown(uds_stream, async move {
                 // Download grpc server shutting down with signals.

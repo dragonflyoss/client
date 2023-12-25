@@ -14,81 +14,15 @@
  * limitations under the License.
  */
 
-use crate::shutdown;
 use crate::{Error, Result};
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use tokio::net::UnixStream;
-use tokio::sync::mpsc;
-use tokio::task::JoinSet;
-use tonic::transport::{Channel, Endpoint, Server, Uri};
+use tonic::transport::{Channel, Endpoint, Uri};
 use tonic_health::pb::{
-    health_client::HealthClient as HealthGRPCClient,
-    health_server::{Health, HealthServer as HealthGRPCServer},
-    HealthCheckRequest, HealthCheckResponse,
+    health_client::HealthClient as HealthGRPCClient, HealthCheckRequest, HealthCheckResponse,
 };
 use tower::service_fn;
-use tracing::{info, instrument};
-
-// HealthServer is the grpc server of the health.
-pub struct HealthServer<T: Health> {
-    // addr is the address of the grpc server.
-    addr: SocketAddr,
-
-    // service is the grpc service of the health.
-    service: HealthGRPCServer<T>,
-
-    // shutdown is used to shutdown the grpc server.
-    shutdown: shutdown::Shutdown,
-
-    // _shutdown_complete is used to notify the grpc server is shutdown.
-    _shutdown_complete: mpsc::UnboundedSender<()>,
-}
-
-// HealthServer implements the grpc server of the health.
-impl<T: Health> HealthServer<T> {
-    // new creates a new HealthServer.
-    #[instrument(skip_all)]
-    pub fn new(
-        addr: SocketAddr,
-        service: HealthGRPCServer<T>,
-        shutdown: shutdown::Shutdown,
-        shutdown_complete_tx: mpsc::UnboundedSender<()>,
-    ) -> Self {
-        Self {
-            addr,
-            service,
-            shutdown,
-            _shutdown_complete: shutdown_complete_tx,
-        }
-    }
-
-    // run starts the health server.
-    #[instrument(skip_all)]
-    pub async fn run(&self) {
-        // Register the reflection service.
-        let reflection = tonic_reflection::server::Builder::configure()
-            .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
-            .build()
-            .unwrap();
-
-        // Clone the shutdown channel.
-        let mut shutdown = self.shutdown.clone();
-
-        // Start health grpc server.
-        info!("health server listening on {}", self.addr);
-        Server::builder()
-            .add_service(reflection.clone())
-            .add_service(self.service.clone())
-            .serve_with_shutdown(self.addr, async move {
-                // Health grpc server shutting down with signals.
-                let _ = shutdown.recv().await;
-                info!("health grpc server shutting down");
-            })
-            .await
-            .unwrap();
-    }
-}
+use tracing::instrument;
 
 // HealthClient is a wrapper of HealthGRPCClient.
 #[derive(Clone)]
@@ -139,40 +73,6 @@ impl HealthClient {
         let request = Self::make_request(HealthCheckRequest { service });
         let response = self.client.clone().check(request).await?;
         Ok(response.into_inner())
-    }
-
-    // check_dfdaemon checks the health of the dfdaemon.
-    #[instrument(skip_all)]
-    pub async fn check_dfdaemon(&self) -> Result<HealthCheckResponse> {
-        let services = vec![
-            "dfdaemon.v2.DfdaemonDownload".to_string(),
-            "dfdaemon.v2.DfdaemonUpload".to_string(),
-        ];
-
-        let mut join_set = JoinSet::new();
-        for service in services {
-            let client = self.clone();
-            async fn check_service(
-                client: HealthClient,
-                service: String,
-            ) -> Result<HealthCheckResponse> {
-                client.check_service(service).await
-            }
-
-            join_set.spawn(check_service(client, service));
-        }
-
-        // Wait for all tasks to finish.
-        while let Some(message) = join_set.join_next().await {
-            match message {
-                Ok(check) => info!("check: {:?}", check),
-                Err(err) => return Err(err.into()),
-            };
-        }
-
-        Ok(HealthCheckResponse {
-            status: tonic_health::ServingStatus::Serving as i32,
-        })
     }
 
     // check_dfdaemon_download checks the health of the dfdaemon download service.
