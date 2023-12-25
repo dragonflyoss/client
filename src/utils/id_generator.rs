@@ -104,8 +104,8 @@ impl IDGenerator {
                 "{}-{}-{}-{}",
                 self.ip,
                 self.hostname,
+                Uuid::new_v4(),
                 "seed",
-                Uuid::new_v4()
             );
         }
 
