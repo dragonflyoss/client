@@ -5,7 +5,7 @@ FROM rust:alpine as builder
 RUN apk add --no-cache build-base
 
 WORKDIR /app/client
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml ./
 COPY src/ src/
 RUN cargo build --release
 
