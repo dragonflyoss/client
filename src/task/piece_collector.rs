@@ -210,6 +210,12 @@ impl PieceCollector {
             match message {
                 Ok(Ok(peer)) => {
                     info!("peer {} sync pieces finished", peer.id);
+
+                    // If all pieces are collected, abort all tasks.
+                    if collected_pieces.len() == 0 {
+                        info!("all pieces are collected, abort all tasks");
+                        join_set.abort_all();
+                    }
                 }
                 Ok(Err(err)) => {
                     error!("sync pieces failed: {}", err);
@@ -217,12 +223,6 @@ impl PieceCollector {
                 Err(err) => {
                     error!("sync pieces failed: {}", err);
                 }
-            }
-
-            // If all pieces are collected, abort all tasks.
-            if collected_pieces.len() == 0 {
-                info!("all pieces are collected, abort all tasks");
-                join_set.abort_all();
             }
         }
 
