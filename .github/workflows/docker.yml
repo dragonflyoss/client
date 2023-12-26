@@ -1,0 +1,74 @@
+name: Docker
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - v*
+
+jobs:
+  push_image_to_registry:
+    name: Push Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Get Version
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          if [[ ${GITHUB_REF} == "refs/heads/main" ]]; then
+            VERSION=latest
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Get Git Revision
+        id: vars
+        shell: bash
+        run: |
+          echo "git_revision=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: PrepareReg Names
+        run: |
+           echo IMAGE_REPOSITORY=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]') >> $GITHUB_ENV
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push to Registry
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          labels: |-
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            GITVERSION=git-${{ steps.vars.outputs.git_revision }}
+            VERSION=${{ steps.get_version.outputs.VERSION }}
+          tags: |
+            dragonflyoss/dfdaemon-rs:${{ steps.get_version.outputs.VERSION }}
+            ghcr.io/${{ env.IMAGE_REPOSITORY }}/dfdaemon-rs:${{ steps.get_version.outputs.VERSION }}
+          push: true
