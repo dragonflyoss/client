@@ -172,32 +172,54 @@ impl Storage {
         self.metadata.upload_task_started(task_id)?;
 
         // Start uploading the piece.
-        self.metadata.upload_piece_started(task_id, number)?;
+        if let Err(err) = self.metadata.upload_piece_started(task_id, number) {
+            // Failed uploading the task.
+            self.metadata.upload_task_failed(task_id)?;
+            return Err(err);
+        }
 
         // Wait for the piece to be finished.
-        self.wait_for_piece_finished(task_id, number).await?;
+        if let Err(err) = self.wait_for_piece_finished(task_id, number).await {
+            // Failed uploading the task.
+            self.metadata.upload_task_failed(task_id)?;
+
+            // Failed uploading the piece.
+            self.metadata.upload_piece_failed(task_id, number)?;
+            return Err(err);
+        }
 
         // Get the piece metadata and return the content of the piece.
         match self.metadata.get_piece(task_id, number)? {
             Some(piece) => {
-                let reader = self
+                match self
                     .content
                     .read_piece(task_id, piece.offset, piece.length)
-                    .await?;
+                    .await
+                {
+                    Ok(reader) => {
+                        // Finish uploading the task.
+                        self.metadata.upload_task_finished(task_id)?;
 
-                // Finish uploading the piece.
-                self.metadata.upload_piece_finished(task_id, number)?;
+                        // Finish uploading the piece.
+                        self.metadata.upload_piece_finished(task_id, number)?;
+                        Ok(reader)
+                    }
+                    Err(err) => {
+                        // Failed uploading the task.
+                        self.metadata.upload_task_failed(task_id)?;
 
-                // Finish uploading the task.
-                self.metadata.upload_task_finished(task_id)?;
-                Ok(reader)
+                        // Failed uploading the piece.
+                        self.metadata.upload_piece_failed(task_id, number)?;
+                        Err(err)
+                    }
+                }
             }
             None => {
-                // Failed uploading the piece.
-                self.metadata.upload_piece_failed(task_id, number)?;
-
                 // Failed uploading the task.
                 self.metadata.upload_task_failed(task_id)?;
+
+                // Failed uploading the piece.
+                self.metadata.upload_piece_failed(task_id, number)?;
                 Err(Error::PieceNotFound(self.piece_id(task_id, number)))
             }
         }

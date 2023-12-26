@@ -108,16 +108,17 @@ impl GC {
         let usage_percent = (100 - available_space * 100 / total_space) as u8;
         if usage_percent >= self.config.gc.policy.dist_high_threshold_percent {
             info!(
-                "disk usage {}% is higher than high threshold {}%, start to evict",
+                "start to evict by disk usage, disk usage {}% is higher than high threshold {}%",
                 usage_percent, self.config.gc.policy.dist_high_threshold_percent
             );
 
             // Calculate the need evict space.
-            let need_evict_space = total_space
-                * ((usage_percent - self.config.gc.policy.dist_low_threshold_percent) / 100) as u64;
+            let need_evict_space = total_space as f64
+                * ((usage_percent - self.config.gc.policy.dist_low_threshold_percent) as f64
+                    / 100.0);
 
             // Evict the cache by the need evict space.
-            if let Err(err) = self.evict_space(need_evict_space) {
+            if let Err(err) = self.evict_space(need_evict_space as u64) {
                 info!("failed to evict by disk usage: {}", err);
             }
         }
@@ -167,7 +168,7 @@ impl GC {
             info!("evict task {} size {}", task.id, task_space);
         }
 
-        info!("evict size {}", evicted_space);
+        info!("evict total size {}", evicted_space);
         Ok(())
     }
 }

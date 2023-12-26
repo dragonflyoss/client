@@ -90,7 +90,7 @@ impl Task {
 
     // is_expired returns whether the task is expired.
     pub fn is_expired(&self, ttl: Duration) -> bool {
-        self.created_at + ttl > Utc::now().naive_utc()
+        self.created_at + ttl < Utc::now().naive_utc()
     }
 
     // is_finished returns whether the task downloads finished.
