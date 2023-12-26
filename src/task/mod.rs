@@ -26,9 +26,10 @@ use dragonfly_api::dfdaemon::v2::DownloadTaskResponse;
 use dragonfly_api::scheduler::v2::{
     announce_peer_request, announce_peer_response, download_piece_back_to_source_failed_request,
     AnnouncePeerRequest, DownloadPeerBackToSourceFailedRequest,
-    DownloadPeerBackToSourceStartedRequest, DownloadPeerFailedRequest, DownloadPeerFinishedRequest,
-    DownloadPeerStartedRequest, DownloadPieceBackToSourceFailedRequest, DownloadPieceFailedRequest,
-    DownloadPieceFinishedRequest, HttpResponse, RegisterPeerRequest,
+    DownloadPeerBackToSourceFinishedRequest, DownloadPeerBackToSourceStartedRequest,
+    DownloadPeerFailedRequest, DownloadPeerFinishedRequest, DownloadPeerStartedRequest,
+    DownloadPieceBackToSourceFailedRequest, DownloadPieceBackToSourceFinishedRequest,
+    DownloadPieceFailedRequest, DownloadPieceFinishedRequest, HttpResponse, RegisterPeerRequest,
 };
 use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
@@ -351,7 +352,7 @@ impl Task {
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
         // Initialize stream channel.
-        let (in_stream_tx, in_stream_rx) = mpsc::channel(128);
+        let (in_stream_tx, in_stream_rx) = mpsc::channel(1024);
 
         // Send the register peer request.
         in_stream_tx
@@ -370,22 +371,6 @@ impl Task {
             )
             .await?;
         info!("sent RegisterPeerRequest");
-
-        // Send the download peer started request.
-        in_stream_tx
-            .send_timeout(
-                AnnouncePeerRequest {
-                    host_id: host_id.to_string(),
-                    task_id: task_id.to_string(),
-                    peer_id: peer_id.to_string(),
-                    request: Some(announce_peer_request::Request::DownloadPeerStartedRequest(
-                        DownloadPeerStartedRequest {},
-                    )),
-                },
-                REQUEST_TIMEOUT,
-            )
-            .await?;
-        info!("sent DownloadPeerStartedRequest");
 
         // Initialize the stream.
         let in_stream = ReceiverStream::new(in_stream_rx);
@@ -436,6 +421,24 @@ impl Task {
                     // If the task is empty, return an empty vector.
                     info!("empty task response: {:?}", response);
 
+                    // Send the download peer started request.
+                    in_stream_tx
+                        .send_timeout(
+                            AnnouncePeerRequest {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.to_string(),
+                                peer_id: peer_id.to_string(),
+                                request: Some(
+                                    announce_peer_request::Request::DownloadPeerStartedRequest(
+                                        DownloadPeerStartedRequest {},
+                                    ),
+                                ),
+                            },
+                            REQUEST_TIMEOUT,
+                        )
+                        .await?;
+                    info!("sent DownloadPeerStartedRequest");
+
                     // Send the download peer finished request.
                     in_stream_tx
                         .send_timeout(
@@ -464,6 +467,24 @@ impl Task {
                 announce_peer_response::Response::NormalTaskResponse(response) => {
                     // If the task is normal, download the pieces from the remote peer.
                     info!("normal task response: {:?}", response);
+
+                    // Send the download peer started request.
+                    in_stream_tx
+                        .send_timeout(
+                            AnnouncePeerRequest {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.to_string(),
+                                peer_id: peer_id.to_string(),
+                                request: Some(
+                                    announce_peer_request::Request::DownloadPeerStartedRequest(
+                                        DownloadPeerStartedRequest {},
+                                    ),
+                                ),
+                            },
+                            REQUEST_TIMEOUT,
+                        )
+                        .await?;
+                    info!("sent DownloadPeerStartedRequest");
 
                     // Download the pieces from the remote peer.
                     finished_pieces = self
@@ -587,8 +608,8 @@ impl Task {
                                     task_id: task_id.to_string(),
                                     peer_id: peer_id.to_string(),
                                     request: Some(
-                                        announce_peer_request::Request::DownloadPeerFinishedRequest(
-                                            DownloadPeerFinishedRequest {
+                                        announce_peer_request::Request::DownloadPeerBackToSourceFinishedRequest(
+                                            DownloadPeerBackToSourceFinishedRequest {
                                                 content_length,
                                                 piece_count: interested_pieces.len() as u32,
                                             },
@@ -655,6 +676,7 @@ impl Task {
             interested_pieces.clone(),
             parents.clone(),
         );
+        let mut piece_collector_rx = piece_collector.run().await;
 
         // Initialize the join set.
         let mut join_set = JoinSet::new();
@@ -663,57 +685,49 @@ impl Task {
         ));
 
         // Download the pieces from the remote peers.
-        loop {
-            match piece_collector.run().await.recv().await {
-                Some(collect_piece) => {
-                    let semaphore = semaphore.clone();
-                    async fn download_from_remote_peer(
-                        task_id: String,
-                        number: u32,
-                        parent: Peer,
-                        piece: Arc<piece::Piece>,
-                        semaphore: Arc<Semaphore>,
-                    ) -> ClientResult<metadata::Piece> {
-                        let _permit = semaphore.acquire().await.map_err(|err| {
-                            error!("acquire semaphore error: {:?}", err);
-                            Error::DownloadFromRemotePeerFailed(DownloadFromRemotePeerFailed {
-                                piece_number: number,
-                                parent_id: parent.id.clone(),
-                            })
-                        })?;
+        while let Some(collect_piece) = piece_collector_rx.recv().await {
+            let semaphore = semaphore.clone();
+            async fn download_from_remote_peer(
+                task_id: String,
+                number: u32,
+                parent: Peer,
+                piece: Arc<piece::Piece>,
+                semaphore: Arc<Semaphore>,
+            ) -> ClientResult<metadata::Piece> {
+                let _permit = semaphore.acquire().await.map_err(|err| {
+                    error!("acquire semaphore error: {:?}", err);
+                    Error::DownloadFromRemotePeerFailed(DownloadFromRemotePeerFailed {
+                        piece_number: number,
+                        parent_id: parent.id.clone(),
+                    })
+                })?;
 
-                        let metadata = piece
-                            .download_from_remote_peer(task_id.as_str(), number, parent.clone())
-                            .await
-                            .map_err(|err| {
-                                error!(
-                                    "download piece {} from remote peer {:?} error: {:?}",
-                                    number,
-                                    parent.id.clone(),
-                                    err
-                                );
-                                Error::DownloadFromRemotePeerFailed(DownloadFromRemotePeerFailed {
-                                    piece_number: number,
-                                    parent_id: parent.id.clone(),
-                                })
-                            })?;
+                let metadata = piece
+                    .download_from_remote_peer(task_id.as_str(), number, parent.clone())
+                    .await
+                    .map_err(|err| {
+                        error!(
+                            "download piece {} from remote peer {:?} error: {:?}",
+                            number,
+                            parent.id.clone(),
+                            err
+                        );
+                        Error::DownloadFromRemotePeerFailed(DownloadFromRemotePeerFailed {
+                            piece_number: number,
+                            parent_id: parent.id.clone(),
+                        })
+                    })?;
 
-                        Ok(metadata)
-                    }
-
-                    join_set.spawn(download_from_remote_peer(
-                        task_id.to_string(),
-                        collect_piece.number,
-                        collect_piece.parent.clone(),
-                        self.piece.clone(),
-                        semaphore.clone(),
-                    ));
-                }
-                None => {
-                    info!("piece collector is closed");
-                    break;
-                }
+                Ok(metadata)
             }
+
+            join_set.spawn(download_from_remote_peer(
+                task_id.to_string(),
+                collect_piece.number,
+                collect_piece.parent.clone(),
+                self.piece.clone(),
+                semaphore.clone(),
+            ));
         }
 
         // Initialize the finished pieces.
@@ -941,8 +955,8 @@ impl Task {
                                 task_id: task_id.to_string(),
                                 peer_id: peer_id.to_string(),
                                 request: Some(
-                                    announce_peer_request::Request::DownloadPieceFinishedRequest(
-                                        DownloadPieceFinishedRequest {
+                                    announce_peer_request::Request::DownloadPieceBackToSourceFinishedRequest(
+                                        DownloadPieceBackToSourceFinishedRequest {
                                             piece: Some(piece.clone()),
                                         },
                                     ),
