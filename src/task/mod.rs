@@ -369,6 +369,7 @@ impl Task {
                 REQUEST_TIMEOUT,
             )
             .await?;
+        info!("sent RegisterPeerRequest");
 
         // Send the download peer started request.
         in_stream_tx
@@ -384,6 +385,7 @@ impl Task {
                 REQUEST_TIMEOUT,
             )
             .await?;
+        info!("sent DownloadPeerStartedRequest");
 
         // Initialize the stream.
         let in_stream = ReceiverStream::new(in_stream_rx);
@@ -417,8 +419,9 @@ impl Task {
                     )
                     .await
                     .unwrap_or_else(|err| {
-                        error!("send download peer failed request error: {:?}", err)
+                        error!("send DownloadPeerFailedRequest failed: {:?}", err)
                     });
+                info!("sent DownloadPeerFailedRequest");
 
                 // Wait for the latest message to be sent.
                 sleep(Duration::from_millis(1)).await;
@@ -452,6 +455,7 @@ impl Task {
                             REQUEST_TIMEOUT,
                         )
                         .await?;
+                    info!("sent DownloadPeerFinishedRequest");
 
                     // Wait for the latest message to be sent.
                     sleep(Duration::from_millis(1)).await;
@@ -497,6 +501,7 @@ impl Task {
                                 REQUEST_TIMEOUT,
                             )
                             .await?;
+                        info!("sent DownloadPeerFinishedRequest");
 
                         // Wait for the latest message to be sent.
                         sleep(Duration::from_millis(1)).await;
@@ -509,19 +514,20 @@ impl Task {
 
                     // Send the download peer back-to-source request.
                     in_stream_tx
-                            .send_timeout(AnnouncePeerRequest {
-                                host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
-                                peer_id: peer_id.to_string(),
-                                request: Some(
-                                    announce_peer_request::Request::DownloadPeerBackToSourceStartedRequest(
-                                        DownloadPeerBackToSourceStartedRequest {
-                                            description: None,
-                                        },
-                                    ),
+                        .send_timeout(AnnouncePeerRequest {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                            request: Some(
+                                announce_peer_request::Request::DownloadPeerBackToSourceStartedRequest(
+                                    DownloadPeerBackToSourceStartedRequest {
+                                        description: None,
+                                    },
                                 ),
-                            }, REQUEST_TIMEOUT)
-                            .await?;
+                            ),
+                        }, REQUEST_TIMEOUT)
+                        .await?;
+                    info!("sent DownloadPeerBackToSourceStartedRequest");
 
                     // Remove the finished pieces from the pieces.
                     let remaining_interested_pieces = self.piece.remove_finished_from_interested(
@@ -562,8 +568,9 @@ impl Task {
                                 }, REQUEST_TIMEOUT)
                                 .await
                                 .unwrap_or_else(|err| {
-                                    error!("send download peer back-to-source failed request error: {:?}", err)
+                                    error!("send DownloadPeerBackToSourceFailedRequest failed: {:?}", err)
                                 });
+                            info!("sent DownloadPeerBackToSourceFailedRequest");
 
                             // Wait for the latest message to be sent.
                             sleep(Duration::from_millis(1)).await;
@@ -591,6 +598,7 @@ impl Task {
                                 REQUEST_TIMEOUT,
                             )
                             .await?;
+                        info!("sent DownloadPeerFinishedRequest");
 
                         // Wait for the latest message to be sent.
                         sleep(Duration::from_millis(1)).await;
@@ -611,6 +619,7 @@ impl Task {
                             ),
                         }, REQUEST_TIMEOUT)
                         .await?;
+                    info!("sent DownloadPeerBackToSourceFailedRequest");
 
                     // Wait for the latest message to be sent.
                     sleep(Duration::from_millis(1)).await;
