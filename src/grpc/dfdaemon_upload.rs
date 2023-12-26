@@ -153,7 +153,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let task = self.task.clone();
 
         // Initialize stream channel.
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(1024);
         tokio::spawn(
             async move {
                 loop {
@@ -180,7 +180,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                         // Send the piece metadata to the stream.
                         if piece.is_finished() {
-                            info!("piece {} is finished", piece.number);
                             out_stream_tx
                                 .send(Ok(SyncPiecesResponse {
                                     piece_number: piece.number,
@@ -189,6 +188,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                 .unwrap_or_else(|err| {
                                     error!("send finished pieces to stream: {}", err);
                                 });
+                            info!("send finished piece {}", piece.number);
 
                             // Add the finished piece number to the finished piece numbers.
                             finished_piece_numbers.push(piece.number);

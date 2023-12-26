@@ -214,7 +214,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let task = self.task.clone();
 
         // Initialize stream channel.
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(1024);
         tokio::spawn(
             async move {
                 match task

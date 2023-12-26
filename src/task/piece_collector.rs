@@ -88,7 +88,7 @@ impl PieceCollector {
         let interested_pieces = self.interested_pieces.clone();
         let collected_pieces = self.collected_pieces.clone();
         let collected_piece_timeout = self.config.download.piece_timeout;
-        let (collected_piece_tx, collected_piece_rx) = mpsc::channel(128);
+        let (collected_piece_tx, collected_piece_rx) = mpsc::channel(1024);
         tokio::spawn(async move {
             Self::collect_from_remote_peers(
                 task_id,
@@ -149,9 +149,7 @@ impl PieceCollector {
                     .await?;
 
                 // If the response repeating timeout exceeds the piece download timeout, the stream will return error.
-                let out_stream = response
-                    .into_inner()
-                    .timeout_repeating(tokio::time::interval(collected_piece_timeout));
+                let out_stream = response.into_inner().timeout(collected_piece_timeout);
                 tokio::pin!(out_stream);
 
                 while let Some(message) = out_stream.try_next().await? {
@@ -161,6 +159,10 @@ impl PieceCollector {
                         .and_modify(|peers| {
                             peers.insert(parent.id.clone());
                         });
+                    info!(
+                        "received piece metadata {} from parent {}",
+                        message.piece_number, parent.id
+                    );
 
                     match collected_pieces.get(&message.piece_number) {
                         Some(parent_ids) => {
@@ -180,12 +182,13 @@ impl PieceCollector {
                                         parent: parent.clone(),
                                     })
                                     .await?;
-
-                                collected_pieces.remove(&number);
                             }
                         }
                         None => continue,
                     };
+
+                    // Remove the piece from collected_pieces.
+                    collected_pieces.remove(&message.piece_number);
                 }
 
                 Ok(parent)
