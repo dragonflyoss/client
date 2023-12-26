@@ -346,8 +346,18 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         tokio::spawn(
             async move {
                 let mut out_stream = response.into_inner();
-                while let Some(message) = out_stream.message().await.unwrap() {
-                    info!("trigger download task: {:?}", message);
+                loop {
+                    match out_stream.message().await {
+                        Ok(Some(message)) => info!("download piece finished {:?}", message),
+                        Ok(None) => {
+                            info!("download task finished");
+                            return;
+                        }
+                        Err(err) => {
+                            error!("download piece failed: {}", err);
+                            return;
+                        }
+                    }
                 }
             }
             .in_current_span(),

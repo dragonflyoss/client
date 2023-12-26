@@ -48,7 +48,7 @@ impl Content {
     pub fn new(data_dir: &Path) -> Result<Content> {
         let dir = data_dir.join(config::NAME).join(DEFAULT_DIR_NAME);
         fs::create_dir_all(&dir)?;
-        info!("create content directory: {:?}", dir);
+        info!("content initialized directory: {:?}", dir);
 
         Ok(Content { dir })
     }

@@ -16,7 +16,7 @@
 
 use opentelemetry::sdk::propagation::TraceContextPropagator;
 use std::path::PathBuf;
-use tracing::Level;
+use tracing::{info, Level};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_log::LogTracer;
@@ -84,6 +84,12 @@ pub fn init_tracing(
     }
 
     LogTracer::init().expect("failed to init LogTracer");
+
+    info!(
+        "tracing initialized directory: {}, level: {}",
+        log_dir.as_path().display(),
+        log_level
+    );
 
     guards
 }

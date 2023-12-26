@@ -213,7 +213,8 @@ impl Metadata {
         let cf_names = [TASK_CF_NAME, PIECE_CF_NAME];
         let db =
             TransactionDB::open_cf(&options, &TransactionDBOptions::default(), &dir, cf_names)?;
-        info!("create metadata directory: {:?}", dir);
+        info!("metadata initialized directory: {:?}", dir);
+
         Ok(Metadata { db })
     }
 
