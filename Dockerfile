@@ -2,7 +2,7 @@ ARG BASE_IMAGE=alpine:3.17
 
 FROM rust:alpine as builder
 
-RUN apk add --no-cache build-base pkgconfig openssl-dev protoc protobuf-dev
+RUN apk add --no-cache build-base pkgconfig openssl-dev protoc protobuf-dev clang-dev
 
 WORKDIR /app/client
 COPY Cargo.toml ./
