@@ -7,22 +7,14 @@ on:
 
 jobs:
   release-github:
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - build: linux
-            os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - build: linux
-            os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-          - build: linux
-            os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-          - build: linux
-            os: ubuntu-latest
-            target: aarch64-unknown-linux-musl
+        target:
+          - x86_64-unknown-linux-gnu
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-gnu
+          - aarch64-unknown-linux-musl
 
     steps:
       - name: Checkout
@@ -38,11 +30,11 @@ jobs:
           targets: ${{ matrix.target }}
           override: true
 
-      # - name: Install dependencies
-        # shell: bash
-        # run: |
-          # sudo apt-get update 
-          # sudo apt-get install -y pkg-config libssl-dev libclang-dev protobuf-compiler build-essential libudev-dev perl
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt-get update 
+          sudo apt-get install -y libclang-dev protobuf-compiler
 
       - name: Build
         uses: actions-rs/cargo@v1
