@@ -70,5 +70,5 @@ jobs:
             VERSION=${{ steps.get_version.outputs.VERSION }}
           tags: |
             dragonflyoss/client:${{ steps.get_version.outputs.VERSION }}
-            ghcr.io/${{ env.IMAGE_REPOSITORY }}/client:${{ steps.get_version.outputs.VERSION }}
+            ghcr.io/${{ env.IMAGE_REPOSITORY }}:${{ steps.get_version.outputs.VERSION }}
           push: true
