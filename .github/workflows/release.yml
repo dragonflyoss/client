@@ -20,6 +20,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+            key: ${{ matrix.target }}
+            cache-on-failure: true
+
       - name: Get the release version from the tag
         shell: bash
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
@@ -28,20 +33,21 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-          override: true
+
+      - name: Install cross-compilation tools
+        uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: ${{ matrix.target }}
 
       - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install protobuf-compiler
+
+      - name: Build binaries
         shell: bash
         run: |
-          sudo apt-get update 
-          sudo apt-get install -y libclang-dev protobuf-compiler
-
-      - name: Build
-        uses: actions-rs/cargo@v1
-        with:
-          use-cross: true
-          command: build
-          args: --verbose --release --target ${{ matrix.target }}
+            cargo build --release --bins --target ${{ matrix.target }}
 
       - name: Build archive dfget
         shell: bash
@@ -50,7 +56,7 @@ jobs:
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
           mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
           tar -czf "$dirname.tar.gz" "$dirname"
-          echo "ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+          echo "DFGET_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
 
       - name: Build archive dfdaemon
         shell: bash
@@ -59,7 +65,7 @@ jobs:
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
           mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
           tar -czf "$dirname.tar.gz" "$dirname"
-          echo "ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+          echo "DFDAEMON_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
 
       - name: Build archive dfstore
         shell: bash
@@ -68,14 +74,16 @@ jobs:
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
           mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
           tar -czf "$dirname.tar.gz" "$dirname"
-          echo "ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+          echo "DFSTORE_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
 
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
           generate_release_notes: true
           files: |
-            ${{ env.ASSET }}
+            ${{ env.DFGET_ASSET }}
+            ${{ env.DFDAEMON_ASSET }}
+            ${{ env.DFSTORE_ASSET }}
 
   # publish-crates:
     # runs-on: ubuntu-latest
@@ -83,14 +91,25 @@ jobs:
       # - name: Checkout
         # uses: actions/checkout@v3
 
+      # - uses: Swatinem/rust-cache@v2
+        # with:
+            # key: ${{ matrix.target }}
+            # cache-on-failure: true
+
       # - name: Install Rust
         # uses: dtolnay/rust-toolchain@stable
+        # with:
+          # targets: ${{ matrix.target }}
+
+      # - name: Install cross-compilation tools
+        # uses: taiki-e/setup-cross-toolchain-action@v1
+        # with:
+          # target: ${{ matrix.target }}
 
       # - name: Install dependencies
-        # shell: bash
         # run: |
-          # sudo apt-get update 
-          # sudo apt-get install -y openssl libclang-dev pkg-config protobuf-compiler libssl-dev
+          # sudo apt-get update
+          # sudo apt-get install protobuf-compiler
 
       # - uses: katyo/publish-crates@v2
         # with:
