@@ -69,6 +69,6 @@ jobs:
             GITVERSION=git-${{ steps.vars.outputs.git_revision }}
             VERSION=${{ steps.get_version.outputs.VERSION }}
           tags: |
-            dragonflyoss/dfdaemon-rs:${{ steps.get_version.outputs.VERSION }}
-            ghcr.io/${{ env.IMAGE_REPOSITORY }}/dfdaemon-rs:${{ steps.get_version.outputs.VERSION }}
+            dragonflyoss/client:${{ steps.get_version.outputs.VERSION }}
+            ghcr.io/${{ env.IMAGE_REPOSITORY }}/client:${{ steps.get_version.outputs.VERSION }}
           push: true
