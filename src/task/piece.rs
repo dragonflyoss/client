@@ -123,14 +123,12 @@ impl Piece {
     ) -> Result<Vec<metadata::Piece>> {
         // If content_length is 0, return empty piece.
         if content_length == 0 {
-            info!("content length is 0");
             return Ok(Vec::new());
         }
 
         // If range is not None, calculate the pieces by range.
         if let Some(range) = range {
             if range.length == 0 {
-                info!("range length is 0");
                 return Err(Error::InvalidParameter());
             }
 
