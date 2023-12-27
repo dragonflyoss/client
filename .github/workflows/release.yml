@@ -13,7 +13,7 @@ jobs:
         include:
           - build: linux
             os: ubuntu-latest
-            target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, powerpc64le-unknown-linux-gnu, riscv64gc-unknown-linux-gnu]
+            target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
           - build: macos
             os: macos-latest
             target: [x86_64-apple-darwin, aarch64-apple-darwin]
