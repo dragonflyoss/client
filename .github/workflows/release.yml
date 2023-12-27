@@ -11,31 +11,65 @@ jobs:
     strategy:
       matrix:
         include:
-          - target: x86_64-unknown-linux-musl
-            archive: tar.gz
-          - target: aarch64-unknown-linux-musl
-            archive: tar.gz
-          - target: powerpc64le-unknown-linux-gnu
-            archive: tar.gz
-          - target: riscv64gc-unknown-linux-gnu
-            archive: tar.gz
+          - build: linux
+            os: ubuntu-latest
+            target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, powerpc64le-unknown-linux-gnu, riscv64gc-unknown-linux-gnu]
+          - build: macos
+            os: macos-latest
+            target: [x86_64-apple-darwin, aarch64-apple-darwin]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Compile and release
-        uses: rust-build/rust-build.action@latest
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          RUSTTARGET: ${{ matrix.target }}
-          EXTRA_FILES: "README.md LICENSE"
-          ARCHIVE_TYPES: ${{ matrix.archive }}
+      - name: Get the release version from the tag
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
 
-      # - name: Release
-        # uses: softprops/action-gh-release@v1
-        # with:
-          # generate_release_notes: true
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: true
+          command: build
+          args: --verbose --release --target ${{ matrix.target }}
+
+      - name: Build archive dfget
+        shell: bash
+        run: |
+          binary_name="dfget"
+          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
+          tar -czf "$dirname.tar.gz" "$dirname"
+          echo "ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+
+      - name: Build archive dfdaemon
+        shell: bash
+        run: |
+          binary_name="dfdaemon"
+          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
+          tar -czf "$dirname.tar.gz" "$dirname"
+          echo "ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+
+      - name: Build archive dfstore
+        shell: bash
+        run: |
+          binary_name="dfstore"
+          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
+          tar -czf "$dirname.tar.gz" "$dirname"
+          echo "ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          generate_release_notes: true
+          files: |
+            ${{ env.ASSET }}
 
   publish-crates:
     runs-on: ubuntu-latest
