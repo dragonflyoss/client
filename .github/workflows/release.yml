@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Compile and release
-        uses: rust-build/rust-build.action@v1.4.4
+        uses: rust-build/rust-build.action@latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -32,10 +32,10 @@ jobs:
           EXTRA_FILES: "README.md LICENSE"
           ARCHIVE_TYPES: ${{ matrix.archive }}
 
-      - name: Release
-        uses: softprops/action-gh-release@v1
-        with:
-          generate_release_notes: true
+      # - name: Release
+        # uses: softprops/action-gh-release@v1
+        # with:
+          # generate_release_notes: true
 
   publish-crates:
     runs-on: ubuntu-latest
