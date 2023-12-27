@@ -74,3 +74,4 @@ fs2 = "0.4.3"
 hashring = "0.3.3"
 libc = "0.2"
 fslock = "0.2.1"
+openssl = { version = "0.10", features = ["vendored"] }
