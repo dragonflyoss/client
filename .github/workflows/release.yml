@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v*
+
+jobs:
+  release-github:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            archive: tar.gz
+          - target: aarch64-unknown-linux-musl
+            archive: tar.gz
+          - target: powerpc64le-unknown-linux-gnu
+            archive: tar.gz
+          - target: riscv64gc-unknown-linux-gnu
+            archive: tar.gz
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compile and release
+        uses: rust-build/rust-build.action@v1.4.4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          RUSTTARGET: ${{ matrix.target }}
+          EXTRA_FILES: "README.md LICENSE"
+          ARCHIVE_TYPES: ${{ matrix.archive }}
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          generate_release_notes: true
+
+  publish-crates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - uses: actions-rs/toolchain@v1
+        with:
+            toolchain: stable
+            override: true
+
+      - uses: katyo/publish-crates@v2
+        with:
+           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
