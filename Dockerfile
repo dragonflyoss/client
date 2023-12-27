@@ -2,6 +2,8 @@ ARG BASE_IMAGE=alpine:3.17
 
 FROM rust as builder
 
+RUN apt-get update && apt-get install -y openssl libclang-dev pkg-config protobuf-compiler
+
 WORKDIR /app/client
 COPY Cargo.toml ./
 COPY src/ src/
