@@ -80,6 +80,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           generate_release_notes: true
+          draft: true
           files: |
             ${{ env.DFGET_ASSET }}
             ${{ env.DFDAEMON_ASSET }}
