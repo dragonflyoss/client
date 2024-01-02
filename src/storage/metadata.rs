@@ -187,7 +187,7 @@ pub struct Metadata {
 // Metadata implements the metadata storage.
 impl Metadata {
     // new returns a new metadata.
-    pub fn new(data_dir: &Path) -> Result<Metadata> {
+    pub fn new(dir: &Path) -> Result<Metadata> {
         // Initialize rocksdb options.
         let mut options = Options::default();
         options.create_if_missing(true);
@@ -209,7 +209,7 @@ impl Metadata {
         options.set_block_based_table_factory(&block_options);
 
         // Open rocksdb.
-        let dir = data_dir.join(config::NAME).join(DEFAULT_DIR_NAME);
+        let dir = dir.join(config::NAME).join(DEFAULT_DIR_NAME);
         let cf_names = [TASK_CF_NAME, PIECE_CF_NAME];
         let db =
             TransactionDB::open_cf(&options, &TransactionDBOptions::default(), &dir, cf_names)?;

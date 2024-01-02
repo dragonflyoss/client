@@ -190,10 +190,6 @@ impl Default for Host {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Server {
-    // data_dir is the directory to store task's metadata and content.
-    #[serde(default = "super::default_data_dir")]
-    pub data_dir: PathBuf,
-
     // plugin_dir is the directory to store plugins.
     #[serde(default = "default_dfdaemon_plugin_dir")]
     pub plugin_dir: PathBuf,
@@ -211,7 +207,6 @@ pub struct Server {
 impl Default for Server {
     fn default() -> Self {
         Server {
-            data_dir: super::default_data_dir(),
             plugin_dir: default_dfdaemon_plugin_dir(),
             cache_dir: default_dfdaemon_cache_dir(),
             lock_dir: default_dfdaemon_lock_path(),
@@ -426,9 +421,22 @@ impl Default for Dynconfig {
 }
 
 // Storage is the storage configuration for dfdaemon.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct Storage {}
+pub struct Storage {
+    // dir is the directory to store task's metadata and content.
+    #[serde(default = "super::default_storage_dir")]
+    pub dir: PathBuf,
+}
+
+// Storage implements Default.
+impl Default for Storage {
+    fn default() -> Self {
+        Storage {
+            dir: super::default_storage_dir(),
+        }
+    }
+}
 
 // Policy is the policy configuration for gc.
 #[derive(Debug, Clone, Validate, Deserialize)]
