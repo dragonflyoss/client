@@ -18,8 +18,7 @@ use crate::grpc::health::HealthClient;
 use crate::{Error, Result};
 use dragonfly_api::manager::v2::{
     manager_client::ManagerClient as ManagerGRPCClient, DeleteSeedPeerRequest,
-    GetObjectStorageRequest, ListSchedulersRequest, ListSchedulersResponse, ObjectStorage,
-    SeedPeer, UpdateSeedPeerRequest,
+    ListSchedulersRequest, ListSchedulersResponse, SeedPeer, UpdateSeedPeerRequest,
 };
 use tonic::transport::Channel;
 use tonic_health::pb::health_check_response::ServingStatus;
@@ -84,17 +83,6 @@ impl ManagerClient {
     ) -> Result<ListSchedulersResponse> {
         let request = Self::make_request(request);
         let response = self.client.clone().list_schedulers(request).await?;
-        Ok(response.into_inner())
-    }
-
-    // get_object_storage provides the object storage information.
-    #[instrument(skip_all)]
-    pub async fn get_object_storage(
-        &self,
-        request: GetObjectStorageRequest,
-    ) -> Result<ObjectStorage> {
-        let request = Self::make_request(request);
-        let response = self.client.clone().get_object_storage(request).await?;
         Ok(response.into_inner())
     }
 
