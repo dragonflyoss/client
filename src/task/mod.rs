@@ -383,7 +383,7 @@ impl Task {
         while let Some(message) = out_stream.try_next().await? {
             // Check if the schedule count is exceeded.
             schedule_count += 1;
-            if schedule_count >= self.config.download.max_schedule_count {
+            if schedule_count >= self.config.scheduler.max_schedule_count {
                 in_stream_tx
                     .send_timeout(
                         AnnouncePeerRequest {
@@ -411,7 +411,7 @@ impl Task {
                 // Wait for the latest message to be sent.
                 sleep(Duration::from_millis(1)).await;
                 return Err(Error::MaxScheduleCountExceeded(
-                    self.config.download.max_schedule_count,
+                    self.config.scheduler.max_schedule_count,
                 ));
             }
 

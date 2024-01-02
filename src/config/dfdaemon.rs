@@ -197,10 +197,6 @@ pub struct Server {
     // cache_dir is the directory to store cache files.
     #[serde(default = "default_dfdaemon_cache_dir")]
     pub cache_dir: PathBuf,
-
-    // lock_path is the file lock path for dfdaemon service.
-    #[serde(default = "default_dfdaemon_lock_path")]
-    pub lock_dir: PathBuf,
 }
 
 // Server implements Default.
@@ -209,7 +205,6 @@ impl Default for Server {
         Server {
             plugin_dir: default_dfdaemon_plugin_dir(),
             cache_dir: default_dfdaemon_cache_dir(),
-            lock_dir: default_dfdaemon_lock_path(),
         }
     }
 }
@@ -247,11 +242,6 @@ pub struct Download {
     #[serde(default = "default_download_concurrent_piece_count")]
     #[validate(range(min = 1))]
     pub concurrent_piece_count: u32,
-
-    // max_schedule_count is the max count of schedule.
-    #[serde(default = "default_download_max_schedule_count")]
-    #[validate(range(min = 1))]
-    pub max_schedule_count: u32,
 }
 
 // Server implements Default.
@@ -261,7 +251,6 @@ impl Default for Download {
             server: DownloadServer::default(),
             piece_timeout: default_download_piece_timeout(),
             concurrent_piece_count: default_download_concurrent_piece_count(),
-            max_schedule_count: default_download_max_schedule_count(),
         }
     }
 }
@@ -320,6 +309,11 @@ pub struct Scheduler {
     #[serde(default = "default_scheduler_schedule_timeout")]
     pub schedule_timeout: Duration,
 
+    // max_schedule_count is the max count of schedule.
+    #[serde(default = "default_download_max_schedule_count")]
+    #[validate(range(min = 1))]
+    pub max_schedule_count: u32,
+
     // enable_back_to_source indicates whether enable back-to-source download, when the scheduling failed.
     #[serde(default = "default_scheduler_enable_back_to_source")]
     pub enable_back_to_source: bool,
@@ -331,6 +325,7 @@ impl Default for Scheduler {
         Scheduler {
             announce_interval: default_scheduler_announce_interval(),
             schedule_timeout: default_scheduler_schedule_timeout(),
+            max_schedule_count: default_download_max_schedule_count(),
             enable_back_to_source: default_scheduler_enable_back_to_source(),
         }
     }
@@ -381,7 +376,7 @@ pub struct SeedPeer {
     pub kind: HostType,
 
     // cluster_id is the cluster id of the seed peer cluster.
-    #[serde(default = "default_seed_peer_cluster_id")]
+    #[serde(default = "default_seed_peer_cluster_id", rename = "clusterID")]
     #[validate(range(min = 1))]
     pub cluster_id: u64,
 
@@ -443,7 +438,7 @@ impl Default for Storage {
 #[serde(default, rename_all = "camelCase")]
 pub struct Policy {
     // task_ttl is the ttl of the task.
-    #[serde(default = "default_gc_policy_task_ttl")]
+    #[serde(default = "default_gc_policy_task_ttl", rename = "taskTTL")]
     pub task_ttl: Duration,
 
     // dist_high_threshold_percent is the high threshold percent of the disk usage.

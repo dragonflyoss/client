@@ -44,15 +44,6 @@ pub fn default_root_dir() -> PathBuf {
     return home::home_dir().unwrap().join(".dragonfly");
 }
 
-// default_lock_dir is the default lock directory for client.
-pub fn default_lock_dir() -> PathBuf {
-    #[cfg(target_os = "linux")]
-    return PathBuf::from("/var/lock/dragonfly/");
-
-    #[cfg(target_os = "macos")]
-    return home::home_dir().unwrap().join(".dragonfly");
-}
-
 // default_config_dir is the default config directory for client.
 pub fn default_config_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
@@ -78,6 +69,15 @@ pub fn default_storage_dir() -> PathBuf {
 
     #[cfg(target_os = "macos")]
     return home::home_dir().unwrap().join(".dragonfly").join("storage");
+}
+
+// default_lock_dir is the default lock directory for client.
+pub fn default_lock_dir() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    return PathBuf::from("/var/lock/dragonfly/");
+
+    #[cfg(target_os = "macos")]
+    return home::home_dir().unwrap().join(".dragonfly");
 }
 
 // default_plugin_dir is the default plugin directory for client.
