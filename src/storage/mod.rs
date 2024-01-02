@@ -43,9 +43,9 @@ pub struct Storage {
 // Storage implements the storage.
 impl Storage {
     // new returns a new storage.
-    pub fn new(config: Arc<Config>, data_dir: &Path) -> Result<Self> {
-        let metadata = metadata::Metadata::new(data_dir)?;
-        let content = content::Content::new(data_dir)?;
+    pub fn new(config: Arc<Config>, dir: &Path) -> Result<Self> {
+        let metadata = metadata::Metadata::new(dir)?;
+        let content = content::Content::new(dir)?;
         Ok(Storage {
             config,
             metadata,

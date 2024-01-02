@@ -1,6 +1,6 @@
 [package]
 name = "dragonfly-client"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["The Dragonfly Developers"]
 homepage = "https://d7y.io/"
 repository = "https://github.com/dragonflyoss/client.git"

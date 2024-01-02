@@ -100,7 +100,7 @@ impl GC {
 
     // evict_by_disk_usage evicts the cache by disk usage.
     fn evict_by_disk_usage(&self) -> Result<()> {
-        let stats = fs2::statvfs(self.config.server.data_dir.as_path())?;
+        let stats = fs2::statvfs(self.config.storage.dir.as_path())?;
         let available_space = stats.available_space();
         let total_space = stats.total_space();
 

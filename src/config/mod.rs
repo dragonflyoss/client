@@ -71,13 +71,13 @@ pub fn default_log_dir() -> PathBuf {
     return home::home_dir().unwrap().join(".dragonfly").join("logs");
 }
 
-// default_data_dir is the default data directory for client.
-pub fn default_data_dir() -> PathBuf {
+// default_storage_dir is the default storage directory for client.
+pub fn default_storage_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/var/lib/dragonfly/");
 
     #[cfg(target_os = "macos")]
-    return home::home_dir().unwrap().join(".dragonfly").join("data");
+    return home::home_dir().unwrap().join(".dragonfly").join("storage");
 }
 
 // default_plugin_dir is the default plugin directory for client.
