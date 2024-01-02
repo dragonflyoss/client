@@ -1,6 +1,6 @@
 [package]
 name = "dragonfly-client"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["The Dragonfly Developers"]
 homepage = "https://d7y.io/"
 repository = "https://github.com/dragonflyoss/client.git"
@@ -28,7 +28,7 @@ home = "0.5.4"
 tracing = "0.1"
 tracing-log = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tracing-appender = "0.2"
+tracing-appender = "0.2.3"
 tracing-opentelemetry = "0.18.0"
 humantime = "2.1.0"
 serde = { version = "1.0", features = ["derive"] }
