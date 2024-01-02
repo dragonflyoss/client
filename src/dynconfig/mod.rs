@@ -20,8 +20,7 @@ use crate::grpc::manager::ManagerClient;
 use crate::shutdown;
 use crate::{Error, Result};
 use dragonfly_api::manager::v2::{
-    GetObjectStorageRequest, ListSchedulersRequest, ListSchedulersResponse, ObjectStorage,
-    Scheduler, SourceType,
+    ListSchedulersRequest, ListSchedulersResponse, Scheduler, SourceType,
 };
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
@@ -39,9 +38,6 @@ pub struct Data {
 
     // available_scheduler_cluster_id is the id of the available scheduler cluster of the dfdaemon.
     pub available_scheduler_cluster_id: Option<u64>,
-
-    // object_storage is the object storage configuration of the dfdaemon.
-    pub object_storage: Option<ObjectStorage>,
 }
 
 // Dynconfig supports dynamic configuration of the client.
@@ -120,9 +116,6 @@ impl Dynconfig {
             return Ok(());
         };
 
-        // refresh the object storage configuration.
-        let object_storage = self.get_object_storage().await.ok();
-
         // refresh the schedulers.
         let schedulers = self.list_schedulers().await?;
 
@@ -139,7 +132,6 @@ impl Dynconfig {
         // Get the data with write lock.
         let mut data = self.data.write().await;
         data.schedulers = schedulers;
-        data.object_storage = object_storage;
         data.available_schedulers = available_schedulers;
         if let Some(available_scheduler) = data.available_schedulers.first() {
             data.available_scheduler_cluster_id = Some(available_scheduler.scheduler_cluster_id);
@@ -166,24 +158,6 @@ impl Dynconfig {
                 location: self.config.host.location.clone(),
                 version: CARGO_PKG_VERSION.to_string(),
                 commit: GIT_HASH.unwrap_or_default().to_string(),
-            })
-            .await
-    }
-
-    // get_object_storage gets the object storage from the manager.
-    async fn get_object_storage(&self) -> Result<ObjectStorage> {
-        // Get the source type.
-        let source_type = if self.config.seed_peer.enable {
-            SourceType::SeedPeerSource.into()
-        } else {
-            SourceType::PeerSource.into()
-        };
-
-        self.manager_client
-            .get_object_storage(GetObjectStorageRequest {
-                source_type,
-                hostname: self.config.host.hostname.clone(),
-                ip: self.config.host.ip.unwrap().to_string(),
             })
             .await
     }

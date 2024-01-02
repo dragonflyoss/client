@@ -69,13 +69,6 @@ impl ManagerAnnouncer {
 
         // If the seed peer is enabled, we should announce the seed peer to the manager.
         if self.config.seed_peer.enable {
-            // Get the object storage port.
-            let object_storage_port = if self.config.object_storage.enable {
-                self.config.object_storage.port
-            } else {
-                u16::MIN
-            };
-
             // Register the seed peer to the manager.
             self.manager_client
                 .update_seed_peer(UpdateSeedPeerRequest {
@@ -88,7 +81,6 @@ impl ManagerAnnouncer {
                     port: self.config.upload.server.port as i32,
                     download_port: self.config.upload.server.port as i32,
                     seed_peer_cluster_id: self.config.seed_peer.cluster_id,
-                    object_storage_port: object_storage_port as i32,
                 })
                 .await?;
 
@@ -257,7 +249,6 @@ impl SchedulerAnnouncer {
             ip: self.config.host.ip.unwrap().to_string(),
             port: self.config.upload.server.port as i32,
             download_port: self.config.upload.server.port as i32,
-            object_storage_port: self.config.object_storage.port as i32,
             os: env::consts::OS.to_string(),
             platform: env::consts::OS.to_string(),
             platform_family: env::consts::FAMILY.to_string(),
