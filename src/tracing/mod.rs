@@ -26,6 +26,7 @@ pub fn init_tracing(
     name: &str,
     log_dir: &PathBuf,
     log_level: Level,
+    log_max_files: usize,
     jaeger_addr: Option<String>,
 ) -> Vec<WorkerGuard> {
     let mut guards = vec![];
@@ -43,7 +44,13 @@ pub fn init_tracing(
     guards.push(stdout_guard);
 
     // Setup file layer.
-    let rolling_appender = RollingFileAppender::new(Rotation::DAILY, log_dir, name);
+    let rolling_appender = RollingFileAppender::builder()
+        .rotation(Rotation::HOURLY)
+        .filename_prefix(name)
+        .max_log_files(log_max_files)
+        .build(log_dir)
+        .expect("failed to create rolling file appender");
+
     let (rolling_writer, rolling_writer_guard) = tracing_appender::non_blocking(rolling_appender);
     let file_logging_layer = Layer::new()
         .with_writer(rolling_writer)
