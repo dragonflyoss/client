@@ -72,22 +72,10 @@ fn default_upload_grpc_server_port() -> u16 {
     4000
 }
 
-// default_health_server_port is the default port of the health server.
-#[inline]
-fn default_health_server_port() -> u16 {
-    4001
-}
-
-// default_object_storage_server_port is the default port of the object storage server.
-#[inline]
-fn default_object_storage_server_port() -> u16 {
-    4002
-}
-
 // default_metrics_server_port is the default port of the metrics server.
 #[inline]
 fn default_metrics_server_port() -> u16 {
-    4003
+    4001
 }
 
 // default_download_piece_timeout is the default timeout for downloading a piece from source.
@@ -512,21 +500,6 @@ pub struct Security {
     pub enable: bool,
 }
 
-// ObjectStorage is the object storage configuration for dfdaemon.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct ObjectStorage {
-    // enable indicates whether enable object storage.
-    pub enable: bool,
-
-    // ip is the listen ip of the object storage server.
-    pub ip: Option<IpAddr>,
-
-    // port is the port to the object storage server.
-    #[serde(default = "default_object_storage_server_port")]
-    pub port: u16,
-}
-
 // Network is the network configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -563,28 +536,6 @@ impl Default for Metrics {
 pub struct Tracing {
     // addr is the address to report tracing log.
     pub addr: Option<String>,
-}
-
-// Tracing is the tracing configuration for dfdaemon.
-#[derive(Debug, Clone, Validate, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Health {
-    // ip is the listen ip of the health server.
-    pub ip: Option<IpAddr>,
-
-    // port is the port to the health server.
-    #[serde(default = "default_health_server_port")]
-    pub port: u16,
-}
-
-// Health implements Default.
-impl Default for Health {
-    fn default() -> Self {
-        Health {
-            ip: None,
-            port: default_health_server_port(),
-        }
-    }
 }
 
 // Config is the configuration for dfdaemon.
@@ -639,10 +590,6 @@ pub struct Config {
     #[validate]
     pub security: Security,
 
-    // object_storage is the object storage configuration for dfdaemon.
-    #[validate]
-    pub object_storage: ObjectStorage,
-
     // metrics is the metrics configuration for dfdaemon.
     #[validate]
     pub metrics: Metrics,
@@ -650,10 +597,6 @@ pub struct Config {
     // tracing is the tracing configuration for dfdaemon.
     #[validate]
     pub tracing: Tracing,
-
-    // health is the health configuration for dfdaemon.
-    #[validate]
-    pub health: Health,
 
     // network is the network configuration for dfdaemon.
     #[validate]
@@ -697,27 +640,9 @@ impl Config {
             }
         }
 
-        // Convert object storage server listen ip.
-        if self.object_storage.ip.is_none() {
-            self.object_storage.ip = if self.network.enable_ipv6 {
-                Some(Ipv6Addr::UNSPECIFIED.into())
-            } else {
-                Some(Ipv4Addr::UNSPECIFIED.into())
-            }
-        }
-
         // Convert metrics server listen ip.
         if self.metrics.ip.is_none() {
             self.metrics.ip = if self.network.enable_ipv6 {
-                Some(Ipv6Addr::UNSPECIFIED.into())
-            } else {
-                Some(Ipv4Addr::UNSPECIFIED.into())
-            }
-        }
-
-        // Convert health server listen ip.
-        if self.health.ip.is_none() {
-            self.health.ip = if self.network.enable_ipv6 {
                 Some(Ipv6Addr::UNSPECIFIED.into())
             } else {
                 Some(Ipv4Addr::UNSPECIFIED.into())
