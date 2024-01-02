@@ -72,21 +72,21 @@ struct Args {
         long = "timeout",
         value_parser= humantime::parse_duration,
         default_value = "2h",
-        help = "Set the timeout for downloading a file"
+        help = "Specify the timeout for downloading a file"
     )]
     timeout: Duration,
 
     #[arg(
         long = "piece-length",
         default_value_t = 4194304,
-        help = "Set the byte length of the piece"
+        help = "Specify the byte length of the piece"
     )]
     piece_length: u64,
 
     #[arg(
         long = "download-rate-limit",
         default_value_t = 2147483648,
-        help = "Set the rate limit of the downloading in bytes per second"
+        help = "Specify the rate limit of the downloading in bytes per second"
     )]
     download_rate_limit: u64,
 
@@ -102,7 +102,7 @@ struct Args {
         short = 'p',
         long = "priority",
         default_value_t = 6,
-        help = "Set the priority for scheduling task"
+        help = "Specify the priority for scheduling task"
     )]
     priority: i32,
 
@@ -124,7 +124,7 @@ struct Args {
         short = 'H',
         long = "header",
         required = false,
-        help = "Set the header for downloading file, e.g. --header='Content-Type: application/json' --header='Accept: application/json'"
+        help = "Specify the header for downloading file, e.g. --header='Content-Type: application/json' --header='Accept: application/json'"
     )]
     header: Option<Vec<String>>,
 
@@ -146,7 +146,7 @@ struct Args {
         short = 'l',
         long,
         default_value = "info",
-        help = "Set the logging level [trace, debug, info, warn, error]"
+        help = "Specify the logging level [trace, debug, info, warn, error]"
     )]
     log_level: Level,
 
@@ -156,6 +156,13 @@ struct Args {
         help = "Specify the log directory"
     )]
     log_dir: PathBuf,
+
+    #[arg(
+        long,
+        default_value_t = 24,
+        help = "Specify the max number of log files"
+    )]
+    log_max_files: usize,
 
     #[arg(
         short = 'c',
@@ -175,7 +182,7 @@ struct Args {
     #[arg(
         long = "dfdaemon-log-level",
         default_value = "info",
-        help = "Set the dfdaemon's logging level [trace, debug, info, warn, error]"
+        help = "Specify the dfdaemon's logging level [trace, debug, info, warn, error]"
     )]
     dfdaemon_log_level: Level,
 
@@ -185,6 +192,13 @@ struct Args {
         help = "Specify the dfdaemon's log directory"
     )]
     dfdaemon_log_dir: PathBuf,
+
+    #[arg(
+        long,
+        default_value_t = 24,
+        help = "Specify the dfdaemon's max number of log files"
+    )]
+    dfdaemon_log_max_files: usize,
 }
 
 #[tokio::main]
@@ -193,7 +207,13 @@ async fn main() -> Result<(), anyhow::Error> {
     let args = Args::parse();
 
     // Initialize tracting.
-    let _guards = init_tracing(dfget::NAME, &args.log_dir, args.log_level, None);
+    let _guards = init_tracing(
+        dfget::NAME,
+        &args.log_dir,
+        args.log_level,
+        args.log_max_files,
+        None,
+    );
 
     // Get or create dfdaemon download client.
     let dfdaemon_download_client = get_or_create_dfdaemon_download_client(
@@ -201,6 +221,7 @@ async fn main() -> Result<(), anyhow::Error> {
         args.endpoint.clone(),
         args.dfdaemon_log_dir,
         args.dfdaemon_log_level,
+        args.dfdaemon_log_max_files,
         args.dfdaemon_lock_path,
     )
     .await
@@ -269,6 +290,7 @@ async fn get_or_create_dfdaemon_download_client(
     endpoint: PathBuf,
     log_dir: PathBuf,
     log_level: Level,
+    log_max_files: usize,
     lock_path: PathBuf,
 ) -> Result<DfdaemonDownloadClient, anyhow::Error> {
     // Get dfdaemon download client and check its health.
@@ -288,7 +310,7 @@ async fn get_or_create_dfdaemon_download_client(
     }
 
     // Spawn a dfdaemon process.
-    let child = spawn_dfdaemon(config_path, log_dir, log_level)?;
+    let child = spawn_dfdaemon(config_path, log_dir, log_level, log_max_files)?;
     info!("spawn dfdaemon process: {:?}", child);
 
     // Initialize the timeout of checking dfdaemon's health.
@@ -333,6 +355,7 @@ fn spawn_dfdaemon(
     config_path: PathBuf,
     log_dir: PathBuf,
     log_level: Level,
+    log_max_files: usize,
 ) -> Result<Child, anyhow::Error> {
     // Create dfdaemon command.
     let mut cmd = Command::new("dfdaemon");
@@ -343,7 +366,9 @@ fn spawn_dfdaemon(
         .arg("--log-dir")
         .arg(log_dir)
         .arg("--log-level")
-        .arg(log_level.to_string());
+        .arg(log_level.to_string())
+        .arg("--log-max-files")
+        .arg(log_max_files.to_string());
 
     // Redirect stdin, stdout, stderr to /dev/null.
     cmd.stdin(Stdio::null())

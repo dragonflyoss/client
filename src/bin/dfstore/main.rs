@@ -45,7 +45,7 @@ struct Args {
         short = 'l',
         long,
         default_value = "info",
-        help = "Set the logging level [trace, debug, info, warn, error]"
+        help = "Specify the logging level [trace, debug, info, warn, error]"
     )]
     log_level: Level,
 
@@ -55,6 +55,13 @@ struct Args {
         help = "Specify the log directory"
     )]
     log_dir: PathBuf,
+
+    #[arg(
+        long,
+        default_value_t = 24,
+        help = "Specify the max number of log files"
+    )]
+    log_max_files: usize,
 
     #[command(subcommand)]
     command: Command,
@@ -95,5 +102,11 @@ fn main() {
     let args = Args::parse();
 
     // Initialize tracing.
-    let _guards = init_tracing(dfstore::NAME, &args.log_dir, args.log_level, None);
+    let _guards = init_tracing(
+        dfstore::NAME,
+        &args.log_dir,
+        args.log_level,
+        args.log_max_files,
+        None,
+    );
 }
