@@ -45,8 +45,8 @@ pub struct WritePieceResponse {
 // Content implements the content storage.
 impl Content {
     // new returns a new content.
-    pub fn new(data_dir: &Path) -> Result<Content> {
-        let dir = data_dir.join(config::NAME).join(DEFAULT_DIR_NAME);
+    pub fn new(dir: &Path) -> Result<Content> {
+        let dir = dir.join(config::NAME).join(DEFAULT_DIR_NAME);
         fs::create_dir_all(&dir)?;
         info!("content initialized directory: {:?}", dir);
 
