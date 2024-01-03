@@ -1,6 +1,4 @@
-ARG BASE_IMAGE=rust
-
-FROM ${BASE_IMAGE} as builder
+FROM rust as builder
 
 RUN apt-get update && apt-get install -y openssl libclang-dev pkg-config protobuf-compiler
 
@@ -22,7 +20,7 @@ RUN if [ "$(uname -m)" = "ppc64le" ]; then \
     fi && \
     chmod +x /bin/grpc_health_probe
 
-FROM ${BASE_IMAGE}
+FROM debian:bookworm-slim
 
 COPY --from=builder /app/client/target/release/dfget /usr/local/bin/dfget
 COPY --from=builder /app/client/target/release/dfdaemon /usr/local/bin/dfdaemon
