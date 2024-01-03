@@ -1,6 +1,6 @@
 [package]
 name = "dragonfly-client"
-version = "0.1.6"
+version = "0.1.7"
 authors = ["The Dragonfly Developers"]
 homepage = "https://d7y.io/"
 repository = "https://github.com/dragonflyoss/client.git"
@@ -75,3 +75,4 @@ hashring = "0.3.3"
 libc = "0.2"
 fslock = "0.2.1"
 openssl = { version = "0.10", features = ["vendored"] }
+humantime-serde = "1.1.1"
