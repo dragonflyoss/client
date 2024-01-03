@@ -1,6 +1,6 @@
-ARG BASE_IMAGE=alpine:3.17
+ARG BASE_IMAGE=rust
 
-FROM rust as builder
+FROM ${BASE_IMAGE} as builder
 
 RUN apt-get update && apt-get install -y openssl libclang-dev pkg-config protobuf-compiler
 
@@ -9,7 +9,7 @@ COPY Cargo.toml ./
 COPY src/ src/
 RUN cargo build --release
 
-FROM ${BASE_IMAGE} as health
+FROM alpine:3.17 as health
 
 ENV GRPC_HEALTH_PROBE_VERSION v0.4.24
 
