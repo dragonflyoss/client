@@ -235,7 +235,7 @@ pub struct Download {
     pub server: DownloadServer,
 
     // piece_timeout is the timeout for downloading a piece from source.
-    #[serde(default = "default_download_piece_timeout")]
+    #[serde(default = "default_download_piece_timeout", with = "humantime_serde")]
     pub piece_timeout: Duration,
 
     // concurrent_piece_count is the number of concurrent pieces to download.
@@ -301,12 +301,18 @@ pub struct Scheduler {
     // announce_interval is the interval to announce peer to the scheduler.
     // Announcer will provide the scheduler with peer information for scheduling,
     // peer information includes cpu, memory, etc.
-    #[serde(default = "default_scheduler_announce_interval")]
+    #[serde(
+        default = "default_scheduler_announce_interval",
+        with = "humantime_serde"
+    )]
     pub announce_interval: Duration,
 
     // schedule_timeout is the timeout for scheduling. If the scheduling timesout, dfdaemon will back-to-source
     // download if enable_back_to_source is true, otherwise dfdaemon will return download failed.
-    #[serde(default = "default_scheduler_schedule_timeout")]
+    #[serde(
+        default = "default_scheduler_schedule_timeout",
+        with = "humantime_serde"
+    )]
     pub schedule_timeout: Duration,
 
     // max_schedule_count is the max count of schedule.
@@ -381,7 +387,10 @@ pub struct SeedPeer {
     pub cluster_id: u64,
 
     // keepalive_interval is the interval to keep alive with manager.
-    #[serde(default = "default_seed_peer_keepalive_interval")]
+    #[serde(
+        default = "default_seed_peer_keepalive_interval",
+        with = "humantime_serde"
+    )]
     pub keepalive_interval: Duration,
 }
 
@@ -402,7 +411,10 @@ impl Default for SeedPeer {
 #[serde(default, rename_all = "camelCase")]
 pub struct Dynconfig {
     // refresh_interval is the interval to refresh dynamic configuration from manager.
-    #[serde(default = "default_dynconfig_refresh_interval")]
+    #[serde(
+        default = "default_dynconfig_refresh_interval",
+        with = "humantime_serde"
+    )]
     pub refresh_interval: Duration,
 }
 
@@ -438,7 +450,11 @@ impl Default for Storage {
 #[serde(default, rename_all = "camelCase")]
 pub struct Policy {
     // task_ttl is the ttl of the task.
-    #[serde(default = "default_gc_policy_task_ttl", rename = "taskTTL")]
+    #[serde(
+        default = "default_gc_policy_task_ttl",
+        rename = "taskTTL",
+        with = "humantime_serde"
+    )]
     pub task_ttl: Duration,
 
     // dist_high_threshold_percent is the high threshold percent of the disk usage.
@@ -470,7 +486,7 @@ impl Default for Policy {
 #[serde(default, rename_all = "camelCase")]
 pub struct GC {
     // interval is the interval to do gc.
-    #[serde(default = "default_gc_interval")]
+    #[serde(default = "default_gc_interval", with = "humantime_serde")]
     pub interval: Duration,
 
     // policy is the gc policy.
