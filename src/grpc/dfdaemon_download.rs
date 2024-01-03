@@ -31,6 +31,7 @@ use dragonfly_api::scheduler::v2::StatTaskRequest as SchedulerStatTaskRequest;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::fs;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
@@ -103,6 +104,9 @@ impl DfdaemonDownloadServer {
             "download server listening on {}",
             self.socket_path.display()
         );
+        fs::create_dir_all(self.socket_path.parent().unwrap())
+            .await
+            .unwrap();
         let uds = UnixListener::bind(&self.socket_path).unwrap();
         let uds_stream = UnixListenerStream::new(uds);
         Server::builder()
