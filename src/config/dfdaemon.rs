@@ -99,7 +99,7 @@ fn default_download_max_schedule_count() -> u32 {
 // default_scheduler_announce_interval is the default interval to announce peer to the scheduler.
 #[inline]
 fn default_scheduler_announce_interval() -> Duration {
-    Duration::from_secs(30)
+    Duration::from_secs(300)
 }
 
 // default_scheduler_schedule_timeout is the default timeout for scheduling.
