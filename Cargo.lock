@@ -545,7 +545,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "0.1.9"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "async-stream",
