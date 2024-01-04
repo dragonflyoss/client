@@ -165,6 +165,13 @@ struct Args {
     log_max_files: usize,
 
     #[arg(
+        long = "verbose",
+        default_value_t = false,
+        help = "Specify whether to print log"
+    )]
+    verbose: bool,
+
+    #[arg(
         short = 'c',
         long = "dfdaemon-config",
         default_value_os_t = dfdaemon::default_dfdaemon_config_path(),
@@ -213,6 +220,7 @@ async fn main() -> Result<(), anyhow::Error> {
         args.log_level,
         args.log_max_files,
         None,
+        args.verbose,
     );
 
     // Get or create dfdaemon download client.

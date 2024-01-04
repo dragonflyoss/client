@@ -63,6 +63,13 @@ struct Args {
     )]
     log_max_files: usize,
 
+    #[arg(
+        long = "verbose",
+        default_value_t = false,
+        help = "Specify whether to print log"
+    )]
+    verbose: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -108,5 +115,6 @@ fn main() {
         args.log_level,
         args.log_max_files,
         None,
+        args.verbose,
     );
 }
