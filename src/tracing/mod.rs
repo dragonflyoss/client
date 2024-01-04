@@ -20,7 +20,7 @@ use tracing::{info, Level};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_log::LogTracer;
-use tracing_subscriber::{fmt::Layer, prelude::*, EnvFilter, Registry};
+use tracing_subscriber::{filter::LevelFilter, fmt::Layer, prelude::*, EnvFilter, Registry};
 
 pub fn init_tracing(
     name: &str,
@@ -28,11 +28,19 @@ pub fn init_tracing(
     log_level: Level,
     log_max_files: usize,
     jaeger_addr: Option<String>,
+    verbose: bool,
 ) -> Vec<WorkerGuard> {
     let mut guards = vec![];
 
     // Setup stdout layer.
     let (stdout_writer, stdout_guard) = tracing_appender::non_blocking(std::io::stdout());
+
+    // Initialize stdout layer.
+    let stdout_filter = if verbose {
+        LevelFilter::DEBUG
+    } else {
+        LevelFilter::OFF
+    };
     let stdout_logging_layer = Layer::new()
         .with_writer(stdout_writer)
         .with_file(true)
@@ -40,7 +48,8 @@ pub fn init_tracing(
         .with_target(false)
         .with_thread_names(false)
         .with_thread_ids(false)
-        .pretty();
+        .pretty()
+        .with_filter(stdout_filter);
     guards.push(stdout_guard);
 
     // Setup file layer.
