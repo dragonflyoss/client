@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y openssl libclang-dev pkg-config protobu
 WORKDIR /app/client
 COPY Cargo.toml ./
 COPY src/ src/
-RUN cargo build --release
+RUN cargo build --release --verbose
 
 FROM alpine:3.17 as health
 

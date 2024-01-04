@@ -83,6 +83,13 @@ struct Args {
         help = "Specify the max number of log files"
     )]
     log_max_files: usize,
+
+    #[arg(
+        long = "verbose",
+        default_value_t = false,
+        help = "Specify whether to print log"
+    )]
+    verbose: bool,
 }
 
 #[tokio::main]
@@ -104,6 +111,7 @@ async fn main() -> Result<(), anyhow::Error> {
         args.log_level,
         args.log_max_files,
         config.tracing.addr.to_owned(),
+        args.verbose,
     );
 
     // Initialize storage.
