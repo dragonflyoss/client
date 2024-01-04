@@ -22,6 +22,9 @@ RUN if [ "$(uname -m)" = "ppc64le" ]; then \
 
 FROM debian:bookworm-slim
 
+RUN apt-get update && apt-get install -y --no-install-recommends wget \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /app/client/target/release/dfget /usr/local/bin/dfget
 COPY --from=builder /app/client/target/release/dfdaemon /usr/local/bin/dfdaemon
 COPY --from=builder /app/client/target/release/dfstore /usr/local/bin/dfstore
