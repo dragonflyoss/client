@@ -117,7 +117,7 @@ fn default_scheduler_enable_back_to_source() -> bool {
 // default_dynconfig_refresh_interval is the default interval to refresh dynamic configuration from manager.
 #[inline]
 fn default_dynconfig_refresh_interval() -> Duration {
-    Duration::from_secs(1800)
+    Duration::from_secs(300)
 }
 
 // default_seed_peer_cluster_id is the default cluster id of seed peer.
