@@ -692,6 +692,7 @@ impl Task {
                 number: u32,
                 parent: Peer,
                 piece: Arc<piece::Piece>,
+                storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
             ) -> ClientResult<metadata::Piece> {
                 let _permit = semaphore.acquire().await.map_err(|err| {
@@ -708,7 +709,7 @@ impl Task {
                     .map_err(|err| {
                         error!(
                             "download piece {} from remote peer {:?} error: {:?}",
-                            number,
+                            storage.piece_id(task_id.as_str(), number),
                             parent.id.clone(),
                             err
                         );
@@ -726,6 +727,7 @@ impl Task {
                 collect_piece.number,
                 collect_piece.parent.clone(),
                 self.piece.clone(),
+                self.storage.clone(),
                 semaphore.clone(),
             ));
         }
@@ -752,7 +754,8 @@ impl Task {
 
                     info!(
                         "finished piece {} from remote peer {:?}",
-                        metadata.number, metadata.parent_id
+                        self.storage.piece_id(task_id, metadata.number),
+                        metadata.parent_id
                     );
 
                     // Construct the piece.
@@ -807,7 +810,9 @@ impl Task {
                 Ok(Err(Error::DownloadFromRemotePeerFailed(err))) => {
                     error!(
                         "download piece {} from remote peer {} error: {:?}",
-                        err.piece_number, err.parent_id, err
+                        self.storage.piece_id(task_id, err.piece_number),
+                        err.parent_id,
+                        err
                     );
 
                     // Send the download piece failed request.
@@ -932,7 +937,10 @@ impl Task {
                         )
                         .await?;
 
-                    info!("finished piece {} from source", metadata.number);
+                    info!(
+                        "finished piece {} from source",
+                        self.storage.piece_id(task_id, metadata.number)
+                    );
 
                     // Construct the piece.
                     let piece = Piece {
@@ -1104,7 +1112,8 @@ impl Task {
                 Err(err) => {
                     info!(
                         "download piece {} from local peer error: {:?}",
-                        interested_piece.number, err
+                        self.storage.piece_id(task_id, interested_piece.number),
+                        err
                     );
                     continue;
                 }
@@ -1126,7 +1135,10 @@ impl Task {
                 )
                 .await?;
 
-            info!("finished piece {} from local peer", metadata.number);
+            info!(
+                "finished piece {} from local peer",
+                self.storage.piece_id(task_id, metadata.number)
+            );
 
             // Construct the piece.
             let piece = Piece {
@@ -1244,7 +1256,10 @@ impl Task {
                         )
                         .await?;
 
-                    info!("finished piece {} from source", metadata.number);
+                    info!(
+                        "finished piece {} from source",
+                        self.storage.piece_id(task_id, metadata.number)
+                    );
 
                     // Construct the piece.
                     let piece = Piece {
