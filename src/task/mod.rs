@@ -619,7 +619,7 @@ impl Task {
                                 REQUEST_TIMEOUT,
                             )
                             .await?;
-                        info!("sent DownloadPeerFinishedRequest");
+                        info!("sent DownloadPeerBackToSourceFinishedRequest");
 
                         // Wait for the latest message to be sent.
                         sleep(Duration::from_millis(1)).await;
