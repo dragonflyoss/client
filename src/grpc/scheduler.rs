@@ -263,7 +263,9 @@ impl SchedulerClient {
 
         // Get the scheduler address from the hashring.
         let addr = self.hashring.read().await;
-        let addr = addr.get(&key).ok_or_else(|| Error::HashRing(key.clone()))?;
+        let addr = addr
+            .get(&key[0..5].to_string())
+            .ok_or_else(|| Error::HashRing(key.clone()))?;
         info!("{} picked {:?}", key, addr);
 
         let channel = match Channel::from_shared(format!("http://{}", addr.to_string()))
@@ -307,7 +309,10 @@ impl SchedulerClient {
                 .iter()
                 .all(|available_scheduler| available_schedulers.contains(available_scheduler))
         {
-            info!("available schedulers is not changed");
+            info!(
+                "available schedulers is not changed: {:?}",
+                data.available_schedulers
+            );
             return Ok(());
         }
         drop(available_schedulers);
