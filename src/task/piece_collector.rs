@@ -26,7 +26,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
-use tracing::{error, info};
+use tracing::{error, info, Instrument};
 
 // CollectedPiece is the piece collected from a peer.
 pub struct CollectedPiece {
@@ -101,7 +101,7 @@ impl PieceCollector {
             .await
             .unwrap_or_else(|err| {
                 error!("collect pieces failed: {}", err);
-            })
+            });
         });
 
         collected_piece_rx
@@ -128,6 +128,8 @@ impl PieceCollector {
                 collected_piece_tx: Sender<CollectedPiece>,
                 collected_piece_timeout: Duration,
             ) -> Result<Peer> {
+                info!("sync pieces from parent {}", parent.id);
+
                 // If candidate_parent.host is None, skip it.
                 let host = parent.host.clone().ok_or_else(|| {
                     error!("peer {:?} host is empty", parent);
@@ -136,7 +138,15 @@ impl PieceCollector {
 
                 // Create a dfdaemon client.
                 let dfdaemon_upload_client =
-                    DfdaemonUploadClient::new(format!("http://{}:{}", host.ip, host.port)).await?;
+                    DfdaemonUploadClient::new(format!("http://{}:{}", host.ip, host.port))
+                        .await
+                        .map_err(|err| {
+                            error!(
+                                "create dfdaemon upload client from parent {} failed: {}",
+                                parent.id, err
+                            );
+                            err
+                        })?;
 
                 let response = dfdaemon_upload_client
                     .sync_pieces(SyncPiecesRequest {
@@ -146,7 +156,11 @@ impl PieceCollector {
                             .map(|piece| piece.number)
                             .collect(),
                     })
-                    .await?;
+                    .await
+                    .map_err(|err| {
+                        error!("sync pieces from parent {} failed: {}", parent.id, err);
+                        err
+                    })?;
 
                 // If the response repeating timeout exceeds the piece download timeout, the stream will return error.
                 let out_stream = response.into_inner().timeout(collected_piece_timeout);
@@ -194,15 +208,18 @@ impl PieceCollector {
                 Ok(parent)
             }
 
-            join_set.spawn(sync_pieces(
-                task_id.clone(),
-                parent.clone(),
-                parents.clone(),
-                interested_pieces.clone(),
-                collected_pieces.clone(),
-                collected_piece_tx.clone(),
-                collected_piece_timeout,
-            ));
+            join_set.spawn(
+                sync_pieces(
+                    task_id.clone(),
+                    parent.clone(),
+                    parents.clone(),
+                    interested_pieces.clone(),
+                    collected_pieces.clone(),
+                    collected_piece_tx.clone(),
+                    collected_piece_timeout,
+                )
+                .in_current_span(),
+            );
         }
 
         // Wait for all tasks to finish.
