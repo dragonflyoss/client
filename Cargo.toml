@@ -23,7 +23,7 @@ name = "dfstore"
 path = "src/bin/dfstore/main.rs"
 
 [dependencies]
-clap = { version = "4.1.13", features = [ "derive" ] }
+clap = { version = "4.4.13", features = [ "derive" ] }
 home = "0.5.4"
 tracing = "0.1"
 tracing-log = "0.1"
