@@ -31,7 +31,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tonic::transport::Channel;
-use tracing::{error, info, instrument};
+use tracing::{error, info, instrument, Instrument};
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq)]
 struct VNode {
@@ -152,6 +152,8 @@ impl SchedulerClient {
                 addr: SocketAddr,
                 request: tonic::Request<AnnounceHostRequest>,
             ) -> Result<()> {
+                info!("announce host to {:?}", addr);
+
                 // Connect to the scheduler.
                 let channel = Channel::from_shared(format!("http://{}", addr))
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
@@ -164,7 +166,7 @@ impl SchedulerClient {
                 Ok(())
             }
 
-            join_set.spawn(announce_host(*available_scheduler_addr, request));
+            join_set.spawn(announce_host(*available_scheduler_addr, request).in_current_span());
         }
 
         while let Some(message) = join_set.join_next().await {
@@ -192,6 +194,8 @@ impl SchedulerClient {
                 addr: SocketAddr,
                 request: tonic::Request<AnnounceHostRequest>,
             ) -> Result<()> {
+                info!("announce host to {}", addr);
+
                 // Connect to the scheduler.
                 let channel = Channel::from_shared(format!("http://{}", addr))
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
@@ -204,7 +208,7 @@ impl SchedulerClient {
                 Ok(())
             }
 
-            join_set.spawn(announce_host(*available_scheduler_addr, request));
+            join_set.spawn(announce_host(*available_scheduler_addr, request).in_current_span());
         }
 
         while let Some(message) = join_set.join_next().await {
@@ -231,6 +235,8 @@ impl SchedulerClient {
                 addr: SocketAddr,
                 request: tonic::Request<LeaveHostRequest>,
             ) -> Result<()> {
+                info!("leave host from {}", addr);
+
                 // Connect to the scheduler.
                 let channel = Channel::from_shared(format!("http://{}", addr))
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
@@ -243,7 +249,7 @@ impl SchedulerClient {
                 Ok(())
             }
 
-            join_set.spawn(leave_host(*available_scheduler_addr, request));
+            join_set.spawn(leave_host(*available_scheduler_addr, request).in_current_span());
         }
 
         while let Some(message) = join_set.join_next().await {

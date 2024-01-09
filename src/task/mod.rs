@@ -45,7 +45,7 @@ use tokio::time::sleep;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::Request;
 use tonic::Status;
-use tracing::{error, info};
+use tracing::{error, info, Instrument};
 
 pub mod piece;
 pub mod piece_collector;
@@ -695,6 +695,12 @@ impl Task {
                 storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
             ) -> ClientResult<metadata::Piece> {
+                info!(
+                    "start to download piece {} from remote peer {:?}",
+                    storage.piece_id(task_id.as_str(), number),
+                    parent.id.clone()
+                );
+
                 let _permit = semaphore.acquire().await.map_err(|err| {
                     error!("acquire semaphore error: {:?}", err);
                     Error::DownloadFromRemotePeerFailed(DownloadFromRemotePeerFailed {
@@ -722,14 +728,17 @@ impl Task {
                 Ok(metadata)
             }
 
-            join_set.spawn(download_from_remote_peer(
-                task_id.to_string(),
-                collect_piece.number,
-                collect_piece.parent.clone(),
-                self.piece.clone(),
-                self.storage.clone(),
-                semaphore.clone(),
-            ));
+            join_set.spawn(
+                download_from_remote_peer(
+                    task_id.to_string(),
+                    collect_piece.number,
+                    collect_piece.parent.clone(),
+                    self.piece.clone(),
+                    self.storage.clone(),
+                    semaphore.clone(),
+                )
+                .in_current_span(),
+            );
         }
 
         // Initialize the finished pieces.
@@ -890,8 +899,14 @@ impl Task {
                 length: u64,
                 header: HeaderMap,
                 piece: Arc<piece::Piece>,
+                storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
             ) -> ClientResult<metadata::Piece> {
+                info!(
+                    "start to download piece {} from source",
+                    storage.piece_id(task_id.as_str(), number)
+                );
+
                 let _permit = semaphore.acquire().await?;
 
                 let metadata = piece
@@ -908,16 +923,20 @@ impl Task {
                 Ok(metadata)
             }
 
-            join_set.spawn(download_from_source(
-                task_id.to_string(),
-                interested_piece.number,
-                url.clone(),
-                interested_piece.offset,
-                interested_piece.length,
-                header.clone(),
-                self.piece.clone(),
-                semaphore.clone(),
-            ));
+            join_set.spawn(
+                download_from_source(
+                    task_id.to_string(),
+                    interested_piece.number,
+                    url.clone(),
+                    interested_piece.offset,
+                    interested_piece.length,
+                    header.clone(),
+                    self.piece.clone(),
+                    self.storage.clone(),
+                    semaphore.clone(),
+                )
+                .in_current_span(),
+            );
         }
 
         // Wait for the pieces to be downloaded.
@@ -1209,8 +1228,14 @@ impl Task {
                 length: u64,
                 header: HeaderMap,
                 piece: Arc<piece::Piece>,
+                storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
             ) -> ClientResult<metadata::Piece> {
+                info!(
+                    "start to download piece {} from source",
+                    storage.piece_id(task_id.as_str(), number)
+                );
+
                 let _permit = semaphore.acquire().await?;
 
                 let metadata = piece
@@ -1227,16 +1252,20 @@ impl Task {
                 Ok(metadata)
             }
 
-            join_set.spawn(download_from_source(
-                task_id.to_string(),
-                interested_piece.number,
-                url.clone(),
-                interested_piece.offset,
-                interested_piece.length,
-                header.clone(),
-                self.piece.clone(),
-                semaphore.clone(),
-            ));
+            join_set.spawn(
+                download_from_source(
+                    task_id.to_string(),
+                    interested_piece.number,
+                    url.clone(),
+                    interested_piece.offset,
+                    interested_piece.length,
+                    header.clone(),
+                    self.piece.clone(),
+                    self.storage.clone(),
+                    semaphore.clone(),
+                )
+                .in_current_span(),
+            );
         }
 
         // Wait for the pieces to be downloaded.
