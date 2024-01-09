@@ -105,7 +105,7 @@ fn default_scheduler_announce_interval() -> Duration {
 // default_scheduler_schedule_timeout is the default timeout for scheduling.
 #[inline]
 fn default_scheduler_schedule_timeout() -> Duration {
-    Duration::from_secs(300)
+    Duration::from_secs(30)
 }
 
 // default_scheduler_enable_back_to_source indicates whether enable back-to-source download, when the scheduling failed.
