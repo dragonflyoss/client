@@ -30,6 +30,7 @@ use dragonfly_api::scheduler::v2::{
     DownloadPeerFailedRequest, DownloadPeerFinishedRequest, DownloadPeerStartedRequest,
     DownloadPieceBackToSourceFailedRequest, DownloadPieceBackToSourceFinishedRequest,
     DownloadPieceFailedRequest, DownloadPieceFinishedRequest, HttpResponse, RegisterPeerRequest,
+    RescheduleRequest,
 };
 use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
@@ -379,7 +380,11 @@ impl Task {
             .announce_peer(task_id, Request::new(in_stream))
             .await?;
 
-        let mut out_stream = response.into_inner();
+        let out_stream = response
+            .into_inner()
+            .timeout(self.config.scheduler.schedule_timeout);
+        tokio::pin!(out_stream);
+
         while let Some(message) = out_stream.try_next().await? {
             // Check if the schedule count is exceeded.
             schedule_count += 1;
@@ -415,7 +420,7 @@ impl Task {
                 ));
             }
 
-            let response = message.response.ok_or(Error::UnexpectedResponse())?;
+            let response = message?.response.ok_or(Error::UnexpectedResponse())?;
             match response {
                 announce_peer_response::Response::EmptyTaskResponse(response) => {
                     // If the task is empty, return an empty vector.
@@ -500,6 +505,11 @@ impl Task {
                             in_stream_tx.clone(),
                         )
                         .await?;
+                    info!(
+                        "schedule {} finished {} pieces from remote peer",
+                        schedule_count,
+                        finished_pieces.len()
+                    );
 
                     // Check if all pieces are downloaded.
                     if finished_pieces.len() == interested_pieces.len() {
@@ -528,6 +538,27 @@ impl Task {
                         sleep(Duration::from_millis(1)).await;
                         return Ok(finished_pieces);
                     }
+
+                    // If not all pieces are downloaded, send the reschedule request.
+                    in_stream_tx
+                        .send_timeout(
+                            AnnouncePeerRequest {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.to_string(),
+                                peer_id: peer_id.to_string(),
+                                request: Some(announce_peer_request::Request::RescheduleRequest(
+                                    RescheduleRequest {
+                                        description: Some(
+                                            "not all pieces are downloaded from remote peer"
+                                                .to_string(),
+                                        ),
+                                    },
+                                )),
+                            },
+                            REQUEST_TIMEOUT,
+                        )
+                        .await?;
+                    info!("sent RescheduleRequest");
                 }
                 announce_peer_response::Response::NeedBackToSourceResponse(response) => {
                     // If the task need back to source, download the pieces from the source.
