@@ -323,13 +323,8 @@ impl SchedulerClient {
         }
         drop(available_schedulers);
 
-        // Get the available schedulers.
-        let mut available_schedulers = self.available_schedulers.write().await;
-
-        // Get the addresses of available schedulers.
-        let mut available_scheduler_addrs = self.available_scheduler_addrs.write().await;
-
-        // Refresh the hashring.
+        let mut new_available_schedulers = Vec::new();
+        let mut new_available_scheduler_addrs = Vec::new();
         let mut new_hashring = HashRing::new();
         for available_scheduler in data.available_schedulers.iter() {
             let ip = match IpAddr::from_str(&available_scheduler.ip) {
@@ -341,16 +336,25 @@ impl SchedulerClient {
             };
 
             // Add the scheduler to the available schedulers.
-            available_schedulers.push(available_scheduler.clone());
+            new_available_schedulers.push(available_scheduler.clone());
 
             // Add the scheduler address to the addresses of available schedulers.
-            available_scheduler_addrs.push(SocketAddr::new(ip, available_scheduler.port as u16));
+            new_available_scheduler_addrs
+                .push(SocketAddr::new(ip, available_scheduler.port as u16));
 
             // Add the scheduler to the hashring.
             new_hashring.add(VNode {
                 addr: SocketAddr::new(ip, available_scheduler.port as u16),
             });
         }
+
+        // Update the available schedulers.
+        let mut available_schedulers = self.available_schedulers.write().await;
+        *available_schedulers = new_available_schedulers;
+
+        // Update the addresses of available schedulers.
+        let mut available_scheduler_addrs = self.available_scheduler_addrs.write().await;
+        *available_scheduler_addrs = new_available_scheduler_addrs;
 
         // Update the hashring.
         let mut hashring = self.hashring.write().await;
