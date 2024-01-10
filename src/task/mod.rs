@@ -548,6 +548,7 @@ impl Task {
                                 peer_id: peer_id.to_string(),
                                 request: Some(announce_peer_request::Request::RescheduleRequest(
                                     RescheduleRequest {
+                                        candidate_parents: response.candidate_parents,
                                         description: Some(
                                             "not all pieces are downloaded from remote peer"
                                                 .to_string(),
