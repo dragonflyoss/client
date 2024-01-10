@@ -177,7 +177,15 @@ impl Dynconfig {
 
             // Check the health of the scheduler.
             let health_client =
-                HealthClient::new(&format!("http://{}:{}", scheduler.ip, scheduler.port)).await?;
+                HealthClient::new(&format!("http://{}:{}", scheduler.ip, scheduler.port))
+                    .await
+                    .map_err(|err| {
+                        error!(
+                            "create health client for scheduler {}:{} failed: {}",
+                            scheduler.ip, scheduler.port, err
+                        );
+                        err
+                    })?;
 
             match health_client.check().await {
                 Ok(resp) => {

@@ -22,7 +22,7 @@ use dragonfly_api::manager::v2::{
 };
 use tonic::transport::Channel;
 use tonic_health::pb::health_check_response::ServingStatus;
-use tracing::{info, instrument, warn};
+use tracing::{error, info, instrument, warn};
 
 // ManagerClient is a wrapper of ManagerGRPCClient.
 #[derive(Clone)]
@@ -67,10 +67,14 @@ impl ManagerClient {
 
         // Initialize the manager client by the available address.
         let channel = Channel::from_shared(available_addr.clone())
-            .map_err(|_| Error::InvalidURI(available_addr))?
+            .map_err(|_| Error::InvalidURI(available_addr.clone()))?
             .connect_timeout(super::CONNECT_TIMEOUT)
             .connect()
-            .await?;
+            .await
+            .map_err(|err| {
+                error!("connect to {} failed: {}", available_addr.to_string(), err);
+                err
+            })?;
         let client = ManagerGRPCClient::new(channel);
         Ok(Self { client })
     }

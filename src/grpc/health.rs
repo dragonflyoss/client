@@ -22,7 +22,7 @@ use tonic_health::pb::{
     health_client::HealthClient as HealthGRPCClient, HealthCheckRequest, HealthCheckResponse,
 };
 use tower::service_fn;
-use tracing::instrument;
+use tracing::{error, instrument};
 
 // HealthClient is a wrapper of HealthGRPCClient.
 #[derive(Clone)]
@@ -39,7 +39,11 @@ impl HealthClient {
             .map_err(|_| Error::InvalidURI(addr.into()))?
             .connect_timeout(super::CONNECT_TIMEOUT)
             .connect()
-            .await?;
+            .await
+            .map_err(|err| {
+                error!("connect to {} failed: {}", addr, err);
+                err
+            })?;
         let client = HealthGRPCClient::new(channel);
         Ok(Self { client })
     }
@@ -53,7 +57,11 @@ impl HealthClient {
             .connect_with_connector(service_fn(move |_: Uri| {
                 UnixStream::connect(socket_path.clone())
             }))
-            .await?;
+            .await
+            .map_err(|err| {
+                error!("connect failed: {}", err);
+                err
+            })?;
         let client = HealthGRPCClient::new(channel).max_decoding_message_size(usize::MAX);
         Ok(Self { client })
     }
