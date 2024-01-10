@@ -169,7 +169,7 @@ impl SchedulerAnnouncer {
                         }
                     };
 
-                    if let Err(err) = self.scheduler_client.init_announce_host(request).await {
+                    if let Err(err) = self.scheduler_client.announce_host(request).await {
                         error!("announce host to scheduler failed: {}", err);
                     };
                 }

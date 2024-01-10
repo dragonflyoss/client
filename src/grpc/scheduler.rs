@@ -313,7 +313,8 @@ impl SchedulerClient {
             && data
                 .available_schedulers
                 .iter()
-                .all(|available_scheduler| available_schedulers.contains(available_scheduler))
+                .zip(available_schedulers.iter())
+                .all(|(a, b)| a == b)
         {
             info!(
                 "available schedulers is not changed: {:?}",
