@@ -159,7 +159,11 @@ impl SchedulerClient {
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
                     .connect_timeout(super::CONNECT_TIMEOUT)
                     .connect()
-                    .await?;
+                    .await
+                    .map_err(|err| {
+                        error!("connect to {} failed: {}", addr.to_string(), err);
+                        err
+                    })?;
 
                 let mut client = SchedulerGRPCClient::new(channel);
                 client.announce_host(request).await?;
@@ -201,7 +205,11 @@ impl SchedulerClient {
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
                     .connect_timeout(super::CONNECT_TIMEOUT)
                     .connect()
-                    .await?;
+                    .await
+                    .map_err(|err| {
+                        error!("connect to {} failed: {}", addr.to_string(), err);
+                        err
+                    })?;
 
                 let mut client = SchedulerGRPCClient::new(channel);
                 client.announce_host(request).await?;
@@ -242,7 +250,11 @@ impl SchedulerClient {
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
                     .connect_timeout(super::CONNECT_TIMEOUT)
                     .connect()
-                    .await?;
+                    .await
+                    .map_err(|err| {
+                        error!("connect to {} failed: {}", addr.to_string(), err);
+                        err
+                    })?;
 
                 let mut client = SchedulerGRPCClient::new(channel);
                 client.leave_host(request).await?;
@@ -282,7 +294,7 @@ impl SchedulerClient {
         {
             Ok(channel) => channel,
             Err(err) => {
-                error!("failed to connect to {:?}: {}", addr, err);
+                error!("connect to {} failed: {}", addr.to_string(), err);
                 if let Err(err) = self.refresh_available_scheduler_addrs().await {
                     error!("failed to refresh scheduler client: {}", err);
                 };

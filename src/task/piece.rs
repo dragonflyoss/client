@@ -255,7 +255,15 @@ impl Piece {
             .clone()
             .ok_or(Error::InvalidPeer(parent.id.clone()))?;
         let dfdaemon_upload_client =
-            DfdaemonUploadClient::new(format!("http://{}:{}", host.ip, host.port)).await?;
+            DfdaemonUploadClient::new(format!("http://{}:{}", host.ip, host.port))
+                .await
+                .map_err(|err| {
+                    error!(
+                        "create dfdaemon upload client from {}:{} failed: {}",
+                        host.ip, host.port, err
+                    );
+                    err
+                })?;
 
         // Send the interested pieces request.
         let response = dfdaemon_upload_client
