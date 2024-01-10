@@ -378,10 +378,14 @@ pub struct DfdaemonUploadClient {
 impl DfdaemonUploadClient {
     // new creates a new DfdaemonUploadClient.
     pub async fn new(addr: String) -> ClientResult<Self> {
-        let channel = Channel::from_static(Box::leak(addr.into_boxed_str()))
+        let channel = Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
             .connect_timeout(super::CONNECT_TIMEOUT)
             .connect()
-            .await?;
+            .await
+            .map_err(|err| {
+                error!("connect to {} failed: {}", addr, err);
+                err
+            })?;
         let client = DfdaemonUploadGRPCClient::new(channel).max_decoding_message_size(usize::MAX);
         Ok(Self { client })
     }

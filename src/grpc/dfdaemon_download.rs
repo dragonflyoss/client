@@ -341,7 +341,11 @@ impl DfdaemonDownloadClient {
             .connect_with_connector(service_fn(move |_: Uri| {
                 UnixStream::connect(socket_path.clone())
             }))
-            .await?;
+            .await
+            .map_err(|err| {
+                error!("connect failed: {}", err);
+                err
+            })?;
         let client = DfdaemonDownloadGRPCClient::new(channel).max_decoding_message_size(usize::MAX);
         Ok(Self { client })
     }
