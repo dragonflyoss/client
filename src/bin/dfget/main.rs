@@ -84,13 +84,6 @@ struct Args {
     piece_length: u64,
 
     #[arg(
-        long = "download-rate-limit",
-        default_value_t = 2147483648,
-        help = "Specify the rate limit of the downloading in bytes per second"
-    )]
-    download_rate_limit: u64,
-
-    #[arg(
         short = 'd',
         long = "digest",
         default_value = "",
@@ -254,7 +247,6 @@ async fn main() -> Result<(), anyhow::Error> {
                 piece_length: args.piece_length,
                 output_path: args.output.into_os_string().into_string().unwrap(),
                 timeout: Some(prost_wkt_types::Duration::try_from(args.timeout)?),
-                download_rate_limit: Some(args.download_rate_limit),
                 need_back_to_source: false,
             }),
         })

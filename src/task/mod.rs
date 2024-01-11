@@ -722,6 +722,7 @@ impl Task {
             async fn download_from_remote_peer(
                 task_id: String,
                 number: u32,
+                length: u64,
                 parent: Peer,
                 piece: Arc<piece::Piece>,
                 storage: Arc<Storage>,
@@ -742,7 +743,7 @@ impl Task {
                 })?;
 
                 let metadata = piece
-                    .download_from_remote_peer(task_id.as_str(), number, parent.clone())
+                    .download_from_remote_peer(task_id.as_str(), number, length, parent.clone())
                     .await
                     .map_err(|err| {
                         error!(
@@ -764,6 +765,7 @@ impl Task {
                 download_from_remote_peer(
                     task_id.to_string(),
                     collect_piece.number,
+                    collect_piece.length,
                     collect_piece.parent.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
@@ -1156,7 +1158,11 @@ impl Task {
         for interested_piece in interested_pieces {
             let mut reader = match self
                 .piece
-                .download_from_local_peer_into_async_read(task_id, interested_piece.number)
+                .download_from_local_peer_into_async_read(
+                    task_id,
+                    interested_piece.number,
+                    interested_piece.length,
+                )
                 .await
             {
                 Ok(reader) => reader,
