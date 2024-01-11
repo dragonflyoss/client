@@ -23,9 +23,11 @@ use crate::{Error, HTTPError, Result};
 use chrono::Utc;
 use dragonfly_api::common::v2::{Peer, Range};
 use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
+use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::{
     fs,
     io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, SeekFrom},
@@ -52,6 +54,12 @@ pub struct Piece {
 
     // http_client is the http client.
     http_client: Arc<HTTP>,
+
+    // download_rate_limiter is the rate limiter of the download speed in bps(bytes per second).
+    download_rate_limiter: Arc<RateLimiter>,
+
+    // upload_rate_limiter is the rate limiter of the upload speed in bps(bytes per second).
+    upload_rate_limiter: Arc<RateLimiter>,
 }
 
 // Piece implements the piece manager.
@@ -59,9 +67,24 @@ impl Piece {
     // new returns a new Piece.
     pub fn new(config: Arc<Config>, storage: Arc<Storage>, http_client: Arc<HTTP>) -> Self {
         Self {
-            config,
+            config: config.clone(),
             storage,
             http_client,
+            download_rate_limiter: Arc::new(
+                RateLimiter::builder()
+                    .initial(config.download.rate_limit as usize)
+                    .refill(config.download.rate_limit as usize)
+                    .interval(Duration::from_secs(1))
+                    .fair(false)
+                    .build(),
+            ),
+            upload_rate_limiter: Arc::new(
+                RateLimiter::builder()
+                    .initial(config.upload.rate_limit as usize)
+                    .refill(config.upload.rate_limit as usize)
+                    .interval(Duration::from_secs(1))
+                    .build(),
+            ),
         }
     }
 
@@ -229,12 +252,30 @@ impl Piece {
             .collect::<Vec<metadata::Piece>>()
     }
 
+    // upload_from_local_peer_into_async_read uploads a single piece from a local peer.
+    pub async fn upload_from_local_peer_into_async_read(
+        &self,
+        task_id: &str,
+        number: u32,
+        length: u64,
+    ) -> Result<impl AsyncRead> {
+        // Acquire the upload rate limiter.
+        self.upload_rate_limiter.acquire(length as usize).await;
+
+        // Upload the piece content.
+        self.storage.upload_piece(task_id, number).await
+    }
+
     // download_from_local_peer_into_async_read downloads a single piece from a local peer.
     pub async fn download_from_local_peer_into_async_read(
         &self,
         task_id: &str,
         number: u32,
+        length: u64,
     ) -> Result<impl AsyncRead> {
+        // Acquire the download rate limiter.
+        self.download_rate_limiter.acquire(length as usize).await;
+
         // Upload the piece content.
         self.storage.upload_piece(task_id, number).await
     }
@@ -244,8 +285,12 @@ impl Piece {
         &self,
         task_id: &str,
         number: u32,
+        length: u64,
         parent: Peer,
     ) -> Result<metadata::Piece> {
+        // Acquire the download rate limiter.
+        self.download_rate_limiter.acquire(length as usize).await;
+
         // Record the start of downloading piece.
         self.storage.download_piece_started(task_id, number).await?;
 
@@ -335,10 +380,11 @@ impl Piece {
         &self,
         task_id: &str,
         number: u32,
+        length: u64,
         parent: Peer,
     ) -> Result<impl AsyncRead> {
         // Download the piece from the remote peer.
-        self.download_from_remote_peer(task_id, number, parent)
+        self.download_from_remote_peer(task_id, number, length, parent)
             .await?;
 
         // Return reader of the piece.
@@ -356,6 +402,9 @@ impl Piece {
         length: u64,
         header: HeaderMap,
     ) -> Result<metadata::Piece> {
+        // Acquire the download rate limiter.
+        self.download_rate_limiter.acquire(length as usize).await;
+
         // Record the start of downloading piece.
         self.storage.download_piece_started(task_id, number).await?;
 

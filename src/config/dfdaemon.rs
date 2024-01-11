@@ -72,11 +72,11 @@ fn default_upload_grpc_server_port() -> u16 {
     4000
 }
 
-// default_upload_bandwidth is the default upload speed in bps(bytes per second).
+// default_upload_rate_limit is the default rate limit of the upload speed in bps(bytes per second).
 #[inline]
-fn default_upload_bandwidth() -> u64 {
-    // Default bandwidth is 8.192Gbps.
-    8_192_000_000
+fn default_upload_rate_limit() -> u64 {
+    // Default rate limit is 10Gbps.
+    10_000_000_000
 }
 
 // default_metrics_server_port is the default port of the metrics server.
@@ -85,11 +85,11 @@ fn default_metrics_server_port() -> u16 {
     4001
 }
 
-// default_download_bandwidth is the default download speed in bps(bytes per second).
+// default_download_rate_limit is the default rate limit of the download speed in bps(bytes per second).
 #[inline]
-fn default_download_bandwidth() -> u64 {
-    // Default bandwidth is 8.192Gbps.
-    8_192_000_000
+fn default_download_rate_limit() -> u64 {
+    // Default rate limit is 10Gbps.
+    10_000_000_000
 }
 
 // default_download_piece_timeout is the default timeout for downloading a piece from source.
@@ -248,9 +248,9 @@ pub struct Download {
     // server is the download server configuration for dfdaemon.
     pub server: DownloadServer,
 
-    // bandwidth is the download speed in bps(bytes per second).
-    #[serde(default = "default_download_bandwidth")]
-    pub bandwidth: u64,
+    // rate_limit is the rate limit of the download speed in bps(bytes per second).
+    #[serde(default = "default_download_rate_limit")]
+    pub rate_limit: u64,
 
     // piece_timeout is the timeout for downloading a piece from source.
     #[serde(default = "default_download_piece_timeout", with = "humantime_serde")]
@@ -267,7 +267,7 @@ impl Default for Download {
     fn default() -> Self {
         Download {
             server: DownloadServer::default(),
-            bandwidth: default_download_bandwidth(),
+            rate_limit: default_download_rate_limit(),
             piece_timeout: default_download_piece_timeout(),
             concurrent_piece_count: default_download_concurrent_piece_count(),
         }
@@ -303,9 +303,9 @@ pub struct Upload {
     // server is the upload server configuration for dfdaemon.
     pub server: UploadServer,
 
-    // bandwidth is the upload speed in bps(bytes per second).
-    #[serde(default = "default_upload_bandwidth")]
-    pub bandwidth: u64,
+    // rate_limit is the rate limit of the upload speed in bps(bytes per second).
+    #[serde(default = "default_upload_rate_limit")]
+    pub rate_limit: u64,
 }
 
 // Upload implements Default.
@@ -313,7 +313,7 @@ impl Default for Upload {
     fn default() -> Self {
         Upload {
             server: UploadServer::default(),
-            bandwidth: default_download_bandwidth(),
+            rate_limit: default_upload_rate_limit(),
         }
     }
 }
