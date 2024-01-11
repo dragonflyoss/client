@@ -33,6 +33,9 @@ pub struct CollectedPiece {
     // number is the piece number.
     pub number: u32,
 
+    // length is the piece length.
+    pub length: u64,
+
     // parent is the parent peer.
     pub parent: Peer,
 }
@@ -168,20 +171,19 @@ impl PieceCollector {
 
                 while let Some(message) = out_stream.try_next().await? {
                     let message = message?;
-                    collected_pieces
-                        .entry(message.piece_number)
-                        .and_modify(|peers| {
-                            peers.insert(parent.id.clone());
-                        });
+                    collected_pieces.entry(message.number).and_modify(|peers| {
+                        peers.insert(parent.id.clone());
+                    });
                     info!(
                         "received piece metadata {} from parent {}",
-                        message.piece_number, parent.id
+                        message.number, parent.id
                     );
 
-                    match collected_pieces.get(&message.piece_number) {
+                    match collected_pieces.get(&message.number) {
                         Some(parent_ids) => {
                             if let Some(parent_id) = parent_ids.iter().next() {
-                                let number = message.piece_number;
+                                let number = message.number;
+                                let length = message.length;
                                 let parent = parents
                                     .iter()
                                     .find(|parent| parent.id == parent_id.as_str())
@@ -193,6 +195,7 @@ impl PieceCollector {
                                 collected_piece_tx
                                     .send(CollectedPiece {
                                         number,
+                                        length,
                                         parent: parent.clone(),
                                     })
                                     .await?;
@@ -202,7 +205,7 @@ impl PieceCollector {
                     };
 
                     // Remove the piece from collected_pieces.
-                    collected_pieces.remove(&message.piece_number);
+                    collected_pieces.remove(&message.number);
                 }
 
                 Ok(parent)

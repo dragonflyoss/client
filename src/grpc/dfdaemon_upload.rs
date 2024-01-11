@@ -27,7 +27,6 @@ use dragonfly_api::dfdaemon::v2::{
     DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest, SyncPiecesRequest,
     SyncPiecesResponse, TriggerDownloadTaskRequest,
 };
-use leaky_bucket::RateLimiter;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -69,13 +68,6 @@ impl DfdaemonUploadServer {
         let service = DfdaemonUploadGRPCServer::new(DfdaemonUploadServerHandler {
             config: config.clone(),
             task,
-            rate_limiter: Arc::new(
-                RateLimiter::builder()
-                    .initial(config.upload.bandwidth as usize)
-                    .refill(config.upload.bandwidth as usize)
-                    .interval(Duration::from_secs(1))
-                    .build(),
-            ),
         })
         .max_decoding_message_size(usize::MAX);
 
@@ -130,9 +122,6 @@ pub struct DfdaemonUploadServerHandler {
 
     // task is the task manager.
     task: Arc<task::Task>,
-
-    // rate_limiter is the rate limiter of the upload speed.
-    rate_limiter: Arc<RateLimiter>,
 }
 
 // DfdaemonUploadServerHandler implements the dfdaemon upload grpc service.
@@ -196,7 +185,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         if piece.is_finished() {
                             out_stream_tx
                                 .send(Ok(SyncPiecesResponse {
-                                    piece_number: piece.number,
+                                    number: piece.number,
+                                    offset: piece.offset,
+                                    length: piece.length,
                                 }))
                                 .await
                                 .unwrap_or_else(|err| {
@@ -280,14 +271,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 Status::not_found("piece metadata not found")
             })?;
 
-        // Acquire by the upload bandwidth.
-        self.rate_limiter.acquire(piece.length as usize).await;
-
         // Get the piece content from the local storage.
         let mut reader = self
             .task
             .piece
-            .download_from_local_peer_into_async_read(task_id.as_str(), piece_number)
+            .upload_from_local_peer_into_async_read(task_id.as_str(), piece_number, piece.length)
             .await
             .map_err(|err| {
                 error!("read piece content from local storage: {}", err);
