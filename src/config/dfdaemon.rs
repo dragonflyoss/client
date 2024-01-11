@@ -72,10 +72,24 @@ fn default_upload_grpc_server_port() -> u16 {
     4000
 }
 
+// default_upload_bandwidth is the default upload speed in bps(bytes per second).
+#[inline]
+fn default_upload_bandwidth() -> u64 {
+    // Default bandwidth is 8.192Gbps.
+    8_192_000_000
+}
+
 // default_metrics_server_port is the default port of the metrics server.
 #[inline]
 fn default_metrics_server_port() -> u16 {
     4001
+}
+
+// default_download_bandwidth is the default download speed in bps(bytes per second).
+#[inline]
+fn default_download_bandwidth() -> u64 {
+    // Default bandwidth is 8.192Gbps.
+    8_192_000_000
 }
 
 // default_download_piece_timeout is the default timeout for downloading a piece from source.
@@ -227,12 +241,16 @@ impl Default for DownloadServer {
     }
 }
 
-// Server is the server configuration for dfdaemon.
+// Download is the download configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Download {
     // server is the download server configuration for dfdaemon.
     pub server: DownloadServer,
+
+    // bandwidth is the download speed in bps(bytes per second).
+    #[serde(default = "default_download_bandwidth")]
+    pub bandwidth: u64,
 
     // piece_timeout is the timeout for downloading a piece from source.
     #[serde(default = "default_download_piece_timeout", with = "humantime_serde")]
@@ -244,11 +262,12 @@ pub struct Download {
     pub concurrent_piece_count: u32,
 }
 
-// Server implements Default.
+// Download implements Default.
 impl Default for Download {
     fn default() -> Self {
         Download {
             server: DownloadServer::default(),
+            bandwidth: default_download_bandwidth(),
             piece_timeout: default_download_piece_timeout(),
             concurrent_piece_count: default_download_concurrent_piece_count(),
         }
@@ -277,12 +296,26 @@ impl Default for UploadServer {
     }
 }
 
-// Server is the server configuration for dfdaemon.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+// Upload is the upload configuration for dfdaemon.
+#[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Upload {
     // server is the upload server configuration for dfdaemon.
     pub server: UploadServer,
+
+    // bandwidth is the upload speed in bps(bytes per second).
+    #[serde(default = "default_upload_bandwidth")]
+    pub bandwidth: u64,
+}
+
+// Upload implements Default.
+impl Default for Upload {
+    fn default() -> Self {
+        Upload {
+            server: UploadServer::default(),
+            bandwidth: default_download_bandwidth(),
+        }
+    }
 }
 
 // Manager is the manager configuration for dfdaemon.
