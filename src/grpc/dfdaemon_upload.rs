@@ -27,6 +27,7 @@ use dragonfly_api::dfdaemon::v2::{
     DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest, SyncPiecesRequest,
     SyncPiecesResponse, TriggerDownloadTaskRequest,
 };
+use leaky_bucket::RateLimiter;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -65,8 +66,18 @@ impl DfdaemonUploadServer {
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
         // Initialize the grpc service.
-        let service = DfdaemonUploadGRPCServer::new(DfdaemonUploadServerHandler { config, task })
-            .max_decoding_message_size(usize::MAX);
+        let service = DfdaemonUploadGRPCServer::new(DfdaemonUploadServerHandler {
+            config: config.clone(),
+            task,
+            rate_limiter: Arc::new(
+                RateLimiter::builder()
+                    .initial(config.upload.bandwidth as usize)
+                    .refill(config.upload.bandwidth as usize)
+                    .interval(Duration::from_secs(1))
+                    .build(),
+            ),
+        })
+        .max_decoding_message_size(usize::MAX);
 
         Self {
             addr,
@@ -119,6 +130,9 @@ pub struct DfdaemonUploadServerHandler {
 
     // task is the task manager.
     task: Arc<task::Task>,
+
+    // rate_limiter is the rate limiter of the upload speed.
+    rate_limiter: Arc<RateLimiter>,
 }
 
 // DfdaemonUploadServerHandler implements the dfdaemon upload grpc service.
@@ -265,6 +279,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 error!("piece metadata not found");
                 Status::not_found("piece metadata not found")
             })?;
+
+        // Acquire by the upload bandwidth.
+        self.rate_limiter.acquire(piece.length as usize).await;
 
         // Get the piece content from the local storage.
         let mut reader = self
