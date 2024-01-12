@@ -16,10 +16,10 @@
 
 use crate::config;
 use crate::Result;
+use dragonfly_api::common::v2::Range;
 use sha2::{Digest, Sha256};
-use std::fs;
 use std::path::{Path, PathBuf};
-use tokio::fs::{File, OpenOptions};
+use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tokio_util::io::InspectReader;
 use tracing::info;
@@ -45,17 +45,74 @@ pub struct WritePieceResponse {
 // Content implements the content storage.
 impl Content {
     // new returns a new content.
-    pub fn new(dir: &Path) -> Result<Content> {
+    pub async fn new(dir: &Path) -> Result<Content> {
         let dir = dir.join(config::NAME).join(DEFAULT_DIR_NAME);
-        fs::create_dir_all(&dir)?;
+        fs::create_dir_all(&dir).await?;
         info!("content initialized directory: {:?}", dir);
 
         Ok(Content { dir })
     }
 
+    // hard_link_or_copy_task hard links or copies the task content to the destination.
+    pub async fn hard_link_or_copy_task(
+        &self,
+        task_id: &str,
+        to: &Path,
+        range: Option<Range>,
+    ) -> Result<()> {
+        // Copy the task content to the destination by range
+        // if the range is specified.
+        if let Some(range) = range {
+            self.copy_task_by_range(task_id, to, range).await?;
+            info!("copy range of task success");
+            return Ok(());
+        }
+
+        // Copy the task content to the destination. If the hard link fails,
+        // copy the task content to the destination.
+        if let Err(err) = self.hard_link_task(task_id, to).await {
+            info!("hard link task failed: {}", err);
+
+            self.copy_task(task_id, to).await?;
+            info!("copy task success");
+            return Ok(());
+        }
+
+        info!("hard link task success");
+        Ok(())
+    }
+
+    // hard_link_task hard links the task content.
+    pub async fn hard_link_task(&self, task_id: &str, link: &Path) -> Result<()> {
+        fs::hard_link(self.dir.join(task_id), link).await?;
+        Ok(())
+    }
+
+    // copy_task copies the task content to the destination.
+    pub async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        fs::copy(self.dir.join(task_id), to).await?;
+        Ok(())
+    }
+
+    // copy_task_by_range copies the task content to the destination by range.
+    pub async fn copy_task_by_range(&self, task_id: &str, to: &Path, range: Range) -> Result<()> {
+        let mut from_f = File::open(self.dir.join(task_id)).await?;
+        from_f.seek(SeekFrom::Start(range.start)).await?;
+        let mut range_reader = from_f.take(range.length);
+
+        let mut to_f = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(to.as_os_str())
+            .await?;
+
+        io::copy(&mut range_reader, &mut to_f).await?;
+        Ok(())
+    }
+
     // delete_task deletes the task content.
-    pub fn delete_task(&self, task_id: &str) -> Result<()> {
-        fs::remove_file(self.dir.join(task_id))?;
+    pub async fn delete_task(&self, task_id: &str) -> Result<()> {
+        fs::remove_file(self.dir.join(task_id)).await?;
         Ok(())
     }
 

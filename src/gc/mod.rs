@@ -64,12 +64,12 @@ impl GC {
             tokio::select! {
                 _ = interval.tick() => {
                     // Evict the cache by task ttl.
-                    if let Err(err) = self.evict_by_task_ttl() {
+                    if let Err(err) = self.evict_by_task_ttl().await {
                         info!("failed to evict by task ttl: {}", err);
                     }
 
                     // Evict the cache by disk usage.
-                    if let Err(err) = self.evict_by_disk_usage() {
+                    if let Err(err) = self.evict_by_disk_usage().await {
                         info!("failed to evict by disk usage: {}", err);
                     }
                 }
@@ -83,14 +83,17 @@ impl GC {
     }
 
     // evict_by_task_ttl evicts the cache by task ttl.
-    fn evict_by_task_ttl(&self) -> Result<()> {
+    async fn evict_by_task_ttl(&self) -> Result<()> {
         info!("start to evict by task ttl");
         for task in self.storage.get_tasks()? {
             // If the task is expired and not uploading, evict the task.
             if task.is_expired(self.config.gc.policy.task_ttl) && !task.is_uploading() {
-                self.storage.delete_task(&task.id).unwrap_or_else(|err| {
-                    info!("failed to evict task {}: {}", task.id, err);
-                });
+                self.storage
+                    .delete_task(&task.id)
+                    .await
+                    .unwrap_or_else(|err| {
+                        info!("failed to evict task {}: {}", task.id, err);
+                    });
                 info!("evict task {}", task.id);
             }
         }
@@ -99,7 +102,7 @@ impl GC {
     }
 
     // evict_by_disk_usage evicts the cache by disk usage.
-    fn evict_by_disk_usage(&self) -> Result<()> {
+    async fn evict_by_disk_usage(&self) -> Result<()> {
         let stats = fs2::statvfs(self.config.storage.dir.as_path())?;
         let available_space = stats.available_space();
         let total_space = stats.total_space();
@@ -118,7 +121,7 @@ impl GC {
                     / 100.0);
 
             // Evict the cache by the need evict space.
-            if let Err(err) = self.evict_space(need_evict_space as u64) {
+            if let Err(err) = self.evict_space(need_evict_space as u64).await {
                 info!("failed to evict by disk usage: {}", err);
             }
         }
@@ -127,7 +130,7 @@ impl GC {
     }
 
     // evict_space evicts the cache by the given space.
-    fn evict_space(&self, need_evict_space: u64) -> Result<()> {
+    async fn evict_space(&self, need_evict_space: u64) -> Result<()> {
         let mut tasks = self.storage.get_tasks()?;
         tasks.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
 
@@ -158,7 +161,7 @@ impl GC {
             };
 
             // Evict the task.
-            if let Err(err) = self.storage.delete_task(&task.id) {
+            if let Err(err) = self.storage.delete_task(&task.id).await {
                 info!("failed to evict task {}: {}", task.id, err);
                 continue;
             }
