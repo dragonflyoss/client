@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-use crate::config;
 use crate::{Error, Result};
 use chrono::{NaiveDateTime, Utc};
 use rocksdb::{
@@ -209,7 +208,7 @@ impl Metadata {
         options.set_block_based_table_factory(&block_options);
 
         // Open rocksdb.
-        let dir = dir.join(config::NAME).join(DEFAULT_DIR_NAME);
+        let dir = dir.join(DEFAULT_DIR_NAME);
         let cf_names = [TASK_CF_NAME, PIECE_CF_NAME];
         let db =
             TransactionDB::open_cf(&options, &TransactionDBOptions::default(), &dir, cf_names)?;
