@@ -17,6 +17,7 @@
 use crate::config::dfdaemon::Config;
 use crate::utils::digest::{Algorithm, Digest};
 use crate::{Error, Result};
+use dragonfly_api::common::v2::Range;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,14 +44,26 @@ pub struct Storage {
 // Storage implements the storage.
 impl Storage {
     // new returns a new storage.
-    pub fn new(config: Arc<Config>, dir: &Path) -> Result<Self> {
+    pub async fn new(config: Arc<Config>, dir: &Path) -> Result<Self> {
         let metadata = metadata::Metadata::new(dir)?;
-        let content = content::Content::new(dir)?;
+        let content = content::Content::new(dir).await?;
         Ok(Storage {
             config,
             metadata,
             content,
         })
+    }
+
+    // hard_link_or_copy_task hard links or copies the task content to the destination.
+    pub async fn hard_link_or_copy_task(
+        &self,
+        task_id: &str,
+        to: &Path,
+        range: Option<Range>,
+    ) -> Result<()> {
+        self.content
+            .hard_link_or_copy_task(task_id, to, range)
+            .await
     }
 
     // download_task_started updates the metadata of the task when the task downloads started.
@@ -69,8 +82,8 @@ impl Storage {
     }
 
     // download_task_failed updates the metadata of the task when the task downloads failed.
-    pub fn download_task_failed(&self, id: &str) -> Result<()> {
-        self.delete_task(id)
+    pub async fn download_task_failed(&self, id: &str) -> Result<()> {
+        self.delete_task(id).await
     }
 
     // upload_task_finished updates the metadata of the task when task uploads finished.
@@ -89,10 +102,10 @@ impl Storage {
     }
 
     // delete_task deletes the task metadatas, task content and piece metadatas.
-    pub fn delete_task(&self, id: &str) -> Result<()> {
+    pub async fn delete_task(&self, id: &str) -> Result<()> {
         self.metadata.delete_task(id)?;
         self.metadata.delete_pieces(id)?;
-        self.content.delete_task(id)?;
+        self.content.delete_task(id).await?;
         Ok(())
     }
 

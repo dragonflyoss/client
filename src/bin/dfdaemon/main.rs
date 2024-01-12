@@ -115,10 +115,12 @@ async fn main() -> Result<(), anyhow::Error> {
     );
 
     // Initialize storage.
-    let storage = Storage::new(config.clone(), config.storage.dir.as_path()).map_err(|err| {
-        error!("initialize storage failed: {}", err);
-        err
-    })?;
+    let storage = Storage::new(config.clone(), config.storage.dir.as_path())
+        .await
+        .map_err(|err| {
+            error!("initialize storage failed: {}", err);
+            err
+        })?;
     let storage = Arc::new(storage);
 
     // Initialize id generator.

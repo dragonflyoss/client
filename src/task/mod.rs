@@ -21,6 +21,7 @@ use crate::storage::{metadata, Storage};
 use crate::utils::http::headermap_to_hashmap;
 use crate::utils::id_generator::IDGenerator;
 use crate::{DownloadFromRemotePeerFailed, Error, HTTPError, Result as ClientResult};
+use dragonfly_api::common::v2::Range;
 use dragonfly_api::common::v2::{Download, Peer, Piece, TrafficType};
 use dragonfly_api::dfdaemon::v2::DownloadTaskResponse;
 use dragonfly_api::scheduler::v2::{
@@ -34,9 +35,9 @@ use dragonfly_api::scheduler::v2::{
 };
 use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::fs::{self, OpenOptions};
 use tokio::sync::{
     mpsc::{self, Sender},
     Semaphore,
@@ -100,24 +101,36 @@ impl Task {
         self.storage.get_task(task_id)
     }
 
-    // download_task_started updates the metadata of the task when the task downloads started.
-    pub fn download_task_started(&self, id: &str, piece_length: u64) -> ClientResult<()> {
+    // download_started updates the metadata of the task when the task downloads started.
+    pub fn download_started(&self, id: &str, piece_length: u64) -> ClientResult<()> {
         self.storage.download_task_started(id, piece_length)
     }
 
-    // download_task_finished updates the metadata of the task when the task downloads finished.
-    pub fn download_task_finished(&self, id: &str) -> ClientResult<()> {
+    // download_finished updates the metadata of the task when the task downloads finished.
+    pub fn download_finished(&self, id: &str) -> ClientResult<()> {
         self.storage.download_task_finished(id)
     }
 
-    // download_task_failed updates the metadata of the task when the task downloads failed.
-    pub fn download_task_failed(&self, id: &str) -> ClientResult<()> {
-        self.storage.download_task_failed(id)
+    // download_failed updates the metadata of the task when the task downloads failed.
+    pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
+        self.storage.download_task_failed(id).await
     }
 
-    // download_into_file downloads a task into a file.
+    // hard_link_or_copy hard links or copies the task content to the destination.
+    pub async fn hard_link_or_copy(
+        &self,
+        task_id: &str,
+        to: &Path,
+        range: Option<Range>,
+    ) -> ClientResult<()> {
+        self.storage
+            .hard_link_or_copy_task(task_id, to, range)
+            .await
+    }
+
+    // download downloads a task.
     #[allow(clippy::too_many_arguments)]
-    pub async fn download_into_file(
+    pub async fn download(
         &self,
         task_id: &str,
         host_id: &str,
@@ -126,28 +139,6 @@ impl Task {
         download: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<()> {
-        // Open the file.
-        let mut f = match OpenOptions::new()
-            .create(true)
-            .write(true)
-            .open(download.output_path.as_str())
-            .await
-        {
-            Ok(f) => f,
-            Err(err) => {
-                error!("open file error: {:?}", err);
-                download_progress_tx
-                    .send_timeout(
-                        Err(Status::internal(format!("open file error: {:?}", err))),
-                        REQUEST_TIMEOUT,
-                    )
-                    .await
-                    .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
-                return Err(Error::IO(err));
-            }
-        };
-
         // Calculate the interested pieces to download.
         let interested_pieces = match self.piece.calculate_interested(
             download.piece_length,
@@ -205,8 +196,7 @@ impl Task {
 
             // Download the pieces from the local peer.
             if let Err(err) = self
-                .download_from_local_peer_into_file(
-                    &mut f,
+                .download_from_local_peer(
                     host_id,
                     task_id,
                     peer_id,
@@ -239,8 +229,7 @@ impl Task {
 
         // Download the pieces from the local peer.
         let finished_pieces = match self
-            .download_partial_from_local_peer_into_file(
-                &mut f,
+            .download_partial_from_local_peer(
                 host_id,
                 task_id,
                 peer_id,
@@ -281,8 +270,7 @@ impl Task {
 
         // Download the pieces with scheduler.
         if let Err(err) = self
-            .download_partial_with_scheduler_into_file(
-                &mut f,
+            .download_partial_with_scheduler(
                 task_id,
                 host_id,
                 peer_id,
@@ -297,8 +285,7 @@ impl Task {
 
             // Download the pieces from the source.
             if let Err(err) = self
-                .download_partial_from_source_into_file(
-                    &mut f,
+                .download_partial_from_source(
                     host_id,
                     task_id,
                     peer_id,
@@ -333,11 +320,10 @@ impl Task {
         Ok(())
     }
 
-    // download_partial_with_scheduler_into_file downloads a partial task with scheduler into a file.
+    // download_partial_with_scheduler downloads a partial task with scheduler.
     #[allow(clippy::too_many_arguments)]
-    async fn download_partial_with_scheduler_into_file(
+    async fn download_partial_with_scheduler(
         &self,
-        f: &mut fs::File,
         task_id: &str,
         host_id: &str,
         peer_id: &str,
@@ -493,8 +479,7 @@ impl Task {
 
                     // Download the pieces from the remote peer.
                     finished_pieces = self
-                        .download_partial_with_scheduler_from_remote_peer_into_file(
-                            f,
+                        .download_partial_with_scheduler_from_remote_peer(
                             task_id,
                             host_id,
                             peer_id,
@@ -590,8 +575,7 @@ impl Task {
 
                     // Download the pieces from the source.
                     let finished_pieces = match self
-                        .download_partial_with_scheduler_from_source_into_file(
-                            f,
+                        .download_partial_with_scheduler_from_source(
                             task_id,
                             host_id,
                             peer_id,
@@ -687,11 +671,10 @@ impl Task {
         Err(Error::Unknown("stream is finished abnormally".to_string()))
     }
 
-    // download_partial_with_scheduler_from_remote_peer_into_file downloads a partial task with scheduler from a remote peer into a file.
+    // download_partial_with_scheduler_from_remote_peer downloads a partial task with scheduler from a remote peer.
     #[allow(clippy::too_many_arguments)]
-    async fn download_partial_with_scheduler_from_remote_peer_into_file(
+    async fn download_partial_with_scheduler_from_remote_peer(
         &self,
-        f: &mut fs::File,
         task_id: &str,
         host_id: &str,
         peer_id: &str,
@@ -782,19 +765,6 @@ impl Task {
         while let Some(message) = join_set.join_next().await {
             match message {
                 Ok(Ok(metadata)) => {
-                    // Get the piece content from the local storage.
-                    let mut reader = self.storage.upload_piece(task_id, metadata.number).await?;
-
-                    // Write the piece into the file.
-                    self.piece
-                        .write_into_file_and_verify(
-                            &mut reader,
-                            f,
-                            metadata.offset,
-                            metadata.digest.as_str(),
-                        )
-                        .await?;
-
                     info!(
                         "finished piece {} from remote peer {:?}",
                         self.storage.piece_id(task_id, metadata.number),
@@ -897,11 +867,10 @@ impl Task {
         Ok(finished_pieces)
     }
 
-    // download_partial_with_scheduler_from_source_into_file downloads a partial task with scheduler from the source into a file.
+    // download_partial_with_scheduler_from_source downloads a partial task with scheduler from the source.
     #[allow(clippy::too_many_arguments)]
-    async fn download_partial_with_scheduler_from_source_into_file(
+    async fn download_partial_with_scheduler_from_source(
         &self,
-        f: &mut fs::File,
         task_id: &str,
         host_id: &str,
         peer_id: &str,
@@ -977,19 +946,6 @@ impl Task {
         while let Some(message) = join_set.join_next().await {
             match message {
                 Ok(Ok(metadata)) => {
-                    // Get the piece content from the local storage.
-                    let mut reader = self.storage.upload_piece(task_id, metadata.number).await?;
-
-                    // Write the piece into the file.
-                    self.piece
-                        .write_into_file_and_verify(
-                            &mut reader,
-                            f,
-                            metadata.offset,
-                            metadata.digest.as_str(),
-                        )
-                        .await?;
-
                     info!(
                         "finished piece {} from source",
                         self.storage.piece_id(task_id, metadata.number)
@@ -1096,11 +1052,10 @@ impl Task {
         Ok(finished_pieces)
     }
 
-    // download_from_local_peer_into_file downloads a task from a local peer into a file.
+    // download_from_local_peer downloads a task from a local peer.
     #[allow(clippy::too_many_arguments)]
-    async fn download_from_local_peer_into_file(
+    async fn download_from_local_peer(
         &self,
-        f: &mut fs::File,
         host_id: &str,
         task_id: &str,
         peer_id: &str,
@@ -1109,8 +1064,7 @@ impl Task {
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<()> {
         let finished_pieces = self
-            .download_partial_from_local_peer_into_file(
-                f,
+            .download_partial_from_local_peer(
                 host_id,
                 task_id,
                 peer_id,
@@ -1139,11 +1093,10 @@ impl Task {
         ))
     }
 
-    // download_partial_from_local_peer_into_file downloads a partial task from a local peer into a file.
+    // download_partial_from_local_peer downloads a partial task from a local peer.
     #[allow(clippy::too_many_arguments)]
-    async fn download_partial_from_local_peer_into_file(
+    async fn download_partial_from_local_peer(
         &self,
-        f: &mut fs::File,
         host_id: &str,
         task_id: &str,
         peer_id: &str,
@@ -1156,41 +1109,25 @@ impl Task {
 
         // Download the piece from the local peer.
         for interested_piece in interested_pieces {
-            let mut reader = match self
-                .piece
-                .download_from_local_peer_into_async_read(
-                    task_id,
-                    interested_piece.number,
-                    interested_piece.length,
-                )
-                .await
-            {
-                Ok(reader) => reader,
-                Err(err) => {
+            // Get the piece metadata from the local storage.
+            let metadata = match self.piece.get(task_id, interested_piece.number) {
+                Ok(Some(metadata)) => metadata,
+                Ok(None) => {
                     info!(
-                        "download piece {} from local peer error: {:?}",
+                        "piece {} not found in local storage",
+                        self.storage.piece_id(task_id, interested_piece.number)
+                    );
+                    continue;
+                }
+                Err(err) => {
+                    error!(
+                        "get piece {} from local storage error: {:?}",
                         self.storage.piece_id(task_id, interested_piece.number),
                         err
                     );
                     continue;
                 }
             };
-
-            // Get the piece metadata from the local storage.
-            let metadata = self
-                .piece
-                .get(task_id, interested_piece.number)?
-                .ok_or(Error::PieceNotFound(interested_piece.number.to_string()))?;
-
-            // Write the piece into the file.
-            self.piece
-                .write_into_file_and_verify(
-                    &mut reader,
-                    f,
-                    metadata.offset,
-                    metadata.digest.as_str(),
-                )
-                .await?;
 
             info!(
                 "finished piece {} from local peer",
@@ -1231,11 +1168,10 @@ impl Task {
         Ok(finished_pieces)
     }
 
-    // download_partial_from_source_into_file downloads a partial task from the source into a file.
+    // download_partial_from_source downloads a partial task from the source.
     #[allow(clippy::too_many_arguments)]
-    async fn download_partial_from_source_into_file(
+    async fn download_partial_from_source(
         &self,
-        f: &mut fs::File,
         host_id: &str,
         task_id: &str,
         peer_id: &str,
@@ -1310,19 +1246,6 @@ impl Task {
         while let Some(message) = join_set.join_next().await {
             match message {
                 Ok(Ok(metadata)) => {
-                    // Get the piece content from the local storage.
-                    let mut reader = self.storage.upload_piece(task_id, metadata.number).await?;
-
-                    // Write the piece into the file.
-                    self.piece
-                        .write_into_file_and_verify(
-                            &mut reader,
-                            f,
-                            metadata.offset,
-                            metadata.digest.as_str(),
-                        )
-                        .await?;
-
                     info!(
                         "finished piece {} from source",
                         self.storage.piece_id(task_id, metadata.number)

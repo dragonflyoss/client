@@ -28,6 +28,7 @@ use dragonfly_api::dfdaemon::v2::{
     StatTaskRequest as DfdaemonStatTaskRequest, UploadTaskRequest,
 };
 use dragonfly_api::scheduler::v2::StatTaskRequest as SchedulerStatTaskRequest;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -184,7 +185,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Download task started.
         info!("download task started: {:?}", download);
         self.task
-            .download_task_started(task_id.as_str(), download.piece_length)
+            .download_started(task_id.as_str(), download.piece_length)
             .map_err(|e| {
                 error!("download task started: {}", e);
                 Status::internal(e.to_string())
@@ -197,21 +198,25 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         })?;
 
         // Get the content length.
-        let content_length = self
+        let content_length = match self
             .task
             .get_content_length(task_id.as_str(), download.url.as_str(), header.clone())
             .await
-            .map_err(|e| {
+        {
+            Ok(content_length) => content_length,
+            Err(e) => {
                 // Download task failed.
                 self.task
-                    .download_task_failed(task_id.as_str())
+                    .download_failed(task_id.as_str())
+                    .await
                     .unwrap_or_else(|e| {
                         error!("download task failed: {}", e);
                     });
 
                 error!("get content length: {}", e);
-                Status::internal(e.to_string())
-            })?;
+                return Err(Status::internal(e.to_string()));
+            }
+        };
         info!("content length: {}", content_length);
 
         // Clone the task.
@@ -222,7 +227,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         tokio::spawn(
             async move {
                 match task
-                    .download_into_file(
+                    .download(
                         task_id.as_str(),
                         host_id.as_str(),
                         peer_id.as_str(),
@@ -234,26 +239,42 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 {
                     Ok(_) => {
                         // Download task succeeded.
+                        info!("download task succeeded");
                         if download.range.is_none() {
-                            info!("download complete task succeeded");
-                            task.download_task_finished(task_id.as_str())
+                            task.download_finished(task_id.as_str())
                                 .unwrap_or_else(|e| {
-                                    error!("download task complete succeeded: {}", e);
+                                    error!("download task finished failed: {}", e);
                                 });
-                            return;
                         }
 
-                        info!("download range task succeeded");
+                        // Hard link or copy the task content to the destination.
+                        if let Err(err) = task
+                            .hard_link_or_copy(
+                                task_id.as_str(),
+                                Path::new(download.output_path.clone().as_str()),
+                                download.range.clone(),
+                            )
+                            .await
+                        {
+                            error!("hard link or copy task: {}", err);
+                            out_stream_tx
+                                .send(Err(Status::internal(err.to_string())))
+                                .await
+                                .unwrap_or_else(|err| {
+                                    error!("send download progress error: {:?}", err);
+                                });
+                        };
                     }
                     Err(e) => {
                         // Download task failed.
                         info!("download task failed: {:?}", download);
-                        task.download_task_failed(task_id.as_str())
+                        task.download_failed(task_id.as_str())
+                            .await
                             .unwrap_or_else(|e| {
                                 error!("download task failed: {}", e);
                             });
 
-                        error!("download into file: {}", e);
+                        error!("download failed: {}", e);
                     }
                 }
 

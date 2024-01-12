@@ -18,21 +18,15 @@ use crate::backend::http::{Request, HTTP};
 use crate::config::dfdaemon::Config;
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::storage::{metadata, Storage};
-use crate::utils::digest::{Algorithm, Digest as UtilsDigest};
 use crate::{Error, HTTPError, Result};
 use chrono::Utc;
 use dragonfly_api::common::v2::{Peer, Range};
 use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
 use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::{
-    fs,
-    io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, SeekFrom},
-};
-use tokio_util::io::InspectReader;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{error, info};
 
 // CollectPiece represents a piece to collect.
@@ -96,45 +90,6 @@ impl Piece {
     // get_all gets all pieces from the local storage.
     pub fn get_all(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
         self.storage.get_pieces(task_id)
-    }
-
-    // write_into_file_and_verify writes the piece into the file and verifies the digest of the piece.
-    pub async fn write_into_file_and_verify<R: AsyncRead + Unpin + ?Sized>(
-        &self,
-        reader: &mut R,
-        f: &mut fs::File,
-        offset: u64,
-        expected_digest: &str,
-    ) -> Result<()> {
-        // Sha256 is used to calculate the hash of the piece.
-        let mut hasher = Sha256::new();
-
-        // InspectReader is used to calculate the hash of the piece.
-        let mut tee = InspectReader::new(reader, |bytes| hasher.update(bytes));
-
-        // Seek the file to the offset.
-        f.seek(SeekFrom::Start(offset)).await?;
-
-        // Copy the piece to the file.
-        io::copy(&mut tee, f).await?;
-
-        // Calculate the hash of the piece.
-        let hash = hasher.finalize();
-
-        // Calculate the digest of the piece.
-        let digest = UtilsDigest::new(Algorithm::Sha256, base16ct::lower::encode_string(&hash));
-
-        // Check the digest of the piece.
-        if expected_digest != digest.to_string() {
-            error!(
-                "piece digest mismatch: expected {}, got {}",
-                expected_digest,
-                digest.to_string()
-            );
-            return Err(Error::PieceDigestMismatch());
-        }
-
-        Ok(())
     }
 
     // calculate_interested calculates the interested pieces by content_length and range.
