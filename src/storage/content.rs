@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-use crate::config;
 use crate::Result;
 use dragonfly_api::common::v2::Range;
 use sha2::{Digest, Sha256};
@@ -46,7 +45,7 @@ pub struct WritePieceResponse {
 impl Content {
     // new returns a new content.
     pub async fn new(dir: &Path) -> Result<Content> {
-        let dir = dir.join(config::NAME).join(DEFAULT_DIR_NAME);
+        let dir = dir.join(DEFAULT_DIR_NAME);
         fs::create_dir_all(&dir).await?;
         info!("content initialized directory: {:?}", dir);
 
@@ -68,11 +67,12 @@ impl Content {
             return Ok(());
         }
 
-        // Copy the task content to the destination. If the hard link fails,
+        // If the hard link fails,
         // copy the task content to the destination.
         if let Err(err) = self.hard_link_task(task_id, to).await {
             info!("hard link task failed: {}", err);
 
+            fs::remove_file(to).await?;
             self.copy_task(task_id, to).await?;
             info!("copy task success");
             return Ok(());

@@ -247,23 +247,27 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                 });
                         }
 
-                        // Hard link or copy the task content to the destination.
-                        if let Err(err) = task
-                            .hard_link_or_copy(
-                                task_id.as_str(),
-                                Path::new(download.output_path.clone().as_str()),
-                                download.range.clone(),
-                            )
-                            .await
-                        {
-                            error!("hard link or copy task: {}", err);
-                            out_stream_tx
-                                .send(Err(Status::internal(err.to_string())))
+                        // Check whether the output path is empty. If output path is empty,
+                        // should not hard link or copy the task content to the destination.
+                        if let Some(output_path) = download.output_path.clone() {
+                            // Hard link or copy the task content to the destination.
+                            if let Err(err) = task
+                                .hard_link_or_copy(
+                                    task_id.as_str(),
+                                    Path::new(output_path.as_str()),
+                                    download.range.clone(),
+                                )
                                 .await
-                                .unwrap_or_else(|err| {
-                                    error!("send download progress error: {:?}", err);
-                                });
-                        };
+                            {
+                                error!("hard link or copy task: {}", err);
+                                out_stream_tx
+                                    .send(Err(Status::internal(err.to_string())))
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        error!("send download progress error: {:?}", err);
+                                    });
+                            };
+                        }
                     }
                     Err(e) => {
                         // Download task failed.
