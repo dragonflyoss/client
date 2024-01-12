@@ -245,7 +245,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 filters: args.filters.unwrap_or_default(),
                 header: parse_header(args.header.unwrap_or_default())?,
                 piece_length: args.piece_length,
-                output_path: args.output.into_os_string().into_string().unwrap(),
+                output_path: Some(args.output.into_os_string().into_string().unwrap()),
                 timeout: Some(prost_wkt_types::Duration::try_from(args.timeout)?),
                 need_back_to_source: false,
             }),
