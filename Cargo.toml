@@ -32,6 +32,7 @@ tracing-appender = "0.2.3"
 tracing-opentelemetry = "0.18.0"
 humantime = "2.1.0"
 serde = { version = "1.0", features = ["derive"] }
+serde_regex = "1.1.0"
 serde_yaml = "0.9"
 serde_json = "1.0"
 validator = { version = "0.16", features = ["derive"] }
@@ -82,3 +83,4 @@ hyper-util = { version = "0.1.2", features = ["tokio"] }
 tokio-rustls = "0.25"
 hyper-rustls = "0.25"
 http-body-util = "0.1.0"
+regex = "1.10.2"

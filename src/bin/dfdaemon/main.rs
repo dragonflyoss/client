@@ -25,6 +25,7 @@ use dragonfly_client::grpc::{
     manager::ManagerClient, scheduler::SchedulerClient,
 };
 use dragonfly_client::metrics::Metrics;
+use dragonfly_client::proxy::Proxy;
 use dragonfly_client::shutdown;
 use dragonfly_client::storage::Storage;
 use dragonfly_client::task::Task;
@@ -183,7 +184,16 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Initialize metrics server.
     let metrics = Metrics::new(
-        SocketAddr::new(config.metrics.ip.unwrap(), config.metrics.port),
+        SocketAddr::new(
+            config.metrics.server.ip.unwrap(),
+            config.metrics.server.port,
+        ),
+        shutdown.clone(),
+        shutdown_complete_tx.clone(),
+    );
+
+    let proxy = Proxy::new(
+        SocketAddr::new(config.proxy.server.ip.unwrap(), config.proxy.server.port),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
@@ -246,6 +256,10 @@ async fn main() -> Result<(), anyhow::Error> {
 
         _ = tokio::spawn(async move { metrics.run().await }) => {
             info!("metrics server exited");
+        },
+
+        _ = tokio::spawn(async move { proxy.run().await }) => {
+            info!("proxy server exited");
         },
 
         _ = tokio::spawn(async move { manager_announcer.run().await }) => {

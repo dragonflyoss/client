@@ -15,6 +15,7 @@
  */
 use crate::Result;
 use local_ip_address::{local_ip, local_ipv6};
+use regex::Regex;
 use serde::Deserialize;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
@@ -82,7 +83,7 @@ fn default_upload_rate_limit() -> u64 {
 // default_metrics_server_port is the default port of the metrics server.
 #[inline]
 fn default_metrics_server_port() -> u16 {
-    4001
+    4002
 }
 
 // default_download_rate_limit is the default rate limit of the download speed in bps(bytes per second).
@@ -168,6 +169,12 @@ fn default_gc_policy_dist_high_threshold_percent() -> u8 {
 #[inline]
 fn default_gc_policy_dist_low_threshold_percent() -> u8 {
     60
+}
+
+// default_proxy_server_port is the default port of the proxy server.
+#[inline]
+fn default_proxy_server_port() -> u16 {
+    4001
 }
 
 // Host is the host configuration for dfdaemon.
@@ -536,12 +543,64 @@ impl Default for GC {
     }
 }
 
+// ProxyServer is the proxy server configuration for dfdaemon.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ProxyServer {
+    // ip is the listen ip of the proxy server.
+    pub ip: Option<IpAddr>,
+
+    // port is the port to the proxy server.
+    #[serde(default = "default_proxy_server_port")]
+    pub port: u16,
+}
+
+// ProxyServer implements Default.
+impl Default for ProxyServer {
+    fn default() -> Self {
+        Self {
+            ip: None,
+            port: default_proxy_server_port(),
+        }
+    }
+}
+
+// Rule is the proxy rule.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Rule {
+    // regex is the regex of the request url.
+    #[serde(with = "serde_regex")]
+    pub regex: Regex,
+
+    // use_tls indicates whether use tls for the proxy backend.
+    #[serde(rename = "useTLS")]
+    pub use_tls: bool,
+
+    // redirect is the redirect url.
+    pub redirect: Option<String>,
+}
+
+// Rule implements Default.
+impl Default for Rule {
+    fn default() -> Self {
+        Self {
+            regex: Regex::new(r".*").unwrap(),
+            use_tls: false,
+            redirect: None,
+        }
+    }
+}
+
 // Proxy is the proxy configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Proxy {
-    // enable indicates whether enable proxy.
-    pub enable: bool,
+    // server is the proxy server configuration for dfdaemon.
+    pub server: ProxyServer,
+
+    // rules is the proxy rules.
+    pub rules: Option<Vec<Rule>>,
 }
 
 // Security is the security configuration for dfdaemon.
@@ -560,10 +619,10 @@ pub struct Network {
     pub enable_ipv6: bool,
 }
 
-// Metrics is the metrics configuration for dfdaemon.
+// MetricsServer is the metrics server configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct Metrics {
+pub struct MetricsServer {
     // ip is the listen ip of the metrics server.
     pub ip: Option<IpAddr>,
 
@@ -572,14 +631,22 @@ pub struct Metrics {
     pub port: u16,
 }
 
-// Metrics implements Default.
-impl Default for Metrics {
+// MetricsServer implements Default.
+impl Default for MetricsServer {
     fn default() -> Self {
-        Metrics {
+        Self {
             ip: None,
             port: default_metrics_server_port(),
         }
     }
+}
+
+// Metrics is the metrics configuration for dfdaemon.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Metrics {
+    // server is the metrics server configuration for dfdaemon.
+    pub server: MetricsServer,
 }
 
 // Tracing is the tracing configuration for dfdaemon.
@@ -693,8 +760,17 @@ impl Config {
         }
 
         // Convert metrics server listen ip.
-        if self.metrics.ip.is_none() {
-            self.metrics.ip = if self.network.enable_ipv6 {
+        if self.metrics.server.ip.is_none() {
+            self.metrics.server.ip = if self.network.enable_ipv6 {
+                Some(Ipv6Addr::UNSPECIFIED.into())
+            } else {
+                Some(Ipv4Addr::UNSPECIFIED.into())
+            }
+        }
+
+        // Convert proxy server listen ip.
+        if self.proxy.server.ip.is_none() {
+            self.proxy.server.ip = if self.network.enable_ipv6 {
                 Some(Ipv6Addr::UNSPECIFIED.into())
             } else {
                 Some(Ipv4Addr::UNSPECIFIED.into())
