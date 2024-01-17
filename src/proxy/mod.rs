@@ -28,7 +28,7 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::pin;
 use tokio::sync::mpsc;
-use tracing::{info, instrument, Span};
+use tracing::{error, info, instrument, Span};
 
 // Proxy is the proxy server.
 #[derive(Debug)]
@@ -70,35 +70,29 @@ impl Proxy {
             // Clone the shutdown channel.
             let mut shutdown = self.shutdown.clone();
 
+            // Wait for a client connection.
             let (tcp, remote_address) = listener.accept().await?;
 
+            // Spawn a task to handle the connection.
             let io = TokioIo::new(tcp);
             info!("accepted connection from {}", remote_address);
 
             tokio::task::spawn(async move {
-                // Pin the connection object so we can use tokio::select! below.
                 let conn = http1::Builder::new()
                     .preserve_header_case(true)
                     .title_case_headers(true)
                     .serve_connection(io, service_fn(handler));
                 pin!(conn);
 
-                // Iterate the timeouts.  Use tokio::select! to wait on the
-                // result of polling the connection itself,
-                // and also on tokio::time::sleep for the current timeout duration.
                 tokio::select! {
                     res = conn.as_mut() => {
-                        // Polling the connection returned a result.
-                        // In this case print either the successful or error result for the connection
-                        // and break out of the loop.
                         match res {
                             Ok(()) => println!("after polling conn, no error"),
                             Err(e) =>  println!("error serving connection: {:?}", e),
                         };
                     }
                     _ = shutdown.recv() => {
-                        // tokio::time::sleep returned a result.
-                        // Call graceful_shutdown on the connection and continue the loop.
+                        info!("shutdown signal received");
                         conn.as_mut().graceful_shutdown();
                     }
                 }
@@ -120,15 +114,15 @@ pub async fn handler(
 
     // Handle CONNECT request.
     if Method::CONNECT == request.method() {
-        return handle_https(request).await;
+        return https_handler(request).await;
     }
 
-    return handle_http(request).await;
+    return http_handler(request).await;
 }
 
-// handle_http handles the http request.
+// http_handler handles the http request.
 #[instrument(skip_all)]
-pub async fn handle_http(
+pub async fn http_handler(
     request: Request<hyper::body::Incoming>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     info!("handle http request: {:?}", request);
@@ -138,9 +132,9 @@ pub async fn handle_http(
     Ok(resp)
 }
 
-// handle_https handles the https request.
+// https_handler handles the https request.
 #[instrument(skip_all)]
-pub async fn handle_https(
+pub async fn https_handler(
     request: Request<hyper::body::Incoming>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     if let Some(addr) = host_addr(request.uri()) {
@@ -148,24 +142,25 @@ pub async fn handle_https(
             match hyper::upgrade::on(request).await {
                 Ok(upgraded) => {
                     if let Err(e) = tunnel(upgraded, addr).await {
-                        eprintln!("server io error: {}", e);
+                        error!("server io error: {}", e);
                     };
                 }
-                Err(e) => eprintln!("upgrade error: {}", e),
+                Err(e) => error!("upgrade error: {}", e),
             }
         });
 
         Ok(Response::new(empty()))
     } else {
-        eprintln!("CONNECT host is not socket addr: {:?}", request.uri());
-        let mut resp = Response::new(full("CONNECT must be to a socket address"));
-        *resp.status_mut() = http::StatusCode::BAD_REQUEST;
+        error!("CONNECT host is not socket addr: {:?}", request.uri());
+        let mut response = Response::new(full("CONNECT must be to a socket address"));
+        *response.status_mut() = http::StatusCode::BAD_REQUEST;
 
-        Ok(resp)
+        Ok(response)
     }
 }
 
 // empty returns an empty body.
+#[instrument(skip_all)]
 fn empty() -> BoxBody<Bytes, hyper::Error> {
     Empty::<Bytes>::new()
         .map_err(|never| match never {})
@@ -173,6 +168,7 @@ fn empty() -> BoxBody<Bytes, hyper::Error> {
 }
 
 // full returns a body with the given chunk.
+#[instrument(skip_all)]
 fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {
     Full::new(chunk.into())
         .map_err(|never| match never {})
@@ -186,6 +182,7 @@ fn host_addr(uri: &hyper::Uri) -> Option<String> {
 }
 
 // tunnel proxies the data between the client and the remote server.
+#[instrument(skip_all)]
 async fn tunnel(upgraded: Upgraded, addr: String) -> std::io::Result<()> {
     // Connect to remote server
     let mut server = TcpStream::connect(addr).await?;
