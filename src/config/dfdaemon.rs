@@ -17,6 +17,7 @@ use crate::Result;
 use local_ip_address::{local_ip, local_ipv6};
 use regex::Regex;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -175,6 +176,99 @@ fn default_gc_policy_dist_low_threshold_percent() -> u8 {
 #[inline]
 fn default_proxy_server_port() -> u16 {
     4001
+}
+
+// default_s3_filtered_query_params is the default filtered query params with s3 protocol to generate the task id.
+#[inline]
+fn s3_filtered_query_params() -> Vec<String> {
+    vec![
+        "X-Amz-Algorithm".to_string(),
+        "X-Amz-Credential".to_string(),
+        "X-Amz-Date".to_string(),
+        "X-Amz-Expires".to_string(),
+        "X-Amz-SignedHeaders".to_string(),
+        "X-Amz-Signature".to_string(),
+        "X-Amz-Security-Token".to_string(),
+        "X-Amz-User-Agent".to_string(),
+    ]
+}
+
+// gcs_filtered_query_params is the filtered query params with gcs protocol to generate the task id.
+#[inline]
+fn gcs_filtered_query_params() -> Vec<String> {
+    vec![
+        "X-Goog-Algorithm".to_string(),
+        "X-Goog-Credential".to_string(),
+        "X-Goog-Date".to_string(),
+        "X-Goog-Expires".to_string(),
+        "X-Goog-SignedHeaders".to_string(),
+        "X-Goog-Signature".to_string(),
+    ]
+}
+
+// oss_filtered_query_params is the filtered query params with oss protocol to generate the task id.
+#[inline]
+fn oss_filtered_query_params() -> Vec<String> {
+    vec![
+        "OSSAccessKeyId".to_string(),
+        "Expires".to_string(),
+        "Signature".to_string(),
+        "SecurityToken".to_string(),
+    ]
+}
+
+// obs_filtered_query_params is the filtered query params with obs protocol to generate the task id.
+#[inline]
+fn obs_filtered_query_params() -> Vec<String> {
+    vec![
+        "AccessKeyId".to_string(),
+        "Signature".to_string(),
+        "Expires".to_string(),
+        "X-Obs-Date".to_string(),
+        "X-Obs-Security-Token".to_string(),
+    ]
+}
+
+// cos_filtered_query_params is the filtered query params with cos protocol to generate the task id.
+#[inline]
+fn cos_filtered_query_params() -> Vec<String> {
+    vec![
+        "q-sign-algorithm".to_string(),
+        "q-ak".to_string(),
+        "q-sign-time".to_string(),
+        "q-key-time".to_string(),
+        "q-header-list".to_string(),
+        "q-url-param-list".to_string(),
+        "q-signature".to_string(),
+        "x-cos-security-token".to_string(),
+    ]
+}
+
+// default_proxy_rule_filtered_query_params is the default filtered query params to generate the task id.
+#[inline]
+fn default_proxy_rule_filtered_query_params() -> Vec<String> {
+    let mut visited = HashSet::new();
+    for query_param in s3_filtered_query_params() {
+        visited.insert(query_param);
+    }
+
+    for query_param in gcs_filtered_query_params() {
+        visited.insert(query_param);
+    }
+
+    for query_param in oss_filtered_query_params() {
+        visited.insert(query_param);
+    }
+
+    for query_param in obs_filtered_query_params() {
+        visited.insert(query_param);
+    }
+
+    for query_param in cos_filtered_query_params() {
+        visited.insert(query_param);
+    }
+
+    visited.into_iter().collect()
 }
 
 // Host is the host configuration for dfdaemon.
@@ -579,6 +673,14 @@ pub struct Rule {
 
     // redirect is the redirect url.
     pub redirect: Option<String>,
+
+    // filtered_query_params is the filtered query params to generate the task id.
+    // When filter is ["Signature", "Expires", "ns"], for example:
+    // http://example.com/xyz?Expires=e1&Signature=s1&ns=docker.io and http://example.com/xyz?Expires=e2&Signature=s2&ns=docker.io
+    // will generate the same task id.
+    // Default value includes the filtered query params of s3, gcs, oss, obs, cos.
+    #[serde(default = "default_proxy_rule_filtered_query_params")]
+    pub filtered_query_params: Vec<String>,
 }
 
 // Rule implements Default.
@@ -588,6 +690,7 @@ impl Default for Rule {
             regex: Regex::new(r".*").unwrap(),
             use_tls: false,
             redirect: None,
+            filtered_query_params: default_proxy_rule_filtered_query_params(),
         }
     }
 }
