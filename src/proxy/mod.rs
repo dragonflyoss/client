@@ -14,16 +14,19 @@
  * limitations under the License.
  */
 
+use crate::config::dfdaemon::Config;
 use crate::shutdown;
 use crate::Result as ClientResult;
 use bytes::Bytes;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
+use hyper::client::conn::http1::Builder;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{Method, Request, Response};
 use hyper_util::rt::tokio::TokioIo;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::pin;
@@ -33,6 +36,9 @@ use tracing::{error, info, instrument, Span};
 // Proxy is the proxy server.
 #[derive(Debug)]
 pub struct Proxy {
+    // config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
     // addr is the address of the proxy server.
     addr: SocketAddr,
 
@@ -47,11 +53,13 @@ pub struct Proxy {
 impl Proxy {
     // new creates a new Proxy.
     pub fn new(
+        config: Arc<Config>,
         addr: SocketAddr,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
         Self {
+            config,
             addr,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
@@ -77,11 +85,17 @@ impl Proxy {
             let io = TokioIo::new(tcp);
             info!("accepted connection from {}", remote_address);
 
+            // Clone the config.
+            let config = self.config.clone();
+
             tokio::task::spawn(async move {
                 let conn = http1::Builder::new()
                     .preserve_header_case(true)
                     .title_case_headers(true)
-                    .serve_connection(io, service_fn(handler));
+                    .serve_connection(
+                        io,
+                        service_fn(move |request| handler(config.clone(), request)),
+                    );
                 pin!(conn);
 
                 tokio::select! {
@@ -104,6 +118,7 @@ impl Proxy {
 // handle starts to handle the request.
 #[instrument(skip_all, fields(uri, method))]
 pub async fn handler(
+    config: Arc<Config>,
     request: Request<hyper::body::Incoming>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     info!("handle request: {:?}", request);
@@ -114,29 +129,68 @@ pub async fn handler(
 
     // Handle CONNECT request.
     if Method::CONNECT == request.method() {
-        return https_handler(request).await;
+        return https_handler(config, request).await;
     }
 
-    return http_handler(request).await;
+    return http_handler(config, request).await;
 }
 
 // http_handler handles the http request.
 #[instrument(skip_all)]
 pub async fn http_handler(
+    config: Arc<Config>,
     request: Request<hyper::body::Incoming>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
-    info!("handle http request: {:?}", request);
-    let mut resp = Response::new(full("CONNECT must be to a socket address"));
-    *resp.status_mut() = http::StatusCode::BAD_REQUEST;
+    if let Some(rules) = config.proxy.rules.clone() {
+        for rule in rules.iter() {
+            if rule.regex.is_match(request.uri().to_string().as_str()) {
+                // TODO: handle https request.
+                let mut response = Response::new(full("CONNECT must be to a socket address"));
+                *response.status_mut() = http::StatusCode::BAD_REQUEST;
+                return Ok(response);
+            }
+        }
+    }
 
-    Ok(resp)
+    // Proxy the request to the remote server directly.
+    let Some(host) = request.uri().host() else {
+        error!("CONNECT host is not socket addr: {:?}", request.uri());
+        let mut response = Response::new(full("CONNECT must be to a socket address"));
+        *response.status_mut() = http::StatusCode::BAD_REQUEST;
+        return Ok(response);
+    };
+    let port = request.uri().port_u16().unwrap_or(80);
+
+    let stream = TcpStream::connect((host, port)).await.unwrap();
+    let io = TokioIo::new(stream);
+    let (mut sender, _) = Builder::new()
+        .preserve_header_case(true)
+        .title_case_headers(true)
+        .handshake(io)
+        .await?;
+
+    let response = sender.send_request(request).await?;
+    Ok(response.map(|b| b.boxed()))
 }
 
 // https_handler handles the https request.
 #[instrument(skip_all)]
 pub async fn https_handler(
+    config: Arc<Config>,
     request: Request<hyper::body::Incoming>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
+    if let Some(rules) = config.proxy.rules.clone() {
+        for rule in rules.iter() {
+            if rule.regex.is_match(request.uri().to_string().as_str()) {
+                // TODO: handle https request.
+                let mut response = Response::new(full("CONNECT must be to a socket address"));
+                *response.status_mut() = http::StatusCode::BAD_REQUEST;
+                return Ok(response);
+            }
+        }
+    }
+
+    // Proxy the request to the remote server directly.
     if let Some(addr) = host_addr(request.uri()) {
         tokio::task::spawn(async move {
             match hyper::upgrade::on(request).await {
@@ -193,7 +247,7 @@ async fn tunnel(upgraded: Upgraded, addr: String) -> std::io::Result<()> {
         tokio::io::copy_bidirectional(&mut upgraded, &mut server).await?;
 
     // Print message when done
-    println!(
+    info!(
         "client wrote {} bytes and received {} bytes",
         from_client, from_server
     );
