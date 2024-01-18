@@ -29,7 +29,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
-use tokio::pin;
 use tokio::sync::mpsc;
 use tracing::{error, info, instrument, Span};
 
@@ -79,38 +78,38 @@ impl Proxy {
             let mut shutdown = self.shutdown.clone();
 
             // Wait for a client connection.
-            let (tcp, remote_address) = listener.accept().await?;
+            tokio::select! {
+                tcp_accepted = listener.accept() => {
+                    // A new client connection has been established.
+                    let (tcp, remote_address) = tcp_accepted?;
 
-            // Spawn a task to handle the connection.
-            let io = TokioIo::new(tcp);
-            info!("accepted connection from {}", remote_address);
+                    // Spawn a task to handle the connection.
+                    let io = TokioIo::new(tcp);
+                    info!("accepted connection from {}", remote_address);
 
-            // Clone the config.
-            let config = self.config.clone();
+                    // Clone the config.
+                    let config = self.config.clone();
 
-            tokio::task::spawn(async move {
-                let conn = http1::Builder::new()
-                    .preserve_header_case(true)
-                    .title_case_headers(true)
-                    .serve_connection(
-                        io,
-                        service_fn(move |request| handler(config.clone(), request)),
-                    );
-                pin!(conn);
+                    tokio::task::spawn(async move {
+                        let conn = http1::Builder::new()
+                            .preserve_header_case(true)
+                            .title_case_headers(true)
+                            .serve_connection(
+                                io,
+                                service_fn(move |request| handler(config.clone(), request)),
+                            );
 
-                tokio::select! {
-                    res = conn.as_mut() => {
-                        match res {
-                            Ok(()) => println!("after polling conn, no error"),
-                            Err(e) =>  println!("error serving connection: {:?}", e),
-                        };
-                    }
-                    _ = shutdown.recv() => {
-                        info!("shutdown signal received");
-                        conn.as_mut().graceful_shutdown();
-                    }
+                        if let Err(err) = conn.await {
+                            error!("failed to serve connection: {}", err);
+                        }
+                    });
                 }
-            });
+                _ = shutdown.recv() => {
+                    // Proxy server shutting down with signals.
+                    info!("proxy server shutting down");
+                    return Ok(());
+                }
+            }
         }
     }
 }
@@ -153,6 +152,7 @@ pub async fn http_handler(
     }
 
     // Proxy the request to the remote server directly.
+    info!("proxy http request to remote server directly");
     let Some(host) = request.uri().host() else {
         error!("CONNECT host is not socket addr: {:?}", request.uri());
         let mut response = Response::new(full("CONNECT must be to a socket address"));
@@ -163,11 +163,17 @@ pub async fn http_handler(
 
     let stream = TcpStream::connect((host, port)).await.unwrap();
     let io = TokioIo::new(stream);
-    let (mut sender, _) = Builder::new()
+    let (mut sender, conn) = Builder::new()
         .preserve_header_case(true)
         .title_case_headers(true)
         .handshake(io)
         .await?;
+
+    tokio::task::spawn(async move {
+        if let Err(err) = conn.await {
+            error!("connection failed: {:?}", err);
+        }
+    });
 
     let response = sender.send_request(request).await?;
     Ok(response.map(|b| b.boxed()))
@@ -191,6 +197,7 @@ pub async fn https_handler(
     }
 
     // Proxy the request to the remote server directly.
+    info!("proxy https request to remote server directly");
     if let Some(addr) = host_addr(request.uri()) {
         tokio::task::spawn(async move {
             match hyper::upgrade::on(request).await {
