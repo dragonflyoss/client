@@ -33,7 +33,6 @@ use tokio::sync::mpsc;
 use tracing::{error, info, instrument, Span};
 
 // Proxy is the proxy server.
-#[derive(Debug)]
 pub struct Proxy {
     // config is the configuration of the dfdaemon.
     config: Arc<Config>,
@@ -53,13 +52,12 @@ impl Proxy {
     // new creates a new Proxy.
     pub fn new(
         config: Arc<Config>,
-        addr: SocketAddr,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
         Self {
-            config,
-            addr,
+            config: config.clone(),
+            addr: SocketAddr::new(config.proxy.server.ip.unwrap(), config.proxy.server.port),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -141,6 +139,14 @@ pub async fn http_handler(
     config: Arc<Config>,
     request: Request<hyper::body::Incoming>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
+    let Some(host) = request.uri().host() else {
+        error!("CONNECT host is not socket addr: {:?}", request.uri());
+        let mut response = Response::new(full("CONNECT must be to a socket address"));
+        *response.status_mut() = http::StatusCode::BAD_REQUEST;
+        return Ok(response);
+    };
+    let port = request.uri().port_u16().unwrap_or(80);
+
     if let Some(rules) = config.proxy.rules.clone() {
         for rule in rules.iter() {
             if rule.regex.is_match(request.uri().to_string().as_str()) {
@@ -154,14 +160,6 @@ pub async fn http_handler(
 
     // Proxy the request to the remote server directly.
     info!("proxy http request to remote server directly");
-    let Some(host) = request.uri().host() else {
-        error!("CONNECT host is not socket addr: {:?}", request.uri());
-        let mut response = Response::new(full("CONNECT must be to a socket address"));
-        *response.status_mut() = http::StatusCode::BAD_REQUEST;
-        return Ok(response);
-    };
-    let port = request.uri().port_u16().unwrap_or(80);
-
     let stream = TcpStream::connect((host, port)).await.unwrap();
     let io = TokioIo::new(stream);
     let (mut sender, conn) = Builder::new()
