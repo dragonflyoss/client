@@ -192,9 +192,9 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     );
 
+    // Initialize proxy server.
     let proxy = Proxy::new(
         config.clone(),
-        SocketAddr::new(config.proxy.server.ip.unwrap(), config.proxy.server.port),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );

@@ -21,6 +21,7 @@ use rocksdb::{
     TransactionDBOptions,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 use tracing::{error, info};
@@ -57,6 +58,9 @@ pub struct Task {
 
     // content_length is the length of the task.
     pub content_length: Option<u64>,
+
+    // header is the header of the request.
+    pub header: Option<HashMap<String, String>>,
 
     // uploading_count is the count of the task being uploaded by other peers.
     pub uploading_count: u64,
