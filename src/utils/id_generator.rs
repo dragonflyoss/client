@@ -20,6 +20,7 @@ use url::Url;
 use uuid::Uuid;
 
 // IDGenerator is used to generate the id for the resources.
+#[derive(Debug)]
 pub struct IDGenerator {
     // ip is the ip of the host.
     ip: String,
