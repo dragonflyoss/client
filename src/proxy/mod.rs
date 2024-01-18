@@ -91,15 +91,16 @@ impl Proxy {
                     let config = self.config.clone();
 
                     tokio::task::spawn(async move {
-                        let conn = http1::Builder::new()
+                        if let Err(err) = http1::Builder::new()
                             .preserve_header_case(true)
                             .title_case_headers(true)
                             .serve_connection(
                                 io,
                                 service_fn(move |request| handler(config.clone(), request)),
-                            );
-
-                        if let Err(err) = conn.await {
+                                )
+                            .with_upgrades()
+                            .await
+                        {
                             error!("failed to serve connection: {}", err);
                         }
                     });
@@ -245,15 +246,15 @@ fn host_addr(uri: &hyper::Uri) -> Option<String> {
 // tunnel proxies the data between the client and the remote server.
 #[instrument(skip_all)]
 async fn tunnel(upgraded: Upgraded, addr: String) -> std::io::Result<()> {
-    // Connect to remote server
+    // Connect to remote server.
     let mut server = TcpStream::connect(addr).await?;
     let mut upgraded = TokioIo::new(upgraded);
 
-    // Proxying data
+    // Proxying data.
     let (from_client, from_server) =
         tokio::io::copy_bidirectional(&mut upgraded, &mut server).await?;
 
-    // Print message when done
+    // Print message when done.
     info!(
         "client wrote {} bytes and received {} bytes",
         from_client, from_server
