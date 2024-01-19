@@ -15,7 +15,7 @@
  */
 
 use crate::Result;
-use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::header::{self, HeaderMap, HeaderValue};
 use std::collections::HashMap;
 
 // headermap_to_hashmap converts a headermap to a hashmap.
@@ -36,4 +36,12 @@ pub fn headermap_to_hashmap(header: &HeaderMap<HeaderValue>) -> HashMap<String, 
 pub fn hashmap_to_headermap(header: &HashMap<String, String>) -> Result<HeaderMap<HeaderValue>> {
     let header: HeaderMap = (header).try_into()?;
     Ok(header)
+}
+
+// get_content_length gets the content length from the header.
+pub fn get_content_length(header: &HeaderMap<HeaderValue>) -> Option<u64> {
+    header
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
 }
