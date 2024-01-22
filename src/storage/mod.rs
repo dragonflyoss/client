@@ -67,6 +67,15 @@ impl Storage {
             .await
     }
 
+    // read_task_by_range returns the reader of the task by range.
+    pub async fn read_task_by_range(
+        &self,
+        task_id: &str,
+        range: Range,
+    ) -> Result<impl AsyncRead + 'static> {
+        self.content.read_task_by_range(task_id, range).await
+    }
+
     // download_task_started updates the metadata of the task when the task downloads started.
     pub fn download_task_started(
         &self,
