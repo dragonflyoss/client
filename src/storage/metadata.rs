@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
+use crate::utils::http::headermap_to_hashmap;
 use crate::{Error, Result};
 use chrono::{NaiveDateTime, Utc};
+use reqwest::header::{self, HeaderMap};
 use rocksdb::{
     BlockBasedOptions, Cache, ColumnFamily, IteratorMode, Options, TransactionDB,
     TransactionDBOptions,
@@ -56,11 +58,8 @@ pub struct Task {
     // piece_length is the length of the piece.
     pub piece_length: u64,
 
-    // content_length is the length of the task.
-    pub content_length: Option<u64>,
-
-    // header is the header of the request.
-    pub header: Option<HashMap<String, String>>,
+    // header is the header of the response.
+    pub response_header: HashMap<String, String>,
 
     // uploading_count is the count of the task being uploaded by other peers.
     pub uploading_count: u64,
@@ -99,6 +98,20 @@ impl Task {
     // is_finished returns whether the task downloads finished.
     pub fn is_finished(&self) -> bool {
         self.finished_at.is_some()
+    }
+
+    // content_length returns the content length of the task.
+    pub fn content_length(&self) -> Option<u64> {
+        match self.response_header.get(header::CONTENT_LENGTH.as_str()) {
+            Some(content_length) => match content_length.parse::<u64>() {
+                Ok(content_length) => Some(content_length),
+                Err(err) => {
+                    error!("parse content length error: {:?}", err);
+                    None
+                }
+            },
+            None => None,
+        }
     }
 }
 
@@ -222,9 +235,20 @@ impl Metadata {
     }
 
     // download_task_started updates the metadata of the task when the task downloads started.
-    pub fn download_task_started(&self, id: &str, piece_length: u64) -> Result<()> {
+    pub fn download_task_started(
+        &self,
+        id: &str,
+        piece_length: u64,
+        response_header: Option<HeaderMap>,
+    ) -> Result<Task> {
         // Get the column family handle of task.
         let handle = self.cf_handle(TASK_CF_NAME)?;
+
+        // Convert the response header to hashmap.
+        let response_header = match response_header {
+            Some(response_header) => headermap_to_hashmap(&response_header),
+            None => HashMap::new(),
+        };
 
         // Transaction is used to update the task metadata.
         let txn = self.db.transaction();
@@ -233,12 +257,19 @@ impl Metadata {
                 // If the task exists, update the task metadata.
                 let mut task: Task = serde_json::from_slice(&bytes)?;
                 task.updated_at = Utc::now().naive_utc();
+
+                // If the task has the response header, the response header
+                // will not be covered.
+                if task.response_header.is_empty() {
+                    task.response_header = response_header;
+                }
                 task
             }
             // If the task does not exist, create a new task metadata.
             None => Task {
                 id: id.to_string(),
                 piece_length,
+                response_header,
                 updated_at: Utc::now().naive_utc(),
                 created_at: Utc::now().naive_utc(),
                 ..Default::default()
@@ -249,36 +280,11 @@ impl Metadata {
         let json = serde_json::to_string(&task)?;
         txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
         txn.commit()?;
-        Ok(())
-    }
-
-    // set_task_content_length sets the content length of the task.
-    pub fn set_task_content_length(&self, id: &str, content_length: u64) -> Result<()> {
-        // Get the column family handle of task.
-        let handle = self.cf_handle(TASK_CF_NAME)?;
-
-        // Transaction is used to update the task metadata.
-        let txn = self.db.transaction();
-        let task = match txn.get_for_update_cf(handle, id, true)? {
-            Some(bytes) => {
-                // If the task exists, update the task metadata.
-                let mut task: Task = serde_json::from_slice(&bytes)?;
-                task.content_length = Some(content_length);
-                task
-            }
-            // If the task does not exist, return error.
-            None => return Err(Error::TaskNotFound(id.to_string())),
-        };
-
-        // Put the task metadata.
-        let json = serde_json::to_string(&task)?;
-        txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
-        txn.commit()?;
-        Ok(())
+        Ok(task)
     }
 
     // download_task_finished updates the metadata of the task when the task downloads finished.
-    pub fn download_task_finished(&self, id: &str) -> Result<()> {
+    pub fn download_task_finished(&self, id: &str) -> Result<Task> {
         // Get the column family handle of task.
         let handle = self.cf_handle(TASK_CF_NAME)?;
 
@@ -300,11 +306,11 @@ impl Metadata {
         let json = serde_json::to_string(&task)?;
         txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
         txn.commit()?;
-        Ok(())
+        Ok(task)
     }
 
     // upload_task_started updates the metadata of the task when task uploads started.
-    pub fn upload_task_started(&self, id: &str) -> Result<()> {
+    pub fn upload_task_started(&self, id: &str) -> Result<Task> {
         // Get the column family handle of task.
         let handle = self.cf_handle(TASK_CF_NAME)?;
 
@@ -326,11 +332,11 @@ impl Metadata {
         let json = serde_json::to_string(&task)?;
         txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
         txn.commit()?;
-        Ok(())
+        Ok(task)
     }
 
     // upload_task_finished updates the metadata of the task when task uploads finished.
-    pub fn upload_task_finished(&self, id: &str) -> Result<()> {
+    pub fn upload_task_finished(&self, id: &str) -> Result<Task> {
         // Get the column family handle of task.
         let handle = self.cf_handle(TASK_CF_NAME)?;
 
@@ -353,11 +359,11 @@ impl Metadata {
         let json = serde_json::to_string(&task)?;
         txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
         txn.commit()?;
-        Ok(())
+        Ok(task)
     }
 
     // upload_task_failed updates the metadata of the task when the task uploads failed.
-    pub fn upload_task_failed(&self, id: &str) -> Result<()> {
+    pub fn upload_task_failed(&self, id: &str) -> Result<Task> {
         // Get the column family handle of task.
         let handle = self.cf_handle(TASK_CF_NAME)?;
 
@@ -379,7 +385,7 @@ impl Metadata {
         let json = serde_json::to_string(&task)?;
         txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
         txn.commit()?;
-        Ok(())
+        Ok(task)
     }
 
     // get_task gets the task metadata.
@@ -425,26 +431,29 @@ impl Metadata {
     }
 
     // download_piece_started updates the metadata of the piece when the piece downloads started.
-    pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<()> {
+    pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Get the column family handle of piece.
         let handle = self.cf_handle(PIECE_CF_NAME)?;
 
         // Get the piece id.
         let id = self.piece_id(task_id, number);
 
-        // Transaction is used to update the piece metadata.
-        let txn = self.db.transaction();
-
-        // Put the piece metadata.
-        let json = serde_json::to_string(&Piece {
+        // Construct the piece metadata.
+        let piece = Piece {
             number,
             updated_at: Utc::now().naive_utc(),
             created_at: Utc::now().naive_utc(),
             ..Default::default()
-        })?;
+        };
+
+        // Transaction is used to update the piece metadata.
+        let txn = self.db.transaction();
+
+        // Put the piece metadata.
+        let json = serde_json::to_string(&piece)?;
         txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
         txn.commit()?;
-        Ok(())
+        Ok(piece)
     }
 
     // download_piece_finished updates the metadata of the piece when the piece downloads finished.
@@ -456,7 +465,7 @@ impl Metadata {
         length: u64,
         digest: &str,
         parent_id: Option<String>,
-    ) -> Result<()> {
+    ) -> Result<Piece> {
         // Get the column family handle of piece.
         let handle = self.cf_handle(PIECE_CF_NAME)?;
 
@@ -485,11 +494,11 @@ impl Metadata {
         let json = serde_json::to_string(&piece)?;
         txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
         txn.commit()?;
-        Ok(())
+        Ok(piece)
     }
 
     // download_piece_failed updates the metadata of the piece when the piece downloads failed.
-    pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
+    pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Get the column family handle of piece.
         let handle = self.cf_handle(PIECE_CF_NAME)?;
 
@@ -498,20 +507,24 @@ impl Metadata {
 
         // Transaction is used to update the piece metadata.
         let txn = self.db.transaction();
-        match txn.get_for_update_cf(handle, id.as_bytes(), true)? {
+        let piece = match txn.get_for_update_cf(handle, id.as_bytes(), true)? {
             // If the piece exists, delete the piece metadata.
-            Some(_) => txn.delete_cf(handle, id.as_bytes())?,
+            Some(bytes) => {
+                txn.delete_cf(handle, id.as_bytes())?;
+                let piece: Piece = serde_json::from_slice(&bytes)?;
+                piece
+            }
             // If the piece does not exist, return error.
             None => return Err(Error::PieceNotFound(id)),
         };
 
         // Commit the transaction.
         txn.commit()?;
-        Ok(())
+        Ok(piece)
     }
 
     // upload_piece_started updates the metadata of the piece when piece uploads started.
-    pub fn upload_piece_started(&self, task_id: &str, number: u32) -> Result<()> {
+    pub fn upload_piece_started(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Get the column family handle of piece.
         let handle = self.cf_handle(PIECE_CF_NAME)?;
 
@@ -536,11 +549,11 @@ impl Metadata {
         let json = serde_json::to_string(&piece)?;
         txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
         txn.commit()?;
-        Ok(())
+        Ok(piece)
     }
 
     // upload_piece_finished updates the metadata of the piece when piece uploads finished.
-    pub fn upload_piece_finished(&self, task_id: &str, number: u32) -> Result<()> {
+    pub fn upload_piece_finished(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Get the column family handle of piece.
         let handle = self.cf_handle(PIECE_CF_NAME)?;
 
@@ -566,11 +579,11 @@ impl Metadata {
         let json = serde_json::to_string(&piece)?;
         txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
         txn.commit()?;
-        Ok(())
+        Ok(piece)
     }
 
     // upload_piece_failed updates the metadata of the piece when the piece uploads failed.
-    pub fn upload_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
+    pub fn upload_piece_failed(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Get the column family handle of piece.
         let handle = self.cf_handle(PIECE_CF_NAME)?;
 
@@ -595,7 +608,7 @@ impl Metadata {
         let json = serde_json::to_string(&piece)?;
         txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
         txn.commit()?;
-        Ok(())
+        Ok(piece)
     }
 
     // get_piece gets the piece metadata.
