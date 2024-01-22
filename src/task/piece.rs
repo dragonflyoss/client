@@ -321,13 +321,9 @@ impl Piece {
                 err
             })?;
 
-        let metadata = self
-            .storage
+        self.storage
             .get_piece(task_id, number)?
-            .ok_or(Error::PieceNotFound(number.to_string()))?;
-
-        // Return reader of the piece.
-        Ok(metadata)
+            .ok_or(Error::PieceNotFound(number.to_string()))
     }
 
     // download_from_remote_peer_into_async_read downloads a single piece from a remote peer.
@@ -426,12 +422,9 @@ impl Piece {
                 err
             })?;
 
-        let metadata = self
-            .storage
+        self.storage
             .get_piece(task_id, number)?
-            .ok_or(Error::PieceNotFound(number.to_string()))?;
-
-        Ok(metadata)
+            .ok_or(Error::PieceNotFound(number.to_string()))
     }
 
     // download_from_source_into_async_read downloads a single piece from the source.

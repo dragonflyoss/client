@@ -731,7 +731,7 @@ impl Task {
                     })
                 })?;
 
-                let metadata = piece_manager
+                piece_manager
                     .download_from_remote_peer(task_id.as_str(), number, length, parent.clone())
                     .await
                     .map_err(|err| {
@@ -745,9 +745,7 @@ impl Task {
                             piece_number: number,
                             parent_id: parent.id.clone(),
                         })
-                    })?;
-
-                Ok(metadata)
+                    })
             }
 
             join_set.spawn(
@@ -916,8 +914,7 @@ impl Task {
                 );
 
                 let _permit = semaphore.acquire().await?;
-
-                let metadata = piece_manager
+                piece_manager
                     .download_from_source(
                         task_id.as_str(),
                         number,
@@ -926,9 +923,7 @@ impl Task {
                         length,
                         request_header,
                     )
-                    .await?;
-
-                Ok(metadata)
+                    .await
             }
 
             join_set.spawn(
@@ -1214,8 +1209,7 @@ impl Task {
                 );
 
                 let _permit = semaphore.acquire().await?;
-
-                let metadata = piece_manager
+                piece_manager
                     .download_from_source(
                         task_id.as_str(),
                         number,
@@ -1224,9 +1218,7 @@ impl Task {
                         length,
                         request_header,
                     )
-                    .await?;
-
-                Ok(metadata)
+                    .await
             }
 
             join_set.spawn(
