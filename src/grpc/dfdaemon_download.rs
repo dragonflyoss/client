@@ -183,7 +183,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("peer_id", peer_id.as_str());
 
         // Convert the header.
-        let request_header = hashmap_to_headermap(&download.header).map_err(|e| {
+        let request_header = hashmap_to_headermap(&download.request_header).map_err(|e| {
             error!("convert header: {}", e);
             Status::invalid_argument(e.to_string())
         })?;
