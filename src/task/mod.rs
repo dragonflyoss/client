@@ -301,7 +301,7 @@ impl Task {
                     peer_id,
                     interested_pieces.clone(),
                     download.url.clone(),
-                    download.header.clone(),
+                    download.request_header.clone(),
                     download_progress_tx.clone(),
                 )
                 .await
@@ -589,7 +589,7 @@ impl Task {
                             peer_id,
                             remaining_interested_pieces.clone(),
                             download.url.clone(),
-                            download.header.clone(),
+                            download.request_header.clone(),
                             download_progress_tx.clone(),
                             in_stream_tx.clone(),
                         )
