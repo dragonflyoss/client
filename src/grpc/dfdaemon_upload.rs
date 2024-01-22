@@ -153,7 +153,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let mut interested_piece_numbers = request.interested_piece_numbers.clone();
 
         // Clone the task.
-        let task = self.task.clone();
+        let task_manager = self.task.clone();
 
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(1024);
@@ -163,7 +163,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     let mut has_started_piece = false;
                     let mut finished_piece_numbers = Vec::new();
                     for interested_piece_number in interested_piece_numbers.iter() {
-                        let piece = match task.piece.get(task_id.as_str(), *interested_piece_number)
+                        let piece = match task_manager
+                            .piece
+                            .get(task_id.as_str(), *interested_piece_number)
                         {
                             Ok(Some(piece)) => piece,
                             Ok(None) => continue,

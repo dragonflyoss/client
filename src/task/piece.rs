@@ -355,7 +355,7 @@ impl Piece {
         url: &str,
         offset: u64,
         length: u64,
-        header: HeaderMap,
+        request_header: HeaderMap,
     ) -> Result<metadata::Piece> {
         // Acquire the download rate limiter.
         self.download_rate_limiter.acquire(length as usize).await;
@@ -364,8 +364,8 @@ impl Piece {
         self.storage.download_piece_started(task_id, number).await?;
 
         // Add range header to the request by offset and length.
-        let mut header = header.clone();
-        header.insert(
+        let mut request_header = request_header.clone();
+        request_header.insert(
             header::RANGE,
             format!("bytes={}-{}", offset, offset + length - 1)
                 .parse()
@@ -377,7 +377,7 @@ impl Piece {
             .http_client
             .get(Request {
                 url: url.to_string(),
-                header: header.to_owned(),
+                header: request_header.to_owned(),
                 timeout: self.config.download.piece_timeout,
             })
             .await

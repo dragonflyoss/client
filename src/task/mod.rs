@@ -33,7 +33,7 @@ use dragonfly_api::scheduler::v2::{
     DownloadPieceFailedRequest, DownloadPieceFinishedRequest, HttpResponse, RegisterPeerRequest,
     RescheduleRequest,
 };
-use reqwest::header::{self, HeaderMap};
+use reqwest::header::HeaderMap;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -96,18 +96,44 @@ impl Task {
         }
     }
 
-    // get gets a task metadata.
-    pub fn get(&self, task_id: &str) -> ClientResult<Option<metadata::Task>> {
-        self.storage.get_task(task_id)
-    }
-
     // download_started updates the metadata of the task when the task downloads started.
-    pub fn download_started(&self, id: &str, piece_length: u64) -> ClientResult<()> {
-        self.storage.download_task_started(id, piece_length)
+    pub async fn download_started(
+        &self,
+        id: &str,
+        piece_length: u64,
+        url: &str,
+        request_header: HeaderMap,
+    ) -> ClientResult<metadata::Task> {
+        let task = self.storage.download_task_started(id, piece_length, None)?;
+
+        if !task.response_header.is_empty() {
+            return Ok(task);
+        }
+
+        // Head the url to get the content length.
+        let response = self
+            .http_client
+            .head(HTTPRequest {
+                url: url.to_string(),
+                header: request_header,
+                timeout: self.config.download.piece_timeout,
+            })
+            .await?;
+
+        // Check if the status code is success.
+        if !response.status_code.is_success() {
+            return Err(Error::HTTP(HTTPError {
+                status_code: response.status_code,
+                header: response.header,
+            }));
+        }
+
+        self.storage
+            .download_task_started(id, piece_length, Some(response.header))
     }
 
     // download_finished updates the metadata of the task when the task downloads finished.
-    pub fn download_finished(&self, id: &str) -> ClientResult<()> {
+    pub fn download_finished(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.download_task_finished(id)
     }
 
@@ -132,13 +158,26 @@ impl Task {
     #[allow(clippy::too_many_arguments)]
     pub async fn download(
         &self,
-        task_id: &str,
+        task: metadata::Task,
         host_id: &str,
         peer_id: &str,
-        content_length: u64,
         download: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<()> {
+        // Get the content length from the task.
+        let Some(content_length) = task.content_length() else {
+            error!("content length not found");
+            download_progress_tx
+                .send_timeout(
+                    Err(Status::internal("content length not found")),
+                    REQUEST_TIMEOUT,
+                )
+                .await
+                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+
+            return Err(Error::InvalidContentLength());
+        };
+
         // Calculate the interested pieces to download.
         let interested_pieces = match self.piece.calculate_interested(
             download.piece_length,
@@ -164,32 +203,6 @@ impl Task {
         };
         info!("interested pieces: {:?}", interested_pieces);
 
-        // Get the task from the local storage.
-        let task = match self.get(task_id) {
-            Ok(Some(task)) => task,
-            Ok(None) => {
-                error!("task not found");
-                download_progress_tx
-                    .send_timeout(Err(Status::not_found("task not found")), REQUEST_TIMEOUT)
-                    .await
-                    .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
-                return Err(Error::TaskNotFound(task_id.to_string()));
-            }
-            Err(err) => {
-                error!("get task error: {:?}", err);
-                download_progress_tx
-                    .send_timeout(
-                        Err(Status::internal(format!("get task error: {:?}", err))),
-                        REQUEST_TIMEOUT,
-                    )
-                    .await
-                    .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
-                return Err(err);
-            }
-        };
-
         // If the task is finished, return the file.
         if task.is_finished() {
             info!("task is finished, download the pieces from the local peer");
@@ -197,11 +210,10 @@ impl Task {
             // Download the pieces from the local peer.
             if let Err(err) = self
                 .download_from_local_peer(
+                    task,
                     host_id,
-                    task_id,
                     peer_id,
                     interested_pieces.clone(),
-                    content_length,
                     download_progress_tx.clone(),
                 )
                 .await
@@ -224,17 +236,15 @@ impl Task {
             info!("all pieces are downloaded from local peer");
             return Ok(());
         }
-
         info!("download the pieces from local peer");
 
         // Download the pieces from the local peer.
         let finished_pieces = match self
             .download_partial_from_local_peer(
+                task.clone(),
                 host_id,
-                task_id,
                 peer_id,
                 interested_pieces.clone(),
-                content_length,
                 download_progress_tx.clone(),
             )
             .await
@@ -271,7 +281,7 @@ impl Task {
         // Download the pieces with scheduler.
         if let Err(err) = self
             .download_partial_with_scheduler(
-                task_id,
+                task.clone(),
                 host_id,
                 peer_id,
                 interested_pieces.clone(),
@@ -286,13 +296,12 @@ impl Task {
             // Download the pieces from the source.
             if let Err(err) = self
                 .download_partial_from_source(
+                    task.clone(),
                     host_id,
-                    task_id,
                     peer_id,
                     interested_pieces.clone(),
                     download.url.clone(),
                     download.header.clone(),
-                    content_length,
                     download_progress_tx.clone(),
                 )
                 .await
@@ -324,7 +333,7 @@ impl Task {
     #[allow(clippy::too_many_arguments)]
     async fn download_partial_with_scheduler(
         &self,
-        task_id: &str,
+        task: metadata::Task,
         host_id: &str,
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
@@ -346,7 +355,7 @@ impl Task {
             .send_timeout(
                 AnnouncePeerRequest {
                     host_id: host_id.to_string(),
-                    task_id: task_id.to_string(),
+                    task_id: task.id.clone(),
                     peer_id: peer_id.to_string(),
                     request: Some(announce_peer_request::Request::RegisterPeerRequest(
                         RegisterPeerRequest {
@@ -363,7 +372,7 @@ impl Task {
         let in_stream = ReceiverStream::new(in_stream_rx);
         let response = self
             .scheduler_client
-            .announce_peer(task_id, Request::new(in_stream))
+            .announce_peer(task.id.as_str(), Request::new(in_stream))
             .await?;
 
         let out_stream = response
@@ -379,7 +388,7 @@ impl Task {
                     .send_timeout(
                         AnnouncePeerRequest {
                             host_id: host_id.to_string(),
-                            task_id: task_id.to_string(),
+                            task_id: task.id.clone(),
                             peer_id: peer_id.to_string(),
                             request: Some(
                                 announce_peer_request::Request::DownloadPeerFailedRequest(
@@ -417,7 +426,7 @@ impl Task {
                         .send_timeout(
                             AnnouncePeerRequest {
                                 host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
+                                task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
                                 request: Some(
                                     announce_peer_request::Request::DownloadPeerStartedRequest(
@@ -435,7 +444,7 @@ impl Task {
                         .send_timeout(
                             AnnouncePeerRequest {
                                 host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
+                                task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
                                 request: Some(
                                     announce_peer_request::Request::DownloadPeerFinishedRequest(
@@ -464,7 +473,7 @@ impl Task {
                         .send_timeout(
                             AnnouncePeerRequest {
                                 host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
+                                task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
                                 request: Some(
                                     announce_peer_request::Request::DownloadPeerStartedRequest(
@@ -480,12 +489,11 @@ impl Task {
                     // Download the pieces from the remote peer.
                     finished_pieces = self
                         .download_partial_with_scheduler_from_remote_peer(
-                            task_id,
+                            task.clone(),
                             host_id,
                             peer_id,
                             response.candidate_parents.clone(),
                             interested_pieces.clone(),
-                            content_length,
                             download_progress_tx.clone(),
                             in_stream_tx.clone(),
                         )
@@ -503,7 +511,7 @@ impl Task {
                             .send_timeout(
                                 AnnouncePeerRequest {
                                     host_id: host_id.to_string(),
-                                    task_id: task_id.to_string(),
+                                    task_id: task.id.clone(),
                                     peer_id: peer_id.to_string(),
                                     request: Some(
                                         announce_peer_request::Request::DownloadPeerFinishedRequest(
@@ -529,7 +537,7 @@ impl Task {
                         .send_timeout(
                             AnnouncePeerRequest {
                                 host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
+                                task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
                                 request: Some(announce_peer_request::Request::RescheduleRequest(
                                     RescheduleRequest {
@@ -554,7 +562,7 @@ impl Task {
                     in_stream_tx
                         .send_timeout(AnnouncePeerRequest {
                             host_id: host_id.to_string(),
-                            task_id: task_id.to_string(),
+                            task_id: task.id.clone(),
                             peer_id: peer_id.to_string(),
                             request: Some(
                                 announce_peer_request::Request::DownloadPeerBackToSourceStartedRequest(
@@ -576,13 +584,12 @@ impl Task {
                     // Download the pieces from the source.
                     let finished_pieces = match self
                         .download_partial_with_scheduler_from_source(
-                            task_id,
+                            task.clone(),
                             host_id,
                             peer_id,
                             remaining_interested_pieces.clone(),
                             download.url.clone(),
                             download.header.clone(),
-                            content_length,
                             download_progress_tx.clone(),
                             in_stream_tx.clone(),
                         )
@@ -593,7 +600,7 @@ impl Task {
                             in_stream_tx
                                 .send_timeout(AnnouncePeerRequest {
                                     host_id: host_id.to_string(),
-                                    task_id: task_id.to_string(),
+                                    task_id: task.id.clone(),
                                     peer_id: peer_id.to_string(),
                                     request: Some(
                                         announce_peer_request::Request::DownloadPeerBackToSourceFailedRequest(
@@ -621,7 +628,7 @@ impl Task {
                             .send_timeout(
                                 AnnouncePeerRequest {
                                     host_id: host_id.to_string(),
-                                    task_id: task_id.to_string(),
+                                    task_id: task.id.clone(),
                                     peer_id: peer_id.to_string(),
                                     request: Some(
                                         announce_peer_request::Request::DownloadPeerBackToSourceFinishedRequest(
@@ -645,7 +652,7 @@ impl Task {
                     in_stream_tx
                         .send_timeout(AnnouncePeerRequest {
                             host_id: host_id.to_string(),
-                            task_id: task_id.to_string(),
+                            task_id: task.id,
                             peer_id: peer_id.to_string(),
                             request: Some(
                                 announce_peer_request::Request::DownloadPeerBackToSourceFailedRequest(
@@ -675,19 +682,18 @@ impl Task {
     #[allow(clippy::too_many_arguments)]
     async fn download_partial_with_scheduler_from_remote_peer(
         &self,
-        task_id: &str,
+        task: metadata::Task,
         host_id: &str,
         peer_id: &str,
         parents: Vec<Peer>,
         interested_pieces: Vec<metadata::Piece>,
-        content_length: u64,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
         in_stream_tx: Sender<AnnouncePeerRequest>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Initialize the piece collector.
         let piece_collector = piece_collector::PieceCollector::new(
             self.config.clone(),
-            task_id,
+            task.id.as_str(),
             interested_pieces.clone(),
             parents.clone(),
         );
@@ -707,7 +713,7 @@ impl Task {
                 number: u32,
                 length: u64,
                 parent: Peer,
-                piece: Arc<piece::Piece>,
+                piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
             ) -> ClientResult<metadata::Piece> {
@@ -725,7 +731,7 @@ impl Task {
                     })
                 })?;
 
-                let metadata = piece
+                let metadata = piece_manager
                     .download_from_remote_peer(task_id.as_str(), number, length, parent.clone())
                     .await
                     .map_err(|err| {
@@ -746,7 +752,7 @@ impl Task {
 
             join_set.spawn(
                 download_from_remote_peer(
-                    task_id.to_string(),
+                    task.id.clone(),
                     collect_piece.number,
                     collect_piece.length,
                     collect_piece.parent.clone(),
@@ -767,7 +773,7 @@ impl Task {
                 Ok(Ok(metadata)) => {
                     info!(
                         "finished piece {} from remote peer {:?}",
-                        self.storage.piece_id(task_id, metadata.number),
+                        self.storage.piece_id(task.id.as_str(), metadata.number),
                         metadata.parent_id
                     );
 
@@ -789,7 +795,7 @@ impl Task {
                         .send_timeout(
                             AnnouncePeerRequest {
                                 host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
+                                task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
                                 request: Some(
                                     announce_peer_request::Request::DownloadPieceFinishedRequest(
@@ -808,9 +814,9 @@ impl Task {
                         .send_timeout(
                             Ok(DownloadTaskResponse {
                                 host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
+                                task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
-                                content_length,
+                                response_header: task.response_header.clone(),
                                 piece: Some(piece.clone()),
                             }),
                             REQUEST_TIMEOUT,
@@ -823,7 +829,7 @@ impl Task {
                 Ok(Err(Error::DownloadFromRemotePeerFailed(err))) => {
                     error!(
                         "download piece {} from remote peer {} error: {:?}",
-                        self.storage.piece_id(task_id, err.piece_number),
+                        self.storage.piece_id(task.id.as_str(), err.piece_number),
                         err.parent_id,
                         err
                     );
@@ -833,7 +839,7 @@ impl Task {
                         .send_timeout(
                             AnnouncePeerRequest {
                                 host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
+                                task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
                                 request: Some(
                                     announce_peer_request::Request::DownloadPieceFailedRequest(
@@ -871,18 +877,17 @@ impl Task {
     #[allow(clippy::too_many_arguments)]
     async fn download_partial_with_scheduler_from_source(
         &self,
-        task_id: &str,
+        task: metadata::Task,
         host_id: &str,
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
         url: String,
-        header: HashMap<String, String>,
-        content_length: u64,
+        request_header: HashMap<String, String>,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
         in_stream_tx: Sender<AnnouncePeerRequest>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Convert the header.
-        let header: HeaderMap = (&header).try_into()?;
+        let request_header: HeaderMap = (&request_header).try_into()?;
 
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
@@ -900,8 +905,8 @@ impl Task {
                 url: String,
                 offset: u64,
                 length: u64,
-                header: HeaderMap,
-                piece: Arc<piece::Piece>,
+                request_header: HeaderMap,
+                piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
             ) -> ClientResult<metadata::Piece> {
@@ -912,14 +917,14 @@ impl Task {
 
                 let _permit = semaphore.acquire().await?;
 
-                let metadata = piece
+                let metadata = piece_manager
                     .download_from_source(
                         task_id.as_str(),
                         number,
                         url.as_str(),
                         offset,
                         length,
-                        header,
+                        request_header,
                     )
                     .await?;
 
@@ -928,12 +933,12 @@ impl Task {
 
             join_set.spawn(
                 download_from_source(
-                    task_id.to_string(),
+                    task.id.clone(),
                     interested_piece.number,
                     url.clone(),
                     interested_piece.offset,
                     interested_piece.length,
-                    header.clone(),
+                    request_header.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
                     semaphore.clone(),
@@ -948,7 +953,7 @@ impl Task {
                 Ok(Ok(metadata)) => {
                     info!(
                         "finished piece {} from source",
-                        self.storage.piece_id(task_id, metadata.number)
+                        self.storage.piece_id(task.id.as_str(), metadata.number)
                     );
 
                     // Construct the piece.
@@ -969,7 +974,7 @@ impl Task {
                         .send_timeout(
                             AnnouncePeerRequest {
                                 host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
+                                task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
                                 request: Some(
                                     announce_peer_request::Request::DownloadPieceBackToSourceFinishedRequest(
@@ -988,9 +993,9 @@ impl Task {
                         .send_timeout(
                             Ok(DownloadTaskResponse {
                                 host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
+                                task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
-                                content_length,
+                                response_header: task.response_header.clone(),
                                 piece: Some(piece.clone()),
                             }),
                             REQUEST_TIMEOUT,
@@ -1004,7 +1009,7 @@ impl Task {
                     // Send the download piece http failed request.
                     in_stream_tx.send_timeout(AnnouncePeerRequest {
                                     host_id: host_id.to_string(),
-                                    task_id: task_id.to_string(),
+                                    task_id: task.id.clone(),
                                     peer_id: peer_id.to_string(),
                                     request: Some(announce_peer_request::Request::DownloadPieceBackToSourceFailedRequest(
                                             DownloadPieceBackToSourceFailedRequest{
@@ -1029,7 +1034,7 @@ impl Task {
                     // Send the download piece failed request.
                     in_stream_tx.send_timeout(AnnouncePeerRequest {
                                     host_id: host_id.to_string(),
-                                    task_id: task_id.to_string(),
+                                    task_id: task.id,
                                     peer_id: peer_id.to_string(),
                                     request: Some(announce_peer_request::Request::DownloadPieceBackToSourceFailedRequest(
                                             DownloadPieceBackToSourceFailedRequest{
@@ -1056,20 +1061,18 @@ impl Task {
     #[allow(clippy::too_many_arguments)]
     async fn download_from_local_peer(
         &self,
+        task: metadata::Task,
         host_id: &str,
-        task_id: &str,
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
-        content_length: u64,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<()> {
         let finished_pieces = self
             .download_partial_from_local_peer(
+                task,
                 host_id,
-                task_id,
                 peer_id,
                 interested_pieces.clone(),
-                content_length,
                 download_progress_tx.clone(),
             )
             .await?;
@@ -1097,11 +1100,10 @@ impl Task {
     #[allow(clippy::too_many_arguments)]
     async fn download_partial_from_local_peer(
         &self,
+        task: metadata::Task,
         host_id: &str,
-        task_id: &str,
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
-        content_length: u64,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Initialize the finished pieces.
@@ -1110,19 +1112,21 @@ impl Task {
         // Download the piece from the local peer.
         for interested_piece in interested_pieces {
             // Get the piece metadata from the local storage.
-            let metadata = match self.piece.get(task_id, interested_piece.number) {
-                Ok(Some(metadata)) => metadata,
+            let piece = match self.piece.get(task.id.as_str(), interested_piece.number) {
+                Ok(Some(piece)) => piece,
                 Ok(None) => {
                     info!(
                         "piece {} not found in local storage",
-                        self.storage.piece_id(task_id, interested_piece.number)
+                        self.storage
+                            .piece_id(task.id.as_str(), interested_piece.number)
                     );
                     continue;
                 }
                 Err(err) => {
                     error!(
                         "get piece {} from local storage error: {:?}",
-                        self.storage.piece_id(task_id, interested_piece.number),
+                        self.storage
+                            .piece_id(task.id.as_str(), interested_piece.number),
                         err
                     );
                     continue;
@@ -1131,20 +1135,20 @@ impl Task {
 
             info!(
                 "finished piece {} from local peer",
-                self.storage.piece_id(task_id, metadata.number)
+                self.storage.piece_id(task.id.as_str(), piece.number)
             );
 
             // Construct the piece.
             let piece = Piece {
-                number: metadata.number,
+                number: piece.number,
                 parent_id: None,
-                offset: metadata.offset,
-                length: metadata.length,
-                digest: metadata.digest.clone(),
+                offset: piece.offset,
+                length: piece.length,
+                digest: piece.digest.clone(),
                 content: None,
                 traffic_type: Some(TrafficType::LocalPeer as i32),
-                cost: metadata.prost_cost(),
-                created_at: Some(prost_wkt_types::Timestamp::from(metadata.created_at)),
+                cost: piece.prost_cost(),
+                created_at: Some(prost_wkt_types::Timestamp::from(piece.created_at)),
             };
 
             // Send the download progress.
@@ -1152,9 +1156,9 @@ impl Task {
                 .send_timeout(
                     Ok(DownloadTaskResponse {
                         host_id: host_id.to_string(),
-                        task_id: task_id.to_string(),
+                        task_id: task.id.as_str().to_string(),
                         peer_id: peer_id.to_string(),
-                        content_length,
+                        response_header: task.response_header.clone(),
                         piece: Some(piece.clone()),
                     }),
                     REQUEST_TIMEOUT,
@@ -1172,17 +1176,16 @@ impl Task {
     #[allow(clippy::too_many_arguments)]
     async fn download_partial_from_source(
         &self,
+        task: metadata::Task,
         host_id: &str,
-        task_id: &str,
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
         url: String,
-        header: HashMap<String, String>,
-        content_length: u64,
+        request_header: HashMap<String, String>,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Convert the header.
-        let header: HeaderMap = (&header).try_into()?;
+        let request_header: HeaderMap = (&request_header).try_into()?;
 
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
@@ -1200,8 +1203,8 @@ impl Task {
                 url: String,
                 offset: u64,
                 length: u64,
-                header: HeaderMap,
-                piece: Arc<piece::Piece>,
+                request_header: HeaderMap,
+                piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
             ) -> ClientResult<metadata::Piece> {
@@ -1212,14 +1215,14 @@ impl Task {
 
                 let _permit = semaphore.acquire().await?;
 
-                let metadata = piece
+                let metadata = piece_manager
                     .download_from_source(
                         task_id.as_str(),
                         number,
                         url.as_str(),
                         offset,
                         length,
-                        header,
+                        request_header,
                     )
                     .await?;
 
@@ -1228,12 +1231,12 @@ impl Task {
 
             join_set.spawn(
                 download_from_source(
-                    task_id.to_string(),
+                    task.id.clone(),
                     interested_piece.number,
                     url.clone(),
                     interested_piece.offset,
                     interested_piece.length,
-                    header.clone(),
+                    request_header.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
                     semaphore.clone(),
@@ -1248,7 +1251,7 @@ impl Task {
                 Ok(Ok(metadata)) => {
                     info!(
                         "finished piece {} from source",
-                        self.storage.piece_id(task_id, metadata.number)
+                        self.storage.piece_id(task.id.as_str(), metadata.number)
                     );
 
                     // Construct the piece.
@@ -1269,9 +1272,9 @@ impl Task {
                         .send_timeout(
                             Ok(DownloadTaskResponse {
                                 host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
+                                task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
-                                content_length,
+                                response_header: task.response_header.clone(),
                                 piece: Some(piece.clone()),
                             }),
                             REQUEST_TIMEOUT,
@@ -1300,56 +1303,5 @@ impl Task {
         Err(Error::Unknown(
             "not all pieces are downloaded from source".to_string(),
         ))
-    }
-
-    // get_content_length gets the content length of the task.
-    pub async fn get_content_length(
-        &self,
-        task_id: &str,
-        url: &str,
-        header: HeaderMap,
-    ) -> ClientResult<u64> {
-        let task = self
-            .storage
-            .get_task(task_id)?
-            .ok_or(Error::TaskNotFound(task_id.to_string()))?;
-
-        if let Some(content_length) = task.content_length {
-            return Ok(content_length);
-        }
-
-        // Head the url to get the content length.
-        let response = self
-            .http_client
-            .head(HTTPRequest {
-                url: url.to_string(),
-                header,
-                timeout: self.config.download.piece_timeout,
-            })
-            .await?;
-
-        // Check if the status code is success.
-        if !response.status_code.is_success() {
-            return Err(Error::HTTP(HTTPError {
-                status_code: response.status_code,
-                header: response.header,
-            }));
-        }
-
-        // Get the content length from the response.
-        let content_length = response
-            .header
-            .get(header::CONTENT_LENGTH)
-            .ok_or(Error::InvalidContentLength())?
-            .to_str()
-            .map_err(|_| Error::InvalidContentLength())?
-            .parse::<u64>()
-            .map_err(|_| Error::InvalidContentLength())?;
-
-        // Set the content length of the task.
-        self.storage
-            .set_task_content_length(task_id, content_length)?;
-
-        Ok(content_length)
     }
 }

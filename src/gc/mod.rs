@@ -152,7 +152,7 @@ impl GC {
             }
 
             // If the task has no content length, skip it.
-            let task_space = match task.content_length {
+            let task_space = match task.content_length() {
                 Some(content_length) => content_length,
                 None => {
                     error!("task {} has no content length", task.id);

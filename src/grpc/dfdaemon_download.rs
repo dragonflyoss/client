@@ -182,56 +182,40 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
 
+        // Convert the header.
+        let request_header = hashmap_to_headermap(&download.header).map_err(|e| {
+            error!("convert header: {}", e);
+            Status::invalid_argument(e.to_string())
+        })?;
+
         // Download task started.
         info!("download task started: {:?}", download);
-        self.task
-            .download_started(task_id.as_str(), download.piece_length)
+        let task = self
+            .task
+            .download_started(
+                task_id.as_str(),
+                download.piece_length,
+                download.url.as_str(),
+                request_header.clone(),
+            )
+            .await
             .map_err(|e| {
                 error!("download task started: {}", e);
                 Status::internal(e.to_string())
             })?;
 
-        // Convert the header.
-        let header = hashmap_to_headermap(&download.header).map_err(|e| {
-            error!("convert header: {}", e);
-            Status::invalid_argument(e.to_string())
-        })?;
-
-        // Get the content length.
-        let content_length = match self
-            .task
-            .get_content_length(task_id.as_str(), download.url.as_str(), header.clone())
-            .await
-        {
-            Ok(content_length) => content_length,
-            Err(e) => {
-                // Download task failed.
-                self.task
-                    .download_failed(task_id.as_str())
-                    .await
-                    .unwrap_or_else(|e| {
-                        error!("download task failed: {}", e);
-                    });
-
-                error!("get content length: {}", e);
-                return Err(Status::internal(e.to_string()));
-            }
-        };
-        info!("content length: {}", content_length);
-
         // Clone the task.
-        let task = self.task.clone();
+        let task_manager = self.task.clone();
 
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(1024);
         tokio::spawn(
             async move {
-                match task
+                match task_manager
                     .download(
-                        task_id.as_str(),
+                        task.clone(),
                         host_id.as_str(),
                         peer_id.as_str(),
-                        content_length,
                         download.clone(),
                         out_stream_tx.clone(),
                     )
@@ -241,17 +225,16 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         // Download task succeeded.
                         info!("download task succeeded");
                         if download.range.is_none() {
-                            task.download_finished(task_id.as_str())
-                                .unwrap_or_else(|e| {
-                                    error!("download task finished failed: {}", e);
-                                });
+                            if let Err(err) = task_manager.download_finished(task_id.as_str()) {
+                                error!("download task finished: {}", err);
+                            }
                         }
 
                         // Check whether the output path is empty. If output path is empty,
                         // should not hard link or copy the task content to the destination.
                         if let Some(output_path) = download.output_path.clone() {
                             // Hard link or copy the task content to the destination.
-                            if let Err(err) = task
+                            if let Err(err) = task_manager
                                 .hard_link_or_copy(
                                     task_id.as_str(),
                                     Path::new(output_path.as_str()),
@@ -271,11 +254,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                     }
                     Err(e) => {
                         // Download task failed.
-                        info!("download task failed: {:?}", download);
-                        task.download_failed(task_id.as_str())
+                        task_manager
+                            .download_failed(task_id.as_str())
                             .await
-                            .unwrap_or_else(|e| {
-                                error!("download task failed: {}", e);
+                            .unwrap_or_else(|err| {
+                                error!("download task failed: {}", err);
                             });
 
                         error!("download failed: {}", e);

@@ -26,6 +26,7 @@ use dragonfly_client::tracing::init_tracing;
 use dragonfly_client::Error;
 use fslock::LockFile;
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
+use reqwest::header;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -273,10 +274,15 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut out_stream = response.into_inner();
     while let Some(message) = out_stream.message().await? {
         let piece = message.piece.ok_or(Error::InvalidParameter())?;
-        pb.set_length(message.content_length);
+        let content_length = message
+            .response_header
+            .get(header::CONTENT_LENGTH.as_str())
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+        pb.set_length(content_length);
 
         downloaded += piece.length;
-        let position = min(downloaded + piece.length, message.content_length);
+        let position = min(downloaded + piece.length, content_length);
         pb.set_position(position);
     }
 

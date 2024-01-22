@@ -18,6 +18,7 @@ use crate::config::dfdaemon::Config;
 use crate::utils::digest::{Algorithm, Digest};
 use crate::{Error, Result};
 use dragonfly_api::common::v2::Range;
+use reqwest::header::HeaderMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -67,17 +68,18 @@ impl Storage {
     }
 
     // download_task_started updates the metadata of the task when the task downloads started.
-    pub fn download_task_started(&self, id: &str, piece_length: u64) -> Result<()> {
-        self.metadata.download_task_started(id, piece_length)
-    }
-
-    // set_task_content_length sets the content length of the task.
-    pub fn set_task_content_length(&self, id: &str, content_length: u64) -> Result<()> {
-        self.metadata.set_task_content_length(id, content_length)
+    pub fn download_task_started(
+        &self,
+        id: &str,
+        piece_length: u64,
+        response_header: Option<HeaderMap>,
+    ) -> Result<metadata::Task> {
+        self.metadata
+            .download_task_started(id, piece_length, response_header)
     }
 
     // download_task_finished updates the metadata of the task when the task downloads finished.
-    pub fn download_task_finished(&self, id: &str) -> Result<()> {
+    pub fn download_task_finished(&self, id: &str) -> Result<metadata::Task> {
         self.metadata.download_task_finished(id)
     }
 
@@ -87,7 +89,7 @@ impl Storage {
     }
 
     // upload_task_finished updates the metadata of the task when task uploads finished.
-    pub fn upload_task_finished(&self, id: &str) -> Result<()> {
+    pub fn upload_task_finished(&self, id: &str) -> Result<metadata::Task> {
         self.metadata.upload_task_finished(id)
     }
 
@@ -111,10 +113,14 @@ impl Storage {
 
     // download_piece_started updates the metadata of the piece and writes
     // the data of piece to file when the piece downloads started.
-    pub async fn download_piece_started(&self, task_id: &str, number: u32) -> Result<()> {
+    pub async fn download_piece_started(
+        &self,
+        task_id: &str,
+        number: u32,
+    ) -> Result<metadata::Piece> {
         // Wait for the piece to be finished.
         match self.wait_for_piece_finished(task_id, number).await {
-            Ok(_) => Ok(()),
+            Ok(piece) => Ok(piece),
             // If piece is not found or wait timeout, create piece metadata.
             Err(_) => self.metadata.download_piece_started(task_id, number),
         }
@@ -128,7 +134,7 @@ impl Storage {
         offset: u64,
         length: u64,
         reader: &mut R,
-    ) -> Result<u64> {
+    ) -> Result<metadata::Piece> {
         let response = self.content.write_piece(task_id, offset, reader).await?;
         let digest = Digest::new(Algorithm::Sha256, response.hash);
 
@@ -139,8 +145,7 @@ impl Storage {
             length,
             digest.to_string().as_str(),
             None,
-        )?;
-        Ok(length)
+        )
     }
 
     // download_piece_from_remote_peer_finished is used for downloading piece from remote peer.
@@ -152,7 +157,7 @@ impl Storage {
         expected_digest: &str,
         parent_id: &str,
         reader: &mut R,
-    ) -> Result<u64> {
+    ) -> Result<metadata::Piece> {
         let response = self.content.write_piece(task_id, offset, reader).await?;
         let length = response.length;
         let digest = Digest::new(Algorithm::Sha256, response.hash);
@@ -169,12 +174,11 @@ impl Storage {
             length,
             digest.to_string().as_str(),
             Some(parent_id.to_string()),
-        )?;
-        Ok(length)
+        )
     }
 
     // download_piece_failed updates the metadata of the piece when the piece downloads failed.
-    pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
+    pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<metadata::Piece> {
         self.metadata.download_piece_failed(task_id, number)
     }
 
@@ -254,7 +258,7 @@ impl Storage {
     }
 
     // wait_for_piece_finished waits for the piece to be finished.
-    async fn wait_for_piece_finished(&self, task_id: &str, number: u32) -> Result<()> {
+    async fn wait_for_piece_finished(&self, task_id: &str, number: u32) -> Result<metadata::Piece> {
         // Initialize the timeout of piece.
         let piece_timeout = tokio::time::sleep(self.config.download.piece_timeout);
         tokio::pin!(piece_timeout);
@@ -270,7 +274,7 @@ impl Storage {
 
                     // If the piece is finished, return.
                     if piece.is_finished() {
-                        return Ok(());
+                        return Ok(piece);
                     }
                 }
                 _ = &mut piece_timeout => {
