@@ -81,6 +81,6 @@ leaky-bucket = "1.0.1"
 hyper = { version = "1.1", features = ["full"] }
 hyper-util = { version = "0.1.2", features = ["tokio"] }
 tokio-rustls = "0.25"
-hyper-rustls = "0.25"
+hyper-rustls = "0.26"
 http-body-util = "0.1.0"
 regex = "1.10.2"
