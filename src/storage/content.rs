@@ -110,6 +110,14 @@ impl Content {
         Ok(())
     }
 
+    // read_task reads the task content by range.
+    pub async fn read_task_by_range(&self, task_id: &str, range: Range) -> Result<impl AsyncRead> {
+        let mut from_f = File::open(self.dir.join(task_id)).await?;
+        from_f.seek(SeekFrom::Start(range.start)).await?;
+        let range_reader = from_f.take(range.length);
+        Ok(range_reader)
+    }
+
     // delete_task deletes the task content.
     pub async fn delete_task(&self, task_id: &str) -> Result<()> {
         fs::remove_file(self.dir.join(task_id)).await?;
