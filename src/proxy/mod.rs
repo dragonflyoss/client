@@ -18,6 +18,7 @@ use crate::config::dfdaemon::Config;
 use crate::shutdown;
 use crate::Result as ClientResult;
 use bytes::Bytes;
+use dragonfly_api::dfdaemon::v2::DownloadTaskRequest;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::client::conn::http1::Builder;
 use hyper::server::conn::http1;
@@ -150,6 +151,9 @@ pub async fn http_handler(
     if let Some(rules) = config.proxy.rules.clone() {
         for rule in rules.iter() {
             if rule.regex.is_match(request.uri().to_string().as_str()) {
+                // If the rule is to use tls, change the download url with https.
+                if rule.use_tls {}
+
                 // TODO: handle https request.
                 let mut response = Response::new(full("CONNECT must be to a socket address"));
                 *response.status_mut() = http::StatusCode::BAD_REQUEST;
@@ -217,6 +221,17 @@ pub async fn https_handler(
 
         Ok(response)
     }
+}
+
+// make_download_task_request makes a request for downloading the task.
+#[instrument(skip_all)]
+fn make_download_task_request(
+    request: Request<hyper::body::Incoming>,
+    use_tls: bool,
+    redirect: Option<String>,
+    filtered_query_params: Vec<String>,
+) -> DownloadTaskRequest {
+    DownloadTaskRequest { download: None }
 }
 
 // empty returns an empty body.
