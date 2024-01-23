@@ -326,22 +326,6 @@ impl Piece {
             .ok_or(Error::PieceNotFound(number.to_string()))
     }
 
-    // download_from_remote_peer_into_async_read downloads a single piece from a remote peer.
-    pub async fn download_from_remote_peer_into_async_read(
-        &self,
-        task_id: &str,
-        number: u32,
-        length: u64,
-        parent: Peer,
-    ) -> Result<impl AsyncRead> {
-        // Download the piece from the remote peer.
-        self.download_from_remote_peer(task_id, number, length, parent)
-            .await?;
-
-        // Return reader of the piece.
-        self.storage.upload_piece(task_id, number).await
-    }
-
     // download_from_source downloads a single piece from the source.
     #[allow(clippy::too_many_arguments)]
     pub async fn download_from_source(
@@ -425,24 +409,5 @@ impl Piece {
         self.storage
             .get_piece(task_id, number)?
             .ok_or(Error::PieceNotFound(number.to_string()))
-    }
-
-    // download_from_source_into_async_read downloads a single piece from the source.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn download_from_source_into_async_read(
-        &self,
-        task_id: &str,
-        number: u32,
-        url: &str,
-        offset: u64,
-        length: u64,
-        header: HeaderMap,
-    ) -> Result<impl AsyncRead> {
-        // Download the piece from the source.
-        self.download_from_source(task_id, number, url, offset, length, header)
-            .await?;
-
-        // Return reader of the piece.
-        self.storage.upload_piece(task_id, number).await
     }
 }
