@@ -16,9 +16,10 @@
 
 use crate::config::dfdaemon::{Config, Rule};
 use crate::shutdown;
+use crate::utils::http::headermap_to_hashmap;
 use crate::Result as ClientResult;
 use bytes::Bytes;
-use dragonfly_api::common::v2::Download;
+use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::DownloadTaskRequest;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::client::conn::http1::Builder;
@@ -33,6 +34,8 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tracing::{error, info, instrument, Span};
+
+pub mod header;
 
 // Proxy is the proxy server.
 pub struct Proxy {
@@ -226,11 +229,58 @@ pub async fn https_handler(
 fn make_download_task_request(
     request: Request<hyper::body::Incoming>,
     rule: Rule,
+    content_length: u64,
 ) -> ClientResult<DownloadTaskRequest> {
+    // Construct the download url.
     let url = make_download_url(request.uri(), rule.use_tls, rule.redirect)?;
 
+    // TODO: Remove the convertion after the http crate version is the same.
+    // Convert the Reqwest header to the Hyper header, because of the http crate
+    // version is different. Reqwest header depends on the http crate
+    // version 0.2, but the Hyper header depends on the http crate version 0.1.
+    let mut header = reqwest::header::HeaderMap::new();
+    for (raw_header_key, raw_header_value) in request.headers() {
+        let header_name: reqwest::header::HeaderName = match raw_header_key.to_string().parse() {
+            Ok(header_name) => header_name,
+            Err(err) => {
+                error!("parse header name error: {}", err);
+                continue;
+            }
+        };
+
+        let header_value: reqwest::header::HeaderValue = match raw_header_value.to_str() {
+            Ok(header_value) => match header_value.parse() {
+                Ok(header_value) => header_value,
+                Err(err) => {
+                    error!("parse header value error: {}", err);
+                    continue;
+                }
+            },
+            Err(err) => {
+                error!("parse header value error: {}", err);
+                continue;
+            }
+        };
+
+        header.insert(header_name, header_value);
+    }
+
     Ok(DownloadTaskRequest {
-        download: Download { url, digest: None },
+        download: Some(Download {
+            url,
+            digest: None,
+            range: header::get_range(&header, content_length)?,
+            r#type: TaskType::Dfdaemon as i32,
+            tag: header::get_tag(&header),
+            application: header::get_application(&header),
+            priority: header::get_priority(&header),
+            filters: header::get_filtered_query_params(&header, rule.filtered_query_params),
+            request_header: headermap_to_hashmap(&header),
+            piece_length: header::get_piece_length(&header),
+            output_path: None,
+            timeout: None,
+            need_back_to_source: false,
+        }),
     })
 }
 

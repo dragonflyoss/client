@@ -106,11 +106,11 @@ pub enum Error {
 
     // InvalidHeaderValue is the error for invalid header value.
     #[error(transparent)]
-    InvalidHeaderValue(#[from] http::header::InvalidHeaderValue),
+    InvalidHeaderValue(#[from] reqwest::header::InvalidHeaderValue),
 
     // HeaderToStrError is the error for header to str.
     #[error(transparent)]
-    HeaderToStrError(#[from] http::header::ToStrError),
+    HeaderToStrError(#[from] reqwest::header::ToStrError),
 
     // RangeUnsatisfiableError is the error for range unsatisfiable.
     #[error(transparent)]
