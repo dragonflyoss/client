@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-use crate::Result;
+use crate::{Error, Result};
+use dragonfly_api::common::v2::Range;
 use reqwest::header::{HeaderMap, HeaderValue};
 use std::collections::HashMap;
 
@@ -36,4 +37,34 @@ pub fn headermap_to_hashmap(header: &HeaderMap<HeaderValue>) -> HashMap<String, 
 pub fn hashmap_to_headermap(header: &HashMap<String, String>) -> Result<HeaderMap<HeaderValue>> {
     let header: HeaderMap = (header).try_into()?;
     Ok(header)
+}
+
+// header_vec_to_hashmap converts a vector of header string to a hashmap.
+pub fn header_vec_to_hashmap(raw_header: Vec<String>) -> Result<HashMap<String, String>> {
+    let mut header = HashMap::new();
+    for h in raw_header {
+        let mut parts = h.splitn(2, ':');
+        let key = parts.next().unwrap().trim();
+        let value = parts.next().unwrap().trim();
+        header.insert(key.to_string(), value.to_string());
+    }
+
+    Ok(header)
+}
+
+// parse_range_header parses a Range header string as per RFC 7233,
+// supported Range Header: "Range": "bytes=100-200", "Range": "bytes=-50",
+// "Range": "bytes=150-", "Range": "bytes=0-0,-1".
+pub fn parse_range_header(range_header_value: &str, content_length: u64) -> Result<Range> {
+    let parsed_ranges = http_range_header::parse_range_header(range_header_value)?;
+    let valid_ranges = parsed_ranges.validate(content_length)?;
+
+    // Not support multiple ranges.
+    let valid_range = valid_ranges.first().ok_or(Error::RangeUnsatisfiableError(
+        http_range_header::RangeUnsatisfiableError::Empty,
+    ))?;
+
+    let start = valid_range.start().to_owned();
+    let length = valid_range.end() - start;
+    Ok(Range { start, length })
 }

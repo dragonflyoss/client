@@ -23,11 +23,11 @@ use dragonfly_client::config::dfget;
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::tracing::init_tracing;
+use dragonfly_client::utils::http::header_vec_to_hashmap;
 use dragonfly_client::Error;
 use fslock::LockFile;
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use reqwest::header;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -238,13 +238,14 @@ async fn main() -> Result<(), anyhow::Error> {
             download: Some(Download {
                 url: args.url.to_string(),
                 digest: Some(args.digest),
+                // NOTE: Dfget does not support range download.
                 range: None,
                 r#type: TaskType::Dfdaemon as i32,
                 tag: Some(args.tag),
                 application: Some(args.application),
                 priority: args.priority,
                 filters: args.filters.unwrap_or_default(),
-                request_header: parse_header(args.header.unwrap_or_default())?,
+                request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
                 piece_length: args.piece_length,
                 output_path: Some(args.output.into_os_string().into_string().unwrap()),
                 timeout: Some(prost_wkt_types::Duration::try_from(args.timeout)?),
@@ -391,17 +392,4 @@ fn spawn_dfdaemon(
 
     let child = cmd.spawn()?;
     Ok(child)
-}
-
-// parse_header parses the header strings to a hash map.
-fn parse_header(raw_header: Vec<String>) -> Result<HashMap<String, String>, Error> {
-    let mut header = HashMap::new();
-    for h in raw_header {
-        let mut parts = h.splitn(2, ':');
-        let key = parts.next().unwrap().trim();
-        let value = parts.next().unwrap().trim();
-        header.insert(key.to_string(), value.to_string());
-    }
-
-    Ok(header)
 }
