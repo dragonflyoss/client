@@ -274,7 +274,10 @@ fn make_download_task_request(
             tag: header::get_tag(&header),
             application: header::get_application(&header),
             priority: header::get_priority(&header),
-            filters: header::get_filtered_query_params(&header, rule.filtered_query_params),
+            filtered_query_params: header::get_filtered_query_params(
+                &header,
+                rule.filtered_query_params,
+            ),
             request_header: headermap_to_hashmap(&header),
             piece_length: header::get_piece_length(&header),
             output_path: None,

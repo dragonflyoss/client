@@ -121,11 +121,11 @@ struct Args {
     header: Option<Vec<String>>,
 
     #[arg(
-        long = "filter",
+        long = "filtered-query-param",
         required = false,
-        help = "Filter the query parameters of the downloaded URL. If the download URL is the same, it will be scheduled as the same task, e.g. --filter='signature' --filter='timeout'"
+        help = "Filter the query parameters of the downloaded URL. If the download URL is the same, it will be scheduled as the same task, e.g. --filtered-query-param='signature' --filtered-query-param='timeout'"
     )]
-    filters: Option<Vec<String>>,
+    filtered_query_params: Option<Vec<String>>,
 
     #[arg(
         long = "disable-back-to-source",
@@ -242,7 +242,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 tag: Some(args.tag),
                 application: Some(args.application),
                 priority: args.priority,
-                filters: args.filters.unwrap_or_default(),
+                filtered_query_params: args.filtered_query_params.unwrap_or_default(),
                 request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
                 piece_length: args.piece_length,
                 output_path: Some(args.output.into_os_string().into_string().unwrap()),
