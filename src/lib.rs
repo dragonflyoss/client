@@ -96,6 +96,22 @@ pub enum Error {
     #[error(transparent)]
     Elapsed(#[from] tokio_stream::Elapsed),
 
+    // InvalidUri is the error for invalid uri.
+    #[error(transparent)]
+    InvalidUri(#[from] http::uri::InvalidUri),
+
+    // InvalidUriParts is the error for invalid uri parts.
+    #[error(transparent)]
+    InvalidUriParts(#[from] http::uri::InvalidUriParts),
+
+    // InvalidHeaderValue is the error for invalid header value.
+    #[error(transparent)]
+    InvalidHeaderValue(#[from] reqwest::header::InvalidHeaderValue),
+
+    // HeaderToStrError is the error for header to str.
+    #[error(transparent)]
+    HeaderToStrError(#[from] reqwest::header::ToStrError),
+
     // RangeUnsatisfiableError is the error for range unsatisfiable.
     #[error(transparent)]
     RangeUnsatisfiableError(#[from] http_range_header::RangeUnsatisfiableError),

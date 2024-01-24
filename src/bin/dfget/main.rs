@@ -15,11 +15,9 @@
  */
 
 use clap::Parser;
-use dragonfly_api::common::v2::Download;
-use dragonfly_api::common::v2::TaskType;
+use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::DownloadTaskRequest;
-use dragonfly_client::config::dfdaemon;
-use dragonfly_client::config::dfget;
+use dragonfly_client::config::{self, dfdaemon, dfget};
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::tracing::init_tracing;
@@ -79,7 +77,7 @@ struct Args {
 
     #[arg(
         long = "piece-length",
-        default_value_t = 4194304,
+        default_value_t = config::default_piece_length(),
         help = "Specify the byte length of the piece"
     )]
     piece_length: u64,
