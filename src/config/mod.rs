@@ -97,3 +97,8 @@ pub fn default_cache_dir() -> PathBuf {
     #[cfg(target_os = "macos")]
     return home::home_dir().unwrap().join(".dragonfly").join("cache");
 }
+
+// default_piece_length is the default piece length for task.
+pub fn default_piece_length() -> u64 {
+    4 * 1024 * 1024
+}
