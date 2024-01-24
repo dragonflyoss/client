@@ -164,7 +164,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 download.tag.as_deref(),
                 download.application.as_deref(),
                 download.piece_length,
-                download.filters.clone(),
+                download.filtered_query_params.clone(),
             )
             .map_err(|e| {
                 error!("generate task id: {}", e);

@@ -60,13 +60,13 @@ impl IDGenerator {
         tag: Option<&str>,
         application: Option<&str>,
         piece_length: u64,
-        filters: Vec<String>,
+        filtered_query_params: Vec<String>,
     ) -> Result<String> {
         // Filter the query parameters.
         let url = Url::parse(url)?;
         let query = url
             .query_pairs()
-            .filter(|(k, _)| filters.contains(&k.to_string()));
+            .filter(|(k, _)| filtered_query_params.contains(&k.to_string()));
         let mut artifact_url = url.clone();
         artifact_url.query_pairs_mut().clear().extend_pairs(query);
 
