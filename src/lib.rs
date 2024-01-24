@@ -112,6 +112,10 @@ pub enum Error {
     #[error(transparent)]
     HeaderToStrError(#[from] http::header::ToStrError),
 
+    // RangeUnsatisfiableError is the error for range unsatisfiable.
+    #[error(transparent)]
+    RangeUnsatisfiableError(#[from] http_range_header::RangeUnsatisfiableError),
+
     // HashRing is the error for hashring.
     #[error{"hashring {0} is failed"}]
     HashRing(String),
