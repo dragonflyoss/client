@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
-use crate::config::dfdaemon::Config;
+use crate::config::dfdaemon::{Config, Rule};
 use crate::shutdown;
 use crate::Result as ClientResult;
 use bytes::Bytes;
+use dragonfly_api::common::v2::Download;
+use dragonfly_api::dfdaemon::v2::DownloadTaskRequest;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::client::conn::http1::Builder;
 use hyper::server::conn::http1;
@@ -217,6 +219,43 @@ pub async fn https_handler(
 
         Ok(response)
     }
+}
+
+// make_download_task_request makes a request for downloading the task.
+#[instrument(skip_all)]
+fn make_download_task_request(
+    request: Request<hyper::body::Incoming>,
+    rule: Rule,
+) -> ClientResult<DownloadTaskRequest> {
+    let url = make_download_url(request.uri(), rule.use_tls, rule.redirect)?;
+
+    Ok(DownloadTaskRequest {
+        download: Download { url, digest: None },
+    })
+}
+
+// make_download_url makes a download url by the given uri.
+#[instrument(skip_all)]
+fn make_download_url(
+    uri: &hyper::Uri,
+    use_tls: bool,
+    redirect: Option<String>,
+) -> ClientResult<String> {
+    let mut parts = uri.clone().into_parts();
+
+    // Set the scheme to https if the rule uses tls.
+    if use_tls {
+        parts.scheme = Some(http::uri::Scheme::HTTPS);
+    }
+
+    // Set the authority to the redirect address.
+    if let Some(redirect) = redirect {
+        parts.authority = Some(http::uri::Authority::from_static(Box::leak(
+            redirect.into_boxed_str(),
+        )));
+    }
+
+    Ok(http::Uri::from_parts(parts)?.to_string())
 }
 
 // empty returns an empty body.
