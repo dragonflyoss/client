@@ -551,6 +551,7 @@ dependencies = [
  "fs2",
  "fslock",
  "futures",
+ "futures-util",
  "hashring",
  "hex",
  "home",

@@ -14,25 +14,31 @@
  * limitations under the License.
  */
 
-use crate::config::dfdaemon::{Config, Rule};
+use crate::config::dfdaemon::Config;
+use crate::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use crate::shutdown;
-use crate::utils::http::headermap_to_hashmap;
+use crate::task::Task;
+use crate::utils::http::{headermap_to_hashmap, hyper_headermap_to_reqwest_headermap};
 use crate::Result as ClientResult;
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::DownloadTaskRequest;
-use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
+use futures_util::TryStreamExt;
+use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full, StreamBody};
+use hyper::body::Frame;
 use hyper::client::conn::http1::Builder;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{Method, Request, Response};
 use hyper_util::rt::tokio::TokioIo;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+use tokio_util::io::ReaderStream;
 use tracing::{error, info, instrument, Span};
 
 pub mod header;
@@ -41,6 +47,9 @@ pub mod header;
 pub struct Proxy {
     // config is the configuration of the dfdaemon.
     config: Arc<Config>,
+
+    // task is the task manager.
+    task: Arc<Task>,
 
     // addr is the address of the proxy server.
     addr: SocketAddr,
@@ -57,11 +66,13 @@ impl Proxy {
     // new creates a new Proxy.
     pub fn new(
         config: Arc<Config>,
+        task: Arc<Task>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
         Self {
             config: config.clone(),
+            task: task.clone(),
             addr: SocketAddr::new(config.proxy.server.ip.unwrap(), config.proxy.server.port),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
@@ -90,16 +101,15 @@ impl Proxy {
                     let io = TokioIo::new(tcp);
                     info!("accepted connection from {}", remote_address);
 
-                    // Clone the config.
                     let config = self.config.clone();
-
+                    let task = self.task.clone();
                     tokio::task::spawn(async move {
                         if let Err(err) = http1::Builder::new()
                             .preserve_header_case(true)
                             .title_case_headers(true)
                             .serve_connection(
                                 io,
-                                service_fn(move |request| handler(config.clone(), request)),
+                                service_fn(move |request| handler(config.clone(), task.clone(), request)),
                                 )
                             .with_upgrades()
                             .await
@@ -122,6 +132,7 @@ impl Proxy {
 #[instrument(skip_all, fields(uri, method))]
 pub async fn handler(
     config: Arc<Config>,
+    task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     info!("handle request: {:?}", request);
@@ -135,13 +146,14 @@ pub async fn handler(
         return https_handler(config, request).await;
     }
 
-    return http_handler(config, request).await;
+    return http_handler(config, task, request).await;
 }
 
 // http_handler handles the http request.
 #[instrument(skip_all)]
 pub async fn http_handler(
     config: Arc<Config>,
+    task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     let Some(host) = request.uri().host() else {
@@ -155,7 +167,148 @@ pub async fn http_handler(
     if let Some(rules) = config.proxy.rules.clone() {
         for rule in rules.iter() {
             if rule.regex.is_match(request.uri().to_string().as_str()) {
-                // TODO: handle https request.
+                // Convert the Reqwest header to the Hyper header.
+                let request_header = hyper_headermap_to_reqwest_headermap(request.headers());
+
+                // Construct the download url.
+                let url =
+                    match make_download_url(request.uri(), rule.use_tls, rule.redirect.clone()) {
+                        Ok(url) => url,
+                        Err(err) => {
+                            let mut response = Response::new(full(
+                                err.to_string().to_string().as_bytes().to_vec(),
+                            ));
+                            *response.status_mut() = http::StatusCode::BAD_REQUEST;
+                            return Ok(response);
+                        }
+                    };
+
+                // Get parameters from the header.
+                let tag = header::get_tag(&request_header);
+                let application = header::get_application(&request_header);
+                let priority = header::get_priority(&request_header);
+                let piece_length = header::get_piece_length(&request_header);
+                let filtered_query_params = header::get_filtered_query_params(
+                    &request_header,
+                    rule.filtered_query_params.clone(),
+                );
+                let request_header = headermap_to_hashmap(&request_header);
+
+                // Initialize the dfdaemon download client.
+                let dfdaemon_download_client = match DfdaemonDownloadClient::new_unix(
+                    config.download.server.socket_path.clone(),
+                )
+                .await
+                {
+                    Ok(client) => client,
+                    Err(err) => {
+                        let mut response =
+                            Response::new(full(err.to_string().to_string().as_bytes().to_vec()));
+                        *response.status_mut() = http::StatusCode::BAD_REQUEST;
+                        return Ok(response);
+                    }
+                };
+
+                // Download the task by the dfdaemon download client.
+                let response = match dfdaemon_download_client
+                    .download_task(DownloadTaskRequest {
+                        download: Some(Download {
+                            url,
+                            digest: None,
+                            // Download range use header range in HTTP protocol.
+                            range: None,
+                            r#type: TaskType::Dfdaemon as i32,
+                            tag,
+                            application,
+                            priority,
+                            filtered_query_params,
+                            request_header,
+                            piece_length,
+                            output_path: None,
+                            timeout: None,
+                            need_back_to_source: false,
+                        }),
+                    })
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(err) => {
+                        let mut response =
+                            Response::new(full(err.to_string().to_string().as_bytes().to_vec()));
+                        *response.status_mut() = http::StatusCode::BAD_REQUEST;
+                        return Ok(response);
+                    }
+                };
+
+                // Write the task data to the reader.
+                let (reader, mut writer) = tokio::io::duplex(1024);
+
+                // Handle the response from the download grpc server.
+                let mut out_stream = response.into_inner();
+                while let Some(message) = match out_stream.message().await {
+                    Ok(message) => message,
+                    Err(err) => {
+                        let mut response =
+                            Response::new(full(err.to_string().to_string().as_bytes().to_vec()));
+                        *response.status_mut() = http::StatusCode::BAD_REQUEST;
+                        return Ok(response);
+                    }
+                } {
+                    let piece = match message.piece {
+                        Some(piece) => piece,
+                        None => {
+                            let mut response =
+                                Response::new(full("download task response piece is empty"));
+                            *response.status_mut() = http::StatusCode::BAD_REQUEST;
+                            return Ok(response);
+                        }
+                    };
+
+                    let mut need_piece_number = 0;
+                    let piece_reader = match task
+                        .piece
+                        .download_from_local_peer_into_async_read(
+                            message.task_id.as_str(),
+                            piece.number,
+                            piece.length,
+                            true,
+                        )
+                        .await
+                    {
+                        Ok(reader) => reader,
+                        Err(err) => {
+                            let mut response = Response::new(full(
+                                err.to_string().to_string().as_bytes().to_vec(),
+                            ));
+                            *response.status_mut() = http::StatusCode::BAD_REQUEST;
+                            return Ok(response);
+                        }
+                    };
+
+                    // Sort by piece number and return to reader in order.
+                    let mut finished_piece_readers = HashMap::new();
+                    finished_piece_readers.insert(piece.number, piece_reader);
+                    while let Some(piece_reader) =
+                        finished_piece_readers.get_mut(&need_piece_number)
+                    {
+                        if let Err(err) = tokio::io::copy(piece_reader, &mut writer).await {
+                            let mut response = Response::new(full(
+                                err.to_string().to_string().as_bytes().to_vec(),
+                            ));
+                            *response.status_mut() = http::StatusCode::BAD_REQUEST;
+                            return Ok(response);
+                        }
+                        need_piece_number += 1;
+                    }
+                }
+
+                // TODO: Construct the reader stream.
+                let reader_stream = ReaderStream::new(reader);
+                let stream_body = StreamBody::new(reader_stream.map_ok(Frame::data));
+                let boxed_body = stream_body.boxed();
+                info!("boxed_body: {:?}", boxed_body);
+
+                // TODO: handle http stream.
                 let mut response = Response::new(full("CONNECT must be to a socket address"));
                 *response.status_mut() = http::StatusCode::BAD_REQUEST;
                 return Ok(response);
@@ -222,69 +375,6 @@ pub async fn https_handler(
 
         Ok(response)
     }
-}
-
-// make_download_task_request makes a request for downloading the task.
-#[instrument(skip_all)]
-fn make_download_task_request(
-    request: Request<hyper::body::Incoming>,
-    rule: Rule,
-    content_length: u64,
-) -> ClientResult<DownloadTaskRequest> {
-    // Construct the download url.
-    let url = make_download_url(request.uri(), rule.use_tls, rule.redirect)?;
-
-    // TODO: Remove the convertion after the http crate version is the same.
-    // Convert the Reqwest header to the Hyper header, because of the http crate
-    // version is different. Reqwest header depends on the http crate
-    // version 0.2, but the Hyper header depends on the http crate version 0.1.
-    let mut header = reqwest::header::HeaderMap::new();
-    for (raw_header_key, raw_header_value) in request.headers() {
-        let header_name: reqwest::header::HeaderName = match raw_header_key.to_string().parse() {
-            Ok(header_name) => header_name,
-            Err(err) => {
-                error!("parse header name error: {}", err);
-                continue;
-            }
-        };
-
-        let header_value: reqwest::header::HeaderValue = match raw_header_value.to_str() {
-            Ok(header_value) => match header_value.parse() {
-                Ok(header_value) => header_value,
-                Err(err) => {
-                    error!("parse header value error: {}", err);
-                    continue;
-                }
-            },
-            Err(err) => {
-                error!("parse header value error: {}", err);
-                continue;
-            }
-        };
-
-        header.insert(header_name, header_value);
-    }
-
-    Ok(DownloadTaskRequest {
-        download: Some(Download {
-            url,
-            digest: None,
-            range: header::get_range(&header, content_length)?,
-            r#type: TaskType::Dfdaemon as i32,
-            tag: header::get_tag(&header),
-            application: header::get_application(&header),
-            priority: header::get_priority(&header),
-            filtered_query_params: header::get_filtered_query_params(
-                &header,
-                rule.filtered_query_params,
-            ),
-            request_header: headermap_to_hashmap(&header),
-            piece_length: header::get_piece_length(&header),
-            output_path: None,
-            timeout: None,
-            need_back_to_source: false,
-        }),
-    })
 }
 
 // make_download_url makes a download url by the given uri.

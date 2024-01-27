@@ -213,9 +213,12 @@ impl Piece {
         task_id: &str,
         number: u32,
         length: u64,
+        disable_rate_limit: bool,
     ) -> Result<impl AsyncRead> {
         // Acquire the upload rate limiter.
-        self.upload_rate_limiter.acquire(length as usize).await;
+        if !disable_rate_limit {
+            self.upload_rate_limiter.acquire(length as usize).await;
+        }
 
         // Upload the piece content.
         self.storage.upload_piece(task_id, number).await
@@ -227,9 +230,12 @@ impl Piece {
         task_id: &str,
         number: u32,
         length: u64,
+        disable_rate_limit: bool,
     ) -> Result<impl AsyncRead> {
         // Acquire the download rate limiter.
-        self.download_rate_limiter.acquire(length as usize).await;
+        if !disable_rate_limit {
+            self.download_rate_limiter.acquire(length as usize).await;
+        }
 
         // Upload the piece content.
         self.storage.upload_piece(task_id, number).await
