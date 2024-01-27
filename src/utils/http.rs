@@ -18,6 +18,7 @@ use crate::{Error, Result};
 use dragonfly_api::common::v2::Range;
 use reqwest::header::{HeaderMap, HeaderValue};
 use std::collections::HashMap;
+use tracing::error;
 
 // headermap_to_hashmap converts a headermap to a hashmap.
 pub fn headermap_to_hashmap(header: &HeaderMap<HeaderValue>) -> HashMap<String, String> {
@@ -39,6 +40,44 @@ pub fn hashmap_to_headermap(header: &HashMap<String, String>) -> Result<HeaderMa
     Ok(header)
 }
 
+// TODO: Remove the convertion after the http crate version is the same.
+// Convert the Reqwest header to the Hyper header, because of the http crate
+// version is different. Reqwest header depends on the http crate
+// version 0.2, but the Hyper header depends on the http crate version 0.1.
+pub fn hyper_headermap_to_reqwest_headermap(
+    hyper_header: &hyper::header::HeaderMap,
+) -> reqwest::header::HeaderMap {
+    let mut reqwest_header = reqwest::header::HeaderMap::new();
+    for (hyper_header_key, hyper_header_value) in hyper_header.iter() {
+        let reqwest_header_name: reqwest::header::HeaderName =
+            match hyper_header_key.to_string().parse() {
+                Ok(reqwest_header_name) => reqwest_header_name,
+                Err(err) => {
+                    error!("parse header name error: {}", err);
+                    continue;
+                }
+            };
+
+        let reqwest_header_value: reqwest::header::HeaderValue = match hyper_header_value.to_str() {
+            Ok(reqwest_header_value) => match reqwest_header_value.parse() {
+                Ok(reqwest_header_value) => reqwest_header_value,
+                Err(err) => {
+                    error!("parse header value error: {}", err);
+                    continue;
+                }
+            },
+            Err(err) => {
+                error!("parse header value error: {}", err);
+                continue;
+            }
+        };
+
+        reqwest_header.insert(reqwest_header_name, reqwest_header_value);
+    }
+
+    reqwest_header
+}
+
 // header_vec_to_hashmap converts a vector of header string to a hashmap.
 pub fn header_vec_to_hashmap(raw_header: Vec<String>) -> Result<HashMap<String, String>> {
     let mut header = HashMap::new();
@@ -50,6 +89,17 @@ pub fn header_vec_to_hashmap(raw_header: Vec<String>) -> Result<HashMap<String, 
     }
 
     Ok(header)
+}
+
+// get_range gets the range from http header.
+pub fn get_range(header: &HeaderMap, content_length: u64) -> Result<Option<Range>> {
+    match header.get(reqwest::header::RANGE) {
+        Some(range) => {
+            let range = range.to_str()?;
+            Ok(Some(parse_range_header(range, content_length)?))
+        }
+        None => Ok(None),
+    }
 }
 
 // parse_range_header parses a Range header string as per RFC 7233,

@@ -16,7 +16,7 @@
 
 use crate::shutdown;
 use crate::task;
-use crate::utils::http::hashmap_to_headermap;
+use crate::utils::http::{get_range, hashmap_to_headermap};
 use crate::Result as ClientResult;
 use dragonfly_api::common::v2::Task;
 use dragonfly_api::dfdaemon::v2::{
@@ -150,7 +150,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let request = request.into_inner();
 
         // Check whether the download is empty.
-        let download = request
+        let mut download = request
             .download
             .ok_or(Status::invalid_argument("missing download"))?;
 
@@ -203,6 +203,20 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 error!("download task started: {}", e);
                 Status::internal(e.to_string())
             })?;
+
+        // Download's range priority is higher than the request header's range.
+        // If download protocol is http, use the range of the request header.
+        // If download protocol is not http, use the range of the download.
+        if download.range.is_none() {
+            let content_length = task
+                .content_length()
+                .ok_or(Status::internal("missing content length in the response"))?;
+
+            download.range = get_range(&request_header, content_length).map_err(|err| {
+                error!("get range failed: {}", err);
+                Status::failed_precondition(err.to_string())
+            })?;
+        }
 
         // Clone the task.
         let task_manager = self.task.clone();

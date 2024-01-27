@@ -15,9 +15,7 @@
  */
 
 use crate::config;
-use crate::utils::http::parse_range_header;
-use crate::Result;
-use dragonfly_api::common::v2::{Priority, Range};
+use dragonfly_api::common::v2::Priority;
 use reqwest::header::HeaderMap;
 use tracing::error;
 
@@ -42,17 +40,6 @@ pub const DRAGONFLY_FILTERED_QUERY_PARAMS_HEADER: &str = "X-Dragonfly-Filtered-Q
 // DRAGONFLY_PIECE_LENGTH_HEADER is the header key of piece length in http request,
 // it specifies the piece length of the task.
 pub const DRAGONFLY_PIECE_LENGTH_HEADER: &str = "X-Dragonfly-Piece-Length";
-
-// get_range gets the range from http header.
-pub fn get_range(header: &HeaderMap, content_length: u64) -> Result<Option<Range>> {
-    match header.get(reqwest::header::RANGE) {
-        Some(range) => {
-            let range = range.to_str()?;
-            Ok(Some(parse_range_header(range, content_length)?))
-        }
-        None => Ok(None),
-    }
-}
 
 // get_tag gets the tag from http header.
 pub fn get_tag(header: &HeaderMap) -> Option<String> {

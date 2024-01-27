@@ -38,7 +38,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncRead;
 use tokio::sync::{
     mpsc::{self, Sender},
     Semaphore,
@@ -328,101 +327,6 @@ impl Task {
 
         info!("all pieces are downloaded with scheduler");
         Ok(())
-    }
-
-    // download downloads a task.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn download_into_async_read(
-        self: Arc<Self>,
-        task: metadata::Task,
-        host_id: &str,
-        peer_id: &str,
-        download: Download,
-    ) -> ClientResult<Box<dyn AsyncRead>> {
-        // Initialize stream channel.
-        let (out_stream_tx, mut out_stream_rx) = mpsc::channel(1024);
-        let self_clone = Arc::clone(&self);
-        let host_id = host_id.to_string();
-        let peer_id = peer_id.to_string();
-        let task_id = task.id.clone();
-        let range = download.range.clone();
-
-        // Spawn the download task.
-        tokio::spawn(
-            async move {
-                match self_clone
-                    .download(
-                        task.clone(),
-                        host_id.as_str(),
-                        peer_id.as_str(),
-                        download.clone(),
-                        out_stream_tx.clone(),
-                    )
-                    .await
-                {
-                    Ok(_) => {
-                        // Download task succeeded.
-                        info!("download task succeeded");
-                        if download.range.is_none() {
-                            if let Err(err) = self_clone.download_finished(task.id.as_str()) {
-                                error!("download task finished: {}", err);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        // Download task failed.
-                        self_clone
-                            .download_failed(task.id.as_str())
-                            .await
-                            .unwrap_or_else(|err| {
-                                error!("download task failed: {}", err);
-                            });
-
-                        error!("download failed: {}", e);
-                    }
-                }
-                drop(out_stream_tx);
-            }
-            .in_current_span(),
-        );
-
-        // If the range is specified, read the task by range.
-        if let Some(range) = range {
-            while let Some(message) = out_stream_rx.recv().await {
-                message?.piece.ok_or(Error::UnexpectedResponse())?;
-            }
-
-            let reader = self
-                .storage
-                .read_task_by_range(task_id.as_str(), range)
-                .await?;
-
-            return Ok(Box::new(reader) as Box<dyn AsyncRead>);
-        }
-
-        // Return async read of the order of the pieces.
-        let mut need_piece_number = 0;
-        let (reader, mut writer) = tokio::io::duplex(1024);
-        while let Some(message) = out_stream_rx.recv().await {
-            let piece = message?.piece.ok_or(Error::UnexpectedResponse())?;
-            let piece_reader = self
-                .piece
-                .download_from_local_peer_into_async_read(
-                    task_id.as_str(),
-                    piece.number,
-                    piece.length,
-                )
-                .await?;
-
-            let mut finished_piece_readers = HashMap::new();
-            finished_piece_readers.insert(piece.number, piece_reader);
-            while let Some(piece_reader) = finished_piece_readers.get_mut(&need_piece_number) {
-                tokio::io::copy(piece_reader, &mut writer).await?;
-                need_piece_number += 1;
-            }
-        }
-
-        Ok(Box::new(reader))
     }
 
     // download_partial_with_scheduler downloads a partial task with scheduler.

@@ -277,7 +277,12 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let mut reader = self
             .task
             .piece
-            .upload_from_local_peer_into_async_read(task_id.as_str(), piece_number, piece.length)
+            .upload_from_local_peer_into_async_read(
+                task_id.as_str(),
+                piece_number,
+                piece.length,
+                false,
+            )
             .await
             .map_err(|err| {
                 error!("read piece content from local storage: {}", err);

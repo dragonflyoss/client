@@ -195,6 +195,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize proxy server.
     let proxy = Proxy::new(
         config.clone(),
+        task.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
