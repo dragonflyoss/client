@@ -25,7 +25,6 @@ use dragonfly_client::utils::http::header_vec_to_hashmap;
 use dragonfly_client::Error;
 use fslock::LockFile;
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use reqwest::header;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -274,12 +273,7 @@ async fn main() -> Result<(), anyhow::Error> {
     while let Some(message) = out_stream.message().await? {
         match message.response {
             Some(download_task_response::Response::DownloadTaskStartedResponse(response)) => {
-                let content_length = response
-                    .response_header
-                    .get(header::CONTENT_LENGTH.as_str())
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(0);
-                pb.set_length(content_length);
+                pb.set_length(response.content_length);
             }
             Some(download_task_response::Response::DownloadPieceFinishedResponse(response)) => {
                 let piece = response.piece.ok_or(Error::InvalidParameter())?;

@@ -172,23 +172,6 @@ impl Task {
         download: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<()> {
-        // Send the download task started request.
-        download_progress_tx
-            .send_timeout(
-                Ok(DownloadTaskResponse {
-                    host_id: host_id.to_string(),
-                    task_id: task.id.clone(),
-                    peer_id: peer_id.to_string(),
-                    request: Some(download_task_response::Request::DownloadTaskStartedRequest(
-                        dfdaemon::v2::DownloadTaskStartedRequest {
-                            response_header: task.response_header.clone(),
-                        },
-                    )),
-                }),
-                REQUEST_TIMEOUT,
-            )
-            .await?;
-
         // Get the content length from the task.
         let Some(content_length) = task.content_length() else {
             error!("content length not found");
@@ -202,6 +185,26 @@ impl Task {
 
             return Err(Error::InvalidContentLength());
         };
+
+        // Send the download task started request.
+        download_progress_tx
+            .send_timeout(
+                Ok(DownloadTaskResponse {
+                    host_id: host_id.to_string(),
+                    task_id: task.id.clone(),
+                    peer_id: peer_id.to_string(),
+                    response: Some(
+                        download_task_response::Response::DownloadTaskStartedResponse(
+                            dfdaemon::v2::DownloadTaskStartedResponse {
+                                content_length,
+                                response_header: task.response_header.clone(),
+                            },
+                        ),
+                    ),
+                }),
+                REQUEST_TIMEOUT,
+            )
+            .await?;
 
         // Calculate the interested pieces to download.
         let interested_pieces = match self.piece.calculate_interested(
@@ -265,9 +268,9 @@ impl Task {
                         host_id: host_id.to_string(),
                         task_id: task.id.clone(),
                         peer_id: peer_id.to_string(),
-                        request: Some(
-                            download_task_response::Request::DownloadTaskFinishedRequest(
-                                dfdaemon::v2::DownloadTaskFinishedRequest {},
+                        response: Some(
+                            download_task_response::Response::DownloadTaskFinishedResponse(
+                                dfdaemon::v2::DownloadTaskFinishedResponse {},
                             ),
                         ),
                     }),
@@ -321,9 +324,9 @@ impl Task {
                         host_id: host_id.to_string(),
                         task_id: task.id.clone(),
                         peer_id: peer_id.to_string(),
-                        request: Some(
-                            download_task_response::Request::DownloadTaskFinishedRequest(
-                                dfdaemon::v2::DownloadTaskFinishedRequest {},
+                        response: Some(
+                            download_task_response::Response::DownloadTaskFinishedResponse(
+                                dfdaemon::v2::DownloadTaskFinishedResponse {},
                             ),
                         ),
                     }),
@@ -386,9 +389,9 @@ impl Task {
                         host_id: host_id.to_string(),
                         task_id: task.id.clone(),
                         peer_id: peer_id.to_string(),
-                        request: Some(
-                            download_task_response::Request::DownloadTaskFinishedRequest(
-                                dfdaemon::v2::DownloadTaskFinishedRequest {},
+                        response: Some(
+                            download_task_response::Response::DownloadTaskFinishedResponse(
+                                dfdaemon::v2::DownloadTaskFinishedResponse {},
                             ),
                         ),
                     }),
@@ -407,9 +410,9 @@ impl Task {
                     host_id: host_id.to_string(),
                     task_id: task.id.clone(),
                     peer_id: peer_id.to_string(),
-                    request: Some(
-                        download_task_response::Request::DownloadTaskFinishedRequest(
-                            dfdaemon::v2::DownloadTaskFinishedRequest {},
+                    response: Some(
+                        download_task_response::Response::DownloadTaskFinishedResponse(
+                            dfdaemon::v2::DownloadTaskFinishedResponse {},
                         ),
                     ),
                 }),
@@ -906,9 +909,9 @@ impl Task {
                                 host_id: host_id.to_string(),
                                 task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
-                                request: Some(
-                                    download_task_response::Request::DownloadPieceFinishedRequest(
-                                        dfdaemon::v2::DownloadPieceFinishedRequest {
+                                response: Some(
+                                    download_task_response::Response::DownloadPieceFinishedResponse(
+                                        dfdaemon::v2::DownloadPieceFinishedResponse {
                                             piece: Some(piece.clone()),
                                         },
                                     ),
@@ -1087,9 +1090,9 @@ impl Task {
                                 host_id: host_id.to_string(),
                                 task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
-                                request: Some(
-                                    download_task_response::Request::DownloadPieceFinishedRequest(
-                                        dfdaemon::v2::DownloadPieceFinishedRequest {
+                                response: Some(
+                                    download_task_response::Response::DownloadPieceFinishedResponse(
+                                        dfdaemon::v2::DownloadPieceFinishedResponse {
                                             piece: Some(piece.clone()),
                                         },
                                     ),
@@ -1255,9 +1258,9 @@ impl Task {
                         host_id: host_id.to_string(),
                         task_id: task.id.clone(),
                         peer_id: peer_id.to_string(),
-                        request: Some(
-                            download_task_response::Request::DownloadPieceFinishedRequest(
-                                dfdaemon::v2::DownloadPieceFinishedRequest {
+                        response: Some(
+                            download_task_response::Response::DownloadPieceFinishedResponse(
+                                dfdaemon::v2::DownloadPieceFinishedResponse {
                                     piece: Some(piece.clone()),
                                 },
                             ),
@@ -1373,9 +1376,9 @@ impl Task {
                                 host_id: host_id.to_string(),
                                 task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
-                                request: Some(
-                                    download_task_response::Request::DownloadPieceFinishedRequest(
-                                        dfdaemon::v2::DownloadPieceFinishedRequest {
+                                response: Some(
+                                    download_task_response::Response::DownloadPieceFinishedResponse(
+                                        dfdaemon::v2::DownloadPieceFinishedResponse {
                                             piece: Some(piece.clone()),
                                         },
                                     ),

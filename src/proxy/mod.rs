@@ -19,7 +19,7 @@ use crate::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use crate::shutdown;
 use crate::task::Task;
 use crate::utils::http::{
-    hashmap_to_hyper_header_map, reqwest_headermap_to_hashmap, hyper_headermap_to_reqwest_headermap,
+    hashmap_to_hyper_header_map, hyper_headermap_to_reqwest_headermap, reqwest_headermap_to_hashmap,
 };
 use crate::{Error as ClientError, Result as ClientResult};
 use bytes::Bytes;
@@ -32,7 +32,7 @@ use hyper::client::conn::http1::Builder;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
-use hyper::{Method, Request, StatusCode};
+use hyper::{Method, Request};
 use hyper_util::rt::tokio::TokioIo;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -266,7 +266,6 @@ pub async fn http_handler(
                             response,
                         )) => {
                             response_header = response.response_header;
-                            break;
                         }
                         Some(download_task_response::Response::DownloadTaskFinishedResponse(_)) => {
                             info!("download task finished");
