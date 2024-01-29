@@ -20,8 +20,8 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use std::collections::HashMap;
 use tracing::error;
 
-// headermap_to_hashmap converts a headermap to a hashmap.
-pub fn headermap_to_hashmap(header: &HeaderMap<HeaderValue>) -> HashMap<String, String> {
+// reqwest_headermap_to_hashmap converts a reqwest headermap to a hashmap.
+pub fn reqwest_headermap_to_hashmap(header: &HeaderMap<HeaderValue>) -> HashMap<String, String> {
     let mut hashmap: HashMap<String, String> = HashMap::new();
     for (k, v) in header {
         let Some(v) = v.to_str().ok() else {
@@ -34,9 +34,19 @@ pub fn headermap_to_hashmap(header: &HeaderMap<HeaderValue>) -> HashMap<String, 
     hashmap
 }
 
-// hashmap_to_headermap converts a hashmap to a headermap.
-pub fn hashmap_to_headermap(header: &HashMap<String, String>) -> Result<HeaderMap<HeaderValue>> {
+// hashmap_to_reqwest_headermap converts a hashmap to a reqwest headermap.
+pub fn hashmap_to_reqwest_headermap(
+    header: &HashMap<String, String>,
+) -> Result<HeaderMap<HeaderValue>> {
     let header: HeaderMap = (header).try_into()?;
+    Ok(header)
+}
+
+// hashmap_to_hyper_header_map converts a hashmap to a hyper header map.
+pub fn hashmap_to_hyper_header_map(
+    header: &HashMap<String, String>,
+) -> Result<hyper::header::HeaderMap> {
+    let header: hyper::header::HeaderMap = (header).try_into()?;
     Ok(header)
 }
 

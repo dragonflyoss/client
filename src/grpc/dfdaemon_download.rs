@@ -16,7 +16,7 @@
 
 use crate::shutdown;
 use crate::task;
-use crate::utils::http::{get_range, hashmap_to_headermap};
+use crate::utils::http::{get_range, hashmap_to_reqwest_headermap};
 use crate::Result as ClientResult;
 use dragonfly_api::common::v2::Task;
 use dragonfly_api::dfdaemon::v2::{
@@ -183,10 +183,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("peer_id", peer_id.as_str());
 
         // Convert the header.
-        let request_header = hashmap_to_headermap(&download.request_header).map_err(|e| {
-            error!("convert header: {}", e);
-            Status::invalid_argument(e.to_string())
-        })?;
+        let request_header =
+            hashmap_to_reqwest_headermap(&download.request_header).map_err(|e| {
+                error!("convert header: {}", e);
+                Status::invalid_argument(e.to_string())
+            })?;
 
         // Download task started.
         info!("download task started: {:?}", download);

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::utils::http::headermap_to_hashmap;
+use crate::utils::http::reqwest_headermap_to_hashmap;
 use crate::{Error, Result};
 use chrono::{NaiveDateTime, Utc};
 use reqwest::header::{self, HeaderMap};
@@ -246,7 +246,7 @@ impl Metadata {
 
         // Convert the response header to hashmap.
         let response_header = match response_header {
-            Some(response_header) => headermap_to_hashmap(&response_header),
+            Some(response_header) => reqwest_headermap_to_hashmap(&response_header),
             None => HashMap::new(),
         };
 
