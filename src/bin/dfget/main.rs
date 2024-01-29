@@ -16,7 +16,7 @@
 
 use clap::Parser;
 use dragonfly_api::common::v2::{Download, TaskType};
-use dragonfly_api::dfdaemon::v2::DownloadTaskRequest;
+use dragonfly_api::dfdaemon::v2::{download_task_response, DownloadTaskRequest};
 use dragonfly_client::config::{self, dfdaemon, dfget};
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
@@ -272,20 +272,30 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut downloaded = 0;
     let mut out_stream = response.into_inner();
     while let Some(message) = out_stream.message().await? {
-        let piece = message.piece.ok_or(Error::InvalidParameter())?;
-        let content_length = message
-            .response_header
-            .get(header::CONTENT_LENGTH.as_str())
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0);
-        pb.set_length(content_length);
+        match message.response {
+            Some(download_task_response::Response::DownloadTaskStartedResponse(response)) => {
+                let content_length = response
+                    .response_header
+                    .get(header::CONTENT_LENGTH.as_str())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0);
+                pb.set_length(content_length);
+            }
+            Some(download_task_response::Response::DownloadPieceFinishedResponse(response)) => {
+                let piece = response.piece.ok_or(Error::InvalidParameter())?;
 
-        downloaded += piece.length;
-        let position = min(downloaded + piece.length, content_length);
-        pb.set_position(position);
+                downloaded += piece.length;
+                let position = min(downloaded + piece.length, pb.length().unwrap_or(0));
+                pb.set_position(position);
+            }
+            Some(download_task_response::Response::DownloadTaskFinishedResponse(_)) => {
+                pb.finish_with_message("downloaded");
+                return Ok(());
+            }
+            None => {}
+        }
     }
 
-    pb.finish_with_message("downloaded");
     Ok(())
 }
 

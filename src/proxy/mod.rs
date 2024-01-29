@@ -18,11 +18,13 @@ use crate::config::dfdaemon::Config;
 use crate::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use crate::shutdown;
 use crate::task::Task;
-use crate::utils::http::{headermap_to_hashmap, hyper_headermap_to_reqwest_headermap};
+use crate::utils::http::{
+    hashmap_to_hyper_header_map, reqwest_headermap_to_hashmap, hyper_headermap_to_reqwest_headermap,
+};
 use crate::{Error as ClientError, Result as ClientResult};
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
-use dragonfly_api::dfdaemon::v2::DownloadTaskRequest;
+use dragonfly_api::dfdaemon::v2::{download_task_response, DownloadTaskRequest};
 use futures_util::TryStreamExt;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full, StreamBody};
 use hyper::body::Frame;
@@ -194,7 +196,7 @@ pub async fn http_handler(
                     &request_header,
                     rule.filtered_query_params.clone(),
                 );
-                let request_header = headermap_to_hashmap(&request_header);
+                let request_header = reqwest_headermap_to_hashmap(&request_header);
 
                 // Initialize the dfdaemon download client.
                 let dfdaemon_download_client = match DfdaemonDownloadClient::new_unix(
@@ -242,6 +244,9 @@ pub async fn http_handler(
                     }
                 };
 
+                // Construct the response header.
+                let mut response_header = HashMap::new();
+
                 // Write the task data to the reader.
                 let (reader, mut writer) = tokio::io::duplex(1024);
 
@@ -256,51 +261,75 @@ pub async fn http_handler(
                         return Ok(response);
                     }
                 } {
-                    let piece = match message.piece {
-                        Some(piece) => piece,
+                    match message.response {
+                        Some(download_task_response::Response::DownloadTaskStartedResponse(
+                            response,
+                        )) => {
+                            response_header = response.response_header;
+                            break;
+                        }
+                        Some(download_task_response::Response::DownloadTaskFinishedResponse(_)) => {
+                            info!("download task finished");
+                        }
+                        Some(download_task_response::Response::DownloadPieceFinishedResponse(
+                            response,
+                        )) => {
+                            let piece = match response.piece {
+                                Some(piece) => piece,
+                                None => {
+                                    let mut response = Response::new(full(
+                                        "download task response piece is empty",
+                                    ));
+                                    *response.status_mut() = http::StatusCode::BAD_REQUEST;
+                                    return Ok(response);
+                                }
+                            };
+
+                            let mut need_piece_number = 0;
+                            let piece_reader = match task
+                                .piece
+                                .download_from_local_peer_into_async_read(
+                                    message.task_id.as_str(),
+                                    piece.number,
+                                    piece.length,
+                                    true,
+                                )
+                                .await
+                            {
+                                Ok(reader) => reader,
+                                Err(err) => {
+                                    let mut response = Response::new(full(
+                                        err.to_string().to_string().as_bytes().to_vec(),
+                                    ));
+                                    *response.status_mut() = http::StatusCode::BAD_REQUEST;
+                                    return Ok(response);
+                                }
+                            };
+
+                            // Sort by piece number and return to reader in order.
+                            let mut finished_piece_readers = HashMap::new();
+                            finished_piece_readers.insert(piece.number, piece_reader);
+                            while let Some(piece_reader) =
+                                finished_piece_readers.get_mut(&need_piece_number)
+                            {
+                                if let Err(err) = tokio::io::copy(piece_reader, &mut writer).await {
+                                    let mut response = Response::new(full(
+                                        err.to_string().to_string().as_bytes().to_vec(),
+                                    ));
+                                    *response.status_mut() =
+                                        http::StatusCode::INTERNAL_SERVER_ERROR;
+                                    return Ok(response);
+                                }
+                                need_piece_number += 1;
+                            }
+                        }
                         None => {
-                            let mut response =
-                                Response::new(full("download task response piece is empty"));
-                            *response.status_mut() = http::StatusCode::BAD_REQUEST;
-                            return Ok(response);
-                        }
-                    };
-
-                    let mut need_piece_number = 0;
-                    let piece_reader = match task
-                        .piece
-                        .download_from_local_peer_into_async_read(
-                            message.task_id.as_str(),
-                            piece.number,
-                            piece.length,
-                            true,
-                        )
-                        .await
-                    {
-                        Ok(reader) => reader,
-                        Err(err) => {
                             let mut response = Response::new(full(
-                                err.to_string().to_string().as_bytes().to_vec(),
+                                "download task response is empty".as_bytes().to_vec(),
                             ));
-                            *response.status_mut() = http::StatusCode::BAD_REQUEST;
+                            *response.status_mut() = http::StatusCode::INTERNAL_SERVER_ERROR;
                             return Ok(response);
                         }
-                    };
-
-                    // Sort by piece number and return to reader in order.
-                    let mut finished_piece_readers = HashMap::new();
-                    finished_piece_readers.insert(piece.number, piece_reader);
-                    while let Some(piece_reader) =
-                        finished_piece_readers.get_mut(&need_piece_number)
-                    {
-                        if let Err(err) = tokio::io::copy(piece_reader, &mut writer).await {
-                            let mut response = Response::new(full(
-                                err.to_string().to_string().as_bytes().to_vec(),
-                            ));
-                            *response.status_mut() = http::StatusCode::BAD_REQUEST;
-                            return Ok(response);
-                        }
-                        need_piece_number += 1;
                     }
                 }
 
@@ -310,10 +339,13 @@ pub async fn http_handler(
                     StreamBody::new(reader_stream.map_ok(Frame::data).map_err(ClientError::from));
                 let boxed_body = stream_body.boxed();
 
+                // Construct the response.
+                let mut response = Response::new(boxed_body);
+                *response.headers_mut() = hashmap_to_hyper_header_map(&response_header)?;
+                *response.status_mut() = http::StatusCode::OK;
+
                 // Send response
-                return Ok(hyper::Response::builder()
-                    .status(StatusCode::OK)
-                    .body(boxed_body)?);
+                return Ok(response);
             }
         }
     }

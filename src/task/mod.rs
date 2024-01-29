@@ -18,12 +18,15 @@ use crate::backend::http::{Request as HTTPRequest, HTTP};
 use crate::config::dfdaemon::Config;
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::storage::{metadata, Storage};
-use crate::utils::http::headermap_to_hashmap;
+use crate::utils::http::reqwest_headermap_to_hashmap;
 use crate::utils::id_generator::IDGenerator;
 use crate::{DownloadFromRemotePeerFailed, Error, HTTPError, Result as ClientResult};
 use dragonfly_api::common::v2::Range;
 use dragonfly_api::common::v2::{Download, Peer, Piece, TrafficType};
-use dragonfly_api::dfdaemon::v2::DownloadTaskResponse;
+use dragonfly_api::dfdaemon::{
+    self,
+    v2::{download_task_response, DownloadTaskResponse},
+};
 use dragonfly_api::scheduler::v2::{
     announce_peer_request, announce_peer_response, download_piece_back_to_source_failed_request,
     AnnouncePeerRequest, DownloadPeerBackToSourceFailedRequest,
@@ -169,6 +172,23 @@ impl Task {
         download: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<()> {
+        // Send the download task started request.
+        download_progress_tx
+            .send_timeout(
+                Ok(DownloadTaskResponse {
+                    host_id: host_id.to_string(),
+                    task_id: task.id.clone(),
+                    peer_id: peer_id.to_string(),
+                    request: Some(download_task_response::Request::DownloadTaskStartedRequest(
+                        dfdaemon::v2::DownloadTaskStartedRequest {
+                            response_header: task.response_header.clone(),
+                        },
+                    )),
+                }),
+                REQUEST_TIMEOUT,
+            )
+            .await?;
+
         // Get the content length from the task.
         let Some(content_length) = task.content_length() else {
             error!("content length not found");
@@ -215,7 +235,7 @@ impl Task {
             // Download the pieces from the local peer.
             if let Err(err) = self
                 .download_from_local_peer(
-                    task,
+                    task.clone(),
                     host_id,
                     peer_id,
                     interested_pieces.clone(),
@@ -237,6 +257,23 @@ impl Task {
 
                 return Err(err);
             };
+
+            // Send the download task finished request.
+            download_progress_tx
+                .send_timeout(
+                    Ok(DownloadTaskResponse {
+                        host_id: host_id.to_string(),
+                        task_id: task.id.clone(),
+                        peer_id: peer_id.to_string(),
+                        request: Some(
+                            download_task_response::Request::DownloadTaskFinishedRequest(
+                                dfdaemon::v2::DownloadTaskFinishedRequest {},
+                            ),
+                        ),
+                    }),
+                    REQUEST_TIMEOUT,
+                )
+                .await?;
 
             info!("all pieces are downloaded from local peer");
             return Ok(());
@@ -277,10 +314,26 @@ impl Task {
 
         // Check if all pieces are downloaded.
         if interested_pieces.is_empty() {
+            // Send the download task finished request.
+            download_progress_tx
+                .send_timeout(
+                    Ok(DownloadTaskResponse {
+                        host_id: host_id.to_string(),
+                        task_id: task.id.clone(),
+                        peer_id: peer_id.to_string(),
+                        request: Some(
+                            download_task_response::Request::DownloadTaskFinishedRequest(
+                                dfdaemon::v2::DownloadTaskFinishedRequest {},
+                            ),
+                        ),
+                    }),
+                    REQUEST_TIMEOUT,
+                )
+                .await?;
+
             info!("all pieces are downloaded from local peer");
             return Ok(());
         };
-
         info!("download the pieces with scheduler");
 
         // Download the pieces with scheduler.
@@ -326,9 +379,43 @@ impl Task {
                 return Err(err);
             }
 
+            // Send the download task finished request.
+            download_progress_tx
+                .send_timeout(
+                    Ok(DownloadTaskResponse {
+                        host_id: host_id.to_string(),
+                        task_id: task.id.clone(),
+                        peer_id: peer_id.to_string(),
+                        request: Some(
+                            download_task_response::Request::DownloadTaskFinishedRequest(
+                                dfdaemon::v2::DownloadTaskFinishedRequest {},
+                            ),
+                        ),
+                    }),
+                    REQUEST_TIMEOUT,
+                )
+                .await?;
+
             info!("all pieces are downloaded from source");
             return Ok(());
         };
+
+        // Send the download task finished request.
+        download_progress_tx
+            .send_timeout(
+                Ok(DownloadTaskResponse {
+                    host_id: host_id.to_string(),
+                    task_id: task.id.clone(),
+                    peer_id: peer_id.to_string(),
+                    request: Some(
+                        download_task_response::Request::DownloadTaskFinishedRequest(
+                            dfdaemon::v2::DownloadTaskFinishedRequest {},
+                        ),
+                    ),
+                }),
+                REQUEST_TIMEOUT,
+            )
+            .await?;
 
         info!("all pieces are downloaded with scheduler");
         Ok(())
@@ -819,8 +906,13 @@ impl Task {
                                 host_id: host_id.to_string(),
                                 task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
-                                response_header: task.response_header.clone(),
-                                piece: Some(piece.clone()),
+                                request: Some(
+                                    download_task_response::Request::DownloadPieceFinishedRequest(
+                                        dfdaemon::v2::DownloadPieceFinishedRequest {
+                                            piece: Some(piece.clone()),
+                                        },
+                                    ),
+                                ),
                             }),
                             REQUEST_TIMEOUT,
                         )
@@ -995,8 +1087,13 @@ impl Task {
                                 host_id: host_id.to_string(),
                                 task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
-                                response_header: task.response_header.clone(),
-                                piece: Some(piece.clone()),
+                                request: Some(
+                                    download_task_response::Request::DownloadPieceFinishedRequest(
+                                        dfdaemon::v2::DownloadPieceFinishedRequest {
+                                            piece: Some(piece.clone()),
+                                        },
+                                    ),
+                                ),
                             }),
                             REQUEST_TIMEOUT,
                         )
@@ -1016,7 +1113,7 @@ impl Task {
                                                 piece_number: None,
                                                 response: Some(download_piece_back_to_source_failed_request::Response::HttpResponse(
                                                         HttpResponse{
-                                                            header: headermap_to_hashmap(&err.header),
+                                                            header: reqwest_headermap_to_hashmap(&err.header),
                                                             status_code: err.status_code.as_u16() as i32,
                                                             status: err.status_code.canonical_reason().unwrap_or("").to_string(),
                                                         }
@@ -1156,10 +1253,15 @@ impl Task {
                 .send_timeout(
                     Ok(DownloadTaskResponse {
                         host_id: host_id.to_string(),
-                        task_id: task.id.as_str().to_string(),
+                        task_id: task.id.clone(),
                         peer_id: peer_id.to_string(),
-                        response_header: task.response_header.clone(),
-                        piece: Some(piece.clone()),
+                        request: Some(
+                            download_task_response::Request::DownloadPieceFinishedRequest(
+                                dfdaemon::v2::DownloadPieceFinishedRequest {
+                                    piece: Some(piece.clone()),
+                                },
+                            ),
+                        ),
                     }),
                     REQUEST_TIMEOUT,
                 )
@@ -1271,8 +1373,13 @@ impl Task {
                                 host_id: host_id.to_string(),
                                 task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
-                                response_header: task.response_header.clone(),
-                                piece: Some(piece.clone()),
+                                request: Some(
+                                    download_task_response::Request::DownloadPieceFinishedRequest(
+                                        dfdaemon::v2::DownloadPieceFinishedRequest {
+                                            piece: Some(piece.clone()),
+                                        },
+                                    ),
+                                ),
                             }),
                             REQUEST_TIMEOUT,
                         )
