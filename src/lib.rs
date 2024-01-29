@@ -61,6 +61,10 @@ pub enum Error {
     #[error(transparent)]
     TonicStatus(#[from] tonic::Status),
 
+    // HeaderError is the error for headers.
+    #[error(transparent)]
+    HeadersError(#[from] headers::Error),
+
     // Reqwest is the error for reqwest.
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
