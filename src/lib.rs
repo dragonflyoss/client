@@ -65,6 +65,14 @@ pub enum Error {
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
 
+    // Hyper is the error for hyper.
+    #[error(transparent)]
+    Hyper(#[from] hyper::Error),
+
+    /// Hyper is the http request error for hyper.
+    #[error(transparent)]
+    Http(#[from] hyper::http::Error),
+
     // ValidationError is the error for validation.
     #[error(transparent)]
     ValidationError(#[from] validator::ValidationErrors),
