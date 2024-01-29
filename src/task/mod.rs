@@ -102,13 +102,18 @@ impl Task {
         id: &str,
         piece_length: u64,
         url: &str,
-        request_header: HeaderMap,
+        mut request_header: HeaderMap,
     ) -> ClientResult<metadata::Task> {
         let task = self.storage.download_task_started(id, piece_length, None)?;
 
         if !task.response_header.is_empty() {
             return Ok(task);
         }
+
+        // Remove the range header to prevent the server from
+        // returning a 206 partial content and returning
+        // a 200 full content.
+        request_header.remove(reqwest::header::RANGE);
 
         // Head the url to get the content length.
         let response = self
