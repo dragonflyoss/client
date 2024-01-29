@@ -19,7 +19,7 @@ use crate::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use crate::shutdown;
 use crate::task::Task;
 use crate::utils::http::{headermap_to_hashmap, hyper_headermap_to_reqwest_headermap};
-use crate::Result as ClientResult;
+use crate::{Error as ClientError, Result as ClientResult};
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::DownloadTaskRequest;
@@ -30,7 +30,7 @@ use hyper::client::conn::http1::Builder;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
-use hyper::{Method, Request, Response};
+use hyper::{Method, Request, StatusCode};
 use hyper_util::rt::tokio::TokioIo;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -42,6 +42,8 @@ use tokio_util::io::ReaderStream;
 use tracing::{error, info, instrument, Span};
 
 pub mod header;
+
+pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
 
 // Proxy is the proxy server.
 pub struct Proxy {
@@ -134,7 +136,7 @@ pub async fn handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
-) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
+) -> ClientResult<Response> {
     info!("handle request: {:?}", request);
 
     // Span record the uri and method.
@@ -155,7 +157,7 @@ pub async fn http_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
-) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
+) -> ClientResult<Response> {
     let Some(host) = request.uri().host() else {
         error!("CONNECT host is not socket addr: {:?}", request.uri());
         let mut response = Response::new(full("CONNECT must be to a socket address"));
@@ -302,23 +304,23 @@ pub async fn http_handler(
                     }
                 }
 
-                // TODO: Construct the reader stream.
+                // Construct the response body.
                 let reader_stream = ReaderStream::new(reader);
-                let stream_body = StreamBody::new(reader_stream.map_ok(Frame::data));
+                let stream_body =
+                    StreamBody::new(reader_stream.map_ok(Frame::data).map_err(ClientError::from));
                 let boxed_body = stream_body.boxed();
-                info!("boxed_body: {:?}", boxed_body);
 
-                // TODO: handle http stream.
-                let mut response = Response::new(full("CONNECT must be to a socket address"));
-                *response.status_mut() = http::StatusCode::BAD_REQUEST;
-                return Ok(response);
+                // Send response
+                return Ok(hyper::Response::builder()
+                    .status(StatusCode::OK)
+                    .body(boxed_body)?);
             }
         }
     }
 
     // Proxy the request to the remote server directly.
     info!("proxy http request to remote server directly");
-    let stream = TcpStream::connect((host, port)).await.unwrap();
+    let stream = TcpStream::connect((host, port)).await?;
     let io = TokioIo::new(stream);
     let (mut sender, conn) = Builder::new()
         .preserve_header_case(true)
@@ -333,7 +335,7 @@ pub async fn http_handler(
     });
 
     let response = sender.send_request(request).await?;
-    Ok(response.map(|b| b.boxed()))
+    Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }
 
 // https_handler handles the https request.
@@ -341,7 +343,7 @@ pub async fn http_handler(
 pub async fn https_handler(
     config: Arc<Config>,
     request: Request<hyper::body::Incoming>,
-) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
+) -> ClientResult<Response> {
     if let Some(rules) = config.proxy.rules.clone() {
         for rule in rules.iter() {
             if rule.regex.is_match(request.uri().to_string().as_str()) {
@@ -403,7 +405,7 @@ fn make_download_url(
 
 // empty returns an empty body.
 #[instrument(skip_all)]
-fn empty() -> BoxBody<Bytes, hyper::Error> {
+fn empty() -> BoxBody<Bytes, ClientError> {
     Empty::<Bytes>::new()
         .map_err(|never| match never {})
         .boxed()
@@ -411,7 +413,7 @@ fn empty() -> BoxBody<Bytes, hyper::Error> {
 
 // full returns a body with the given chunk.
 #[instrument(skip_all)]
-fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {
+fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, ClientError> {
     Full::new(chunk.into())
         .map_err(|never| match never {})
         .boxed()
