@@ -193,7 +193,12 @@ impl Storage {
 
     // upload_piece updates the metadata of the piece and
     // returns the data of the piece.
-    pub async fn upload_piece(&self, task_id: &str, number: u32) -> Result<impl AsyncRead> {
+    pub async fn upload_piece(
+        &self,
+        task_id: &str,
+        number: u32,
+        range: Option<Range>,
+    ) -> Result<impl AsyncRead> {
         // Start uploading the task.
         self.metadata.upload_task_started(task_id)?;
 
@@ -219,7 +224,7 @@ impl Storage {
             Some(piece) => {
                 match self
                     .content
-                    .read_piece(task_id, piece.offset, piece.length)
+                    .read_piece(task_id, piece.offset, piece.length, range)
                     .await
                 {
                     Ok(reader) => {

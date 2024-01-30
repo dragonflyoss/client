@@ -24,7 +24,9 @@ use crate::utils::http::{
 use crate::{Error as ClientError, Result as ClientResult};
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
-use dragonfly_api::dfdaemon::v2::{download_task_response, DownloadTaskRequest};
+use dragonfly_api::dfdaemon::v2::{
+    download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse,
+};
 use futures_util::TryStreamExt;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full, StreamBody};
 use hyper::body::Frame;
@@ -208,7 +210,7 @@ pub async fn http_handler(
                     Err(err) => {
                         let mut response =
                             Response::new(full(err.to_string().to_string().as_bytes().to_vec()));
-                        *response.status_mut() = http::StatusCode::BAD_REQUEST;
+                        *response.status_mut() = http::StatusCode::INTERNAL_SERVER_ERROR;
                         return Ok(response);
                     }
                 };
@@ -244,8 +246,8 @@ pub async fn http_handler(
                     }
                 };
 
-                // Construct the response header.
-                let mut response_header = HashMap::new();
+                // Construct the response of the download task started.
+                let mut download_task_started_response = DownloadTaskStartedResponse::default();
 
                 // Write the task data to the reader.
                 let (reader, mut writer) = tokio::io::duplex(1024);
@@ -265,7 +267,20 @@ pub async fn http_handler(
                         Some(download_task_response::Response::DownloadTaskStartedResponse(
                             response,
                         )) => {
-                            response_header = response.response_header;
+                            download_task_started_response = response;
+
+                            // Insert the content range header to the resopnse header.
+                            if let Some(range) = download_task_started_response.range.clone() {
+                                download_task_started_response.response_header.insert(
+                                    reqwest::header::CONTENT_RANGE.to_string(),
+                                    format!(
+                                        "bytes {}-{}/{}",
+                                        range.start,
+                                        range.start + range.length - 1,
+                                        download_task_started_response.content_length
+                                    ),
+                                );
+                            }
                         }
                         Some(download_task_response::Response::DownloadTaskFinishedResponse(_)) => {
                             info!("download task finished");
@@ -279,23 +294,37 @@ pub async fn http_handler(
                                     let mut response = Response::new(full(
                                         "download task response piece is empty",
                                     ));
-                                    *response.status_mut() = http::StatusCode::BAD_REQUEST;
+                                    *response.status_mut() =
+                                        http::StatusCode::INTERNAL_SERVER_ERROR;
                                     return Ok(response);
                                 }
                             };
 
-                            let mut need_piece_number = 0;
+                            let mut need_piece_number =
+                                match download_task_started_response.pieces.first() {
+                                    Some(piece) => piece.number,
+                                    None => {
+                                        let mut response = Response::new(full(
+                                            "download task response pieces is empty",
+                                        ));
+                                        *response.status_mut() =
+                                            http::StatusCode::INTERNAL_SERVER_ERROR;
+                                        return Ok(response);
+                                    }
+                                };
+
                             let piece_reader = match task
                                 .piece
                                 .download_from_local_peer_into_async_read(
                                     message.task_id.as_str(),
                                     piece.number,
                                     piece.length,
+                                    download_task_started_response.range.clone(),
                                     true,
                                 )
                                 .await
                             {
-                                Ok(reader) => reader,
+                                Ok(piece_reader) => piece_reader,
                                 Err(err) => {
                                     let mut response = Response::new(full(
                                         err.to_string().to_string().as_bytes().to_vec(),
@@ -340,7 +369,8 @@ pub async fn http_handler(
 
                 // Construct the response.
                 let mut response = Response::new(boxed_body);
-                *response.headers_mut() = hashmap_to_hyper_header_map(&response_header)?;
+                *response.headers_mut() =
+                    hashmap_to_hyper_header_map(&download_task_started_response.response_header)?;
                 *response.status_mut() = http::StatusCode::OK;
 
                 // Send response

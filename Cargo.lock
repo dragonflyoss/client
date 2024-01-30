@@ -75,9 +75,9 @@ dependencies = [
 
 [[package]]
 name = "anstyle"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7079075b41f533b8c61d2a4d073c4676e1f8b249ff94a393b0595db304e0dd87"
+checksum = "2faccea4cc4ab4a667ce676a30e8ec13922a692c99bb8f5b11f1502c72e04220"
 
 [[package]]
 name = "anstyle-parse"
@@ -523,9 +523,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.0.89"
+version = "2.0.91"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf1ebc3686f091f9e1acaa3a8b15aa315ee0dbf4a8167f2ebaf6345dffcc4b13"
+checksum = "f2b68e337a926e543881e4501f2589f288cb139514cb2930509f87b99dd83d43"
 dependencies = [
  "prost 0.11.9",
  "prost-types 0.12.3",

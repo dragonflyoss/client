@@ -281,6 +281,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 task_id.as_str(),
                 piece_number,
                 piece.length,
+                None,
                 false,
             )
             .await
