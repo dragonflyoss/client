@@ -186,6 +186,21 @@ impl Task {
             return Err(Error::InvalidContentLength());
         };
 
+        // If download range is specified, insert the content range header
+        // to the resopnse header.
+        let mut response_header = task.response_header.clone();
+        if let Some(range) = download.range.clone() {
+            response_header.insert(
+                reqwest::header::CONTENT_RANGE.to_string(),
+                format!(
+                    "bytes {}-{}/{}",
+                    range.start,
+                    range.start + range.length - 1,
+                    content_length
+                ),
+            );
+        }
+
         // Send the download task started request.
         download_progress_tx
             .send_timeout(
@@ -197,7 +212,7 @@ impl Task {
                         download_task_response::Response::DownloadTaskStartedResponse(
                             dfdaemon::v2::DownloadTaskStartedResponse {
                                 content_length,
-                                response_header: task.response_header.clone(),
+                                response_header,
                             },
                         ),
                     ),
