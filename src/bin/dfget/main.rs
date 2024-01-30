@@ -52,7 +52,7 @@ struct Args {
     url: Url,
 
     #[arg(
-        short = 'o',
+        short = 'O',
         long = "output",
         help = "Specify the output path of downloading file"
     )]
