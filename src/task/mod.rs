@@ -186,41 +186,6 @@ impl Task {
             return Err(Error::InvalidContentLength());
         };
 
-        // If download range is specified, insert the content range header
-        // to the resopnse header.
-        let mut response_header = task.response_header.clone();
-        if let Some(range) = download.range.clone() {
-            response_header.insert(
-                reqwest::header::CONTENT_RANGE.to_string(),
-                format!(
-                    "bytes {}-{}/{}",
-                    range.start,
-                    range.start + range.length - 1,
-                    content_length
-                ),
-            );
-        }
-
-        // Send the download task started request.
-        download_progress_tx
-            .send_timeout(
-                Ok(DownloadTaskResponse {
-                    host_id: host_id.to_string(),
-                    task_id: task.id.clone(),
-                    peer_id: peer_id.to_string(),
-                    response: Some(
-                        download_task_response::Response::DownloadTaskStartedResponse(
-                            dfdaemon::v2::DownloadTaskStartedResponse {
-                                content_length,
-                                response_header,
-                            },
-                        ),
-                    ),
-                }),
-                REQUEST_TIMEOUT,
-            )
-            .await?;
-
         // Calculate the interested pieces to download.
         let interested_pieces = match self.piece.calculate_interested(
             download.piece_length,
@@ -245,6 +210,46 @@ impl Task {
             }
         };
         info!("interested pieces: {:?}", interested_pieces);
+
+        // Construct the pieces for the download task started response.
+        let mut pieces = Vec::new();
+        for interested_piece in interested_pieces.clone() {
+            pieces.push(Piece {
+                number: interested_piece.number,
+                parent_id: interested_piece.parent_id.clone(),
+                offset: interested_piece.offset,
+                length: interested_piece.length,
+                digest: interested_piece.digest.clone(),
+                content: None,
+                traffic_type: None,
+                cost: interested_piece.prost_cost(),
+                created_at: Some(prost_wkt_types::Timestamp::from(
+                    interested_piece.created_at,
+                )),
+            });
+        }
+
+        // Send the download task started request.
+        download_progress_tx
+            .send_timeout(
+                Ok(DownloadTaskResponse {
+                    host_id: host_id.to_string(),
+                    task_id: task.id.clone(),
+                    peer_id: peer_id.to_string(),
+                    response: Some(
+                        download_task_response::Response::DownloadTaskStartedResponse(
+                            dfdaemon::v2::DownloadTaskStartedResponse {
+                                content_length,
+                                range: download.range.clone(),
+                                response_header: task.response_header.clone(),
+                                pieces,
+                            },
+                        ),
+                    ),
+                }),
+                REQUEST_TIMEOUT,
+            )
+            .await?;
 
         // If the task is finished, return the file.
         if task.is_finished() {

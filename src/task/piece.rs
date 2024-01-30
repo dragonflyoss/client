@@ -213,6 +213,7 @@ impl Piece {
         task_id: &str,
         number: u32,
         length: u64,
+        range: Option<Range>,
         disable_rate_limit: bool,
     ) -> Result<impl AsyncRead> {
         // Acquire the upload rate limiter.
@@ -221,7 +222,7 @@ impl Piece {
         }
 
         // Upload the piece content.
-        self.storage.upload_piece(task_id, number).await
+        self.storage.upload_piece(task_id, number, range).await
     }
 
     // download_from_local_peer_into_async_read downloads a single piece from a local peer.
@@ -230,6 +231,7 @@ impl Piece {
         task_id: &str,
         number: u32,
         length: u64,
+        range: Option<Range>,
         disable_rate_limit: bool,
     ) -> Result<impl AsyncRead> {
         // Acquire the download rate limiter.
@@ -238,7 +240,7 @@ impl Piece {
         }
 
         // Upload the piece content.
-        self.storage.upload_piece(task_id, number).await
+        self.storage.upload_piece(task_id, number, range).await
     }
 
     // download_from_remote_peer downloads a single piece from a remote peer.

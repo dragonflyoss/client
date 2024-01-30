@@ -17,6 +17,7 @@
 use crate::Result;
 use dragonfly_api::common::v2::Range;
 use sha2::{Digest, Sha256};
+use std::cmp::{max, min};
 use std::path::{Path, PathBuf};
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, SeekFrom};
@@ -130,7 +131,17 @@ impl Content {
         task_id: &str,
         offset: u64,
         length: u64,
+        range: Option<Range>,
     ) -> Result<impl AsyncRead> {
+        if let Some(range) = range {
+            let offset = max(offset, range.start);
+            let length = min(offset + length - 1, range.start + range.length - 1) - offset + 1;
+
+            let mut f = File::open(self.dir.join(task_id)).await?;
+            f.seek(SeekFrom::Start(offset)).await?;
+            return Ok(f.take(length));
+        }
+
         let mut f = File::open(self.dir.join(task_id)).await?;
         f.seek(SeekFrom::Start(offset)).await?;
         Ok(f.take(length))
