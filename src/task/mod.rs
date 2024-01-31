@@ -281,23 +281,6 @@ impl Task {
                 return Err(err);
             };
 
-            // Send the download task finished request.
-            download_progress_tx
-                .send_timeout(
-                    Ok(DownloadTaskResponse {
-                        host_id: host_id.to_string(),
-                        task_id: task.id.clone(),
-                        peer_id: peer_id.to_string(),
-                        response: Some(
-                            download_task_response::Response::DownloadTaskFinishedResponse(
-                                dfdaemon::v2::DownloadTaskFinishedResponse {},
-                            ),
-                        ),
-                    }),
-                    REQUEST_TIMEOUT,
-                )
-                .await?;
-
             info!("all pieces are downloaded from local peer");
             return Ok(());
         }
@@ -337,23 +320,6 @@ impl Task {
 
         // Check if all pieces are downloaded.
         if interested_pieces.is_empty() {
-            // Send the download task finished request.
-            download_progress_tx
-                .send_timeout(
-                    Ok(DownloadTaskResponse {
-                        host_id: host_id.to_string(),
-                        task_id: task.id.clone(),
-                        peer_id: peer_id.to_string(),
-                        response: Some(
-                            download_task_response::Response::DownloadTaskFinishedResponse(
-                                dfdaemon::v2::DownloadTaskFinishedResponse {},
-                            ),
-                        ),
-                    }),
-                    REQUEST_TIMEOUT,
-                )
-                .await?;
-
             info!("all pieces are downloaded from local peer");
             return Ok(());
         };
@@ -402,43 +368,9 @@ impl Task {
                 return Err(err);
             }
 
-            // Send the download task finished request.
-            download_progress_tx
-                .send_timeout(
-                    Ok(DownloadTaskResponse {
-                        host_id: host_id.to_string(),
-                        task_id: task.id.clone(),
-                        peer_id: peer_id.to_string(),
-                        response: Some(
-                            download_task_response::Response::DownloadTaskFinishedResponse(
-                                dfdaemon::v2::DownloadTaskFinishedResponse {},
-                            ),
-                        ),
-                    }),
-                    REQUEST_TIMEOUT,
-                )
-                .await?;
-
             info!("all pieces are downloaded from source");
             return Ok(());
         };
-
-        // Send the download task finished request.
-        download_progress_tx
-            .send_timeout(
-                Ok(DownloadTaskResponse {
-                    host_id: host_id.to_string(),
-                    task_id: task.id.clone(),
-                    peer_id: peer_id.to_string(),
-                    response: Some(
-                        download_task_response::Response::DownloadTaskFinishedResponse(
-                            dfdaemon::v2::DownloadTaskFinishedResponse {},
-                        ),
-                    ),
-                }),
-                REQUEST_TIMEOUT,
-            )
-            .await?;
 
         info!("all pieces are downloaded with scheduler");
         Ok(())

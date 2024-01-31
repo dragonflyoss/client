@@ -282,14 +282,11 @@ async fn main() -> Result<(), anyhow::Error> {
                 let position = min(downloaded + piece.length, pb.length().unwrap_or(0));
                 pb.set_position(position);
             }
-            Some(download_task_response::Response::DownloadTaskFinishedResponse(_)) => {
-                pb.finish_with_message("downloaded");
-                return Ok(());
-            }
             None => {}
         }
     }
 
+    pb.finish_with_message("downloaded");
     Ok(())
 }
 

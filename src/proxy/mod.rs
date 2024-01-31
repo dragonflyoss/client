@@ -282,9 +282,6 @@ pub async fn http_handler(
                                 );
                             }
                         }
-                        Some(download_task_response::Response::DownloadTaskFinishedResponse(_)) => {
-                            info!("download task finished");
-                        }
                         Some(download_task_response::Response::DownloadPieceFinishedResponse(
                             response,
                         )) => {
