@@ -357,7 +357,7 @@ async fn proxy_http_by_dfdaemon(
                 // Write the piece data to the pipe in order.
                 finished_piece_readers.insert(piece.number, piece_reader);
                 while let Some(piece_reader) = finished_piece_readers.get_mut(&need_piece_number) {
-                    info!("copy piece to stream: {}", need_piece_number);
+                    info!("copy piece {} to stream", need_piece_number);
                     if let Err(err) = tokio::io::copy(piece_reader, &mut writer).await {
                         error!("download piece reader error: {}", err);
                         if let Err(err) = writer.shutdown().await {
