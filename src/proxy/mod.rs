@@ -24,9 +24,7 @@ use crate::utils::http::{
 use crate::{Error as ClientError, Result as ClientResult};
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
-use dragonfly_api::dfdaemon::v2::{
-    download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse,
-};
+use dragonfly_api::dfdaemon::v2::{download_task_response, DownloadTaskRequest};
 use futures_util::TryStreamExt;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full, StreamBody};
 use hyper::body::Frame;
@@ -39,6 +37,7 @@ use hyper_util::rt::tokio::TokioIo;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -246,117 +245,45 @@ pub async fn http_handler(
                     }
                 };
 
-                // Construct the response of the download task started.
-                let mut download_task_started_response = DownloadTaskStartedResponse::default();
+                // Handle the response from the download grpc server.
+                let mut out_stream = response.into_inner();
+                let Ok(Some(message)) = out_stream.message().await else {
+                    let mut response =
+                        Response::new(full("download task response failed".as_bytes().to_vec()));
+                    *response.status_mut() = http::StatusCode::INTERNAL_SERVER_ERROR;
+                    return Ok(response);
+                };
+
+                let download_task_started_response = match message.response {
+                    Some(download_task_response::Response::DownloadTaskStartedResponse(
+                        mut response,
+                    )) => {
+                        // Insert the content range header to the resopnse header.
+                        if let Some(range) = response.range.as_ref() {
+                            response.response_header.insert(
+                                reqwest::header::CONTENT_RANGE.to_string(),
+                                format!(
+                                    "bytes {}-{}/{}",
+                                    range.start,
+                                    range.start + range.length - 1,
+                                    response.content_length
+                                ),
+                            );
+                        }
+
+                        response
+                    }
+                    _ => {
+                        let mut response = Response::new(full(
+                            "download task response is not started".as_bytes().to_vec(),
+                        ));
+                        *response.status_mut() = http::StatusCode::INTERNAL_SERVER_ERROR;
+                        return Ok(response);
+                    }
+                };
 
                 // Write the task data to the reader.
                 let (reader, mut writer) = tokio::io::duplex(1024);
-
-                // Handle the response from the download grpc server.
-                let mut out_stream = response.into_inner();
-                while let Some(message) = match out_stream.message().await {
-                    Ok(message) => message,
-                    Err(err) => {
-                        let mut response =
-                            Response::new(full(err.to_string().to_string().as_bytes().to_vec()));
-                        *response.status_mut() = http::StatusCode::BAD_REQUEST;
-                        return Ok(response);
-                    }
-                } {
-                    match message.response {
-                        Some(download_task_response::Response::DownloadTaskStartedResponse(
-                            response,
-                        )) => {
-                            download_task_started_response = response;
-
-                            // Insert the content range header to the resopnse header.
-                            if let Some(range) = download_task_started_response.range.clone() {
-                                download_task_started_response.response_header.insert(
-                                    reqwest::header::CONTENT_RANGE.to_string(),
-                                    format!(
-                                        "bytes {}-{}/{}",
-                                        range.start,
-                                        range.start + range.length - 1,
-                                        download_task_started_response.content_length
-                                    ),
-                                );
-                            }
-                        }
-                        Some(download_task_response::Response::DownloadPieceFinishedResponse(
-                            response,
-                        )) => {
-                            let piece = match response.piece {
-                                Some(piece) => piece,
-                                None => {
-                                    let mut response = Response::new(full(
-                                        "download task response piece is empty",
-                                    ));
-                                    *response.status_mut() =
-                                        http::StatusCode::INTERNAL_SERVER_ERROR;
-                                    return Ok(response);
-                                }
-                            };
-
-                            let mut need_piece_number =
-                                match download_task_started_response.pieces.first() {
-                                    Some(piece) => piece.number,
-                                    None => {
-                                        let mut response = Response::new(full(
-                                            "download task response pieces is empty",
-                                        ));
-                                        *response.status_mut() =
-                                            http::StatusCode::INTERNAL_SERVER_ERROR;
-                                        return Ok(response);
-                                    }
-                                };
-
-                            let piece_reader = match task
-                                .piece
-                                .download_from_local_peer_into_async_read(
-                                    message.task_id.as_str(),
-                                    piece.number,
-                                    piece.length,
-                                    download_task_started_response.range.clone(),
-                                    true,
-                                )
-                                .await
-                            {
-                                Ok(piece_reader) => piece_reader,
-                                Err(err) => {
-                                    let mut response = Response::new(full(
-                                        err.to_string().to_string().as_bytes().to_vec(),
-                                    ));
-                                    *response.status_mut() = http::StatusCode::BAD_REQUEST;
-                                    return Ok(response);
-                                }
-                            };
-
-                            // Sort by piece number and return to reader in order.
-                            let mut finished_piece_readers = HashMap::new();
-                            finished_piece_readers.insert(piece.number, piece_reader);
-                            while let Some(piece_reader) =
-                                finished_piece_readers.get_mut(&need_piece_number)
-                            {
-                                if let Err(err) = tokio::io::copy(piece_reader, &mut writer).await {
-                                    let mut response = Response::new(full(
-                                        err.to_string().to_string().as_bytes().to_vec(),
-                                    ));
-                                    *response.status_mut() =
-                                        http::StatusCode::INTERNAL_SERVER_ERROR;
-                                    return Ok(response);
-                                }
-                                need_piece_number += 1;
-                            }
-                        }
-                        None => {
-                            let mut response = Response::new(full(
-                                "download task response is empty".as_bytes().to_vec(),
-                            ));
-                            *response.status_mut() = http::StatusCode::INTERNAL_SERVER_ERROR;
-                            return Ok(response);
-                        }
-                    }
-                }
 
                 // Construct the response body.
                 let reader_stream = ReaderStream::new(reader);
@@ -369,6 +296,121 @@ pub async fn http_handler(
                 *response.headers_mut() =
                     hashmap_to_hyper_header_map(&download_task_started_response.response_header)?;
                 *response.status_mut() = http::StatusCode::OK;
+
+                // Write task data to pipe. If grpc received error message,
+                // shutdown the writer.
+                tokio::spawn(async move {
+                    // Initialize the hashmap of the finished piece readers.
+                    let mut finished_piece_readers = HashMap::new();
+
+                    while let Some(message) = match out_stream.message().await {
+                        Ok(message) => message,
+                        Err(err) => {
+                            error!("download task response error: {}", err);
+                            if let Err(err) = writer.shutdown().await {
+                                error!("writer shutdown error: {}", err);
+                            }
+
+                            return;
+                        }
+                    } {
+                        match message.response {
+                            Some(
+                                download_task_response::Response::DownloadTaskStartedResponse(_),
+                            ) => {
+                                error!("download task started response is duplicated");
+                                if let Err(err) = writer.shutdown().await {
+                                    error!("writer shutdown error: {}", err);
+                                }
+
+                                return;
+                            }
+                            Some(
+                                download_task_response::Response::DownloadPieceFinishedResponse(
+                                    response,
+                                ),
+                            ) => {
+                                let piece = match response.piece {
+                                    Some(piece) => piece,
+                                    None => {
+                                        error!("download piece finished response piece is empty");
+                                        if let Err(err) = writer.shutdown().await {
+                                            error!("writer shutdown error: {}", err);
+                                        }
+
+                                        return;
+                                    }
+                                };
+
+                                let mut need_piece_number = match download_task_started_response
+                                    .pieces
+                                    .first()
+                                {
+                                    Some(piece) => piece.number,
+                                    None => {
+                                        error!("download task started response pieces is empty");
+                                        if let Err(err) = writer.shutdown().await {
+                                            error!("writer shutdown error: {}", err);
+                                        }
+
+                                        return;
+                                    }
+                                };
+
+                                let piece_reader = match task
+                                    .piece
+                                    .download_from_local_peer_into_async_read(
+                                        message.task_id.as_str(),
+                                        piece.number,
+                                        piece.length,
+                                        download_task_started_response.range.clone(),
+                                        true,
+                                    )
+                                    .await
+                                {
+                                    Ok(piece_reader) => piece_reader,
+                                    Err(err) => {
+                                        error!("download piece reader error: {}", err);
+                                        if let Err(err) = writer.shutdown().await {
+                                            error!("writer shutdown error: {}", err);
+                                        }
+
+                                        return;
+                                    }
+                                };
+
+                                // Sort by piece number and return to reader in order.
+                                finished_piece_readers.insert(piece.number, piece_reader);
+                                while let Some(piece_reader) =
+                                    finished_piece_readers.get_mut(&need_piece_number)
+                                {
+                                    info!("copy piece to stream: {}", need_piece_number);
+                                    if let Err(err) =
+                                        tokio::io::copy(piece_reader, &mut writer).await
+                                    {
+                                        error!("download piece reader error: {}", err);
+                                        if let Err(err) = writer.shutdown().await {
+                                            error!("writer shutdown error: {}", err);
+                                        }
+
+                                        return;
+                                    }
+                                    need_piece_number += 1;
+                                }
+                            }
+                            None => {
+                                error!("download task response is empty");
+                                if let Err(err) = writer.shutdown().await {
+                                    error!("writer shutdown error: {}", err);
+                                }
+
+                                return;
+                            }
+                        }
+                    }
+
+                    info!("copy finished");
+                });
 
                 // Send response
                 return Ok(response);
