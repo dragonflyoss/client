@@ -380,6 +380,9 @@ async fn proxy_http_by_dfdaemon(
         }
 
         info!("copy finished");
+        if let Err(err) = writer.flush().await {
+            error!("writer flush error: {}", err);
+        }
     });
 
     Ok(response)
@@ -483,7 +486,7 @@ fn make_response_headers(
             format!(
                 "bytes {}-{}/{}",
                 range.start,
-                range.start + range.length - 1,
+                range.start + range.length,
                 download_task_started_response.content_length
             ),
         );
