@@ -486,9 +486,14 @@ fn make_response_headers(
             format!(
                 "bytes {}-{}/{}",
                 range.start,
-                range.start + range.length,
+                range.start + range.length - 1,
                 download_task_started_response.content_length
             ),
+        );
+
+        download_task_started_response.response_header.insert(
+            reqwest::header::CONTENT_LENGTH.to_string(),
+            range.length.to_string(),
         );
     };
 
