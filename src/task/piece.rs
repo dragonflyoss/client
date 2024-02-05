@@ -127,18 +127,20 @@ impl Piece {
                     break;
                 }
 
-                pieces.push(metadata::Piece {
-                    number: number as u32,
-                    offset,
-                    length: piece_length,
-                    digest: "".to_string(),
-                    parent_id: None,
-                    uploading_count: 0,
-                    uploaded_count: 0,
-                    updated_at: Utc::now().naive_utc(),
-                    created_at: Utc::now().naive_utc(),
-                    finished_at: None,
-                });
+                if offset + piece_length > range.start {
+                    pieces.push(metadata::Piece {
+                        number: number as u32,
+                        offset,
+                        length: piece_length,
+                        digest: "".to_string(),
+                        parent_id: None,
+                        uploading_count: 0,
+                        uploaded_count: 0,
+                        updated_at: Utc::now().naive_utc(),
+                        created_at: Utc::now().naive_utc(),
+                        finished_at: None,
+                    });
+                }
 
                 offset = (number + 1) * piece_length;
                 number += 1;

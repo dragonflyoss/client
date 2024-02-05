@@ -125,6 +125,6 @@ pub fn parse_range_header(range_header_value: &str, content_length: u64) -> Resu
     ))?;
 
     let start = valid_range.start().to_owned();
-    let length = valid_range.end() - start;
+    let length = valid_range.end() - start + 1;
     Ok(Range { start, length })
 }
