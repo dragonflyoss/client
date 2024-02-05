@@ -134,12 +134,13 @@ impl Content {
         range: Option<Range>,
     ) -> Result<impl AsyncRead> {
         if let Some(range) = range {
-            let offset = max(offset, range.start);
-            let length = min(offset + length - 1, range.start + range.length - 1) - offset + 1;
+            let target_offset = max(offset, range.start);
+            let target_length =
+                min(offset + length - 1, range.start + range.length - 1) - target_offset + 1;
 
             let mut f = File::open(self.dir.join(task_id)).await?;
-            f.seek(SeekFrom::Start(offset)).await?;
-            return Ok(f.take(length));
+            f.seek(SeekFrom::Start(target_offset)).await?;
+            return Ok(f.take(target_length));
         }
 
         let mut f = File::open(self.dir.join(task_id)).await?;
