@@ -123,24 +123,22 @@ impl Piece {
                 }
 
                 // If offset is greater than range.start + range.length, break the loop.
-                if offset < range.start + range.length {
+                if offset >= range.start + range.length {
                     break;
                 }
 
-                if offset > range.start {
-                    pieces.push(metadata::Piece {
-                        number: number as u32,
-                        offset,
-                        length: piece_length,
-                        digest: "".to_string(),
-                        parent_id: None,
-                        uploading_count: 0,
-                        uploaded_count: 0,
-                        updated_at: Utc::now().naive_utc(),
-                        created_at: Utc::now().naive_utc(),
-                        finished_at: None,
-                    });
-                }
+                pieces.push(metadata::Piece {
+                    number: number as u32,
+                    offset,
+                    length: piece_length,
+                    digest: "".to_string(),
+                    parent_id: None,
+                    uploading_count: 0,
+                    uploaded_count: 0,
+                    updated_at: Utc::now().naive_utc(),
+                    created_at: Utc::now().naive_utc(),
+                    finished_at: None,
+                });
 
                 offset = (number + 1) * piece_length;
                 number += 1;
