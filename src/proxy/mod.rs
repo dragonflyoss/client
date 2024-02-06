@@ -35,7 +35,9 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{Method, Request};
-use hyper_util::rt::tokio::TokioIo;
+use hyper_util::rt::{tokio::TokioIo, TokioExecutor};
+use rcgen::generate_simple_self_signed;
+use rustls::ServerConfig;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -43,6 +45,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+use tokio_rustls::TlsAcceptor;
 use tokio_util::io::ReaderStream;
 use tracing::{error, info, instrument, Span};
 
@@ -539,20 +542,48 @@ fn host_addr(uri: &hyper::Uri) -> Option<String> {
 
 // tunnel proxies the data between the client and the remote server.
 #[instrument(skip_all)]
-async fn tunnel(upgraded: Upgraded, addr: String) -> std::io::Result<()> {
-    // Connect to remote server.
-    let mut server = TcpStream::connect(addr).await?;
-    let mut upgraded = TokioIo::new(upgraded);
+async fn tunnel(upgraded: Upgraded, addr: String) -> ClientResult<()> {
+    info!("tunnel to {}", addr);
+    // Initialize the tcp stream to the remote server.
+    let upgraded = TokioIo::new(upgraded);
 
-    // Proxying data.
-    let (from_client, from_server) =
-        tokio::io::copy_bidirectional(&mut upgraded, &mut server).await?;
+    // Generate a certificate that's valid for "localhost" and "hello.world.example"
+    let subject_alt_names = vec![
+        "hello.world.example".to_string(),
+        "localhost".to_string(),
+        "baidu.com".to_string(),
+    ];
 
-    // Print message when done.
-    info!(
-        "client wrote {} bytes and received {} bytes",
-        from_client, from_server
-    );
+    let cert = generate_simple_self_signed(subject_alt_names).unwrap();
+    let key = rustls_pki_types::PrivateKeyDer::Pkcs8(cert.serialize_private_key_der().into());
+    let cert = cert.serialize_der().unwrap().into();
+    // Build TLS configuration.
+    let mut server_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert], key)?;
+    info!("server_config: {:?}", server_config);
+    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
+    let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
+    let tls_stream = tls_acceptor.accept(upgraded).await?;
+    info!("tls_stream: {:?}", tls_stream);
+
+    if let Err(err) = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
+        .serve_connection(TokioIo::new(tls_stream), service_fn(example))
+        .await
+    {
+        eprintln!("failed to serve connection: {err:#}");
+    }
 
     Ok(())
+}
+
+// https_handler handles the https request.
+#[instrument(skip_all)]
+pub async fn example(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
+    // Proxy the request directly  to the remote server.
+    info!(
+        "proxy HTTPS request directly to remote server {:?}",
+        request
+    );
+    Ok(Response::new(empty()))
 }

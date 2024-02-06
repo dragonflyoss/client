@@ -61,13 +61,25 @@ pub enum Error {
     #[error(transparent)]
     TonicStatus(#[from] tonic::Status),
 
-    // HeaderError is the error for headers.
+    // Headers is the error for headers.
     #[error(transparent)]
-    HeadersError(#[from] headers::Error),
+    Headers(#[from] headers::Error),
 
     // Reqwest is the error for reqwest.
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
+
+    // Rustls is the error for rustls.
+    #[error(transparent)]
+    Rustls(#[from] rustls::Error),
+
+    // Rcgen is the error for rcgen.
+    #[error(transparent)]
+    Rcgen(#[from] rcgen::Error),
+
+    // Utf8 is the error for utf8.
+    #[error(transparent)]
+    Utf8(#[from] std::str::Utf8Error),
 
     // Hyper is the error for hyper.
     #[error(transparent)]
@@ -77,24 +89,24 @@ pub enum Error {
     #[error(transparent)]
     Http(#[from] hyper::http::Error),
 
-    // ValidationError is the error for validation.
+    // Validation is the error for validation.
     #[error(transparent)]
-    ValidationError(#[from] validator::ValidationErrors),
+    Validation(#[from] validator::ValidationErrors),
 
     // MpscSend is the error for send.
     #[error("mpsc send: {0}")]
     MpscSend(String),
 
-    // AcquireError is the error for acquire.
+    // Acquire is the error for acquire.
     #[error("acquiring semaphore: {0}")]
-    AcquireError(#[from] tokio::sync::AcquireError),
+    Acquire(#[from] tokio::sync::AcquireError),
 
-    // JoinError is the error for join.
+    // Join is the error for join.
     #[error(transparent)]
-    JoinError(#[from] tokio::task::JoinError),
+    Join(#[from] tokio::task::JoinError),
 
     #[error("send timeout")]
-    SendTimeoutError(),
+    SendTimeout(),
 
     // Reqwest is the error for reqwest.
     #[error(transparent)]
@@ -120,9 +132,9 @@ pub enum Error {
     #[error(transparent)]
     InvalidHeaderValue(#[from] reqwest::header::InvalidHeaderValue),
 
-    // HeaderToStrError is the error for header to str.
+    // HeaderToStr is the error for header to str.
     #[error(transparent)]
-    HeaderToStrError(#[from] reqwest::header::ToStrError),
+    HeaderToStr(#[from] reqwest::header::ToStrError),
 
     // RangeUnsatisfiableError is the error for range unsatisfiable.
     #[error(transparent)]
@@ -228,8 +240,8 @@ impl<T> From<tokio::sync::mpsc::error::SendError<T>> for Error {
 impl<T> From<tokio::sync::mpsc::error::SendTimeoutError<T>> for Error {
     fn from(err: tokio::sync::mpsc::error::SendTimeoutError<T>) -> Self {
         match err {
-            tokio::sync::mpsc::error::SendTimeoutError::Timeout(_) => Error::SendTimeoutError(),
-            tokio::sync::mpsc::error::SendTimeoutError::Closed(_) => Error::SendTimeoutError(),
+            tokio::sync::mpsc::error::SendTimeoutError::Timeout(_) => Error::SendTimeout(),
+            tokio::sync::mpsc::error::SendTimeoutError::Closed(_) => Error::SendTimeout(),
         }
     }
 }
