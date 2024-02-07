@@ -21,7 +21,10 @@ use crate::task::Task;
 use crate::utils::http::{
     hashmap_to_hyper_header_map, hyper_headermap_to_reqwest_headermap, reqwest_headermap_to_hashmap,
 };
-use crate::utils::tls::generate_self_signed_cert;
+use crate::utils::tls::{
+    generate_ca_cert_and_key_from_pem, generate_self_signed_cert,
+    generate_self_signed_cert_by_ca_cert,
+};
 use crate::{Error as ClientError, Result as ClientResult};
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
@@ -37,6 +40,7 @@ use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{Method, Request};
 use hyper_util::rt::{tokio::TokioIo, TokioExecutor};
+use rcgen::Certificate;
 use rustls::ServerConfig;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -65,6 +69,10 @@ pub struct Proxy {
     // addr is the address of the proxy server.
     addr: SocketAddr,
 
+    // ca_cert is the CA certificate of the proxy server to
+    // sign the self-signed certificate.
+    ca_cert: Arc<Option<Certificate>>,
+
     // shutdown is used to shutdown the proxy server.
     shutdown: shutdown::Shutdown,
 
@@ -81,13 +89,35 @@ impl Proxy {
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
-        Self {
+        let mut proxy = Self {
             config: config.clone(),
             task: task.clone(),
             addr: SocketAddr::new(config.proxy.server.ip.unwrap(), config.proxy.server.port),
+            ca_cert: Arc::new(None),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
-        }
+        };
+
+        let Some(ca_cert) = config.proxy.server.ca_cert.clone() else {
+            info!("ca_cert is not set, use self-signed certificate");
+            return proxy;
+        };
+
+        let Some(ca_key) = config.proxy.server.ca_key.clone() else {
+            info!("ca_key is not set, use self-signed certificate");
+            return proxy;
+        };
+
+        // Generate the CA certificate and key from the PEM format files.
+        proxy.ca_cert = match generate_ca_cert_and_key_from_pem(&ca_cert, &ca_key) {
+            Ok(ca_cert) => Arc::new(Some(ca_cert)),
+            Err(err) => {
+                error!("generate ca cert and key from pem failed: {}", err);
+                Arc::new(None)
+            }
+        };
+
+        proxy
     }
 
     // run starts the proxy server.
@@ -112,13 +142,14 @@ impl Proxy {
 
                     let config = self.config.clone();
                     let task = self.task.clone();
+                    let ca_cert = self.ca_cert.clone();
                     tokio::task::spawn(async move {
                         if let Err(err) = http1::Builder::new()
                             .preserve_header_case(true)
                             .title_case_headers(true)
                             .serve_connection(
                                 io,
-                                service_fn(move |request| handler(config.clone(), task.clone(), request)),
+                                service_fn(move |request| handler(config.clone(), task.clone(), request, ca_cert.clone())),
                                 )
                             .with_upgrades()
                             .await
@@ -143,6 +174,7 @@ pub async fn handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
+    ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
     info!("handle request: {:?}", request);
 
@@ -152,7 +184,7 @@ pub async fn handler(
 
     // Handle CONNECT request.
     if Method::CONNECT == request.method() {
-        return https_handler(config, request).await;
+        return https_handler(config, request, ca_cert).await;
     }
 
     return http_handler(config, task, request).await;
@@ -185,18 +217,8 @@ pub async fn http_handler(
 pub async fn https_handler(
     config: Arc<Config>,
     request: Request<hyper::body::Incoming>,
+    ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
-    if let Some(rules) = config.proxy.rules.clone() {
-        for rule in rules.iter() {
-            if rule.regex.is_match(request.uri().to_string().as_str()) {
-                // TODO: handle https request.
-                let mut response = Response::new(full("CONNECT must be to a socket address"));
-                *response.status_mut() = http::StatusCode::BAD_REQUEST;
-                return Ok(response);
-            }
-        }
-    }
-
     // Proxy the request directly  to the remote server.
     info!("proxy HTTPS request directly to remote server");
     if let Some(host) = request.uri().host() {
@@ -204,7 +226,7 @@ pub async fn https_handler(
         tokio::task::spawn(async move {
             match hyper::upgrade::on(request).await {
                 Ok(upgraded) => {
-                    if let Err(e) = tunnel(upgraded, host).await {
+                    if let Err(e) = tunnel(config, upgraded, host, ca_cert).await {
                         error!("server io error: {}", e);
                     };
                 }
@@ -535,21 +557,27 @@ fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, ClientError> {
         .boxed()
 }
 
-// host_addr returns the host address of the uri.
+// tunnel handles the upgraded connection. If the ca_cert is not set, use the
+// self-signed certificate. Otherwise, use the CA certificate to sign the
+// self-signed certificate.
 #[instrument(skip_all)]
-fn host_addr(uri: &hyper::Uri) -> Option<String> {
-    uri.authority().map(|auth| auth.to_string())
-}
-
-// tunnel proxies the data between the client and the remote server.
-#[instrument(skip_all)]
-async fn tunnel(upgraded: Upgraded, host: String) -> ClientResult<()> {
+async fn tunnel(
+    config: Arc<Config>,
+    upgraded: Upgraded,
+    host: String,
+    ca_cert: Arc<Option<Certificate>>,
+) -> ClientResult<()> {
     // Initialize the tcp stream to the remote server.
     let upgraded = TokioIo::new(upgraded);
 
-    // Generate a certificate that's valid for requested host.
+    // Generate the self-signed certificate by the given host. If the ca_cert
+    // is not set, use the self-signed certificate. Otherwise, use the CA
+    // certificate to sign the self-signed certificate.
     let subject_alt_names = vec![host.to_string()];
-    let (certs, key) = generate_self_signed_cert(subject_alt_names)?;
+    let (certs, key) = match ca_cert.as_ref() {
+        Some(ca_cert) => generate_self_signed_cert_by_ca_cert(ca_cert, subject_alt_names)?,
+        None => generate_self_signed_cert(subject_alt_names)?,
+    };
 
     // Build TLS configuration.
     let mut server_config = ServerConfig::builder()
@@ -561,23 +589,39 @@ async fn tunnel(upgraded: Upgraded, host: String) -> ClientResult<()> {
 
     // Serve the connection with the TLS stream.
     if let Err(err) = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
-        .serve_connection(TokioIo::new(tls_stream), service_fn(example))
+        .serve_connection(
+            TokioIo::new(tls_stream),
+            service_fn(move |request| handle_upgraded_https(config.clone(), request)),
+        )
         .await
     {
-        eprintln!("failed to serve connection: {err:#}");
+        error!("failed to serve connection: {}", err);
+        return Err(ClientError::Unknown(err.to_string()));
     }
 
     Ok(())
 }
 
-// TODO Implement the example function.
-// https_handler handles the https request.
+// TODO Implement the handle_upgraded_https function.
+// handle_upgraded_https handles the upgraded https request from the client.
 #[instrument(skip_all)]
-pub async fn example(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
-    // Proxy the request directly  to the remote server.
+pub async fn handle_upgraded_https(
+    config: Arc<Config>,
+    request: Request<hyper::body::Incoming>,
+) -> ClientResult<Response> {
+    let request_uri = request.uri();
+    if let Some(rule) =
+        find_matching_rule(config.proxy.rules.clone(), request_uri.to_string().as_str())
+    {
+        info!(
+            "proxy HTTP request via dfdaemon for URI: {} {:?}",
+            request_uri, rule
+        );
+    }
+
     info!(
-        "proxy HTTPS request directly to remote server {:?}",
-        request
+        "proxy HTTP request directly to remote server for URI: {}",
+        request_uri
     );
     Ok(Response::new(empty()))
 }

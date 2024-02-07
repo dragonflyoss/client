@@ -647,6 +647,32 @@ pub struct ProxyServer {
     // port is the port to the proxy server.
     #[serde(default = "default_proxy_server_port")]
     pub port: u16,
+
+    // ca_cert is the root CA cert path with PEM format for the proxy server to generate the server cert.
+    //
+    // If ca_cert is empty, proxy will generate a smaple CA cert by rcgen::generate_simple_self_signed.
+    // When client requests via the proxy, the client should not verify the server cert and set
+    // insecure to true.
+    //
+    // If ca_cert is not empty, proxy will sign the server cert with the CA cert. If openssl is installed,
+    // you can use openssl to generate the root CA cert and make the system trust the root CA cert.
+    // Then set the ca_cert and ca_key to the root CA cert and key path. Dfdaemon generates the server cert
+    // and key, and signs the server cert with the root CA cert. When client requests via the proxy,
+    // the proxy can intercept the request by the server cert.
+    pub ca_cert: Option<PathBuf>,
+
+    // ca_key is the root CA key path with PEM format for the proxy server to generate the server cert.
+    //
+    // if ca_key is empty, proxy will generate a smaple CA key by rcgen::generate_simple_self_signed.
+    // When client requests via the proxy, the client should not verify the server cert and set
+    // insecure to true.
+    //
+    // if ca_key is not empty, proxy will sign the server cert with the CA cert. If openssl is installed,
+    // you can use openssl to generate the root CA cert and make the system trust the root CA cert.
+    // Then set the ca_cert and ca_key to the root CA cert and key path. Dfdaemon generates the server cert
+    // and key, and signs the server cert with the root CA cert. When client requests via the proxy,
+    // the proxy can intercept the request by the server cert.
+    pub ca_key: Option<PathBuf>,
 }
 
 // ProxyServer implements Default.
@@ -655,6 +681,8 @@ impl Default for ProxyServer {
         Self {
             ip: None,
             port: default_proxy_server_port(),
+            ca_cert: None,
+            ca_key: None,
         }
     }
 }
