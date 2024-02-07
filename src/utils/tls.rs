@@ -21,37 +21,11 @@ use std::path::PathBuf;
 use std::vec::Vec;
 use std::{fs, io};
 
-// Load public certificate from file.
-pub fn load_certs(filename: &str) -> io::Result<Vec<CertificateDer<'static>>> {
-    let certfile = fs::File::open(filename).map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("failed to open {}: {}", filename, e),
-        )
-    })?;
-    let mut reader = io::BufReader::new(certfile);
-    rustls_pemfile::certs(&mut reader).collect()
-}
-
-// Load private key from file.
-pub fn load_private_key(filename: &str) -> io::Result<PrivateKeyDer<'static>> {
-    let keyfile = fs::File::open(filename).map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("failed to open {}: {}", filename, e),
-        )
-    })?;
-    let mut reader = io::BufReader::new(keyfile);
-    rustls_pemfile::private_key(&mut reader).map(|key| key.unwrap())
-}
-
-// Generate a self-signed certificate by given subject alternative names
-// with CA certificate and key.
-pub fn generate_self_signed_cert_by_ca(
+// Generate a CA certificate from PEM format files.
+pub fn generate_ca_cert_and_key_from_pem(
     ca_cert_path: &PathBuf,
     ca_key_path: &PathBuf,
-    subject_alt_names: Vec<String>,
-) -> ClientResult<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+) -> ClientResult<Certificate> {
     // Load CA certificate and key with PEM format.
     let ca_cert_pem = fs::read(ca_cert_path)?;
     let ca_cert_pem = std::str::from_utf8(&ca_cert_pem)?;
@@ -63,20 +37,28 @@ pub fn generate_self_signed_cert_by_ca(
     let ca_params = CertificateParams::from_ca_cert_pem(ca_cert_pem, key_pair)?;
     let ca_cert = Certificate::from_params(ca_params)?;
 
-    // Sign server certificate with CA certificate by given subject alternative names.
-    let server_params = CertificateParams::new(subject_alt_names);
-    let server_cert = Certificate::from_params(server_params)?;
-    let server_cert_pem = server_cert.serialize_pem_with_signer(&ca_cert)?;
-    let server_key_pem = server_cert.serialize_private_key_pem();
+    Ok(ca_cert)
+}
 
-    // Parse server certificate.
-    let mut server_cert_pem_reader = io::BufReader::new(server_cert_pem.as_bytes());
-    let certs =
-        rustls_pemfile::certs(&mut server_cert_pem_reader).collect::<Result<Vec<_>, _>>()?;
+// Generate a self-signed certificate by given subject alternative names
+// with CA certificate.
+pub fn generate_self_signed_cert_by_ca_cert(
+    ca_cert: &Certificate,
+    subject_alt_names: Vec<String>,
+) -> ClientResult<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+    // Sign certificate with CA certificate by given subject alternative names.
+    let params = CertificateParams::new(subject_alt_names);
+    let cert = Certificate::from_params(params)?;
+    let cert_pem = cert.serialize_pem_with_signer(ca_cert)?;
+    let key_pem = cert.serialize_private_key_pem();
 
-    // Parse server private key.
-    let mut server_key_pem_reader = io::BufReader::new(server_key_pem.as_bytes());
-    let key = rustls_pemfile::private_key(&mut server_key_pem_reader)?
+    // Parse certificate.
+    let mut cert_pem_reader = io::BufReader::new(cert_pem.as_bytes());
+    let certs = rustls_pemfile::certs(&mut cert_pem_reader).collect::<Result<Vec<_>, _>>()?;
+
+    // Parse private key.
+    let mut key_pem_reader = io::BufReader::new(key_pem.as_bytes());
+    let key = rustls_pemfile::private_key(&mut key_pem_reader)?
         .ok_or_else(|| ClientError::Unknown("failed to load private key".to_string()))?;
 
     Ok((certs, key))
