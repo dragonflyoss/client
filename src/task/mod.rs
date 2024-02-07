@@ -915,7 +915,7 @@ impl Task {
                     continue;
                 }
                 Err(err) => {
-                    return Err(Error::JoinError(err));
+                    return Err(Error::Join(err));
                 }
             }
         }
@@ -1101,7 +1101,7 @@ impl Task {
                     return Err(err);
                 }
                 Err(err) => {
-                    return Err(Error::JoinError(err));
+                    return Err(Error::Join(err));
                 }
             }
         }
@@ -1348,7 +1348,7 @@ impl Task {
                     return Err(err);
                 }
                 Err(err) => {
-                    return Err(Error::JoinError(err));
+                    return Err(Error::Join(err));
                 }
             }
         }
