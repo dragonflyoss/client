@@ -184,7 +184,7 @@ pub async fn handler(
 
     // Handle CONNECT request.
     if Method::CONNECT == request.method() {
-        return https_handler(config, request, ca_cert).await;
+        return https_handler(config, task, request, ca_cert).await;
     }
 
     return http_handler(config, task, request).await;
@@ -202,20 +202,21 @@ pub async fn http_handler(
         find_matching_rule(config.proxy.rules.clone(), request_uri.to_string().as_str())
     {
         info!("proxy HTTP request via dfdaemon for URI: {}", request_uri);
-        return proxy_http_by_dfdaemon(config, task, rule.clone(), request).await;
+        return proxy_by_dfdaemon(config, task, rule.clone(), request).await;
     }
 
     info!(
         "proxy HTTP request directly to remote server for URI: {}",
         request_uri
     );
-    proxy_http(request).await
+    proxy(request).await
 }
 
 // https_handler handles the https request.
 #[instrument(skip_all)]
 pub async fn https_handler(
     config: Arc<Config>,
+    task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
@@ -226,7 +227,7 @@ pub async fn https_handler(
         tokio::task::spawn(async move {
             match hyper::upgrade::on(request).await {
                 Ok(upgraded) => {
-                    if let Err(e) = tunnel(config, upgraded, host, ca_cert).await {
+                    if let Err(e) = tunnel(config, task, upgraded, host, ca_cert).await {
                         error!("server io error: {}", e);
                     };
                 }
@@ -243,8 +244,76 @@ pub async fn https_handler(
     }
 }
 
-// proxy_http_by_dfdaemon proxies the HTTP request via the dfdaemon.
-async fn proxy_http_by_dfdaemon(
+// tunnel handles the upgraded connection. If the ca_cert is not set, use the
+// self-signed certificate. Otherwise, use the CA certificate to sign the
+// self-signed certificate.
+#[instrument(skip_all)]
+async fn tunnel(
+    config: Arc<Config>,
+    task: Arc<Task>,
+    upgraded: Upgraded,
+    host: String,
+    ca_cert: Arc<Option<Certificate>>,
+) -> ClientResult<()> {
+    // Initialize the tcp stream to the remote server.
+    let upgraded = TokioIo::new(upgraded);
+
+    // Generate the self-signed certificate by the given host. If the ca_cert
+    // is not set, use the self-signed certificate. Otherwise, use the CA
+    // certificate to sign the self-signed certificate.
+    let subject_alt_names = vec![host.to_string()];
+    let (certs, key) = match ca_cert.as_ref() {
+        Some(ca_cert) => generate_self_signed_cert_by_ca_cert(ca_cert, subject_alt_names)?,
+        None => generate_self_signed_cert(subject_alt_names)?,
+    };
+
+    // Build TLS configuration.
+    let mut server_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)?;
+    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
+    let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
+    let tls_stream = tls_acceptor.accept(upgraded).await?;
+
+    // Serve the connection with the TLS stream.
+    if let Err(err) = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
+        .serve_connection(
+            TokioIo::new(tls_stream),
+            service_fn(move |request| handle_upgraded(config.clone(), task.clone(), request)),
+        )
+        .await
+    {
+        error!("failed to serve connection: {}", err);
+        return Err(ClientError::Unknown(err.to_string()));
+    }
+
+    Ok(())
+}
+
+// handle_upgraded handles the upgraded https request from the client.
+#[instrument(skip_all)]
+pub async fn handle_upgraded(
+    config: Arc<Config>,
+    task: Arc<Task>,
+    request: Request<hyper::body::Incoming>,
+) -> ClientResult<Response> {
+    let request_uri = request.uri();
+    if let Some(rule) =
+        find_matching_rule(config.proxy.rules.clone(), request_uri.to_string().as_str())
+    {
+        info!("proxy HTTPS request via dfdaemon for URI: {}", request_uri);
+        return proxy_by_dfdaemon(config, task, rule.clone(), request).await;
+    }
+
+    info!(
+        "proxy HTTPS request directly to remote server for URI: {}",
+        request_uri
+    );
+    proxy(request).await
+}
+
+// proxy_by_dfdaemon proxies the request via the dfdaemon.
+async fn proxy_by_dfdaemon(
     config: Arc<Config>,
     task: Arc<Task>,
     rule: Rule,
@@ -415,7 +484,7 @@ async fn proxy_http_by_dfdaemon(
 }
 
 // proxy_http proxies the HTTP request directly to the remote server.
-async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
+async fn proxy(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
     let Some(host) = request.uri().host() else {
         error!("CONNECT host is not socket addr: {:?}", request.uri());
         return Ok(make_error_response(
@@ -555,73 +624,4 @@ fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, ClientError> {
     Full::new(chunk.into())
         .map_err(|never| match never {})
         .boxed()
-}
-
-// tunnel handles the upgraded connection. If the ca_cert is not set, use the
-// self-signed certificate. Otherwise, use the CA certificate to sign the
-// self-signed certificate.
-#[instrument(skip_all)]
-async fn tunnel(
-    config: Arc<Config>,
-    upgraded: Upgraded,
-    host: String,
-    ca_cert: Arc<Option<Certificate>>,
-) -> ClientResult<()> {
-    // Initialize the tcp stream to the remote server.
-    let upgraded = TokioIo::new(upgraded);
-
-    // Generate the self-signed certificate by the given host. If the ca_cert
-    // is not set, use the self-signed certificate. Otherwise, use the CA
-    // certificate to sign the self-signed certificate.
-    let subject_alt_names = vec![host.to_string()];
-    let (certs, key) = match ca_cert.as_ref() {
-        Some(ca_cert) => generate_self_signed_cert_by_ca_cert(ca_cert, subject_alt_names)?,
-        None => generate_self_signed_cert(subject_alt_names)?,
-    };
-
-    // Build TLS configuration.
-    let mut server_config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs, key)?;
-    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
-    let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
-    let tls_stream = tls_acceptor.accept(upgraded).await?;
-
-    // Serve the connection with the TLS stream.
-    if let Err(err) = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
-        .serve_connection(
-            TokioIo::new(tls_stream),
-            service_fn(move |request| handle_upgraded_https(config.clone(), request)),
-        )
-        .await
-    {
-        error!("failed to serve connection: {}", err);
-        return Err(ClientError::Unknown(err.to_string()));
-    }
-
-    Ok(())
-}
-
-// TODO Implement the handle_upgraded_https function.
-// handle_upgraded_https handles the upgraded https request from the client.
-#[instrument(skip_all)]
-pub async fn handle_upgraded_https(
-    config: Arc<Config>,
-    request: Request<hyper::body::Incoming>,
-) -> ClientResult<Response> {
-    let request_uri = request.uri();
-    if let Some(rule) =
-        find_matching_rule(config.proxy.rules.clone(), request_uri.to_string().as_str())
-    {
-        info!(
-            "proxy HTTP request via dfdaemon for URI: {} {:?}",
-            request_uri, rule
-        );
-    }
-
-    info!(
-        "proxy HTTP request directly to remote server for URI: {}",
-        request_uri
-    );
-    Ok(Response::new(empty()))
 }
