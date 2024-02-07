@@ -21,6 +21,7 @@ use crate::task::Task;
 use crate::utils::http::{
     hashmap_to_hyper_header_map, hyper_headermap_to_reqwest_headermap, reqwest_headermap_to_hashmap,
 };
+use crate::utils::tls::generate_self_signed_cert;
 use crate::{Error as ClientError, Result as ClientResult};
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
@@ -36,7 +37,6 @@ use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{Method, Request};
 use hyper_util::rt::{tokio::TokioIo, TokioExecutor};
-use rcgen::generate_simple_self_signed;
 use rustls::ServerConfig;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -199,11 +199,12 @@ pub async fn https_handler(
 
     // Proxy the request directly  to the remote server.
     info!("proxy HTTPS request directly to remote server");
-    if let Some(addr) = host_addr(request.uri()) {
+    if let Some(host) = request.uri().host() {
+        let host = host.to_string();
         tokio::task::spawn(async move {
             match hyper::upgrade::on(request).await {
                 Ok(upgraded) => {
-                    if let Err(e) = tunnel(upgraded, addr).await {
+                    if let Err(e) = tunnel(upgraded, host).await {
                         error!("server io error: {}", e);
                     };
                 }
@@ -542,31 +543,23 @@ fn host_addr(uri: &hyper::Uri) -> Option<String> {
 
 // tunnel proxies the data between the client and the remote server.
 #[instrument(skip_all)]
-async fn tunnel(upgraded: Upgraded, addr: String) -> ClientResult<()> {
-    info!("tunnel to {}", addr);
+async fn tunnel(upgraded: Upgraded, host: String) -> ClientResult<()> {
     // Initialize the tcp stream to the remote server.
     let upgraded = TokioIo::new(upgraded);
 
-    // Generate a certificate that's valid for "localhost" and "hello.world.example"
-    let subject_alt_names = vec![
-        "hello.world.example".to_string(),
-        "localhost".to_string(),
-        "baidu.com".to_string(),
-    ];
+    // Generate a certificate that's valid for requested host.
+    let subject_alt_names = vec![host.to_string()];
+    let (certs, key) = generate_self_signed_cert(subject_alt_names)?;
 
-    let cert = generate_simple_self_signed(subject_alt_names).unwrap();
-    let key = rustls_pki_types::PrivateKeyDer::Pkcs8(cert.serialize_private_key_der().into());
-    let cert = cert.serialize_der().unwrap().into();
     // Build TLS configuration.
     let mut server_config = ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(vec![cert], key)?;
-    info!("server_config: {:?}", server_config);
+        .with_single_cert(certs, key)?;
     server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
     let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
     let tls_stream = tls_acceptor.accept(upgraded).await?;
-    info!("tls_stream: {:?}", tls_stream);
 
+    // Serve the connection with the TLS stream.
     if let Err(err) = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
         .serve_connection(TokioIo::new(tls_stream), service_fn(example))
         .await
@@ -577,6 +570,7 @@ async fn tunnel(upgraded: Upgraded, addr: String) -> ClientResult<()> {
     Ok(())
 }
 
+// TODO Implement the example function.
 // https_handler handles the https request.
 #[instrument(skip_all)]
 pub async fn example(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {

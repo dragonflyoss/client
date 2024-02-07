@@ -91,4 +91,3 @@ rustls = "0.22.2"
 rustls-pemfile = "2.0.0"
 rustls-pki-types = "1.2.0"
 rcgen = { version = "0.12.1", features = ["x509-parser"] }
-secrecy = "0.8.0"
