@@ -168,7 +168,7 @@ impl Proxy {
     }
 }
 
-// handle starts to handle the request.
+// handler handles the request from the client.
 #[instrument(skip_all, fields(uri, method))]
 pub async fn handler(
     config: Arc<Config>,
@@ -209,7 +209,7 @@ pub async fn http_handler(
         "proxy HTTP request directly to remote server for URI: {}",
         request_uri
     );
-    proxy(request).await
+    proxy_http(request).await
 }
 
 // https_handler handles the https request.
@@ -227,7 +227,7 @@ pub async fn https_handler(
         tokio::task::spawn(async move {
             match hyper::upgrade::on(request).await {
                 Ok(upgraded) => {
-                    if let Err(e) = tunnel(config, task, upgraded, host, ca_cert).await {
+                    if let Err(e) = upgraded_tunnel(config, task, upgraded, host, ca_cert).await {
                         error!("server io error: {}", e);
                     };
                 }
@@ -244,11 +244,11 @@ pub async fn https_handler(
     }
 }
 
-// tunnel handles the upgraded connection. If the ca_cert is not set, use the
+// upgraded_tunnel handles the upgraded connection. If the ca_cert is not set, use the
 // self-signed certificate. Otherwise, use the CA certificate to sign the
 // self-signed certificate.
 #[instrument(skip_all)]
-async fn tunnel(
+async fn upgraded_tunnel(
     config: Arc<Config>,
     task: Arc<Task>,
     upgraded: Upgraded,
@@ -279,7 +279,7 @@ async fn tunnel(
     if let Err(err) = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
         .serve_connection(
             TokioIo::new(tls_stream),
-            service_fn(move |request| handle_upgraded(config.clone(), task.clone(), request)),
+            service_fn(move |request| upgraded_handler(config.clone(), task.clone(), request)),
         )
         .await
     {
@@ -290,13 +290,17 @@ async fn tunnel(
     Ok(())
 }
 
-// handle_upgraded handles the upgraded https request from the client.
-#[instrument(skip_all)]
-pub async fn handle_upgraded(
+// upgraded_handler handles the upgraded https request from the client.
+#[instrument(skip_all, fields(uri, method))]
+pub async fn upgraded_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
 ) -> ClientResult<Response> {
+    // Span record the uri and method.
+    Span::current().record("uri", request.uri().to_string().as_str());
+    Span::current().record("method", request.method().as_str());
+
     let request_uri = request.uri();
     if let Some(rule) =
         find_matching_rule(config.proxy.rules.clone(), request_uri.to_string().as_str())
@@ -309,7 +313,7 @@ pub async fn handle_upgraded(
         "proxy HTTPS request directly to remote server for URI: {}",
         request_uri
     );
-    proxy(request).await
+    proxy_https(request).await
 }
 
 // proxy_by_dfdaemon proxies the request via the dfdaemon.
@@ -484,7 +488,7 @@ async fn proxy_by_dfdaemon(
 }
 
 // proxy_http proxies the HTTP request directly to the remote server.
-async fn proxy(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
+async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
     let Some(host) = request.uri().host() else {
         error!("CONNECT host is not socket addr: {:?}", request.uri());
         return Ok(make_error_response(
@@ -509,6 +513,57 @@ async fn proxy(request: Request<hyper::body::Incoming>) -> ClientResult<Response
     });
 
     let response = sender.send_request(request).await?;
+    Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
+}
+
+// proxy_https proxies the HTTPS request directly to the remote server.
+async fn proxy_https(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
+    let Some(host) = request.uri().host() else {
+        error!("CONNECT host is not socket addr: {:?}", request.uri());
+        return Ok(make_error_response(
+            http::StatusCode::BAD_REQUEST,
+            "CONNECT must be to a socket address",
+        ));
+    };
+    let port = request.uri().port_u16().unwrap_or(80);
+
+    let stream = TcpStream::connect((host, port)).await?;
+    let io = TokioIo::new(stream);
+    let (mut sender, conn) = Builder::new()
+        .preserve_header_case(true)
+        .title_case_headers(true)
+        .handshake(io)
+        .await?;
+
+    tokio::task::spawn(async move {
+        if let Err(err) = conn.await {
+            error!("connection failed: {:?}", err);
+        }
+    });
+
+    // Get the authority and path from the request.
+    let Some(authority) = request.uri().authority() else {
+        error!("CONNECT authority is not set: {:?}", request.uri());
+        return Ok(make_error_response(
+            http::StatusCode::BAD_REQUEST,
+            "CONNECT authority is not set",
+        ));
+    };
+    let path = request.uri().path();
+
+    // TODO When body is not empty, the request will be blocked.
+    // Construct the new request.
+    let mut new_request = Request::builder()
+        .uri(path)
+        .header(hyper::header::HOST, authority.as_str())
+        .body(Empty::<Bytes>::new())?;
+
+    // Copy the headers from the original request to the new request.
+    for (name, value) in request.headers() {
+        new_request.headers_mut().insert(name, value.clone());
+    }
+
+    let response = sender.send_request(new_request).await?;
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }
 
