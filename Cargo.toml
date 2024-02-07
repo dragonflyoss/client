@@ -79,7 +79,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 humantime-serde = "1.1.1"
 leaky-bucket = "1.0.1"
 hyper = { version = "1.1", features = ["full"] }
-hyper-util = { version = "0.1.2", features = ["tokio"] }
+hyper-util = { version = "0.1.2", features = ["tokio", "server-auto"] }
 tokio-rustls = "0.25"
 hyper-rustls = "0.26"
 http-body-util = "0.1.0"
@@ -87,3 +87,7 @@ regex = "1.10.2"
 http-range-header = "0.4.0"
 futures-util = "0.3.30"
 headers = "0.4.0"
+rustls = "0.22.2"
+rustls-pemfile = "2.0.0"
+rustls-pki-types = "1.2.0"
+rcgen = { version = "0.12.1", features = ["x509-parser"] }
