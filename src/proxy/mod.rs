@@ -22,8 +22,8 @@ use crate::utils::http::{
     hashmap_to_hyper_header_map, hyper_headermap_to_reqwest_headermap, reqwest_headermap_to_hashmap,
 };
 use crate::utils::tls::{
-    generate_ca_cert_and_key_from_pem, generate_self_signed_cert,
-    generate_self_signed_cert_by_ca_cert,
+    generate_ca_cert_and_key_from_pem, generate_self_signed_cert_by_ca_cert,
+    generate_simple_self_signed_cert,
 };
 use crate::{Error as ClientError, Result as ClientResult};
 use bytes::Bytes;
@@ -264,7 +264,7 @@ async fn upgraded_tunnel(
     let subject_alt_names = vec![host.to_string()];
     let (certs, key) = match ca_cert.as_ref() {
         Some(ca_cert) => generate_self_signed_cert_by_ca_cert(ca_cert, subject_alt_names)?,
-        None => generate_self_signed_cert(subject_alt_names)?,
+        None => generate_simple_self_signed_cert(subject_alt_names)?,
     };
 
     // Build TLS configuration.
@@ -525,7 +525,7 @@ async fn proxy_https(request: Request<hyper::body::Incoming>) -> ClientResult<Re
             "CONNECT must be to a socket address",
         ));
     };
-    let port = request.uri().port_u16().unwrap_or(80);
+    let port = request.uri().port_u16().unwrap_or(443);
 
     let stream = TcpStream::connect((host, port)).await?;
     let io = TokioIo::new(stream);
