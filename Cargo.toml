@@ -55,7 +55,7 @@ hostname = "^0.3"
 local-ip-address = "0.5.3"
 rocksdb = "0.21.0"
 num_cpus = "1.0"
-dragonfly-api = "2.0.92"
+dragonfly-api = "2.0.93"
 chrono = { version = "0.4.33", features = ["serde"] }
 sysinfo = "0.29.6"
 sha2 = "0.10"
