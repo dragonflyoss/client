@@ -27,7 +27,9 @@ use dragonfly_api::dfdaemon::v2::{
     DeleteTaskRequest, DownloadTaskRequest, DownloadTaskResponse,
     StatTaskRequest as DfdaemonStatTaskRequest, UploadTaskRequest,
 };
-use dragonfly_api::scheduler::v2::StatTaskRequest as SchedulerStatTaskRequest;
+use dragonfly_api::scheduler::v2::{
+    LeaveHostRequest as SchedulerLeaveHostRequest, StatTaskRequest as SchedulerStatTaskRequest,
+};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -336,7 +338,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(task))
     }
 
-    // delete_task tells the dfdaemon to delete the task.
+    // delete_task calls the dfdaemon to delete the task.
     #[instrument(skip_all)]
     async fn delete_task(
         &self,
@@ -344,6 +346,23 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     ) -> Result<Response<()>, Status> {
         println!("delete_task: {:?}", request);
         Err(Status::unimplemented("not implemented"))
+    }
+
+    // leave_host calls the scheduler to leave the host.
+    #[instrument(skip_all)]
+    async fn leave_host(&self, _: Request<()>) -> Result<Response<()>, Status> {
+        self.task
+            .scheduler_client
+            .leave_host(SchedulerLeaveHostRequest {
+                id: self.task.id_generator.host_id(),
+            })
+            .await
+            .map_err(|e| {
+                error!("leave host: {}", e);
+                Status::internal(e.to_string())
+            })?;
+
+        Ok(Response::new(()))
     }
 }
 
