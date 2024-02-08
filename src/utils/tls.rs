@@ -40,8 +40,8 @@ pub fn generate_ca_cert_and_key_from_pem(
     Ok(ca_cert)
 }
 
-// Generate a self-signed certificate by given subject alternative names
-// with CA certificate.
+// generate_self_signed_cert_by_ca_cert generates a self-signed certificate
+// by given subject alternative names with CA certificate.
 pub fn generate_self_signed_cert_by_ca_cert(
     ca_cert: &Certificate,
     subject_alt_names: Vec<String>,
@@ -64,8 +64,8 @@ pub fn generate_self_signed_cert_by_ca_cert(
     Ok((certs, key))
 }
 
-// Generate a self-signed certificate by given subject alternative names.
-pub fn generate_self_signed_cert(
+// generate_simple_self_signed_cert generates a simple self-signed certificate
+pub fn generate_simple_self_signed_cert(
     subject_alt_names: impl Into<Vec<String>>,
 ) -> ClientResult<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
     let cert = rcgen::generate_simple_self_signed(subject_alt_names)?;
