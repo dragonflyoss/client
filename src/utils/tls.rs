@@ -22,6 +22,8 @@ use std::vec::Vec;
 use std::{fs, io};
 
 // Generate a CA certificate from PEM format files.
+// Generate CA by openssl with PEM format files:
+// openssl req -x509 -sha256 -days 36500 -nodes -newkey rsa:4096 -keyout ca.key -out ca.crt
 pub fn generate_ca_cert_and_key_from_pem(
     ca_cert_path: &PathBuf,
     ca_key_path: &PathBuf,
