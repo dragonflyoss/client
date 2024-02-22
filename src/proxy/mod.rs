@@ -221,7 +221,6 @@ pub async fn https_handler(
     ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
     // Proxy the request directly  to the remote server.
-    info!("proxy HTTPS request directly to remote server");
     if let Some(host) = request.uri().host() {
         let host = host.to_string();
         tokio::task::spawn(async move {
