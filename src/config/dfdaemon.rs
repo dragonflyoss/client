@@ -765,7 +765,7 @@ pub struct Proxy {
     pub rules: Option<Vec<Rule>>,
 
     // registry_mirror is implementation of the registry mirror in the proxy.
-    pub registry_mirror: Option<String>,
+    pub registry_mirror: RegistryMirror,
 }
 
 // Security is the security configuration for dfdaemon.

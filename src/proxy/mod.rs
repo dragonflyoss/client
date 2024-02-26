@@ -180,7 +180,14 @@ pub async fn handler(
 
     // TODO: Handle the mirror request.
     // If host is not set, it is the mirror request.
-    // if request.uri().host().is_none() {}
+    if request.uri().host().is_none() {
+        // Handle CONNECT request.
+        if Method::CONNECT == request.method() {
+            return registry_mirror_https_handler(config, task, request, ca_cert).await;
+        }
+
+        return registry_mirror_http_handler(config, task, request).await;
+    }
 
     // Span record the uri and method.
     Span::current().record("uri", request.uri().to_string().as_str());
@@ -194,6 +201,53 @@ pub async fn handler(
     return http_handler(config, task, request).await;
 }
 
+// registry_mirror_http_handler handles the http request for the registry mirror.
+#[instrument(skip_all)]
+pub async fn registry_mirror_http_handler(
+    config: Arc<Config>,
+    task: Arc<Task>,
+    mut request: Request<hyper::body::Incoming>,
+) -> ClientResult<Response> {
+    let registry_mirror_uri = http::Uri::from_static(Box::leak(
+        config.proxy.registry_mirror.addr.clone().into_boxed_str(),
+    ));
+
+    *request.uri_mut() = registry_mirror_uri.clone();
+    request.headers_mut().insert(
+        hyper::header::HOST,
+        registry_mirror_uri
+            .host()
+            .ok_or_else(|| ClientError::Unknown("registry mirror host is not set".to_string()))?
+            .parse()?,
+    );
+
+    return http_handler(config, task, request).await;
+}
+
+// registry_mirror_https_handler handles the https request for the registry mirror.
+#[instrument(skip_all)]
+pub async fn registry_mirror_https_handler(
+    config: Arc<Config>,
+    task: Arc<Task>,
+    mut request: Request<hyper::body::Incoming>,
+    ca_cert: Arc<Option<Certificate>>,
+) -> ClientResult<Response> {
+    let registry_mirror_uri = http::Uri::from_static(Box::leak(
+        config.proxy.registry_mirror.addr.clone().into_boxed_str(),
+    ));
+
+    *request.uri_mut() = registry_mirror_uri.clone();
+    request.headers_mut().insert(
+        hyper::header::HOST,
+        registry_mirror_uri
+            .host()
+            .ok_or_else(|| ClientError::Unknown("registry mirror host is not set".to_string()))?
+            .parse()?,
+    );
+
+    return https_handler(config, task, request, ca_cert).await;
+}
+
 // http_handler handles the http request.
 #[instrument(skip_all)]
 pub async fn http_handler(
@@ -205,12 +259,17 @@ pub async fn http_handler(
     if let Some(rule) =
         find_matching_rule(config.proxy.rules.clone(), request_uri.to_string().as_str())
     {
-        info!("proxy HTTP request via dfdaemon for URI: {}", request_uri);
+        info!(
+            "proxy HTTP request via dfdaemon for Method: {}, URI: {}",
+            request.method(),
+            request_uri
+        );
         return proxy_by_dfdaemon(config, task, rule.clone(), request).await;
     }
 
     info!(
-        "proxy HTTP request directly to remote server for URI: {}",
+        "proxy HTTP request directly to remote server for Method: {}, URI: {}",
+        request.method(),
         request_uri
     );
     proxy_http(request).await
@@ -308,12 +367,17 @@ pub async fn upgraded_handler(
     if let Some(rule) =
         find_matching_rule(config.proxy.rules.clone(), request_uri.to_string().as_str())
     {
-        info!("proxy HTTPS request via dfdaemon for URI: {}", request_uri);
+        info!(
+            "proxy HTTPS request via dfdaemon for Method: {}, URI: {}",
+            request.method(),
+            request_uri
+        );
         return proxy_by_dfdaemon(config, task, rule.clone(), request).await;
     }
 
     info!(
-        "proxy HTTPS request directly to remote server for URI: {}",
+        "proxy HTTPS request directly to remote server for Method: {}, URI: {}",
+        request.method(),
         request_uri
     );
     proxy_https(request).await
