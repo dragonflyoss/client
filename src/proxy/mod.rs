@@ -178,6 +178,10 @@ pub async fn handler(
 ) -> ClientResult<Response> {
     info!("handle request: {:?}", request);
 
+    // TODO: Handle the mirror request.
+    // If host is not set, it is the mirror request.
+    // if request.uri().host().is_none() {}
+
     // Span record the uri and method.
     Span::current().record("uri", request.uri().to_string().as_str());
     Span::current().record("method", request.method().as_str());
@@ -550,7 +554,7 @@ async fn proxy_https(request: Request<hyper::body::Incoming>) -> ClientResult<Re
     };
     let path = request.uri().path();
 
-    // TODO When body is not empty, the request will be blocked.
+    // TODO: When body is not empty, the request will be blocked.
     // Construct the new request.
     let mut new_request = Request::builder()
         .uri(path)
