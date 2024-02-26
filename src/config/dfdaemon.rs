@@ -124,12 +124,6 @@ fn default_scheduler_schedule_timeout() -> Duration {
     Duration::from_secs(30)
 }
 
-// default_scheduler_enable_back_to_source indicates whether enable back-to-source download, when the scheduling failed.
-#[inline]
-fn default_scheduler_enable_back_to_source() -> bool {
-    true
-}
-
 // default_dynconfig_refresh_interval is the default interval to refresh dynamic configuration from manager.
 #[inline]
 fn default_dynconfig_refresh_interval() -> Duration {
@@ -269,6 +263,12 @@ fn default_proxy_rule_filtered_query_params() -> Vec<String> {
     }
 
     visited.into_iter().collect()
+}
+
+// default_proxy_registry_mirror_addr is the default registry mirror address.
+#[inline]
+fn default_proxy_registry_mirror_addr() -> String {
+    "https://index.docker.io".to_string()
 }
 
 // Host is the host configuration for dfdaemon.
@@ -455,7 +455,6 @@ pub struct Scheduler {
     pub max_schedule_count: u32,
 
     // enable_back_to_source indicates whether enable back-to-source download, when the scheduling failed.
-    #[serde(default = "default_scheduler_enable_back_to_source")]
     pub enable_back_to_source: bool,
 }
 
@@ -466,7 +465,7 @@ impl Default for Scheduler {
             announce_interval: default_scheduler_announce_interval(),
             schedule_timeout: default_scheduler_schedule_timeout(),
             max_schedule_count: default_download_max_schedule_count(),
-            enable_back_to_source: default_scheduler_enable_back_to_source(),
+            enable_back_to_source: true,
         }
     }
 }
@@ -663,11 +662,11 @@ pub struct ProxyServer {
 
     // ca_key is the root CA key path with PEM format for the proxy server to generate the server cert.
     //
-    // if ca_key is empty, proxy will generate a smaple CA key by rcgen::generate_simple_self_signed.
+    // If ca_key is empty, proxy will generate a smaple CA key by rcgen::generate_simple_self_signed.
     // When client requests via the proxy, the client should not verify the server cert and set
     // insecure to true.
     //
-    // if ca_key is not empty, proxy will sign the server cert with the CA cert. If openssl is installed,
+    // If ca_key is not empty, proxy will sign the server cert with the CA cert. If openssl is installed,
     // you can use openssl to generate the root CA cert and make the system trust the root CA cert.
     // Then set the ca_cert and ca_key to the root CA cert and key path. Dfdaemon generates the server cert
     // and key, and signs the server cert with the root CA cert. When client requests via the proxy,
@@ -687,7 +686,7 @@ impl Default for ProxyServer {
     }
 }
 
-// Rule is the proxy rule.
+// Rule is the proxy rule configuration.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Rule {
@@ -723,6 +722,38 @@ impl Default for Rule {
     }
 }
 
+// RegistryMirror is the registry mirror configuration.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RegistryMirror {
+    // addr is the default address of the registry mirror. Proxy will start a registry mirror service for the
+    // client to pull the image. The client can use the default address of the registry mirror in
+    // configuration to pull the image. The `X-Dragonfly-Registry` header can instead of the default address
+    // of registry mirror.
+    #[serde(default = "default_proxy_registry_mirror_addr")]
+    pub addr: String,
+
+    // cert is the client cert path with PEM format for the registry.
+    // If registry use self-signed cert, the client should set the
+    // cert for the registry mirror.
+    pub cert: Option<PathBuf>,
+
+    // tls_verify indicates whether the client should verify the server cert
+    // for the registry mirror.
+    pub tls_verify: bool,
+}
+
+// RegistryMirror implements Default.
+impl Default for RegistryMirror {
+    fn default() -> Self {
+        Self {
+            addr: default_proxy_registry_mirror_addr(),
+            cert: None,
+            tls_verify: true,
+        }
+    }
+}
+
 // Proxy is the proxy configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -732,6 +763,9 @@ pub struct Proxy {
 
     // rules is the proxy rules.
     pub rules: Option<Vec<Rule>>,
+
+    // registry_mirror is implementation of the registry mirror in the proxy.
+    pub registry_mirror: Option<String>,
 }
 
 // Security is the security configuration for dfdaemon.
