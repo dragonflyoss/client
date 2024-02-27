@@ -16,8 +16,8 @@
 
 use crate::shutdown;
 use crate::task;
-use crate::utils::http::{get_range, hashmap_to_reqwest_headermap};
-use crate::Result as ClientResult;
+use crate::utils::http::{get_range, hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap};
+use crate::{Error as ClientError, Result as ClientResult};
 use dragonfly_api::common::v2::Task;
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_download_client::DfdaemonDownloadClient as DfdaemonDownloadGRPCClient,
@@ -27,6 +27,7 @@ use dragonfly_api::dfdaemon::v2::{
     DeleteTaskRequest, DownloadTaskRequest, DownloadTaskResponse,
     StatTaskRequest as DfdaemonStatTaskRequest, UploadTaskRequest,
 };
+use dragonfly_api::errordetails::v2::Http;
 use dragonfly_api::scheduler::v2::{
     LeaveHostRequest as SchedulerLeaveHostRequest, StatTaskRequest as SchedulerStatTaskRequest,
 };
@@ -38,6 +39,7 @@ use tokio::fs;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
+use tonic::Code;
 use tonic::{
     transport::{Channel, Endpoint, Server, Uri},
     Request, Response, Status,
@@ -193,7 +195,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
         // Download task started.
         info!("download task started: {:?}", download);
-        let task = self
+        let task = match self
             .task
             .download_started(
                 task_id.as_str(),
@@ -202,10 +204,32 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 request_header.clone(),
             )
             .await
-            .map_err(|e| {
-                error!("download task started: {}", e);
-                Status::internal(e.to_string())
-            })?;
+        {
+            Err(ClientError::HTTP(err)) => {
+                error!("download started failed by HTTP error: {}", err);
+                match serde_json::to_vec::<Http>(&Http {
+                    header: reqwest_headermap_to_hashmap(&err.header),
+                    status_code: err.status_code.as_u16() as i32,
+                }) {
+                    Ok(json) => {
+                        return Err(Status::with_details(
+                            Code::Internal,
+                            err.to_string(),
+                            json.into(),
+                        ));
+                    }
+                    Err(e) => {
+                        error!("serialize HTTP error: {}", e);
+                        return Err(Status::internal(e.to_string()));
+                    }
+                }
+            }
+            Err(err) => {
+                error!("download started failed: {}", err);
+                return Err(Status::internal(err.to_string()));
+            }
+            Ok(task) => task,
+        };
 
         // Download's range priority is higher than the request header's range.
         // If download protocol is http, use the range of the request header.

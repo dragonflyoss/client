@@ -89,6 +89,10 @@ pub enum Error {
     #[error(transparent)]
     Http(#[from] hyper::http::Error),
 
+    // HyperUtilClientLegacyError is the error for hyper util client legacy.
+    #[error(transparent)]
+    HyperUtilClientLegacyError(#[from] hyper_util::client::legacy::Error),
+
     // Validation is the error for validation.
     #[error(transparent)]
     Validation(#[from] validator::ValidationErrors),
