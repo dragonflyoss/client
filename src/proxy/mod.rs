@@ -40,7 +40,6 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{Method, Request};
-use hyper_tls::HttpsConnector;
 use hyper_util::{
     client::legacy::Client,
     rt::{tokio::TokioIo, TokioExecutor},
@@ -620,8 +619,16 @@ async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Res
 // proxy_https proxies the HTTPS request directly to the remote server.
 #[instrument(skip_all)]
 async fn proxy_https(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
-    let https = HttpsConnector::new();
-    let client = Client::builder(TokioExecutor::new()).build::<_, hyper::body::Incoming>(https);
+    let https = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_native_roots()?
+        .https_or_http()
+        .enable_http1()
+        .enable_http2()
+        .build();
+
+    let client = Client::builder(TokioExecutor::new())
+        .http2_only(true)
+        .build::<_, hyper::body::Incoming>(https);
     let response = client.request(request).await?;
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }

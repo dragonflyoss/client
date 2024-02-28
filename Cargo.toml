@@ -79,10 +79,9 @@ openssl = { version = "0.10", features = ["vendored"] }
 humantime-serde = "1.1.1"
 leaky-bucket = "1.0.1"
 hyper = { version = "1.1", features = ["full"] }
-hyper-util = { version = "0.1.2", features = ["client-legacy", "tokio", "server-auto", "http1"] }
-hyper-tls = "0.6.0"
+hyper-util = { version = "0.1.2", features = ["client", "client-legacy", "tokio", "server-auto", "http1", "http2"] }
 tokio-rustls = "0.25"
-hyper-rustls = "0.26"
+hyper-rustls = { version = "0.26", features = [ "http1", "http2", "logging" ] }
 http-body-util = "0.1.0"
 regex = "1.10.2"
 http-range-header = "0.4.0"
