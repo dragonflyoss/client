@@ -733,14 +733,10 @@ pub struct RegistryMirror {
     #[serde(default = "default_proxy_registry_mirror_addr")]
     pub addr: String,
 
-    // cert is the client cert path with PEM format for the registry.
+    // certs is the client certs path with PEM format for the registry.
     // If registry use self-signed cert, the client should set the
     // cert for the registry mirror.
-    pub cert: Option<PathBuf>,
-
-    // tls_verify indicates whether the client should verify the server cert
-    // for the registry mirror.
-    pub tls_verify: bool,
+    pub certs: Option<PathBuf>,
 }
 
 // RegistryMirror implements Default.
@@ -748,8 +744,7 @@ impl Default for RegistryMirror {
     fn default() -> Self {
         Self {
             addr: default_proxy_registry_mirror_addr(),
-            cert: None,
-            tls_verify: true,
+            certs: None,
         }
     }
 }
