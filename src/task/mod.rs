@@ -27,13 +27,14 @@ use dragonfly_api::dfdaemon::{
     self,
     v2::{download_task_response, DownloadTaskResponse},
 };
+use dragonfly_api::errordetails::v2::Http;
 use dragonfly_api::scheduler::v2::{
     announce_peer_request, announce_peer_response, download_piece_back_to_source_failed_request,
     AnnouncePeerRequest, DownloadPeerBackToSourceFailedRequest,
     DownloadPeerBackToSourceFinishedRequest, DownloadPeerBackToSourceStartedRequest,
     DownloadPeerFailedRequest, DownloadPeerFinishedRequest, DownloadPeerStartedRequest,
     DownloadPieceBackToSourceFailedRequest, DownloadPieceBackToSourceFinishedRequest,
-    DownloadPieceFailedRequest, DownloadPieceFinishedRequest, HttpResponse, RegisterPeerRequest,
+    DownloadPieceFailedRequest, DownloadPieceFinishedRequest, RegisterPeerRequest,
     RescheduleRequest,
 };
 use reqwest::header::HeaderMap;
@@ -1066,11 +1067,10 @@ impl Task {
                                     request: Some(announce_peer_request::Request::DownloadPieceBackToSourceFailedRequest(
                                             DownloadPieceBackToSourceFailedRequest{
                                                 piece_number: None,
-                                                response: Some(download_piece_back_to_source_failed_request::Response::HttpResponse(
-                                                        HttpResponse{
+                                                response: Some(download_piece_back_to_source_failed_request::Response::Http(
+                                                        Http{
                                                             header: reqwest_headermap_to_hashmap(&err.header),
                                                             status_code: err.status_code.as_u16() as i32,
-                                                            status: err.status_code.canonical_reason().unwrap_or("").to_string(),
                                                         }
                                                 )),
                                             }

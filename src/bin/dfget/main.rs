@@ -247,6 +247,8 @@ async fn main() -> Result<(), anyhow::Error> {
                 output_path: Some(args.output.into_os_string().into_string().unwrap()),
                 timeout: Some(prost_wkt_types::Duration::try_from(args.timeout)?),
                 need_back_to_source: false,
+                certificate: None,
+                tls_verify: false,
             }),
         })
         .await

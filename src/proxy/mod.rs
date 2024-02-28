@@ -31,6 +31,7 @@ use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse,
 };
+use dragonfly_api::errordetails::v2::Http;
 use futures_util::TryStreamExt;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full, StreamBody};
 use hyper::body::Frame;
@@ -39,7 +40,11 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{Method, Request};
-use hyper_util::rt::{tokio::TokioIo, TokioExecutor};
+use hyper_tls::HttpsConnector;
+use hyper_util::{
+    client::legacy::Client,
+    rt::{tokio::TokioIo, TokioExecutor},
+};
 use rcgen::Certificate;
 use rustls::ServerConfig;
 use std::collections::HashMap;
@@ -176,9 +181,6 @@ pub async fn handler(
     request: Request<hyper::body::Incoming>,
     ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
-    info!("handle request: {:?}", request);
-
-    // TODO: Handle the mirror request.
     // If host is not set, it is the mirror request.
     if request.uri().host().is_none() {
         // Handle CONNECT request.
@@ -201,81 +203,69 @@ pub async fn handler(
     return http_handler(config, task, request).await;
 }
 
-// registry_mirror_http_handler handles the http request for the registry mirror.
+// registry_mirror_http_handler handles the http request for the registry mirror by client.
 #[instrument(skip_all)]
 pub async fn registry_mirror_http_handler(
     config: Arc<Config>,
     task: Arc<Task>,
-    mut request: Request<hyper::body::Incoming>,
+    request: Request<hyper::body::Incoming>,
 ) -> ClientResult<Response> {
-    let registry_mirror_uri = http::Uri::from_static(Box::leak(
-        config.proxy.registry_mirror.addr.clone().into_boxed_str(),
-    ));
-
-    *request.uri_mut() = registry_mirror_uri.clone();
-    request.headers_mut().insert(
-        hyper::header::HOST,
-        registry_mirror_uri
-            .host()
-            .ok_or_else(|| ClientError::Unknown("registry mirror host is not set".to_string()))?
-            .parse()?,
-    );
-
+    let request = make_registry_mirror_request(config.clone(), request)?;
     return http_handler(config, task, request).await;
 }
 
-// registry_mirror_https_handler handles the https request for the registry mirror.
+// registry_mirror_https_handler handles the https request for the registry mirror by client.
 #[instrument(skip_all)]
 pub async fn registry_mirror_https_handler(
     config: Arc<Config>,
     task: Arc<Task>,
-    mut request: Request<hyper::body::Incoming>,
+    request: Request<hyper::body::Incoming>,
     ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
-    let registry_mirror_uri = http::Uri::from_static(Box::leak(
-        config.proxy.registry_mirror.addr.clone().into_boxed_str(),
-    ));
-
-    *request.uri_mut() = registry_mirror_uri.clone();
-    request.headers_mut().insert(
-        hyper::header::HOST,
-        registry_mirror_uri
-            .host()
-            .ok_or_else(|| ClientError::Unknown("registry mirror host is not set".to_string()))?
-            .parse()?,
-    );
-
+    let request = make_registry_mirror_request(config.clone(), request)?;
     return https_handler(config, task, request, ca_cert).await;
 }
 
-// http_handler handles the http request.
+// http_handler handles the http request by client.
 #[instrument(skip_all)]
 pub async fn http_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
 ) -> ClientResult<Response> {
+    info!("handle HTTP request: {:?}", request);
+
+    // If find the matching rule, proxy the request via the dfdaemon.
     let request_uri = request.uri();
     if let Some(rule) =
         find_matching_rule(config.proxy.rules.clone(), request_uri.to_string().as_str())
     {
         info!(
-            "proxy HTTP request via dfdaemon for Method: {}, URI: {}",
+            "proxy HTTP request via dfdaemon for method: {}, uri: {}",
             request.method(),
             request_uri
         );
         return proxy_by_dfdaemon(config, task, rule.clone(), request).await;
     }
 
+    if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
+        info!(
+            "proxy HTTPS request directly to remote server for method: {}, uri: {}",
+            request.method(),
+            request.uri()
+        );
+        return proxy_https(request).await;
+    }
+
     info!(
-        "proxy HTTP request directly to remote server for Method: {}, URI: {}",
+        "proxy HTTP request directly to remote server for method: {}, uri: {}",
         request.method(),
-        request_uri
+        request.uri()
     );
-    proxy_http(request).await
+    return proxy_http(request).await;
 }
 
-// https_handler handles the https request.
+// https_handler handles the https request by client.
 #[instrument(skip_all)]
 pub async fn https_handler(
     config: Arc<Config>,
@@ -283,6 +273,8 @@ pub async fn https_handler(
     request: Request<hyper::body::Incoming>,
     ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
+    info!("handle HTTPS request: {:?}", request);
+
     // Proxy the request directly  to the remote server.
     if let Some(host) = request.uri().host() {
         let host = host.to_string();
@@ -302,6 +294,7 @@ pub async fn https_handler(
         return Ok(make_error_response(
             http::StatusCode::BAD_REQUEST,
             "CONNECT must be to a socket address",
+            None,
         ));
     }
 }
@@ -363,27 +356,38 @@ pub async fn upgraded_handler(
     Span::current().record("uri", request.uri().to_string().as_str());
     Span::current().record("method", request.method().as_str());
 
+    // If find the matching rule, proxy the request via the dfdaemon.
     let request_uri = request.uri();
     if let Some(rule) =
         find_matching_rule(config.proxy.rules.clone(), request_uri.to_string().as_str())
     {
         info!(
-            "proxy HTTPS request via dfdaemon for Method: {}, URI: {}",
+            "proxy HTTPS request via dfdaemon for method: {}, uri: {}",
             request.method(),
             request_uri
         );
         return proxy_by_dfdaemon(config, task, rule.clone(), request).await;
     }
 
+    if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
+        info!(
+            "proxy HTTPS request directly to remote server for method: {}, uri: {}",
+            request.method(),
+            request.uri()
+        );
+        return proxy_https(request).await;
+    }
+
     info!(
-        "proxy HTTPS request directly to remote server for Method: {}, URI: {}",
+        "proxy HTTP request directly to remote server for method: {}, uri: {}",
         request.method(),
-        request_uri
+        request.uri()
     );
-    proxy_https(request).await
+    return proxy_http(request).await;
 }
 
 // proxy_by_dfdaemon proxies the request via the dfdaemon.
+#[instrument(skip_all)]
 async fn proxy_by_dfdaemon(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -399,6 +403,7 @@ async fn proxy_by_dfdaemon(
                 return Ok(make_error_response(
                     http::StatusCode::INTERNAL_SERVER_ERROR,
                     err.to_string().as_str(),
+                    None,
                 ));
             }
         };
@@ -411,6 +416,7 @@ async fn proxy_by_dfdaemon(
             return Ok(make_error_response(
                 http::StatusCode::INTERNAL_SERVER_ERROR,
                 err.to_string().as_str(),
+                None,
             ));
         }
     };
@@ -421,13 +427,37 @@ async fn proxy_by_dfdaemon(
         .await
     {
         Ok(response) => response,
-        Err(err) => {
-            error!("initiate download task failed: {}", err);
-            return Ok(make_error_response(
-                http::StatusCode::INTERNAL_SERVER_ERROR,
-                err.to_string().as_str(),
-            ));
-        }
+        Err(err) => match err {
+            ClientError::TonicStatus(err) => {
+                match serde_json::from_slice::<Http>(err.details()) {
+                    Ok(http) => {
+                        error!("download task failed by HTTP error: {:?}", http);
+                        return Ok(make_error_response(
+                            http::StatusCode::from_u16(http.status_code as u16)
+                                .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
+                            "download task failed",
+                            Some(hashmap_to_hyper_header_map(&http.header)?),
+                        ));
+                    }
+                    Err(err) => {
+                        error!("download task failed by tonic status: {}", err.to_string());
+                        return Ok(make_error_response(
+                            http::StatusCode::INTERNAL_SERVER_ERROR,
+                            err.to_string().as_str(),
+                            None,
+                        ));
+                    }
+                };
+            }
+            _ => {
+                error!("download task failed: {}", err);
+                return Ok(make_error_response(
+                    http::StatusCode::INTERNAL_SERVER_ERROR,
+                    err.to_string().as_str(),
+                    None,
+                ));
+            }
+        },
     };
 
     // Handle the response from the download grpc server.
@@ -437,6 +467,7 @@ async fn proxy_by_dfdaemon(
         return Ok(make_error_response(
             http::StatusCode::INTERNAL_SERVER_ERROR,
             "response message failed",
+            None,
         ));
     };
 
@@ -449,6 +480,7 @@ async fn proxy_by_dfdaemon(
         return Ok(make_error_response(
             http::StatusCode::INTERNAL_SERVER_ERROR,
             "response is not started",
+            None,
         ));
     };
 
@@ -555,19 +587,21 @@ async fn proxy_by_dfdaemon(
 }
 
 // proxy_http proxies the HTTP request directly to the remote server.
+#[instrument(skip_all)]
 async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
     let Some(host) = request.uri().host() else {
         error!("CONNECT host is not socket addr: {:?}", request.uri());
         return Ok(make_error_response(
             http::StatusCode::BAD_REQUEST,
             "CONNECT must be to a socket address",
+            None,
         ));
     };
     let port = request.uri().port_u16().unwrap_or(80);
 
     let stream = TcpStream::connect((host, port)).await?;
     let io = TokioIo::new(stream);
-    let (mut sender, conn) = Builder::new()
+    let (mut client, conn) = Builder::new()
         .preserve_header_case(true)
         .title_case_headers(true)
         .handshake(io)
@@ -579,59 +613,42 @@ async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Res
         }
     });
 
-    let response = sender.send_request(request).await?;
+    let response = client.send_request(request).await?;
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }
 
 // proxy_https proxies the HTTPS request directly to the remote server.
+#[instrument(skip_all)]
 async fn proxy_https(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
-    let Some(host) = request.uri().host() else {
-        error!("CONNECT host is not socket addr: {:?}", request.uri());
-        return Ok(make_error_response(
-            http::StatusCode::BAD_REQUEST,
-            "CONNECT must be to a socket address",
-        ));
-    };
-    let port = request.uri().port_u16().unwrap_or(443);
-
-    let stream = TcpStream::connect((host, port)).await?;
-    let io = TokioIo::new(stream);
-    let (mut sender, conn) = Builder::new()
-        .preserve_header_case(true)
-        .title_case_headers(true)
-        .handshake(io)
-        .await?;
-
-    tokio::task::spawn(async move {
-        if let Err(err) = conn.await {
-            error!("connection failed: {:?}", err);
-        }
-    });
-
-    // Get the authority and path from the request.
-    let Some(authority) = request.uri().authority() else {
-        error!("CONNECT authority is not set: {:?}", request.uri());
-        return Ok(make_error_response(
-            http::StatusCode::BAD_REQUEST,
-            "CONNECT authority is not set",
-        ));
-    };
-    let path = request.uri().path();
-
-    // TODO: When body is not empty, the request will be blocked.
-    // Construct the new request.
-    let mut new_request = Request::builder()
-        .uri(path)
-        .header(hyper::header::HOST, authority.as_str())
-        .body(Empty::<Bytes>::new())?;
-
-    // Copy the headers from the original request to the new request.
-    for (name, value) in request.headers() {
-        new_request.headers_mut().insert(name, value.clone());
-    }
-
-    let response = sender.send_request(new_request).await?;
+    let https = HttpsConnector::new();
+    let client = Client::builder(TokioExecutor::new()).build::<_, hyper::body::Incoming>(https);
+    let response = client.request(request).await?;
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
+}
+
+// make_registry_mirror_request makes a registry mirror request by the request.
+#[instrument(skip_all)]
+fn make_registry_mirror_request(
+    config: Arc<Config>,
+    mut request: Request<hyper::body::Incoming>,
+) -> ClientResult<Request<hyper::body::Incoming>> {
+    let registry_mirror_uri = format!(
+        "{}{}",
+        config.proxy.registry_mirror.addr,
+        request.uri().path()
+    )
+    .parse::<http::Uri>()?;
+
+    *request.uri_mut() = registry_mirror_uri.clone();
+    request.headers_mut().insert(
+        hyper::header::HOST,
+        registry_mirror_uri
+            .host()
+            .ok_or_else(|| ClientError::Unknown("registry mirror host is not set".to_string()))?
+            .parse()?,
+    );
+
+    Ok(request)
 }
 
 // make_download_task_requet makes a download task request by the request.
@@ -641,7 +658,10 @@ fn make_download_task_request(
     rule: Rule,
 ) -> ClientResult<DownloadTaskRequest> {
     // Convert the Reqwest header to the Hyper header.
-    let reqwest_request_header = hyper_headermap_to_reqwest_headermap(request.headers());
+    let mut reqwest_request_header = hyper_headermap_to_reqwest_headermap(request.headers());
+
+    // Registry will return the 403 status code if the Host header is set.
+    reqwest_request_header.remove(reqwest::header::HOST);
 
     // Construct the download url.
     Ok(DownloadTaskRequest {
@@ -663,6 +683,8 @@ fn make_download_task_request(
             output_path: None,
             timeout: None,
             need_back_to_source: false,
+            certificate: None,
+            tls_verify: false,
         }),
     })
 }
@@ -726,9 +748,19 @@ fn find_matching_rule(rules: Option<Vec<Rule>>, url: &str) -> Option<Rule> {
 
 // make_error_response makes an error response with the given status and message.
 #[instrument(skip_all)]
-fn make_error_response(status: http::StatusCode, message: &str) -> Response {
+fn make_error_response(
+    status: http::StatusCode,
+    message: &str,
+    header: Option<http::HeaderMap>,
+) -> Response {
     let mut response = Response::new(full(message.as_bytes().to_vec()));
     *response.status_mut() = status;
+    if let Some(header) = header {
+        for (k, v) in header.iter() {
+            response.headers_mut().insert(k, v.clone());
+        }
+    }
+
     response
 }
 
