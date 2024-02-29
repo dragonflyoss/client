@@ -76,7 +76,7 @@ pub struct Proxy {
     // addr is the address of the proxy server.
     addr: SocketAddr,
 
-    // registry_certs is the certificate of the registry.
+    // registry_certs is the certificate of the client for the registry.
     registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
 
     // server_ca_cert is the CA certificate of the proxy server to
@@ -746,31 +746,38 @@ fn make_download_task_request(
     // Registry will return the 403 status code if the Host header is set.
     reqwest_request_header.remove(reqwest::header::HOST);
 
-    // TODO: Add the registry certs to the download task request.
-    info!("registry certs: {:?}", registry_certs);
+    let mut download = Download {
+        url: make_download_url(request.uri(), rule.use_tls, rule.redirect.clone())?,
+        digest: None,
+        // Download range use header range in HTTP protocol.
+        range: None,
+        r#type: TaskType::Dfdaemon as i32,
+        tag: header::get_tag(&reqwest_request_header),
+        application: header::get_application(&reqwest_request_header),
+        priority: header::get_priority(&reqwest_request_header),
+        filtered_query_params: header::get_filtered_query_params(
+            &reqwest_request_header,
+            rule.filtered_query_params.clone(),
+        ),
+        request_header: reqwest_headermap_to_hashmap(&reqwest_request_header),
+        piece_length: header::get_piece_length(&reqwest_request_header),
+        output_path: None,
+        timeout: None,
+        need_back_to_source: false,
+        certificate_chain: Vec::new(),
+    };
 
-    // Construct the download url.
+    // If the registry_certs is set, use the registry_certs as
+    // the certificate chain.
+    if let Some(certs) = registry_certs.as_ref() {
+        download.certificate_chain = certs
+            .iter()
+            .map(|cert| cert.to_vec())
+            .collect::<Vec<Vec<u8>>>();
+    };
+
     Ok(DownloadTaskRequest {
-        download: Some(Download {
-            url: make_download_url(request.uri(), rule.use_tls, rule.redirect.clone())?,
-            digest: None,
-            // Download range use header range in HTTP protocol.
-            range: None,
-            r#type: TaskType::Dfdaemon as i32,
-            tag: header::get_tag(&reqwest_request_header),
-            application: header::get_application(&reqwest_request_header),
-            priority: header::get_priority(&reqwest_request_header),
-            filtered_query_params: header::get_filtered_query_params(
-                &reqwest_request_header,
-                rule.filtered_query_params.clone(),
-            ),
-            request_header: reqwest_headermap_to_hashmap(&reqwest_request_header),
-            piece_length: header::get_piece_length(&reqwest_request_header),
-            output_path: None,
-            timeout: None,
-            need_back_to_source: false,
-            certificate: None,
-        }),
+        download: Some(download),
     })
 }
 
