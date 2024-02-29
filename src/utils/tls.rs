@@ -24,7 +24,7 @@ use std::{fs, io};
 // Generate a CA certificate from PEM format files.
 // Generate CA by openssl with PEM format files:
 // openssl req -x509 -sha256 -days 36500 -nodes -newkey rsa:4096 -keyout ca.key -out ca.crt
-pub fn generate_ca_cert_and_key_from_pem(
+pub fn generate_ca_cert_from_pem(
     ca_cert_path: &PathBuf,
     ca_key_path: &PathBuf,
 ) -> ClientResult<Certificate> {
@@ -42,9 +42,17 @@ pub fn generate_ca_cert_and_key_from_pem(
     Ok(ca_cert)
 }
 
-// generate_self_signed_cert_by_ca_cert generates a self-signed certificate
+// Generate certificates from PEM format files.
+pub fn generate_certs_from_pem(cert_path: &PathBuf) -> ClientResult<Vec<CertificateDer<'static>>> {
+    let f = fs::File::open(cert_path)?;
+    let mut certs_pem_reader = io::BufReader::new(f);
+    let certs = rustls_pemfile::certs(&mut certs_pem_reader).collect::<Result<Vec<_>, _>>()?;
+    Ok(certs)
+}
+
+// generate_self_signed_certs_by_ca_cert generates a self-signed certificates
 // by given subject alternative names with CA certificate.
-pub fn generate_self_signed_cert_by_ca_cert(
+pub fn generate_self_signed_certs_by_ca_cert(
     ca_cert: &Certificate,
     subject_alt_names: Vec<String>,
 ) -> ClientResult<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
@@ -66,8 +74,8 @@ pub fn generate_self_signed_cert_by_ca_cert(
     Ok((certs, key))
 }
 
-// generate_simple_self_signed_cert generates a simple self-signed certificate
-pub fn generate_simple_self_signed_cert(
+// generate_simple_self_signed_certs generates a simple self-signed certificates
+pub fn generate_simple_self_signed_certs(
     subject_alt_names: impl Into<Vec<String>>,
 ) -> ClientResult<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
     let cert = rcgen::generate_simple_self_signed(subject_alt_names)?;

@@ -22,8 +22,8 @@ use crate::utils::http::{
     hashmap_to_hyper_header_map, hyper_headermap_to_reqwest_headermap, reqwest_headermap_to_hashmap,
 };
 use crate::utils::tls::{
-    generate_ca_cert_and_key_from_pem, generate_self_signed_cert_by_ca_cert,
-    generate_simple_self_signed_cert,
+    generate_ca_cert_from_pem, generate_certs_from_pem, generate_self_signed_certs_by_ca_cert,
+    generate_simple_self_signed_certs,
 };
 use crate::{Error as ClientError, Result as ClientResult};
 use bytes::Bytes;
@@ -40,12 +40,15 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{Method, Request};
+use hyper_rustls::ConfigBuilderExt;
 use hyper_util::{
     client::legacy::Client,
     rt::{tokio::TokioIo, TokioExecutor},
 };
 use rcgen::Certificate;
+use rustls::RootCertStore;
 use rustls::ServerConfig;
+use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -73,9 +76,12 @@ pub struct Proxy {
     // addr is the address of the proxy server.
     addr: SocketAddr,
 
-    // ca_cert is the CA certificate of the proxy server to
+    // registry_certs is the certificate of the registry.
+    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
+
+    // server_ca_cert is the CA certificate of the proxy server to
     // sign the self-signed certificate.
-    ca_cert: Arc<Option<Certificate>>,
+    server_ca_cert: Arc<Option<Certificate>>,
 
     // shutdown is used to shutdown the proxy server.
     shutdown: shutdown::Shutdown,
@@ -97,29 +103,45 @@ impl Proxy {
             config: config.clone(),
             task: task.clone(),
             addr: SocketAddr::new(config.proxy.server.ip.unwrap(), config.proxy.server.port),
-            ca_cert: Arc::new(None),
+            registry_certs: Arc::new(None),
+            server_ca_cert: Arc::new(None),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         };
 
-        let Some(ca_cert) = config.proxy.server.ca_cert.clone() else {
+        // Load and generate the registry certificates from the PEM format file.
+        proxy.registry_certs = match config.proxy.registry_mirror.certs.clone() {
+            Some(certs_path) => match generate_certs_from_pem(&certs_path) {
+                Ok(certs) => Arc::new(Some(certs)),
+                Err(err) => {
+                    error!("generate registry cert from pem failed: {}", err);
+                    Arc::new(None)
+                }
+            },
+            None => Arc::new(None),
+        };
+
+        // Load the CA certificate and key from the PEM format files.
+        let Some(server_ca_cert_path) = config.proxy.server.ca_cert.clone() else {
             info!("ca_cert is not set, use self-signed certificate");
             return proxy;
         };
 
-        let Some(ca_key) = config.proxy.server.ca_key.clone() else {
+        // Load the CA certificate and key from the PEM format files.
+        let Some(server_ca_key_path) = config.proxy.server.ca_key.clone() else {
             info!("ca_key is not set, use self-signed certificate");
             return proxy;
         };
 
         // Generate the CA certificate and key from the PEM format files.
-        proxy.ca_cert = match generate_ca_cert_and_key_from_pem(&ca_cert, &ca_key) {
-            Ok(ca_cert) => Arc::new(Some(ca_cert)),
-            Err(err) => {
-                error!("generate ca cert and key from pem failed: {}", err);
-                Arc::new(None)
-            }
-        };
+        proxy.server_ca_cert =
+            match generate_ca_cert_from_pem(&server_ca_cert_path, &server_ca_key_path) {
+                Ok(server_ca_cert) => Arc::new(Some(server_ca_cert)),
+                Err(err) => {
+                    error!("generate ca cert and key from pem failed: {}", err);
+                    Arc::new(None)
+                }
+            };
 
         proxy
     }
@@ -146,14 +168,15 @@ impl Proxy {
 
                     let config = self.config.clone();
                     let task = self.task.clone();
-                    let ca_cert = self.ca_cert.clone();
+                    let registry_certs = self.registry_certs.clone();
+                    let server_ca_cert = self.server_ca_cert.clone();
                     tokio::task::spawn(async move {
                         if let Err(err) = http1::Builder::new()
                             .preserve_header_case(true)
                             .title_case_headers(true)
                             .serve_connection(
                                 io,
-                                service_fn(move |request| handler(config.clone(), task.clone(), request, ca_cert.clone())),
+                                service_fn(move |request| handler(config.clone(), task.clone(), request, registry_certs.clone(), server_ca_cert.clone())),
                                 )
                             .with_upgrades()
                             .await
@@ -178,16 +201,24 @@ pub async fn handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
-    ca_cert: Arc<Option<Certificate>>,
+    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
+    server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
     // If host is not set, it is the mirror request.
     if request.uri().host().is_none() {
         // Handle CONNECT request.
         if Method::CONNECT == request.method() {
-            return registry_mirror_https_handler(config, task, request, ca_cert).await;
+            return registry_mirror_https_handler(
+                config,
+                task,
+                request,
+                registry_certs,
+                server_ca_cert,
+            )
+            .await;
         }
 
-        return registry_mirror_http_handler(config, task, request).await;
+        return registry_mirror_http_handler(config, task, request, registry_certs).await;
     }
 
     // Span record the uri and method.
@@ -196,10 +227,10 @@ pub async fn handler(
 
     // Handle CONNECT request.
     if Method::CONNECT == request.method() {
-        return https_handler(config, task, request, ca_cert).await;
+        return https_handler(config, task, request, registry_certs, server_ca_cert).await;
     }
 
-    return http_handler(config, task, request).await;
+    return http_handler(config, task, request, registry_certs).await;
 }
 
 // registry_mirror_http_handler handles the http request for the registry mirror by client.
@@ -208,9 +239,10 @@ pub async fn registry_mirror_http_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
+    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     let request = make_registry_mirror_request(config.clone(), request)?;
-    return http_handler(config, task, request).await;
+    return http_handler(config, task, request, registry_certs).await;
 }
 
 // registry_mirror_https_handler handles the https request for the registry mirror by client.
@@ -219,10 +251,11 @@ pub async fn registry_mirror_https_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
-    ca_cert: Arc<Option<Certificate>>,
+    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
+    server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
     let request = make_registry_mirror_request(config.clone(), request)?;
-    return https_handler(config, task, request, ca_cert).await;
+    return https_handler(config, task, request, registry_certs, server_ca_cert).await;
 }
 
 // http_handler handles the http request by client.
@@ -231,6 +264,7 @@ pub async fn http_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
+    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     info!("handle HTTP request: {:?}", request);
 
@@ -244,7 +278,7 @@ pub async fn http_handler(
             request.method(),
             request_uri
         );
-        return proxy_by_dfdaemon(config, task, rule.clone(), request).await;
+        return proxy_by_dfdaemon(config, task, rule.clone(), request, registry_certs).await;
     }
 
     if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
@@ -253,7 +287,7 @@ pub async fn http_handler(
             request.method(),
             request.uri()
         );
-        return proxy_https(request).await;
+        return proxy_https(request, registry_certs).await;
     }
 
     info!(
@@ -270,7 +304,8 @@ pub async fn https_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
-    ca_cert: Arc<Option<Certificate>>,
+    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
+    server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
     info!("handle HTTPS request: {:?}", request);
 
@@ -280,7 +315,16 @@ pub async fn https_handler(
         tokio::task::spawn(async move {
             match hyper::upgrade::on(request).await {
                 Ok(upgraded) => {
-                    if let Err(e) = upgraded_tunnel(config, task, upgraded, host, ca_cert).await {
+                    if let Err(e) = upgraded_tunnel(
+                        config,
+                        task,
+                        upgraded,
+                        host,
+                        registry_certs,
+                        server_ca_cert,
+                    )
+                    .await
+                    {
                         error!("server io error: {}", e);
                     };
                 }
@@ -307,7 +351,8 @@ async fn upgraded_tunnel(
     task: Arc<Task>,
     upgraded: Upgraded,
     host: String,
-    ca_cert: Arc<Option<Certificate>>,
+    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
+    server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<()> {
     // Initialize the tcp stream to the remote server.
     let upgraded = TokioIo::new(upgraded);
@@ -316,15 +361,17 @@ async fn upgraded_tunnel(
     // is not set, use the self-signed certificate. Otherwise, use the CA
     // certificate to sign the self-signed certificate.
     let subject_alt_names = vec![host.to_string()];
-    let (certs, key) = match ca_cert.as_ref() {
-        Some(ca_cert) => generate_self_signed_cert_by_ca_cert(ca_cert, subject_alt_names)?,
-        None => generate_simple_self_signed_cert(subject_alt_names)?,
+    let (server_certs, server_key) = match server_ca_cert.as_ref() {
+        Some(server_ca_cert) => {
+            generate_self_signed_certs_by_ca_cert(server_ca_cert, subject_alt_names)?
+        }
+        None => generate_simple_self_signed_certs(subject_alt_names)?,
     };
 
     // Build TLS configuration.
     let mut server_config = ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(certs, key)?;
+        .with_single_cert(server_certs, server_key)?;
     server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
     let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
     let tls_stream = tls_acceptor.accept(upgraded).await?;
@@ -333,7 +380,14 @@ async fn upgraded_tunnel(
     if let Err(err) = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
         .serve_connection(
             TokioIo::new(tls_stream),
-            service_fn(move |request| upgraded_handler(config.clone(), task.clone(), request)),
+            service_fn(move |request| {
+                upgraded_handler(
+                    config.clone(),
+                    task.clone(),
+                    request,
+                    registry_certs.clone(),
+                )
+            }),
         )
         .await
     {
@@ -350,6 +404,7 @@ pub async fn upgraded_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
+    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     // Span record the uri and method.
     Span::current().record("uri", request.uri().to_string().as_str());
@@ -365,7 +420,7 @@ pub async fn upgraded_handler(
             request.method(),
             request_uri
         );
-        return proxy_by_dfdaemon(config, task, rule.clone(), request).await;
+        return proxy_by_dfdaemon(config, task, rule.clone(), request, registry_certs).await;
     }
 
     if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
@@ -374,7 +429,7 @@ pub async fn upgraded_handler(
             request.method(),
             request.uri()
         );
-        return proxy_https(request).await;
+        return proxy_https(request, registry_certs).await;
     }
 
     info!(
@@ -392,6 +447,7 @@ async fn proxy_by_dfdaemon(
     task: Arc<Task>,
     rule: Rule,
     request: Request<hyper::body::Incoming>,
+    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     // Initialize the dfdaemon download client.
     let dfdaemon_download_client =
@@ -408,7 +464,7 @@ async fn proxy_by_dfdaemon(
         };
 
     // Make the download task request.
-    let download_task_request = match make_download_task_request(request, rule) {
+    let download_task_request = match make_download_task_request(request, rule, registry_certs) {
         Ok(download_task_request) => download_task_request,
         Err(err) => {
             error!("make download task request failed: {}", err);
@@ -618,9 +674,28 @@ async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Res
 
 // proxy_https proxies the HTTPS request directly to the remote server.
 #[instrument(skip_all)]
-async fn proxy_https(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
+async fn proxy_https(
+    request: Request<hyper::body::Incoming>,
+    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
+) -> ClientResult<Response> {
+    let client_config_builder = match registry_certs.as_ref() {
+        Some(registry_certs) => {
+            let mut root_certs = RootCertStore::empty();
+            root_certs.add_parsable_certificates(registry_certs.to_owned());
+
+            // TLS client config using the custom CA store for lookups.
+            rustls::ClientConfig::builder()
+                .with_root_certificates(root_certs)
+                .with_no_client_auth()
+        }
+        // Default TLS client config with native roots.
+        None => rustls::ClientConfig::builder()
+            .with_native_roots()?
+            .with_no_client_auth(),
+    };
+
     let https = hyper_rustls::HttpsConnectorBuilder::new()
-        .with_native_roots()?
+        .with_tls_config(client_config_builder)
         .https_or_http()
         .enable_http1()
         .enable_http2()
@@ -663,12 +738,16 @@ fn make_registry_mirror_request(
 fn make_download_task_request(
     request: Request<hyper::body::Incoming>,
     rule: Rule,
+    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<DownloadTaskRequest> {
     // Convert the Reqwest header to the Hyper header.
     let mut reqwest_request_header = hyper_headermap_to_reqwest_headermap(request.headers());
 
     // Registry will return the 403 status code if the Host header is set.
     reqwest_request_header.remove(reqwest::header::HOST);
+
+    // TODO: Add the registry certs to the download task request.
+    info!("registry certs: {:?}", registry_certs);
 
     // Construct the download url.
     Ok(DownloadTaskRequest {
@@ -691,7 +770,6 @@ fn make_download_task_request(
             timeout: None,
             need_back_to_source: false,
             certificate: None,
-            tls_verify: false,
         }),
     })
 }
