@@ -22,8 +22,8 @@ use crate::utils::http::{
     hashmap_to_hyper_header_map, hyper_headermap_to_reqwest_headermap, reqwest_headermap_to_hashmap,
 };
 use crate::utils::tls::{
-    generate_ca_cert_from_pem, generate_certs_from_pem, generate_self_signed_certs_by_ca_cert,
-    generate_simple_self_signed_certs,
+    certs_to_raw_certs, generate_ca_cert_from_pem, generate_certs_from_pem,
+    generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs,
 };
 use crate::{Error as ClientError, Result as ClientResult};
 use bytes::Bytes;
@@ -680,12 +680,12 @@ async fn proxy_https(
 ) -> ClientResult<Response> {
     let client_config_builder = match registry_certs.as_ref() {
         Some(registry_certs) => {
-            let mut root_certs = RootCertStore::empty();
-            root_certs.add_parsable_certificates(registry_certs.to_owned());
+            let mut root_cert_store = RootCertStore::empty();
+            root_cert_store.add_parsable_certificates(registry_certs.to_owned());
 
             // TLS client config using the custom CA store for lookups.
             rustls::ClientConfig::builder()
-                .with_root_certificates(root_certs)
+                .with_root_certificates(root_cert_store)
                 .with_no_client_auth()
         }
         // Default TLS client config with native roots.
@@ -770,10 +770,7 @@ fn make_download_task_request(
     // If the registry_certs is set, use the registry_certs as
     // the certificate chain.
     if let Some(certs) = registry_certs.as_ref() {
-        download.certificate_chain = certs
-            .iter()
-            .map(|cert| cert.to_vec())
-            .collect::<Vec<Vec<u8>>>();
+        download.certificate_chain = certs_to_raw_certs(certs.to_owned());
     };
 
     Ok(DownloadTaskRequest {
