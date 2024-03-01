@@ -84,3 +84,16 @@ pub fn generate_simple_self_signed_certs(
 
     Ok((certs, key))
 }
+
+// certs_to_raw_certs converts DER format of the certificates to raw certificates.
+pub fn certs_to_raw_certs(certs: Vec<CertificateDer<'static>>) -> Vec<Vec<u8>> {
+    certs
+        .into_iter()
+        .map(|cert| cert.as_ref().to_vec())
+        .collect()
+}
+
+// raw_certs_to_certs converts raw certificates to DER format of certificates.
+pub fn raw_certs_to_certs(raw_certs: Vec<Vec<u8>>) -> Vec<CertificateDer<'static>> {
+    raw_certs.into_iter().map(|cert| cert.into()).collect()
+}
