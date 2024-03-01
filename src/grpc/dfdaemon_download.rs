@@ -186,23 +186,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
 
-        // Convert the header.
-        let request_header =
-            hashmap_to_reqwest_headermap(&download.request_header).map_err(|e| {
-                error!("convert header: {}", e);
-                Status::invalid_argument(e.to_string())
-            })?;
-
         // Download task started.
         info!("download task started: {:?}", download);
         let task = match self
             .task
-            .download_started(
-                task_id.as_str(),
-                download.piece_length,
-                download.url.as_str(),
-                request_header.clone(),
-            )
+            .download_started(task_id.as_str(), download.clone())
             .await
         {
             Err(ClientError::HTTP(err)) => {
@@ -238,6 +226,13 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             let content_length = task
                 .content_length()
                 .ok_or(Status::internal("missing content length in the response"))?;
+
+            // Convert the header.
+            let request_header =
+                hashmap_to_reqwest_headermap(&download.request_header).map_err(|e| {
+                    error!("convert header: {}", e);
+                    Status::invalid_argument(e.to_string())
+                })?;
 
             download.range = get_range(&request_header, content_length).map_err(|err| {
                 error!("get range failed: {}", err);

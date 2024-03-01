@@ -18,8 +18,9 @@ use crate::backend::http::{Request as HTTPRequest, HTTP};
 use crate::config::dfdaemon::Config;
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::storage::{metadata, Storage};
-use crate::utils::http::reqwest_headermap_to_hashmap;
+use crate::utils::http::{hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap};
 use crate::utils::id_generator::IDGenerator;
+use crate::utils::tls::raw_certs_to_certs;
 use crate::{DownloadFromRemotePeerFailed, Error, HTTPError, Result as ClientResult};
 use dragonfly_api::common::v2::Range;
 use dragonfly_api::common::v2::{Download, Peer, Piece, TrafficType};
@@ -38,7 +39,7 @@ use dragonfly_api::scheduler::v2::{
     RescheduleRequest,
 };
 use reqwest::header::HeaderMap;
-use std::collections::HashMap;
+use rustls_pki_types::CertificateDer;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -104,11 +105,18 @@ impl Task {
     pub async fn download_started(
         &self,
         id: &str,
-        piece_length: u64,
-        url: &str,
-        mut request_header: HeaderMap,
+        download: Download,
     ) -> ClientResult<metadata::Task> {
-        let task = self.storage.download_task_started(id, piece_length, None)?;
+        let task = self
+            .storage
+            .download_task_started(id, download.piece_length, None)?;
+
+        // Handle the request header.
+        let mut request_header =
+            hashmap_to_reqwest_headermap(&download.request_header).map_err(|e| {
+                error!("convert header: {}", e);
+                Status::invalid_argument(e.to_string())
+            })?;
 
         if !task.response_header.is_empty() {
             return Ok(task);
@@ -119,13 +127,21 @@ impl Task {
         // a 200 full content.
         request_header.remove(reqwest::header::RANGE);
 
+        // Convert the certificate chain to certs.
+        let client_certs = if download.certificate_chain.is_empty() {
+            None
+        } else {
+            Some(raw_certs_to_certs(download.certificate_chain))
+        };
+
         // Head the url to get the content length.
         let response = self
             .http_client
             .head(HTTPRequest {
-                url: url.to_string(),
+                url: download.url,
                 header: request_header,
                 timeout: self.config.download.piece_timeout,
+                client_certs,
             })
             .await?;
 
@@ -138,7 +154,7 @@ impl Task {
         }
 
         self.storage
-            .download_task_started(id, piece_length, Some(response.header))
+            .download_task_started(id, download.piece_length, Some(response.header))
     }
 
     // download_finished updates the metadata of the task when the task downloads finished.
@@ -348,8 +364,7 @@ impl Task {
                     host_id,
                     peer_id,
                     interested_pieces.clone(),
-                    download.url.clone(),
-                    download.request_header.clone(),
+                    download.clone(),
                     download_progress_tx.clone(),
                 )
                 .await
@@ -636,8 +651,7 @@ impl Task {
                             host_id,
                             peer_id,
                             remaining_interested_pieces.clone(),
-                            download.url.clone(),
-                            download.request_header.clone(),
+                            download.clone(),
                             download_progress_tx.clone(),
                             in_stream_tx.clone(),
                         )
@@ -932,16 +946,22 @@ impl Task {
         host_id: &str,
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
-        url: String,
-        request_header: HashMap<String, String>,
+        download: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
         in_stream_tx: Sender<AnnouncePeerRequest>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Convert the header.
-        let request_header: HeaderMap = (&request_header).try_into()?;
+        let request_header: HeaderMap = (&download.request_header).try_into()?;
 
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
+
+        // Convert the raw certificate chain to certs.
+        let client_certs = if download.certificate_chain.is_empty() {
+            None
+        } else {
+            Some(raw_certs_to_certs(download.certificate_chain))
+        };
 
         // Download the piece from the local peer.
         let mut join_set = JoinSet::new();
@@ -957,6 +977,7 @@ impl Task {
                 offset: u64,
                 length: u64,
                 request_header: HeaderMap,
+                client_certs: Option<Vec<CertificateDer<'static>>>,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
@@ -975,6 +996,7 @@ impl Task {
                         offset,
                         length,
                         request_header,
+                        client_certs,
                     )
                     .await
             }
@@ -983,10 +1005,11 @@ impl Task {
                 download_from_source(
                     task.id.clone(),
                     interested_piece.number,
-                    url.clone(),
+                    download.url.clone(),
                     interested_piece.offset,
                     interested_piece.length,
                     request_header.clone(),
+                    client_certs.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
                     semaphore.clone(),
@@ -1237,15 +1260,21 @@ impl Task {
         host_id: &str,
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
-        url: String,
-        request_header: HashMap<String, String>,
+        download: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Convert the header.
-        let request_header: HeaderMap = (&request_header).try_into()?;
+        let request_header: HeaderMap = (&download.request_header).try_into()?;
 
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
+
+        // Convert the raw certificate chain to certs.
+        let client_certs = if download.certificate_chain.is_empty() {
+            None
+        } else {
+            Some(raw_certs_to_certs(download.certificate_chain))
+        };
 
         // Download the pieces.
         let mut join_set = JoinSet::new();
@@ -1261,6 +1290,7 @@ impl Task {
                 offset: u64,
                 length: u64,
                 request_header: HeaderMap,
+                client_certs: Option<Vec<CertificateDer<'static>>>,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
@@ -1279,6 +1309,7 @@ impl Task {
                         offset,
                         length,
                         request_header,
+                        client_certs,
                     )
                     .await
             }
@@ -1287,10 +1318,11 @@ impl Task {
                 download_from_source(
                     task.id.clone(),
                     interested_piece.number,
-                    url.clone(),
+                    download.url.clone(),
                     interested_piece.offset,
                     interested_piece.length,
                     request_header.clone(),
+                    client_certs.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
                     semaphore.clone(),

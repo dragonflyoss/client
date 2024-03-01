@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::backend::http::{Request, HTTP};
+use crate::backend::http::{Request as HTTPRequest, HTTP};
 use crate::config::dfdaemon::Config;
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::storage::{metadata, Storage};
@@ -24,6 +24,7 @@ use dragonfly_api::common::v2::{Peer, Range};
 use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
 use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};
+use rustls_pki_types::CertificateDer;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -344,6 +345,7 @@ impl Piece {
         offset: u64,
         length: u64,
         request_header: HeaderMap,
+        client_certs: Option<Vec<CertificateDer<'static>>>,
     ) -> Result<metadata::Piece> {
         // Acquire the download rate limiter.
         self.download_rate_limiter.acquire(length as usize).await;
@@ -363,10 +365,11 @@ impl Piece {
         // Download the piece from the source.
         let mut response = self
             .http_client
-            .get(Request {
+            .get(HTTPRequest {
                 url: url.to_string(),
                 header: request_header.to_owned(),
                 timeout: self.config.download.piece_timeout,
+                client_certs,
             })
             .await
             .map_err(|err| {
