@@ -20,7 +20,6 @@ use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::storage::{metadata, Storage};
 use crate::utils::http::{hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap};
 use crate::utils::id_generator::IDGenerator;
-use crate::utils::tls::raw_certs_to_certs;
 use crate::{DownloadFromRemotePeerFailed, Error, HTTPError, Result as ClientResult};
 use dragonfly_api::common::v2::Range;
 use dragonfly_api::common::v2::{Download, Peer, Piece, TrafficType};
@@ -39,7 +38,6 @@ use dragonfly_api::scheduler::v2::{
     RescheduleRequest,
 };
 use reqwest::header::HeaderMap;
-use rustls_pki_types::CertificateDer;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -127,13 +125,6 @@ impl Task {
         // a 200 full content.
         request_header.remove(reqwest::header::RANGE);
 
-        // Convert the certificate chain to certs.
-        let client_certs = if download.certificate_chain.is_empty() {
-            None
-        } else {
-            Some(raw_certs_to_certs(download.certificate_chain))
-        };
-
         // Head the url to get the content length.
         let response = self
             .http_client
@@ -141,7 +132,6 @@ impl Task {
                 url: download.url,
                 header: request_header,
                 timeout: self.config.download.piece_timeout,
-                client_certs,
             })
             .await?;
 
@@ -956,13 +946,6 @@ impl Task {
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
-        // Convert the raw certificate chain to certs.
-        let client_certs = if download.certificate_chain.is_empty() {
-            None
-        } else {
-            Some(raw_certs_to_certs(download.certificate_chain))
-        };
-
         // Download the piece from the local peer.
         let mut join_set = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(
@@ -977,7 +960,6 @@ impl Task {
                 offset: u64,
                 length: u64,
                 request_header: HeaderMap,
-                client_certs: Option<Vec<CertificateDer<'static>>>,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
@@ -996,7 +978,6 @@ impl Task {
                         offset,
                         length,
                         request_header,
-                        client_certs,
                     )
                     .await
             }
@@ -1009,7 +990,6 @@ impl Task {
                     interested_piece.offset,
                     interested_piece.length,
                     request_header.clone(),
-                    client_certs.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
                     semaphore.clone(),
@@ -1269,13 +1249,6 @@ impl Task {
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
-        // Convert the raw certificate chain to certs.
-        let client_certs = if download.certificate_chain.is_empty() {
-            None
-        } else {
-            Some(raw_certs_to_certs(download.certificate_chain))
-        };
-
         // Download the pieces.
         let mut join_set = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(
@@ -1290,7 +1263,6 @@ impl Task {
                 offset: u64,
                 length: u64,
                 request_header: HeaderMap,
-                client_certs: Option<Vec<CertificateDer<'static>>>,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
@@ -1309,7 +1281,6 @@ impl Task {
                         offset,
                         length,
                         request_header,
-                        client_certs,
                     )
                     .await
             }
@@ -1322,7 +1293,6 @@ impl Task {
                     interested_piece.offset,
                     interested_piece.length,
                     request_header.clone(),
-                    client_certs.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
                     semaphore.clone(),

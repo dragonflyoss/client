@@ -22,8 +22,8 @@ use crate::utils::http::{
     hashmap_to_hyper_header_map, hyper_headermap_to_reqwest_headermap, reqwest_headermap_to_hashmap,
 };
 use crate::utils::tls::{
-    certs_to_raw_certs, generate_ca_cert_from_pem, generate_certs_from_pem,
-    generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs,
+    generate_ca_cert_from_pem, generate_certs_from_pem, generate_self_signed_certs_by_ca_cert,
+    generate_simple_self_signed_certs,
 };
 use crate::{Error as ClientError, Result as ClientResult};
 use bytes::Bytes;
@@ -278,7 +278,7 @@ pub async fn http_handler(
             request.method(),
             request_uri
         );
-        return proxy_by_dfdaemon(config, task, rule.clone(), request, registry_certs).await;
+        return proxy_by_dfdaemon(config, task, rule.clone(), request).await;
     }
 
     if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
@@ -420,7 +420,7 @@ pub async fn upgraded_handler(
             request.method(),
             request_uri
         );
-        return proxy_by_dfdaemon(config, task, rule.clone(), request, registry_certs).await;
+        return proxy_by_dfdaemon(config, task, rule.clone(), request).await;
     }
 
     if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
@@ -447,7 +447,6 @@ async fn proxy_by_dfdaemon(
     task: Arc<Task>,
     rule: Rule,
     request: Request<hyper::body::Incoming>,
-    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     // Initialize the dfdaemon download client.
     let dfdaemon_download_client =
@@ -464,7 +463,7 @@ async fn proxy_by_dfdaemon(
         };
 
     // Make the download task request.
-    let download_task_request = match make_download_task_request(request, rule, registry_certs) {
+    let download_task_request = match make_download_task_request(request, rule) {
         Ok(download_task_request) => download_task_request,
         Err(err) => {
             error!("make download task request failed: {}", err);
@@ -738,7 +737,6 @@ fn make_registry_mirror_request(
 fn make_download_task_request(
     request: Request<hyper::body::Incoming>,
     rule: Rule,
-    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<DownloadTaskRequest> {
     // Convert the Reqwest header to the Hyper header.
     let mut reqwest_request_header = hyper_headermap_to_reqwest_headermap(request.headers());
@@ -746,35 +744,27 @@ fn make_download_task_request(
     // Registry will return the 403 status code if the Host header is set.
     reqwest_request_header.remove(reqwest::header::HOST);
 
-    let mut download = Download {
-        url: make_download_url(request.uri(), rule.use_tls, rule.redirect.clone())?,
-        digest: None,
-        // Download range use header range in HTTP protocol.
-        range: None,
-        r#type: TaskType::Dfdaemon as i32,
-        tag: header::get_tag(&reqwest_request_header),
-        application: header::get_application(&reqwest_request_header),
-        priority: header::get_priority(&reqwest_request_header),
-        filtered_query_params: header::get_filtered_query_params(
-            &reqwest_request_header,
-            rule.filtered_query_params.clone(),
-        ),
-        request_header: reqwest_headermap_to_hashmap(&reqwest_request_header),
-        piece_length: header::get_piece_length(&reqwest_request_header),
-        output_path: None,
-        timeout: None,
-        need_back_to_source: false,
-        certificate_chain: Vec::new(),
-    };
-
-    // If the registry_certs is set, use the registry_certs as
-    // the certificate chain.
-    if let Some(certs) = registry_certs.as_ref() {
-        download.certificate_chain = certs_to_raw_certs(certs.to_owned());
-    };
-
     Ok(DownloadTaskRequest {
-        download: Some(download),
+        download: Some(Download {
+            url: make_download_url(request.uri(), rule.use_tls, rule.redirect.clone())?,
+            digest: None,
+            // Download range use header range in HTTP protocol.
+            range: None,
+            r#type: TaskType::Dfdaemon as i32,
+            tag: header::get_tag(&reqwest_request_header),
+            application: header::get_application(&reqwest_request_header),
+            priority: header::get_priority(&reqwest_request_header),
+            filtered_query_params: header::get_filtered_query_params(
+                &reqwest_request_header,
+                rule.filtered_query_params.clone(),
+            ),
+            request_header: reqwest_headermap_to_hashmap(&reqwest_request_header),
+            piece_length: header::get_piece_length(&reqwest_request_header),
+            output_path: None,
+            timeout: None,
+            need_back_to_source: false,
+            certificate_chain: Vec::new(),
+        }),
     })
 }
 
