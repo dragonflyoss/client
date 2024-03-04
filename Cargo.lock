@@ -595,13 +595,13 @@ dependencies = [
  "prost-wkt-types",
  "serde",
  "tokio",
- "tonic",
+ "tonic 0.9.2",
  "tonic-build",
 ]
 
 [[package]]
 name = "dragonfly-client"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -658,7 +658,7 @@ dependencies = [
  "tokio-rustls 0.25.0",
  "tokio-stream",
  "tokio-util",
- "tonic",
+ "tonic 0.9.2",
  "tonic-health",
  "tonic-reflection",
  "tower",
@@ -3103,6 +3103,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "tonic"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76c4eb7a4e9ef9d4763600161f12f5070b92a578e1b634db88a6887844c91a13"
+dependencies = [
+ "async-trait",
+ "base64",
+ "bytes",
+ "http 0.2.11",
+ "http-body 0.4.6",
+ "percent-encoding",
+ "pin-project",
+ "prost 0.12.3",
+ "tokio",
+ "tokio-stream",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
 name = "tonic-build"
 version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3125,20 +3146,20 @@ dependencies = [
  "prost 0.11.9",
  "tokio",
  "tokio-stream",
- "tonic",
+ "tonic 0.9.2",
 ]
 
 [[package]]
 name = "tonic-reflection"
-version = "0.9.2"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0543d7092032041fbeac1f2c84304537553421a11a623c2301b12ef0264862c7"
+checksum = "548c227bd5c0fae5925812c4ec6c66ffcfced23ea370cb823f4d18f0fc1cb6a7"
 dependencies = [
- "prost 0.11.9",
- "prost-types 0.11.9",
+ "prost 0.12.3",
+ "prost-types 0.12.3",
  "tokio",
  "tokio-stream",
- "tonic",
+ "tonic 0.11.0",
 ]
 
 [[package]]
