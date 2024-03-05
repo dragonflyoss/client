@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-use crate::utils::http::reqwest_headermap_to_hashmap;
 use chrono::{NaiveDateTime, Utc};
 use dragonfly_client_core::{Error, Result};
+use dragonfly_client_util::http::reqwest_headermap_to_hashmap;
 use reqwest::header::{self, HeaderMap};
 use rocksdb::{
     BlockBasedOptions, Cache, ColumnFamily, IteratorMode, Options, TransactionDB,

@@ -1,0 +1,26 @@
+[package]
+name = "dragonfly-client-util"
+description = "Utility library for the dragonfly client"
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+
+[dependencies]
+dragonfly-client-core.workspace = true
+dragonfly-api.workspace = true
+reqwest.workspace = true
+hyper.workspace = true
+http-range-header.workspace = true
+tracing.workspace = true
+url.workspace = true
+rcgen.workspace = true
+rustls-pki-types.workspace = true
+rustls-pemfile.workspace = true
+sha2.workspace = true
+uuid.workspace = true
+hex.workspace = true

@@ -30,7 +30,7 @@ use dragonfly_client::shutdown;
 use dragonfly_client::storage::Storage;
 use dragonfly_client::task::Task;
 use dragonfly_client::tracing::init_tracing;
-use dragonfly_client::utils::id_generator::IDGenerator;
+use dragonfly_client_util::id_generator::IDGenerator;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
