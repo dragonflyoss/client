@@ -20,7 +20,6 @@ use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::storage::{metadata, Storage};
 use crate::utils::http::{hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap};
 use crate::utils::id_generator::IDGenerator;
-use crate::{DownloadFromRemotePeerFailed, Error, HTTPError, Result as ClientResult};
 use dragonfly_api::common::v2::Range;
 use dragonfly_api::common::v2::{Download, Peer, Piece, TrafficType};
 use dragonfly_api::dfdaemon::{
@@ -36,6 +35,9 @@ use dragonfly_api::scheduler::v2::{
     DownloadPieceBackToSourceFailedRequest, DownloadPieceBackToSourceFinishedRequest,
     DownloadPieceFailedRequest, DownloadPieceFinishedRequest, RegisterPeerRequest,
     RescheduleRequest,
+};
+use dragonfly_client_core::{
+    DownloadFromRemotePeerFailed, Error, HTTPError, Result as ClientResult,
 };
 use reqwest::header::HeaderMap;
 use std::path::Path;
