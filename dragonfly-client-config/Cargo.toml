@@ -10,8 +10,6 @@ license.workspace = true
 readme.workspace = true
 edition.workspace = true
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 dragonfly-client-core.workspace = true
 regex.workspace = true
