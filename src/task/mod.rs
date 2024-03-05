@@ -15,7 +15,6 @@
  */
 
 use crate::backend::http::{Request as HTTPRequest, HTTP};
-use crate::config::dfdaemon::Config;
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::storage::{metadata, Storage};
 use dragonfly_api::common::v2::Range;
@@ -34,6 +33,7 @@ use dragonfly_api::scheduler::v2::{
     DownloadPieceFailedRequest, DownloadPieceFinishedRequest, RegisterPeerRequest,
     RescheduleRequest,
 };
+use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     DownloadFromRemotePeerFailed, Error, HTTPError, Result as ClientResult,
 };

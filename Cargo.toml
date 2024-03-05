@@ -1,7 +1,6 @@
 [package]
 name = "dragonfly-client"
 description = "Dragonfly client written in Rust"
-
 version.workspace = true
 authors.workspace = true
 homepage.workspace = true
@@ -23,7 +22,7 @@ name = "dfstore"
 path = "src/bin/dfstore/main.rs"
 
 [workspace]
-members = ["dragonfly-client-core", "dragonfly-client-util"]
+members = ["dragonfly-client-config","dragonfly-client-core", "dragonfly-client-util"]
 
 [workspace.package]
 version = "0.1.17"
@@ -36,8 +35,9 @@ readme = "README.md"
 edition = "2021"
 
 [workspace.dependencies]
-dragonfly-client-core = { path = "dragonfly-client-core" }
-dragonfly-client-util = { path = "dragonfly-client-util" }
+dragonfly-client-core = { path = "dragonfly-client-core", version = "*" }
+dragonfly-client-util = { path = "dragonfly-client-util", verison = "*" }
+dragonfly-client-config = { path = "dragonfly-client-config", version = "*" }
 thiserror = "1.0"
 dragonfly-api = "2.0.102"
 reqwest = { version = "0.11.24", features = ["stream", "native-tls", "rustls-tls"] }
@@ -54,6 +54,7 @@ sha2 = "0.10"
 uuid = { version = "1.4", features = ["v4"] }
 hex = "0.4"
 rocksdb = "0.22.0"
+serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1.0"
 http = "1"
@@ -63,25 +64,25 @@ tokio-stream = "0.1.14"
 validator = { version = "0.16", features = ["derive"] }
 warp = "0.3.5"
 headers = "0.4.0"
+regex = "1.10.2"
+humantime = "2.1.0"
 
 [dependencies]
 dragonfly-client-core.workspace = true
 dragonfly-client-util.workspace = true
+dragonfly-client-config.workspace = true
 rcgen.workspace = true
 hyper-util.workspace = true
+tracing.workspace = true
+validator.workspace = true
+humantime.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 clap = { version = "4.5.1", features = [ "derive" ] }
-home = "0.5.4"
-tracing = "0.1"
 tracing-log = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2.3"
 tracing-opentelemetry = "0.18.0"
-humantime = "2.1.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_regex = "1.1.0"
-serde_yaml = "0.9"
-serde_json = "1.0"
-validator = { version = "0.16", features = ["derive"] }
 opentelemetry = { version = "0.18.0", default-features = false, features = ["trace", "rt-tokio"] }
 opentelemetry-jaeger = { version = "0.17.0", features = ["rt-tokio"] }
 lazy_static = "1.4"
@@ -96,8 +97,6 @@ futures = "0.3.28"
 tokio = { version = "1.29.1", features = ["full"] }
 tokio-util = { version = "0.7.8", features = ["full"] }
 bytes = "1.4"
-hostname = "^0.3"
-local-ip-address = "0.5.3"
 rocksdb = "0.22.0"
 num_cpus = "1.0"
 dragonfly-api = "2.0.102"
@@ -119,13 +118,11 @@ hashring = "0.3.3"
 libc = "0.2"
 fslock = "0.2.1"
 openssl = { version = "0.10", features = ["vendored"] }
-humantime-serde = "1.1.1"
 leaky-bucket = "1.0.1"
 hyper = { version = "1.1", features = ["full"] }
 tokio-rustls = "0.25"
 hyper-rustls = { version = "0.26", features = [ "http1", "http2", "logging" ] }
 http-body-util = "0.1.0"
-regex = "1.10.2"
 futures-util = "0.3.30"
 rustls = "0.22.2"
 rustls-pki-types = "1.2.0"

@@ -16,7 +16,6 @@
 
 pub mod announcer;
 pub mod backend;
-pub mod config;
 pub mod dynconfig;
 pub mod gc;
 pub mod grpc;

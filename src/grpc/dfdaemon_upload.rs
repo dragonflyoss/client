@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-use crate::config::dfdaemon::Config;
 use crate::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use crate::shutdown;
 use crate::storage;
@@ -26,6 +25,7 @@ use dragonfly_api::dfdaemon::v2::{
     DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest, SyncPiecesRequest,
     SyncPiecesResponse, TriggerDownloadTaskRequest,
 };
+use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result as ClientResult;
 use std::net::SocketAddr;
 use std::sync::Arc;

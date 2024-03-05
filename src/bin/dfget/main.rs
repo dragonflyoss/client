@@ -17,10 +17,10 @@
 use clap::Parser;
 use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::{download_task_response, DownloadTaskRequest};
-use dragonfly_client::config::{self, dfdaemon, dfget};
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::tracing::init_tracing;
+use dragonfly_client_config::{self, default_piece_length, dfdaemon, dfget};
 use dragonfly_client_core::Error;
 use dragonfly_client_util::http::header_vec_to_hashmap;
 use fslock::LockFile;
@@ -76,7 +76,7 @@ struct Args {
 
     #[arg(
         long = "piece-length",
-        default_value_t = config::default_piece_length(),
+        default_value_t = default_piece_length(),
         help = "Specify the byte length of the piece"
     )]
     piece_length: u64,
