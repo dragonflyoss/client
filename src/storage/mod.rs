@@ -15,9 +15,9 @@
  */
 
 use crate::config::dfdaemon::Config;
-use crate::utils::digest::{Algorithm, Digest};
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_core::{Error, Result};
+use dragonfly_client_util::digest::{Algorithm, Digest};
 use reqwest::header::HeaderMap;
 use std::path::Path;
 use std::sync::Arc;

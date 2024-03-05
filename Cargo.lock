@@ -612,18 +612,16 @@ dependencies = [
  "dashmap",
  "dragonfly-api",
  "dragonfly-client-core",
+ "dragonfly-client-util",
  "fs2",
  "fslock",
  "futures",
  "futures-util",
  "hashring",
- "headers 0.4.0",
- "hex",
  "home",
  "hostname",
  "http 1.0.0",
  "http-body-util",
- "http-range-header",
  "humantime",
  "humantime-serde",
  "hyper 1.1.0",
@@ -646,7 +644,6 @@ dependencies = [
  "reqwest",
  "rocksdb",
  "rustls 0.22.2",
- "rustls-pemfile 2.1.1",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -654,7 +651,6 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "sysinfo",
- "thiserror",
  "tokio",
  "tokio-rustls 0.25.0",
  "tokio-stream",
@@ -669,7 +665,6 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "url",
- "uuid",
  "validator",
  "warp",
 ]
@@ -696,6 +691,25 @@ dependencies = [
  "url",
  "validator",
  "warp",
+]
+
+[[package]]
+name = "dragonfly-client-util"
+version = "0.1.17"
+dependencies = [
+ "dragonfly-api",
+ "dragonfly-client-core",
+ "hex",
+ "http-range-header",
+ "hyper 1.1.0",
+ "rcgen",
+ "reqwest",
+ "rustls-pemfile 2.1.1",
+ "rustls-pki-types",
+ "sha2",
+ "tracing",
+ "url",
+ "uuid",
 ]
 
 [[package]]
