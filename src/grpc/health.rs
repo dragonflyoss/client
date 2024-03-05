@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::{Error, Result};
+use dragonfly_client_core::{Error, Result};
 use std::path::PathBuf;
 use tokio::net::UnixStream;
 use tonic::transport::{Channel, Endpoint, Uri};

@@ -15,8 +15,8 @@
  */
 
 use crate::utils::http::reqwest_headermap_to_hashmap;
-use crate::{Error, Result};
 use chrono::{NaiveDateTime, Utc};
+use dragonfly_client_core::{Error, Result};
 use reqwest::header::{self, HeaderMap};
 use rocksdb::{
     BlockBasedOptions, Cache, ColumnFamily, IteratorMode, Options, TransactionDB,

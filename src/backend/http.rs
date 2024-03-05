@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::Result;
+use dragonfly_client_core::Result;
 use futures::TryStreamExt;
 use reqwest::header::HeaderMap;
 use std::time::Duration;
