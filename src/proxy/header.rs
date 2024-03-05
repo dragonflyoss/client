@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-use crate::config;
 use dragonfly_api::common::v2::Priority;
 use reqwest::header::HeaderMap;
 use tracing::error;
@@ -115,14 +114,14 @@ pub fn get_piece_length(header: &HeaderMap) -> u64 {
                 Ok(piece_length) => piece_length,
                 Err(err) => {
                     error!("parse piece length from header failed: {}", err);
-                    config::default_piece_length()
+                    dragonfly_client_config::default_piece_length()
                 }
             },
             Err(err) => {
                 error!("get piece length from header failed: {}", err);
-                config::default_piece_length()
+                dragonfly_client_config::default_piece_length()
             }
         },
-        None => config::default_piece_length(),
+        None => dragonfly_client_config::default_piece_length(),
     }
 }

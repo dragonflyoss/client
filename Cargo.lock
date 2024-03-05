@@ -611,6 +611,7 @@ dependencies = [
  "clap",
  "dashmap",
  "dragonfly-api",
+ "dragonfly-client-config",
  "dragonfly-client-core",
  "dragonfly-client-util",
  "fs2",
@@ -618,12 +619,9 @@ dependencies = [
  "futures",
  "futures-util",
  "hashring",
- "home",
- "hostname",
  "http 1.0.0",
  "http-body-util",
  "humantime",
- "humantime-serde",
  "hyper 1.1.0",
  "hyper-rustls 0.26.0",
  "hyper-util",
@@ -631,7 +629,6 @@ dependencies = [
  "lazy_static",
  "leaky-bucket",
  "libc",
- "local-ip-address",
  "num_cpus",
  "openssl",
  "opentelemetry",
@@ -640,15 +637,12 @@ dependencies = [
  "prost-wkt-types",
  "rand",
  "rcgen",
- "regex",
  "reqwest",
  "rocksdb",
  "rustls 0.22.2",
  "rustls-pki-types",
  "serde",
  "serde_json",
- "serde_regex",
- "serde_yaml",
  "sha2",
  "sysinfo",
  "tokio",
@@ -667,6 +661,24 @@ dependencies = [
  "url",
  "validator",
  "warp",
+]
+
+[[package]]
+name = "dragonfly-client-config"
+version = "0.1.17"
+dependencies = [
+ "dragonfly-client-core",
+ "home",
+ "hostname",
+ "humantime",
+ "humantime-serde",
+ "local-ip-address",
+ "regex",
+ "serde",
+ "serde_regex",
+ "serde_yaml",
+ "tracing",
+ "validator",
 ]
 
 [[package]]
