@@ -610,13 +610,13 @@ dependencies = [
  "clap",
  "dashmap",
  "dragonfly-api",
+ "dragonfly-client-backend",
  "dragonfly-client-config",
  "dragonfly-client-core",
  "dragonfly-client-storage",
  "dragonfly-client-util",
  "fs2",
  "fslock",
- "futures",
  "futures-util",
  "hashring",
  "http 1.0.0",
@@ -660,6 +660,19 @@ dependencies = [
  "url",
  "validator",
  "warp",
+]
+
+[[package]]
+name = "dragonfly-client-backend"
+version = "0.1.17"
+dependencies = [
+ "dragonfly-client-core",
+ "futures",
+ "reqwest",
+ "rustls 0.21.10",
+ "rustls-pki-types",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

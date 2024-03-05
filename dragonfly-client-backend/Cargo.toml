@@ -1,0 +1,22 @@
+[package]
+name = "dragonfly-client-backend"
+description = "Backend for the dragonfly client"
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+dragonfly-client-core.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+rustls-pki-types.workspace = true
+futures = "0.3.28"
+rustls = "0.21.6"
