@@ -26,10 +26,10 @@ use dragonfly_client::grpc::{
 use dragonfly_client::metrics::Metrics;
 use dragonfly_client::proxy::Proxy;
 use dragonfly_client::shutdown;
-use dragonfly_client::storage::Storage;
 use dragonfly_client::task::Task;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_config::dfdaemon;
+use dragonfly_client_storage::Storage;
 use dragonfly_client_util::id_generator::IDGenerator;
 use std::net::SocketAddr;
 use std::path::PathBuf;

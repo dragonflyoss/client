@@ -8,6 +8,7 @@ repository.workspace = true
 keywords.workspace = true
 license.workspace = true
 edition.workspace = true
+resolver = "2"
 
 [[bin]]
 name = "dfdaemon"
@@ -22,7 +23,7 @@ name = "dfstore"
 path = "src/bin/dfstore/main.rs"
 
 [workspace]
-members = ["dragonfly-client-config","dragonfly-client-core", "dragonfly-client-util"]
+members = ["dragonfly-client-config","dragonfly-client-core", "dragonfly-client-storage", "dragonfly-client-util"]
 
 [workspace.package]
 version = "0.1.17"
@@ -36,8 +37,9 @@ edition = "2021"
 
 [workspace.dependencies]
 dragonfly-client-core = { path = "dragonfly-client-core", version = "*" }
-dragonfly-client-util = { path = "dragonfly-client-util", verison = "*" }
 dragonfly-client-config = { path = "dragonfly-client-config", version = "*" }
+dragonfly-client-storage = { path = "dragonfly-client-storage", version = "*" }
+dragonfly-client-util = { path = "dragonfly-client-util", version = "*" }
 thiserror = "1.0"
 dragonfly-api = "2.0.102"
 reqwest = { version = "0.11.24", features = ["stream", "native-tls", "rustls-tls"] }
@@ -60,17 +62,21 @@ serde_json = "1.0"
 http = "1"
 tonic = { version = "0.9.2", features = ["gzip"] }
 tokio = { version = "1.29.1", features = ["full"] }
+tokio-util = { version = "0.7.8", features = ["full"] }
 tokio-stream = "0.1.14"
 validator = { version = "0.16", features = ["derive"] }
 warp = "0.3.5"
 headers = "0.4.0"
 regex = "1.10.2"
 humantime = "2.1.0"
+prost-wkt-types = "0.4"
+chrono = { version = "0.4.34", features = ["serde"] }
 
 [dependencies]
 dragonfly-client-core.workspace = true
-dragonfly-client-util.workspace = true
 dragonfly-client-config.workspace = true
+dragonfly-client-storage.workspace = true
+dragonfly-client-util.workspace = true
 rcgen.workspace = true
 hyper-util.workspace = true
 tracing.workspace = true
@@ -78,6 +84,10 @@ validator.workspace = true
 humantime.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+chrono.workspace = true
+prost-wkt-types.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
 clap = { version = "4.5.1", features = [ "derive" ] }
 tracing-log = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -94,22 +104,16 @@ tonic-reflection = "0.9.2"
 tokio-stream = "0.1.14"
 reqwest = { version = "0.11.24", features = ["stream", "native-tls", "rustls-tls"] }
 futures = "0.3.28"
-tokio = { version = "1.29.1", features = ["full"] }
-tokio-util = { version = "0.7.8", features = ["full"] }
 bytes = "1.4"
 rocksdb = "0.22.0"
-num_cpus = "1.0"
 dragonfly-api = "2.0.102"
-chrono = { version = "0.4.34", features = ["serde"] }
 sysinfo = "0.29.6"
 sha2 = "0.10"
 url = "2.4.0"
 async-stream = "0.3.5"
 anyhow = "1.0.80"
-base16ct = { version = "0.2", features = ["alloc"] }
 http = "1"
 rand = "0.8.5"
-prost-wkt-types = "0.4"
 tower = "0.4.13"
 indicatif = "0.17.8"
 dashmap = "5.5.3"

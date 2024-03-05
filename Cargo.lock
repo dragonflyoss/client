@@ -605,7 +605,6 @@ version = "0.1.17"
 dependencies = [
  "anyhow",
  "async-stream",
- "base16ct",
  "bytes",
  "chrono",
  "clap",
@@ -613,6 +612,7 @@ dependencies = [
  "dragonfly-api",
  "dragonfly-client-config",
  "dragonfly-client-core",
+ "dragonfly-client-storage",
  "dragonfly-client-util",
  "fs2",
  "fslock",
@@ -629,7 +629,6 @@ dependencies = [
  "lazy_static",
  "leaky-bucket",
  "libc",
- "num_cpus",
  "openssl",
  "opentelemetry",
  "opentelemetry-jaeger",
@@ -703,6 +702,28 @@ dependencies = [
  "url",
  "validator",
  "warp",
+]
+
+[[package]]
+name = "dragonfly-client-storage"
+version = "0.1.17"
+dependencies = [
+ "base16ct",
+ "chrono",
+ "dragonfly-api",
+ "dragonfly-client-config",
+ "dragonfly-client-core",
+ "dragonfly-client-util",
+ "num_cpus",
+ "prost-wkt-types",
+ "reqwest",
+ "rocksdb",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

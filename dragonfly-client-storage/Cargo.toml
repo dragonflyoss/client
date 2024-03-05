@@ -1,0 +1,29 @@
+[package]
+name = "dragonfly-client-storage"
+description = "Storage for the dragonfly client"
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+
+[dependencies]
+dragonfly-client-core.workspace = true
+dragonfly-client-config.workspace = true
+dragonfly-client-util.workspace = true
+dragonfly-api.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+rocksdb.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+prost-wkt-types.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+sha2.workspace = true
+num_cpus = "1.0"
+base16ct = { version = "0.2", features = ["alloc"] }

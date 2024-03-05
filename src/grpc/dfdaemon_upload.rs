@@ -16,7 +16,6 @@
 
 use crate::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use crate::shutdown;
-use crate::storage;
 use crate::task;
 use dragonfly_api::common::v2::Piece;
 use dragonfly_api::dfdaemon::v2::{
@@ -227,7 +226,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     }
 
                     // Wait for the piece to be finished.
-                    tokio::time::sleep(storage::DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL).await;
+                    tokio::time::sleep(
+                        dragonfly_client_storage::DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL,
+                    )
+                    .await;
                 }
             }
             .in_current_span(),

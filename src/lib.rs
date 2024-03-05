@@ -22,6 +22,5 @@ pub mod grpc;
 pub mod metrics;
 pub mod proxy;
 pub mod shutdown;
-pub mod storage;
 pub mod task;
 pub mod tracing;

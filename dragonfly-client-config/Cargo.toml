@@ -1,6 +1,6 @@
 [package]
 name = "dragonfly-client-config"
-description = "Configuration for the Dragonfly client"
+description = "Configuration for the dragonfly client"
 version.workspace = true
 authors.workspace = true
 homepage.workspace = true
