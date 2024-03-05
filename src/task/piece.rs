@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-use crate::backend::http::{Request as HTTPRequest, HTTP};
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use chrono::Utc;
 use dragonfly_api::common::v2::{Peer, Range};
 use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
+use dragonfly_client_backend::http::{Request as HTTPRequest, HTTP};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, HTTPError, Result};
 use dragonfly_client_storage::{metadata, Storage};
@@ -367,6 +367,7 @@ impl Piece {
                 url: url.to_string(),
                 header: request_header.to_owned(),
                 timeout: self.config.download.piece_timeout,
+                client_certs: None,
             })
             .await
             .map_err(|err| {

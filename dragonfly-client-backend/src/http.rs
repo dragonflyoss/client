@@ -1,5 +1,5 @@
 /*
- *     Copyright 2023 The Dragonfly Authors
+ *     Copyright 2024 The Dragonfly Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 use dragonfly_client_core::Result;
 use futures::TryStreamExt;
 use reqwest::header::HeaderMap;
+use rustls_pki_types::CertificateDer;
 use std::time::Duration;
 use tokio::io::AsyncRead;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
@@ -31,6 +32,9 @@ pub struct Request {
 
     // timeout is the timeout of the request.
     pub timeout: Duration,
+
+    // client_certs is the client certificates for the request.
+    pub client_certs: Option<Vec<CertificateDer<'static>>>,
 }
 
 // HeadResponse is the head response for HTTP backend.
@@ -70,7 +74,10 @@ impl HTTP {
         // the request method. Therefore, the signed URL of the GET method cannot be requested
         // through the HEAD method. Use GET request to replace of HEAD request
         // to get header and status code.
-        let mut request_builder = self.client()?.get(&request.url).headers(request.header);
+        let mut request_builder = self
+            .client(request.client_certs)?
+            .get(&request.url)
+            .headers(request.header);
         request_builder = request_builder.timeout(request.timeout);
 
         let response = request_builder.send().await?;
@@ -85,7 +92,10 @@ impl HTTP {
 
     // Get gets the content of the request.
     pub async fn get(&self, request: Request) -> Result<GetResponse<impl AsyncRead>> {
-        let mut request_builder = self.client()?.get(&request.url).headers(request.header);
+        let mut request_builder = self
+            .client(request.client_certs)?
+            .get(&request.url)
+            .headers(request.header);
         request_builder = request_builder.timeout(request.timeout);
 
         let response = request_builder.send().await?;
@@ -105,8 +115,32 @@ impl HTTP {
     }
 
     // client returns a new reqwest client.
-    fn client(&self) -> Result<reqwest::Client> {
-        Ok(reqwest::Client::builder().build()?)
+    fn client(
+        &self,
+        client_certs: Option<Vec<CertificateDer<'static>>>,
+    ) -> Result<reqwest::Client> {
+        match client_certs {
+            Some(client_certs) => {
+                // TLS client config using the custom CA store for lookups.
+                let mut root_cert_store = rustls::RootCertStore::empty();
+                root_cert_store.add_parsable_certificates(&client_certs);
+                let client_config = rustls::ClientConfig::builder()
+                    .with_safe_defaults()
+                    .with_root_certificates(root_cert_store)
+                    .with_no_client_auth();
+
+                let client = reqwest::Client::builder()
+                    .use_preconfigured_tls(client_config)
+                    .build()?;
+
+                Ok(client)
+            }
+            None => {
+                // Default TLS client config with native roots.
+                let client = reqwest::Client::builder().build()?;
+                Ok(client)
+            }
+        }
     }
 }
 

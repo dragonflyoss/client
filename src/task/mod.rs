@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-use crate::backend::http::{Request as HTTPRequest, HTTP};
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use dragonfly_api::common::v2::Range;
 use dragonfly_api::common::v2::{Download, Peer, Piece, TrafficType};
@@ -32,6 +31,7 @@ use dragonfly_api::scheduler::v2::{
     DownloadPieceFailedRequest, DownloadPieceFinishedRequest, RegisterPeerRequest,
     RescheduleRequest,
 };
+use dragonfly_client_backend::http::{Request as HTTPRequest, HTTP};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     DownloadFromRemotePeerFailed, Error, HTTPError, Result as ClientResult,
@@ -136,6 +136,7 @@ impl Task {
                 url: download.url,
                 header: request_header,
                 timeout: self.config.download.piece_timeout,
+                client_certs: None,
             })
             .await?;
 
