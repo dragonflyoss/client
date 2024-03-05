@@ -601,7 +601,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -611,6 +611,7 @@ dependencies = [
  "clap",
  "dashmap",
  "dragonfly-api",
+ "dragonfly-client-core",
  "fs2",
  "fslock",
  "futures",
@@ -669,6 +670,30 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "validator",
+ "warp",
+]
+
+[[package]]
+name = "dragonfly-client-core"
+version = "0.1.17"
+dependencies = [
+ "headers 0.4.0",
+ "http 1.0.0",
+ "http-range-header",
+ "hyper 1.1.0",
+ "hyper-util",
+ "rcgen",
+ "reqwest",
+ "rocksdb",
+ "rustls 0.22.2",
+ "serde_json",
+ "serde_yaml",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "url",
  "validator",
  "warp",
 ]

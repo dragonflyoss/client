@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-use crate::{Error, Result};
 use dragonfly_api::common::v2::Range;
+use dragonfly_client_core::{Error, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
 use std::collections::HashMap;
 use tracing::error;

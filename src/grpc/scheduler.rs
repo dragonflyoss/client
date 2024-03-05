@@ -16,7 +16,6 @@
 
 // use crate::dynconfig::Dynconfig;
 use crate::dynconfig::Dynconfig;
-use crate::{Error, Result};
 use dragonfly_api::common::v2::{Peer, Task};
 use dragonfly_api::manager::v2::Scheduler;
 use dragonfly_api::scheduler::v2::{
@@ -24,6 +23,7 @@ use dragonfly_api::scheduler::v2::{
     AnnouncePeerRequest, AnnouncePeerResponse, ExchangePeerRequest, ExchangePeerResponse,
     LeaveHostRequest, LeavePeerRequest, StatPeerRequest, StatTaskRequest,
 };
+use dragonfly_client_core::{Error, Result};
 use hashring::HashRing;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;

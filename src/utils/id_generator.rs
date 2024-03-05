@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::Result;
+use dragonfly_client_core::Result;
 use sha2::{Digest, Sha256};
 use url::Url;
 use uuid::Uuid;

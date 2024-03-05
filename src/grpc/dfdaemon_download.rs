@@ -17,7 +17,6 @@
 use crate::shutdown;
 use crate::task;
 use crate::utils::http::{get_range, hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap};
-use crate::{Error as ClientError, Result as ClientResult};
 use dragonfly_api::common::v2::Task;
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_download_client::DfdaemonDownloadClient as DfdaemonDownloadGRPCClient,
@@ -31,6 +30,7 @@ use dragonfly_api::errordetails::v2::Http;
 use dragonfly_api::scheduler::v2::{
     LeaveHostRequest as SchedulerLeaveHostRequest, StatTaskRequest as SchedulerStatTaskRequest,
 };
+use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;

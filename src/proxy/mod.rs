@@ -25,13 +25,13 @@ use crate::utils::tls::{
     generate_ca_cert_from_pem, generate_certs_from_pem, generate_self_signed_certs_by_ca_cert,
     generate_simple_self_signed_certs,
 };
-use crate::{Error as ClientError, Result as ClientResult};
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse,
 };
 use dragonfly_api::errordetails::v2::Http;
+use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use futures_util::TryStreamExt;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full, StreamBody};
 use hyper::body::Frame;

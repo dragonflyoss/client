@@ -15,11 +15,11 @@
  */
 
 use crate::grpc::health::HealthClient;
-use crate::{Error, Result};
 use dragonfly_api::manager::v2::{
     manager_client::ManagerClient as ManagerGRPCClient, DeleteSeedPeerRequest,
     ListSchedulersRequest, ListSchedulersResponse, SeedPeer, UpdateSeedPeerRequest,
 };
+use dragonfly_client_core::{Error, Result};
 use tonic::transport::Channel;
 use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{error, info, instrument, warn};

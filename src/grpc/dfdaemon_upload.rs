@@ -19,7 +19,6 @@ use crate::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use crate::shutdown;
 use crate::storage;
 use crate::task;
-use crate::Result as ClientResult;
 use dragonfly_api::common::v2::Piece;
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient,
@@ -27,6 +26,7 @@ use dragonfly_api::dfdaemon::v2::{
     DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest, SyncPiecesRequest,
     SyncPiecesResponse, TriggerDownloadTaskRequest,
 };
+use dragonfly_client_core::Result as ClientResult;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;

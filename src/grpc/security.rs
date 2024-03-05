@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-use crate::Result;
 use dragonfly_api::security::{
     certificate_client::CertificateClient as CertificateGRPCClient, CertificateRequest,
     CertificateResponse,
 };
+use dragonfly_client_core::Result;
 use tonic::transport::Channel;
 use tracing::instrument;
 

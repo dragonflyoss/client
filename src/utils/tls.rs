@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::{Error as ClientError, Result as ClientResult};
+use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use rcgen::{Certificate, CertificateParams, KeyPair};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use std::path::PathBuf;

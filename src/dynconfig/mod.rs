@@ -18,10 +18,10 @@ use crate::config::{dfdaemon::Config, CARGO_PKG_VERSION, GIT_HASH};
 use crate::grpc::health::HealthClient;
 use crate::grpc::manager::ManagerClient;
 use crate::shutdown;
-use crate::{Error, Result};
 use dragonfly_api::manager::v2::{
     ListSchedulersRequest, ListSchedulersResponse, Scheduler, SourceType,
 };
+use dragonfly_client_core::{Error, Result};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tonic_health::pb::health_check_response::ServingStatus;
