@@ -6,6 +6,16 @@ WORKDIR /app/client
 COPY Cargo.toml ./
 COPY Cargo.lock ./
 COPY src/ src/
+
+COPY dragonfly-client-config/Cargo.toml ./dragonfly-client-config/Cargo.toml
+COPY dragonfly-client-config/src ./dragonfly-client-config/src
+
+COPY dragonfly-client-core/Cargo.toml ./dragonfly-client-core/Cargo.toml
+COPY dragonfly-client-core/src ./dragonfly-client-core/src
+
+COPY dragonfly-client-util/Cargo.toml ./dragonfly-client-util/Cargo.toml
+COPY dragonfly-client-util/src ./dragonfly-client-util/src
+
 RUN cargo build --release --verbose
 
 FROM alpine:3.17 as health

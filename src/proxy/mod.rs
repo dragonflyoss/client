@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-use crate::config::dfdaemon::{Config, Rule};
 use crate::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use crate::shutdown;
 use crate::task::Task;
@@ -24,6 +23,7 @@ use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse,
 };
 use dragonfly_api::errordetails::v2::Http;
+use dragonfly_client_config::dfdaemon::{Config, Rule};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_util::{
     http::{

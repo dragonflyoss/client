@@ -1,0 +1,27 @@
+[package]
+name = "dragonfly-client-config"
+description = "Configuration for the Dragonfly client"
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+dragonfly-client-core.workspace = true
+regex.workspace = true
+serde.workspace = true
+tracing.workspace = true
+validator.workspace = true
+humantime.workspace = true
+serde_yaml.workspace = true
+home = "0.5.4"
+local-ip-address = "0.5.3"
+hostname = "^0.3"
+humantime-serde = "1.1.1"
+serde_regex = "1.1.0"

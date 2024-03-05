@@ -17,7 +17,6 @@
 use clap::Parser;
 use dragonfly_client::announcer::{ManagerAnnouncer, SchedulerAnnouncer};
 use dragonfly_client::backend::http::HTTP;
-use dragonfly_client::config::dfdaemon;
 use dragonfly_client::dynconfig::Dynconfig;
 use dragonfly_client::gc::GC;
 use dragonfly_client::grpc::{
@@ -30,6 +29,7 @@ use dragonfly_client::shutdown;
 use dragonfly_client::storage::Storage;
 use dragonfly_client::task::Task;
 use dragonfly_client::tracing::init_tracing;
+use dragonfly_client_config::dfdaemon;
 use dragonfly_client_util::id_generator::IDGenerator;
 use std::net::SocketAddr;
 use std::path::PathBuf;

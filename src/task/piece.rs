@@ -15,12 +15,12 @@
  */
 
 use crate::backend::http::{Request as HTTPRequest, HTTP};
-use crate::config::dfdaemon::Config;
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::storage::{metadata, Storage};
 use chrono::Utc;
 use dragonfly_api::common::v2::{Peer, Range};
 use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
+use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, HTTPError, Result};
 use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};

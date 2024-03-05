@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-use crate::config::{
-    dfdaemon::{Config, HostType},
-    CARGO_PKG_RUSTC_VERSION, CARGO_PKG_VERSION, GIT_HASH,
-};
 use crate::grpc::{manager::ManagerClient, scheduler::SchedulerClient};
 use crate::shutdown;
 use dragonfly_api::common::v2::{Build, Cpu, Host, Memory, Network};
 use dragonfly_api::manager::v2::{DeleteSeedPeerRequest, SourceType, UpdateSeedPeerRequest};
 use dragonfly_api::scheduler::v2::AnnounceHostRequest;
+use dragonfly_client_config::{
+    dfdaemon::{Config, HostType},
+    CARGO_PKG_RUSTC_VERSION, CARGO_PKG_VERSION, GIT_HASH,
+};
 use dragonfly_client_core::Result;
 use std::env;
 use std::sync::Arc;

@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-use crate::config::dfdaemon::Config;
 use dragonfly_api::common::v2::Range;
+use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::digest::{Algorithm, Digest};
 use reqwest::header::HeaderMap;
