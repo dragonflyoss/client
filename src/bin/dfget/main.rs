@@ -22,7 +22,7 @@ use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client::utils::http::header_vec_to_hashmap;
-use dragonfly_client::Error;
+use dragonfly_client_core::Error;
 use fslock::LockFile;
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use std::path::PathBuf;
