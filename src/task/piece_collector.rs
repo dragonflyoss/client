@@ -15,12 +15,12 @@
  */
 
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
-use crate::storage::metadata;
 use dashmap::{DashMap, DashSet};
 use dragonfly_api::common::v2::Peer;
 use dragonfly_api::dfdaemon::v2::SyncPiecesRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
+use dragonfly_client_storage::metadata;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
