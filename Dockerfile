@@ -5,7 +5,6 @@ RUN apt-get update && apt-get install -y openssl libclang-dev pkg-config protobu
 WORKDIR /app/client
 COPY Cargo.toml ./
 COPY Cargo.lock ./
-COPY src/ src/
 
 COPY dragonfly-client/Cargo.toml ./dragonfly-client/Cargo.toml
 COPY dragonfly-client/src ./dragonfly-client/src
