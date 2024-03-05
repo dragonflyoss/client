@@ -15,9 +15,9 @@
  */
 
 use crate::shutdown;
-use crate::storage::Storage;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
+use dragonfly_client_storage::Storage;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
