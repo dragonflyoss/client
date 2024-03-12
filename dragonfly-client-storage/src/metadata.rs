@@ -100,6 +100,17 @@ impl Task {
         self.finished_at.is_some()
     }
 
+    // is_empty returns whether the task is empty.
+    pub fn is_empty(&self) -> bool {
+        if let Some(content_length) = self.content_length() {
+            if content_length == 0 {
+                return true;
+            }
+        }
+
+        false
+    }
+
     // content_length returns the content length of the task.
     pub fn content_length(&self) -> Option<u64> {
         match self.response_header.get(header::CONTENT_LENGTH.as_str()) {
