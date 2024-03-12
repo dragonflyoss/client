@@ -58,13 +58,11 @@ impl Storage {
     // hard_link_or_copy_task hard links or copies the task content to the destination.
     pub async fn hard_link_or_copy_task(
         &self,
-        task_id: &str,
+        task: metadata::Task,
         to: &Path,
         range: Option<Range>,
     ) -> Result<()> {
-        self.content
-            .hard_link_or_copy_task(task_id, to, range)
-            .await
+        self.content.hard_link_or_copy_task(task, to, range).await
     }
 
     // read_task_by_range returns the reader of the task by range.

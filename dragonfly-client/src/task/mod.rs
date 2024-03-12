@@ -165,13 +165,11 @@ impl Task {
     // hard_link_or_copy hard links or copies the task content to the destination.
     pub async fn hard_link_or_copy(
         &self,
-        task_id: &str,
+        task: metadata::Task,
         to: &Path,
         range: Option<Range>,
     ) -> ClientResult<()> {
-        self.storage
-            .hard_link_or_copy_task(task_id, to, range)
-            .await
+        self.storage.hard_link_or_copy_task(task, to, range).await
     }
 
     // download downloads a task.

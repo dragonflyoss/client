@@ -274,7 +274,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             // Hard link or copy the task content to the destination.
                             if let Err(err) = task_manager
                                 .hard_link_or_copy(
-                                    task_id.as_str(),
+                                    task,
                                     Path::new(output_path.as_str()),
                                     download.range.clone(),
                                 )

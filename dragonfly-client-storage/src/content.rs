@@ -56,25 +56,41 @@ impl Content {
     // hard_link_or_copy_task hard links or copies the task content to the destination.
     pub async fn hard_link_or_copy_task(
         &self,
-        task_id: &str,
+        task: super::metadata::Task,
         to: &Path,
         range: Option<Range>,
     ) -> Result<()> {
         // Copy the task content to the destination by range
         // if the range is specified.
         if let Some(range) = range {
-            self.copy_task_by_range(task_id, to, range).await?;
+            // If the range length is 0, no need to copy. Need to open the file to
+            // ensure the file exists.
+            if range.length == 0 {
+                info!("range length is 0, no need to copy");
+                File::create(to).await?;
+                return Ok(());
+            }
+
+            self.copy_task_by_range(task.id.as_str(), to, range).await?;
             info!("copy range of task success");
             return Ok(());
         }
 
         // If the hard link fails,
         // copy the task content to the destination.
-        if let Err(err) = self.hard_link_task(task_id, to).await {
+        if let Err(err) = self.hard_link_task(task.id.as_str(), to).await {
             info!("hard link task failed: {}", err);
 
+            // If the task is empty, no need to copy. Need to open the file to
+            // ensure the file exists.
+            if task.is_empty() {
+                info!("task is empty, no need to copy");
+                File::create(to).await?;
+                return Ok(());
+            }
+
             fs::remove_file(to).await?;
-            self.copy_task(task_id, to).await?;
+            self.copy_task(task.id.as_str(), to).await?;
             info!("copy task success");
             return Ok(());
         }
