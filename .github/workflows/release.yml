@@ -36,6 +36,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+            key: ${{ matrix.target }}
+            cache-on-failure: true
+
       - name: Get the release version from the tag
         shell: bash
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
