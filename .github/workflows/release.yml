@@ -24,8 +24,6 @@ jobs:
           # "false" if necessary for your workflow
           android: true
           dotnet: true
-          haskell: true
-          large-packages: true
           docker-images: true
           swap-storage: true
 
@@ -109,8 +107,6 @@ jobs:
           # "false" if necessary for your workflow
           android: true
           dotnet: true
-          haskell: true
-          large-packages: true
           docker-images: true
           swap-storage: true
 
