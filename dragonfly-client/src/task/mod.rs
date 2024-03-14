@@ -348,8 +348,26 @@ impl Task {
             )
             .await
         {
-            error!("download with scheduler error: {:?}", err);
+            if download.disable_back_to_source {
+                error!(
+                    "download back-to-source is disabled, download with scheduler error: {:?}",
+                    err
+                );
+                download_progress_tx
+                    .send_timeout(
+                        Err(Status::internal(format!(
+                            "download back-to-source is disabled, download with scheduler error: {}",
+                            err
+                        ))),
+                        REQUEST_TIMEOUT,
+                    )
+                    .await
+                    .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
 
+                return Err(err);
+            }
+
+            error!("download with scheduler error: {:?}", err);
             // Download the pieces from the source.
             if let Err(err) = self
                 .download_partial_from_source(

@@ -453,9 +453,6 @@ pub struct Scheduler {
     #[serde(default = "default_download_max_schedule_count")]
     #[validate(range(min = 1))]
     pub max_schedule_count: u32,
-
-    // enable_back_to_source indicates whether enable back-to-source download, when the scheduling failed.
-    pub enable_back_to_source: bool,
 }
 
 // Scheduler implements Default.
@@ -465,7 +462,6 @@ impl Default for Scheduler {
             announce_interval: default_scheduler_announce_interval(),
             schedule_timeout: default_scheduler_schedule_timeout(),
             max_schedule_count: default_download_max_schedule_count(),
-            enable_back_to_source: true,
         }
     }
 }
@@ -761,6 +757,10 @@ pub struct Proxy {
 
     // registry_mirror is implementation of the registry mirror in the proxy.
     pub registry_mirror: RegistryMirror,
+
+    // disable_back_to_source indicates whether disable to download back-to-source
+    // when download failed.
+    pub disable_back_to_source: bool,
 }
 
 // Security is the security configuration for dfdaemon.
