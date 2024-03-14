@@ -466,7 +466,7 @@ async fn proxy_by_dfdaemon(
         };
 
     // Make the download task request.
-    let download_task_request = match make_download_task_request(request, rule) {
+    let download_task_request = match make_download_task_request(config, request, rule) {
         Ok(download_task_request) => download_task_request,
         Err(err) => {
             error!("make download task request failed: {}", err);
@@ -738,6 +738,7 @@ fn make_registry_mirror_request(
 // make_download_task_requet makes a download task request by the request.
 #[instrument(skip_all)]
 fn make_download_task_request(
+    config: Arc<Config>,
     request: Request<hyper::body::Incoming>,
     rule: Rule,
 ) -> ClientResult<DownloadTaskRequest> {
@@ -765,7 +766,7 @@ fn make_download_task_request(
             piece_length: header::get_piece_length(&reqwest_request_header),
             output_path: None,
             timeout: None,
-            need_back_to_source: false,
+            disable_back_to_source: config.proxy.disable_back_to_source,
             certificate_chain: Vec::new(),
         }),
     })
