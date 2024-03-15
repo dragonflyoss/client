@@ -103,7 +103,7 @@ fn default_download_piece_timeout() -> Duration {
 // default_download_concurrent_piece_count is the default number of concurrent pieces to download.
 #[inline]
 fn default_download_concurrent_piece_count() -> u32 {
-    10
+    32
 }
 
 // default_download_max_schedule_count is the default max count of schedule.
