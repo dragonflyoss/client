@@ -20,12 +20,15 @@ use sha2::{Digest, Sha256};
 use std::cmp::{max, min};
 use std::path::{Path, PathBuf};
 use tokio::fs::{self, File, OpenOptions};
-use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, SeekFrom};
+use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom};
 use tokio_util::io::InspectReader;
 use tracing::info;
 
 // DEFAULT_DIR_NAME is the default directory name to store content.
 const DEFAULT_DIR_NAME: &str = "content";
+
+// DEFAULT_BUFFER_SIZE is the buffer size to read and write, default is 2MB.
+const DEFAULT_BUFFER_SIZE: usize = 2 * 1024 * 1024;
 
 // Content is the content of a piece.
 pub struct Content {
@@ -115,7 +118,10 @@ impl Content {
     pub async fn copy_task_by_range(&self, task_id: &str, to: &Path, range: Range) -> Result<()> {
         let mut from_f = File::open(self.dir.join(task_id)).await?;
         from_f.seek(SeekFrom::Start(range.start)).await?;
-        let mut range_reader = from_f.take(range.length);
+        let range_reader = from_f.take(range.length);
+
+        // Use a buffer to read the range.
+        let mut range_reader = BufReader::with_capacity(DEFAULT_BUFFER_SIZE, range_reader);
 
         let mut to_f = OpenOptions::new()
             .create(true)
@@ -171,6 +177,9 @@ impl Content {
         offset: u64,
         reader: &mut R,
     ) -> Result<WritePieceResponse> {
+        // Use a buffer to read the piece.
+        let reader = BufReader::with_capacity(DEFAULT_BUFFER_SIZE, reader);
+
         // Sha256 is used to calculate the hash of the piece.
         let mut hasher = Sha256::new();
 
