@@ -771,6 +771,7 @@ fn make_download_task_request(
             piece_length: header::get_piece_length(&reqwest_request_header),
             output_path: None,
             timeout: None,
+            need_back_to_source: false,
             disable_back_to_source: config.proxy.disable_back_to_source,
             certificate_chain: Vec::new(),
         }),
