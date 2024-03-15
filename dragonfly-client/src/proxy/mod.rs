@@ -55,7 +55,7 @@ use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -64,6 +64,9 @@ use tokio_util::io::ReaderStream;
 use tracing::{error, info, instrument, Span};
 
 pub mod header;
+
+// DEFAULT_BUFFER_SIZE is the buffer size to read and write, default is 2MB.
+const DEFAULT_BUFFER_SIZE: usize = 2 * 1024 * 1024;
 
 // Response is the response of the proxy server.
 pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
@@ -608,6 +611,8 @@ async fn proxy_by_dfdaemon(
                         return;
                     }
                 };
+                // Use a buffer to read the piece.
+                let piece_reader = BufReader::with_capacity(DEFAULT_BUFFER_SIZE, piece_reader);
 
                 // Write the piece data to the pipe in order.
                 finished_piece_readers.insert(piece.number, piece_reader);
