@@ -246,6 +246,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 piece_length: args.piece_length,
                 output_path: Some(args.output.into_os_string().into_string().unwrap()),
                 timeout: Some(prost_wkt_types::Duration::try_from(args.timeout)?),
+                need_back_to_source: false,
                 disable_back_to_source: args.disable_back_to_source,
                 certificate_chain: Vec::new(),
             }),
