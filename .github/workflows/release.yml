@@ -120,7 +120,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install protobuf-compiler
+          sudo apt-get install protobuf-compiler libclang-dev
 
       - uses: katyo/publish-crates@v2
         with:
