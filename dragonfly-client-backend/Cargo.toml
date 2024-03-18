@@ -16,4 +16,4 @@ tokio.workspace = true
 tokio-util.workspace = true
 rustls-pki-types.workspace = true
 futures = "0.3.28"
-rustls = "0.21.6"
+rustls = "0.22.2"

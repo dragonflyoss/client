@@ -665,7 +665,7 @@ dependencies = [
  "dragonfly-client-core",
  "futures",
  "reqwest",
- "rustls 0.21.10",
+ "rustls 0.22.2",
  "rustls-pki-types",
  "tokio",
  "tokio-util",
