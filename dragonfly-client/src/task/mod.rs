@@ -783,12 +783,16 @@ impl Task {
             let semaphore = semaphore.clone();
             async fn download_from_remote_peer(
                 task_id: String,
+                host_id: String,
+                peer_id: String,
                 number: u32,
                 length: u64,
                 parent: Peer,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
+                download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
+                in_stream_tx: Sender<AnnouncePeerRequest>,
             ) -> ClientResult<metadata::Piece> {
                 info!(
                     "start to download piece {} from remote peer {:?}",
@@ -804,7 +808,7 @@ impl Task {
                     })
                 })?;
 
-                piece_manager
+                let metadata = piece_manager
                     .download_from_remote_peer(task_id.as_str(), number, length, parent.clone())
                     .await
                     .map_err(|err| {
@@ -818,18 +822,81 @@ impl Task {
                             piece_number: number,
                             parent_id: parent.id.clone(),
                         })
-                    })
+                    })?;
+
+                // Construct the piece.
+                let piece = Piece {
+                    number: metadata.number,
+                    parent_id: metadata.parent_id.clone(),
+                    offset: metadata.offset,
+                    length: metadata.length,
+                    digest: metadata.digest.clone(),
+                    content: None,
+                    traffic_type: Some(TrafficType::RemotePeer as i32),
+                    cost: metadata.prost_cost(),
+                    created_at: Some(prost_wkt_types::Timestamp::from(metadata.created_at)),
+                };
+
+                // Send the download piece finished request.
+                in_stream_tx
+                    .send_timeout(
+                        AnnouncePeerRequest {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.clone(),
+                            peer_id: peer_id.to_string(),
+                            request: Some(
+                                announce_peer_request::Request::DownloadPieceFinishedRequest(
+                                    DownloadPieceFinishedRequest {
+                                        piece: Some(piece.clone()),
+                                    },
+                                ),
+                            ),
+                        },
+                        REQUEST_TIMEOUT,
+                    )
+                    .await?;
+
+                // Send the download progress.
+                download_progress_tx
+                    .send_timeout(
+                        Ok(DownloadTaskResponse {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.clone(),
+                            peer_id: peer_id.to_string(),
+                            response: Some(
+                                download_task_response::Response::DownloadPieceFinishedResponse(
+                                    dfdaemon::v2::DownloadPieceFinishedResponse {
+                                        piece: Some(piece.clone()),
+                                    },
+                                ),
+                            ),
+                        }),
+                        REQUEST_TIMEOUT,
+                    )
+                    .await?;
+
+                info!(
+                    "finished piece {} from remote peer {:?}",
+                    storage.piece_id(task_id.as_str(), metadata.number),
+                    metadata.parent_id
+                );
+
+                Ok(metadata)
             }
 
             join_set.spawn(
                 download_from_remote_peer(
                     task.id.clone(),
+                    host_id.to_string(),
+                    peer_id.to_string(),
                     collect_piece.number,
                     collect_piece.length,
                     collect_piece.parent.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
                     semaphore.clone(),
+                    download_progress_tx.clone(),
+                    in_stream_tx.clone(),
                 )
                 .in_current_span(),
             );
@@ -842,63 +909,6 @@ impl Task {
         while let Some(message) = join_set.join_next().await {
             match message {
                 Ok(Ok(metadata)) => {
-                    info!(
-                        "finished piece {} from remote peer {:?}",
-                        self.storage.piece_id(task.id.as_str(), metadata.number),
-                        metadata.parent_id
-                    );
-
-                    // Construct the piece.
-                    let piece = Piece {
-                        number: metadata.number,
-                        parent_id: metadata.parent_id.clone(),
-                        offset: metadata.offset,
-                        length: metadata.length,
-                        digest: metadata.digest.clone(),
-                        content: None,
-                        traffic_type: Some(TrafficType::RemotePeer as i32),
-                        cost: metadata.prost_cost(),
-                        created_at: Some(prost_wkt_types::Timestamp::from(metadata.created_at)),
-                    };
-
-                    // Send the download piece finished request.
-                    in_stream_tx
-                        .send_timeout(
-                            AnnouncePeerRequest {
-                                host_id: host_id.to_string(),
-                                task_id: task.id.clone(),
-                                peer_id: peer_id.to_string(),
-                                request: Some(
-                                    announce_peer_request::Request::DownloadPieceFinishedRequest(
-                                        DownloadPieceFinishedRequest {
-                                            piece: Some(piece.clone()),
-                                        },
-                                    ),
-                                ),
-                            },
-                            REQUEST_TIMEOUT,
-                        )
-                        .await?;
-
-                    // Send the download progress.
-                    download_progress_tx
-                        .send_timeout(
-                            Ok(DownloadTaskResponse {
-                                host_id: host_id.to_string(),
-                                task_id: task.id.clone(),
-                                peer_id: peer_id.to_string(),
-                                response: Some(
-                                    download_task_response::Response::DownloadPieceFinishedResponse(
-                                        dfdaemon::v2::DownloadPieceFinishedResponse {
-                                            piece: Some(piece.clone()),
-                                        },
-                                    ),
-                                ),
-                            }),
-                            REQUEST_TIMEOUT,
-                        )
-                        .await?;
-
                     // Store the finished piece.
                     finished_pieces.push(metadata.clone());
                 }
@@ -976,6 +986,8 @@ impl Task {
             let semaphore = semaphore.clone();
             async fn download_from_source(
                 task_id: String,
+                host_id: String,
+                peer_id: String,
                 number: u32,
                 url: String,
                 offset: u64,
@@ -984,6 +996,8 @@ impl Task {
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
+                download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
+                in_stream_tx: Sender<AnnouncePeerRequest>,
             ) -> ClientResult<metadata::Piece> {
                 info!(
                     "start to download piece {} from source",
@@ -991,7 +1005,7 @@ impl Task {
                 );
 
                 let _permit = semaphore.acquire().await?;
-                piece_manager
+                let metadata = piece_manager
                     .download_from_source(
                         task_id.as_str(),
                         number,
@@ -1000,53 +1014,27 @@ impl Task {
                         length,
                         request_header,
                     )
-                    .await
-            }
+                    .await?;
 
-            join_set.spawn(
-                download_from_source(
-                    task.id.clone(),
-                    interested_piece.number,
-                    download.url.clone(),
-                    interested_piece.offset,
-                    interested_piece.length,
-                    request_header.clone(),
-                    self.piece.clone(),
-                    self.storage.clone(),
-                    semaphore.clone(),
-                )
-                .in_current_span(),
-            );
-        }
+                // Construct the piece.
+                let piece = Piece {
+                    number: metadata.number,
+                    parent_id: metadata.parent_id.clone(),
+                    offset: metadata.offset,
+                    length: metadata.length,
+                    digest: metadata.digest.clone(),
+                    content: None,
+                    traffic_type: Some(TrafficType::BackToSource as i32),
+                    cost: metadata.prost_cost(),
+                    created_at: Some(prost_wkt_types::Timestamp::from(metadata.created_at)),
+                };
 
-        // Wait for the pieces to be downloaded.
-        while let Some(message) = join_set.join_next().await {
-            match message {
-                Ok(Ok(metadata)) => {
-                    info!(
-                        "finished piece {} from source",
-                        self.storage.piece_id(task.id.as_str(), metadata.number)
-                    );
-
-                    // Construct the piece.
-                    let piece = Piece {
-                        number: metadata.number,
-                        parent_id: metadata.parent_id.clone(),
-                        offset: metadata.offset,
-                        length: metadata.length,
-                        digest: metadata.digest.clone(),
-                        content: None,
-                        traffic_type: Some(TrafficType::BackToSource as i32),
-                        cost: metadata.prost_cost(),
-                        created_at: Some(prost_wkt_types::Timestamp::from(metadata.created_at)),
-                    };
-
-                    // Send the download piece finished request.
-                    in_stream_tx
+                // Send the download piece finished request.
+                in_stream_tx
                         .send_timeout(
                             AnnouncePeerRequest {
                                 host_id: host_id.to_string(),
-                                task_id: task.id.clone(),
+                                task_id: task_id.clone(),
                                 peer_id: peer_id.to_string(),
                                 request: Some(
                                     announce_peer_request::Request::DownloadPieceBackToSourceFinishedRequest(
@@ -1060,25 +1048,57 @@ impl Task {
                         )
                         .await?;
 
-                    // Send the download progress.
-                    download_progress_tx
-                        .send_timeout(
-                            Ok(DownloadTaskResponse {
-                                host_id: host_id.to_string(),
-                                task_id: task.id.clone(),
-                                peer_id: peer_id.to_string(),
-                                response: Some(
-                                    download_task_response::Response::DownloadPieceFinishedResponse(
-                                        dfdaemon::v2::DownloadPieceFinishedResponse {
-                                            piece: Some(piece.clone()),
-                                        },
-                                    ),
+                // Send the download progress.
+                download_progress_tx
+                    .send_timeout(
+                        Ok(DownloadTaskResponse {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.clone(),
+                            peer_id: peer_id.to_string(),
+                            response: Some(
+                                download_task_response::Response::DownloadPieceFinishedResponse(
+                                    dfdaemon::v2::DownloadPieceFinishedResponse {
+                                        piece: Some(piece.clone()),
+                                    },
                                 ),
-                            }),
-                            REQUEST_TIMEOUT,
-                        )
-                        .await?;
+                            ),
+                        }),
+                        REQUEST_TIMEOUT,
+                    )
+                    .await?;
 
+                info!(
+                    "finished piece {} from source",
+                    storage.piece_id(task_id.as_str(), piece.number)
+                );
+
+                Ok(metadata)
+            }
+
+            join_set.spawn(
+                download_from_source(
+                    task.id.clone(),
+                    host_id.to_string(),
+                    peer_id.to_string(),
+                    interested_piece.number,
+                    download.url.clone(),
+                    interested_piece.offset,
+                    interested_piece.length,
+                    request_header.clone(),
+                    self.piece.clone(),
+                    self.storage.clone(),
+                    semaphore.clone(),
+                    download_progress_tx.clone(),
+                    in_stream_tx.clone(),
+                )
+                .in_current_span(),
+            );
+        }
+
+        // Wait for the pieces to be downloaded.
+        while let Some(message) = join_set.join_next().await {
+            match message {
+                Ok(Ok(metadata)) => {
                     // Store the finished piece.
                     finished_pieces.push(metadata.clone());
                 }
@@ -1279,6 +1299,8 @@ impl Task {
             let semaphore = semaphore.clone();
             async fn download_from_source(
                 task_id: String,
+                host_id: String,
+                peer_id: String,
                 number: u32,
                 url: String,
                 offset: u64,
@@ -1287,6 +1309,7 @@ impl Task {
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
+                download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
             ) -> ClientResult<metadata::Piece> {
                 info!(
                     "start to download piece {} from source",
@@ -1294,7 +1317,7 @@ impl Task {
                 );
 
                 let _permit = semaphore.acquire().await?;
-                piece_manager
+                let metadata = piece_manager
                     .download_from_source(
                         task_id.as_str(),
                         number,
@@ -1303,12 +1326,53 @@ impl Task {
                         length,
                         request_header,
                     )
-                    .await
+                    .await?;
+
+                // Construct the piece.
+                let piece = Piece {
+                    number: metadata.number,
+                    parent_id: None,
+                    offset: metadata.offset,
+                    length: metadata.length,
+                    digest: metadata.digest.clone(),
+                    content: None,
+                    traffic_type: Some(TrafficType::BackToSource as i32),
+                    cost: metadata.prost_cost(),
+                    created_at: Some(prost_wkt_types::Timestamp::from(metadata.created_at)),
+                };
+
+                // Send the download progress.
+                download_progress_tx
+                    .send_timeout(
+                        Ok(DownloadTaskResponse {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.clone(),
+                            peer_id: peer_id.to_string(),
+                            response: Some(
+                                download_task_response::Response::DownloadPieceFinishedResponse(
+                                    dfdaemon::v2::DownloadPieceFinishedResponse {
+                                        piece: Some(piece.clone()),
+                                    },
+                                ),
+                            ),
+                        }),
+                        REQUEST_TIMEOUT,
+                    )
+                    .await?;
+
+                info!(
+                    "finished piece {} from source",
+                    storage.piece_id(task_id.as_str(), metadata.number)
+                );
+
+                Ok(metadata)
             }
 
             join_set.spawn(
                 download_from_source(
                     task.id.clone(),
+                    host_id.to_string(),
+                    peer_id.to_string(),
                     interested_piece.number,
                     download.url.clone(),
                     interested_piece.offset,
@@ -1317,6 +1381,7 @@ impl Task {
                     self.piece.clone(),
                     self.storage.clone(),
                     semaphore.clone(),
+                    download_progress_tx.clone(),
                 )
                 .in_current_span(),
             );
@@ -1326,43 +1391,6 @@ impl Task {
         while let Some(message) = join_set.join_next().await {
             match message {
                 Ok(Ok(metadata)) => {
-                    info!(
-                        "finished piece {} from source",
-                        self.storage.piece_id(task.id.as_str(), metadata.number)
-                    );
-
-                    // Construct the piece.
-                    let piece = Piece {
-                        number: metadata.number,
-                        parent_id: None,
-                        offset: metadata.offset,
-                        length: metadata.length,
-                        digest: metadata.digest.clone(),
-                        content: None,
-                        traffic_type: Some(TrafficType::BackToSource as i32),
-                        cost: metadata.prost_cost(),
-                        created_at: Some(prost_wkt_types::Timestamp::from(metadata.created_at)),
-                    };
-
-                    // Send the download progress.
-                    download_progress_tx
-                        .send_timeout(
-                            Ok(DownloadTaskResponse {
-                                host_id: host_id.to_string(),
-                                task_id: task.id.clone(),
-                                peer_id: peer_id.to_string(),
-                                response: Some(
-                                    download_task_response::Response::DownloadPieceFinishedResponse(
-                                        dfdaemon::v2::DownloadPieceFinishedResponse {
-                                            piece: Some(piece.clone()),
-                                        },
-                                    ),
-                                ),
-                            }),
-                            REQUEST_TIMEOUT,
-                        )
-                        .await?;
-
                     // Store the finished piece.
                     finished_pieces.push(metadata.clone());
                 }
