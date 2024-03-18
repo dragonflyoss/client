@@ -23,7 +23,7 @@ thiserror = "1.0"
 dragonfly-api = "2.0.106"
 reqwest = { version = "0.11.25", features = ["stream", "native-tls", "rustls-tls"] }
 rcgen = { version = "0.12.1", features = ["x509-parser"] }
-hyper = { version = "1.1", features = ["full"] }
+hyper = { version = "1.2", features = ["full"] }
 hyper-util = { version = "0.1.2", features = ["client", "client-legacy", "tokio", "server-auto", "http1", "http2"] }
 hyper-rustls = { version = "0.26", features = [ "http1", "http2", "logging" ] }
 http-range-header = "0.4.0"
