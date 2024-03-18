@@ -17,3 +17,5 @@ path = "src/bin/main.rs"
 [dependencies]
 dragonfly-client-config.workspace = true
 clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
