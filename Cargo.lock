@@ -601,7 +601,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "anyhow",
  "bytes",
@@ -660,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "dragonfly-client-core",
  "futures",
@@ -673,7 +673,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "dragonfly-client-core",
  "home",
@@ -691,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "headers 0.4.0",
  "http 1.1.0",
@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "clap",
  "dragonfly-client-config",
@@ -723,7 +723,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "base16ct",
  "chrono",
@@ -745,7 +745,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-core",
