@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 use dragonfly_client_core::Result;
 use local_ip_address::{local_ip, local_ipv6};
 use regex::Regex;

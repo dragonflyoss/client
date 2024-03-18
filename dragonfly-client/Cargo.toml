@@ -51,7 +51,7 @@ reqwest.workspace = true
 url.workspace = true
 http.workspace = true
 openssl.workspace = true
-clap = { version = "4.5.1", features = [ "derive" ] }
+clap.workspace = true
 tracing-log = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2.3"

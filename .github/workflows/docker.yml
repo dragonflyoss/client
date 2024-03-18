@@ -69,6 +69,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: dragonfly-client/Dockerfile
           platforms: linux/amd64,linux/arm64
           labels: |-
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -79,6 +80,25 @@ jobs:
           tags: |
             dragonflyoss/client:${{ steps.get_version.outputs.VERSION }}
             ghcr.io/${{ env.IMAGE_REPOSITORY }}:${{ steps.get_version.outputs.VERSION }}
+          push: true
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new
+
+      - name: Push Dfinit to Registry
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: dragonfly-client-init/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          labels: |-
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            GITVERSION=git-${{ steps.vars.outputs.git_revision }}
+            VERSION=${{ steps.get_version.outputs.VERSION }}
+          tags: |
+            dragonflyoss/dfinit:${{ steps.get_version.outputs.VERSION }}
+            ghcr.io/${{ env.IMAGE_REPOSITORY }}/dfinit:${{ steps.get_version.outputs.VERSION }}
           push: true
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new

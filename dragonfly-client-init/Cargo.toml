@@ -1,0 +1,19 @@
+[package]
+name = "dragonfly-client-init"
+description = "Initialize runtime environment of the dfdaemon"
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "dfinit"
+path = "src/bin/main.rs"
+
+[dependencies]
+dragonfly-client-config.workspace = true
+clap.workspace = true
