@@ -38,9 +38,14 @@ struct Args {
     config: PathBuf,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<(), anyhow::Error> {
     // Parse command line arguments.
     let args = Args::parse();
 
-    println!("{:?}", args);
+    // Load config.
+    let config = dfinit::Config::load(&args.config)?;
+    println!("{:?}", config);
+
+    Ok(())
 }
