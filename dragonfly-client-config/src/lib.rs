@@ -18,6 +18,7 @@ use std::path::PathBuf;
 
 pub mod dfdaemon;
 pub mod dfget;
+pub mod dfinit;
 pub mod dfstore;
 
 // SERVICE_NAME is the name of the service.

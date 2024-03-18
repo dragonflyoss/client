@@ -87,6 +87,15 @@ jobs:
           tar -czf "$dirname.tar.gz" "$dirname"
           echo "DFSTORE_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
 
+      - name: Build archive dfinit
+        shell: bash
+        run: |
+          binary_name="dfinit"
+          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
+          tar -czf "$dirname.tar.gz" "$dirname"
+          echo "DFSTORE_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
