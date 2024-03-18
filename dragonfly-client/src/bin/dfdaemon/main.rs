@@ -99,10 +99,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let args = Args::parse();
 
     // Load config.
-    let config = dfdaemon::Config::load(&args.config).map_err(|err| {
-        error!("load config failed: {}", err);
-        err
-    })?;
+    let config = dfdaemon::Config::load(&args.config)?;
     let config = Arc::new(config);
 
     // Initialize tracing.
