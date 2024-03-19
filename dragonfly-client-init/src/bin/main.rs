@@ -20,7 +20,7 @@ use dragonfly_client_config::dfinit;
 use dragonfly_client_init::container_runtime;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::Level;
+use tracing::{error, Level};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -65,7 +65,7 @@ struct Args {
 
     #[arg(
         long = "verbose",
-        default_value_t = true,
+        default_value_t = false,
         help = "Specify whether to print log"
     )]
     verbose: bool,
@@ -87,12 +87,18 @@ async fn main() -> Result<(), anyhow::Error> {
     );
 
     // Load config.
-    let config = dfinit::Config::load(&args.config)?;
+    let config = dfinit::Config::load(&args.config).map_err(|err| {
+        error!("failed to load config: {}", err);
+        err
+    })?;
     let config = Arc::new(config);
 
     // Handle features of the container runtime.
     let container_runtime = container_runtime::ContainerRuntime::new(config);
-    container_runtime.run().await?;
+    container_runtime.run().await.map_err(|err| {
+        error!("failed to run container runtime: {}", err);
+        err
+    })?;
 
     Ok(())
 }

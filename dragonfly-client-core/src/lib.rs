@@ -25,13 +25,17 @@ pub enum Error {
     #[error(transparent)]
     JSON(#[from] serde_json::Error),
 
-    // TomlSerError is the error for toml serialize.
+    // TomlSerError is the error for toml ser.
     #[error(transparent)]
     TomlSerError(#[from] toml::ser::Error),
 
-    // TomlDeError is the error for toml deserialize.
+    // TomlDeError is the error for toml de.
     #[error(transparent)]
     TomlDeError(#[from] toml::de::Error),
+
+    // TomlError is the error for toml.
+    #[error(transparent)]
+    TomlError(#[from] toml_edit::TomlError),
 
     // YAML is the error for serde_yaml.
     #[error(transparent)]

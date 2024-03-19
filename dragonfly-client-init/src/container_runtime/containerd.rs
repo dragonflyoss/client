@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-use dragonfly_client_config::dfinit;
-use dragonfly_client_core::Result;
+use dragonfly_client_config::dfinit::{self, Registry};
+use dragonfly_client_core::{Error, Result};
 use tokio::fs;
-use toml::Table;
+use toml_edit::{value, Array, DocumentMut, Item, Table, Value};
 use tracing::info;
 
 // Containerd represents the containerd runtime manager.
@@ -38,10 +38,73 @@ impl Containerd {
     // runtime environment for the dfdaemon.
     pub async fn run(&self) -> Result<()> {
         let content = fs::read_to_string(&self.config.config_path).await?;
-        let containerd_config: Table = content.parse()?;
-        info!("containerd config: {:?}", containerd_config);
+        let mut containerd_config = content.parse::<DocumentMut>()?;
 
+        // If containerd supports config_path mode and config_path is not empty,
+        // add registries to the certs.d directory.
+        if let Some(config_path) =
+            containerd_config["plugins"]["io.containerd.grpc.v1.cri"]["registry"].get("config_path")
+        {
+            if config_path.as_str() != Some("") {
+                info!(
+                    "containerd supports config_path mode, config_path: {}",
+                    config_path.to_string()
+                );
+
+                return Ok(());
+            }
+        }
+
+        // If containerd is old version and supports mirror mode, add registries to the
+        // registry mirrors in containerd configuration.
+        info!("containerd not supports config_path mode, use mirror mode to add registries");
+        containerd_config =
+            self.add_registries_by_mirrors(self.config.registries.clone(), containerd_config)?;
+
+        // Override containerd configuration.
+        info!("override containerd configuration");
+        fs::write(
+            &self.config.config_path,
+            containerd_config.to_string().as_bytes(),
+        )
+        .await?;
         Ok(())
+    }
+
+    // add_registries adds registries to the containerd configuration, when containerd supports
+    // config_path mode and config_path is not empty.
+    pub fn add_registries() -> Result<DocumentMut> {
+        Err(Error::Unimplemented())
+    }
+
+    // add_registries_by_mirrors adds registries to the containerd configuration, when containerd
+    // supports mirror mode with old version.
+    pub fn add_registries_by_mirrors(
+        &self,
+        registries: Vec<Registry>,
+        mut containerd_config: DocumentMut,
+    ) -> Result<DocumentMut> {
+        let mut mirrors_table = Table::new();
+        mirrors_table.set_implicit(true);
+
+        for registry in registries {
+            info!("add registry: {:?}", registry);
+            let mut endpoints = Array::default();
+            for host in registry.hosts {
+                endpoints.push(Value::from(host.host))
+            }
+
+            let mut mirror_table = Table::new();
+            mirror_table.insert("endpoint", value(endpoints));
+            mirrors_table.insert(&registry.host_namespace, Item::Table(mirror_table));
+        }
+
+        let registry = containerd_config["plugins"]["io.containerd.grpc.v1.cri"]["registry"]
+            .as_table_mut()
+            .ok_or(Error::Unknown("registry field not found".to_string()))?;
+        registry.insert("mirrors", Item::Table(mirrors_table));
+
+        Ok(containerd_config)
     }
 
     // is_enabled returns true if containerd feature is enabled.

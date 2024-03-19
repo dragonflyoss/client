@@ -709,6 +709,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "toml",
+ "toml_edit",
  "tonic",
  "url",
  "validator",
@@ -726,6 +727,7 @@ dependencies = [
  "dragonfly-client-core",
  "tokio",
  "toml",
+ "toml_edit",
  "tracing",
 ]
 
