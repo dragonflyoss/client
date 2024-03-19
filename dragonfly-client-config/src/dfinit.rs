@@ -35,6 +35,12 @@ pub fn default_dfinit_log_dir() -> PathBuf {
     super::default_log_dir().join(NAME)
 }
 
+// default_container_runtime_containerd_config_path is the default containerd configuration path.
+#[inline]
+fn default_container_runtime_containerd_config_path() -> PathBuf {
+    PathBuf::from("/etc/containerd/config.toml")
+}
+
 // Host is the host configuration for registry.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -65,6 +71,10 @@ pub struct Registry {
 pub struct Containerd {
     // enable is a flag to enable containerd feature.
     pub enable: bool,
+
+    // config_path is the path of containerd configuration file.
+    #[serde(default = "default_container_runtime_containerd_config_path")]
+    pub config_path: PathBuf,
 
     // registries is the list of containerd registries.
     pub registries: Vec<Registry>,
