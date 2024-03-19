@@ -19,10 +19,11 @@ use local_ip_address::{local_ip, local_ipv6};
 use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashSet;
+use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 use std::time::Duration;
-use std::{fmt, fs};
+use tokio::fs;
 use tracing::info;
 use validator::Validate;
 
@@ -886,9 +887,9 @@ pub struct Config {
 // Config implements the config operation of dfdaemon.
 impl Config {
     // load loads configuration from file.
-    pub fn load(path: &PathBuf) -> Result<Config> {
+    pub async fn load(path: &PathBuf) -> Result<Config> {
         // Load configuration from file.
-        let content = fs::read_to_string(path)?;
+        let content = fs::read_to_string(path).await?;
         let mut config: Config = serde_yaml::from_str(&content)?;
         info!("load config from {}", path.display());
 

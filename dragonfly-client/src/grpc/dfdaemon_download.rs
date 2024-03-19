@@ -129,7 +129,7 @@ impl DfdaemonDownloadServer {
             .unwrap();
 
         // Remove the unix domain socket file.
-        std::fs::remove_file(&self.socket_path).unwrap();
+        fs::remove_file(&self.socket_path).await.unwrap();
         info!("remove the unix domain socket file of the download server");
     }
 }
