@@ -28,4 +28,5 @@ tokio-stream.workspace = true
 validator.workspace = true
 warp.workspace = true
 headers.workspace = true
+toml_edit.workspace = true
 toml.workspace = true
