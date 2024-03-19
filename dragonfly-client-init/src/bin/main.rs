@@ -17,8 +17,10 @@
 use clap::Parser;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_config::dfinit;
+use dragonfly_client_init::container_runtime;
 use std::path::PathBuf;
-use tracing::{info, Level};
+use std::sync::Arc;
+use tracing::Level;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -86,7 +88,11 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Load config.
     let config = dfinit::Config::load(&args.config)?;
-    info!("config: {:?}", config);
+    let config = Arc::new(config);
+
+    // Handle features of the container runtime.
+    let container_runtime = container_runtime::ContainerRuntime::new(config);
+    container_runtime.run().await?;
 
     Ok(())
 }
