@@ -13,3 +13,39 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+use dragonfly_client_config::dfinit;
+use dragonfly_client_core::Result;
+use tokio::fs;
+use toml::Table;
+use tracing::info;
+
+// Containerd represents the containerd runtime manager.
+pub struct Containerd {
+    // config is the configuration for initializing
+    // runtime environment for the dfdaemon.
+    config: dfinit::Containerd,
+}
+
+// Containerd implements the containerd runtime manager.
+impl Containerd {
+    // new creates a new containerd runtime manager.
+    pub fn new(config: dfinit::Containerd) -> Self {
+        Self { config }
+    }
+
+    // run runs the containerd runtime to initialize
+    // runtime environment for the dfdaemon.
+    pub async fn run(&self) -> Result<()> {
+        let content = fs::read_to_string(&self.config.config_path).await?;
+        let containerd_config: Table = content.parse()?;
+        info!("containerd config: {:?}", containerd_config);
+
+        Ok(())
+    }
+
+    // is_enabled returns true if containerd feature is enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.config.enable
+    }
+}
