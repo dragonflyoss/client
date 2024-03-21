@@ -11,7 +11,7 @@ jobs:
   push_image_to_registry:
     name: Push Image
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 480
     steps:
       - name: Check out code
         uses: actions/checkout@v4
