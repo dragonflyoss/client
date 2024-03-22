@@ -125,6 +125,7 @@ impl Content {
 
         let mut to_f = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(to.as_os_str())
             .await?;
@@ -189,6 +190,7 @@ impl Content {
         // Open the file and seek to the offset.
         let mut f = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(self.dir.join(task_id))
             .await?;
