@@ -25,13 +25,19 @@ pub struct Containerd {
     // config is the configuration for initializing
     // runtime environment for the dfdaemon.
     config: dfinit::Containerd,
+
+    // proxy_config is the configuration for the dfdaemon's proxy server.
+    proxy_config: dfinit::Proxy,
 }
 
 // Containerd implements the containerd runtime manager.
 impl Containerd {
     // new creates a new containerd runtime manager.
-    pub fn new(config: dfinit::Containerd) -> Self {
-        Self { config }
+    pub fn new(config: dfinit::Containerd, proxy_config: dfinit::Proxy) -> Self {
+        Self {
+            config,
+            proxy_config,
+        }
     }
 
     // run runs the containerd runtime to initialize
@@ -45,21 +51,26 @@ impl Containerd {
         if let Some(config_path) =
             containerd_config["plugins"]["io.containerd.grpc.v1.cri"]["registry"].get("config_path")
         {
-            if config_path.as_str() != Some("") {
-                info!(
-                    "containerd supports config_path mode, config_path: {}",
-                    config_path.to_string()
-                );
+            if let Some(config_path) = config_path.as_str() {
+                if !config_path.is_empty() {
+                    info!(
+                        "containerd supports config_path mode, config_path: {}",
+                        config_path.to_string()
+                    );
 
-                return Ok(());
+                    return Ok(());
+                }
             }
         }
 
         // If containerd is old version and supports mirror mode, add registries to the
         // registry mirrors in containerd configuration.
         info!("containerd not supports config_path mode, use mirror mode to add registries");
-        containerd_config =
-            self.add_registries_by_mirrors(self.config.registries.clone(), containerd_config)?;
+        containerd_config = self.add_registries_by_mirrors(
+            self.config.registries.clone(),
+            self.proxy_config.clone(),
+            containerd_config,
+        )?;
 
         // Override containerd configuration.
         info!("override containerd configuration");
@@ -82,6 +93,7 @@ impl Containerd {
     pub fn add_registries_by_mirrors(
         &self,
         registries: Vec<Registry>,
+        proxy_config: dfinit::Proxy,
         mut containerd_config: DocumentMut,
     ) -> Result<DocumentMut> {
         let mut mirrors_table = Table::new();
@@ -90,6 +102,8 @@ impl Containerd {
         for registry in registries {
             info!("add registry: {:?}", registry);
             let mut endpoints = Array::default();
+            endpoints.push(Value::from(proxy_config.addr.clone()));
+
             for host in registry.hosts {
                 endpoints.push(Value::from(host.host))
             }

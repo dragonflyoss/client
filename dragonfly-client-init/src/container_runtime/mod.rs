@@ -32,7 +32,10 @@ impl ContainerRuntime {
     // new creates a new container runtime manager.
     pub fn new(config: Arc<Config>) -> Self {
         Self {
-            containerd: containerd::Containerd::new(config.container_runtime.containerd.clone()),
+            containerd: containerd::Containerd::new(
+                config.container_runtime.containerd.clone(),
+                config.proxy.clone(),
+            ),
         }
     }
 

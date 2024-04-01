@@ -170,7 +170,7 @@ fn default_gc_policy_dist_low_threshold_percent() -> u8 {
 
 // default_proxy_server_port is the default port of the proxy server.
 #[inline]
-fn default_proxy_server_port() -> u16 {
+pub fn default_proxy_server_port() -> u16 {
     4001
 }
 
