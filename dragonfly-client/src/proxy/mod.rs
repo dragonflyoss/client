@@ -724,7 +724,7 @@ fn make_registry_mirror_request(
     // Convert the Reqwest header to the Hyper header.
     let reqwest_request_header = hyper_headermap_to_reqwest_headermap(request.headers());
     let registry_mirror_uri = match header::get_registry(&reqwest_request_header) {
-        Some(registry) => registry.parse::<http::Uri>()?,
+        Some(registry) => format!("{}{}", registry, request.uri().path()).parse::<http::Uri>()?,
         None => format!(
             "{}{}",
             config.proxy.registry_mirror.addr,

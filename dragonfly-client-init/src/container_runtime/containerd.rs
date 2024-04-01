@@ -127,7 +127,7 @@ impl Containerd {
             let registry_config_dir = PathBuf::from(config_path).join(registry.host_namespace);
             fs::create_dir_all(registry_config_dir.as_os_str()).await?;
             fs::write(
-                registry_config_dir.join("config.toml").as_os_str(),
+                registry_config_dir.join("hosts.toml").as_os_str(),
                 registry_table.to_string().as_bytes(),
             )
             .await?;
