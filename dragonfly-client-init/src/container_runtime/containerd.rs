@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
+use dragonfly_client::proxy::header::DRAGONFLY_REGISTRY_HEADER;
 use dragonfly_client_config::dfinit::{self, Registry};
 use dragonfly_client_core::{Error, Result};
-use tokio::fs;
+use std::path::PathBuf;
+use tokio::{self, fs};
 use toml_edit::{value, Array, DocumentMut, Item, Table, Value};
 use tracing::info;
 
@@ -57,8 +59,13 @@ impl Containerd {
                         "containerd supports config_path mode, config_path: {}",
                         config_path.to_string()
                     );
-
-                    return Ok(());
+                    return self
+                        .add_registries(
+                            config_path,
+                            self.config.registries.clone(),
+                            self.proxy_config.clone(),
+                        )
+                        .await;
                 }
             }
         }
@@ -84,8 +91,49 @@ impl Containerd {
 
     // add_registries adds registries to the containerd configuration, when containerd supports
     // config_path mode and config_path is not empty.
-    pub fn add_registries() -> Result<DocumentMut> {
-        Err(Error::Unimplemented())
+    pub async fn add_registries(
+        &self,
+        config_path: &str,
+        registries: Vec<Registry>,
+        proxy_config: dfinit::Proxy,
+    ) -> Result<()> {
+        for registry in registries {
+            info!("add registry: {:?}", registry);
+            let mut registry_table = toml_edit::DocumentMut::new();
+            registry_table.set_implicit(true);
+            registry_table.insert("server", value(registry.server_addr.clone()));
+
+            let mut host_config_table = Table::new();
+            host_config_table.set_implicit(true);
+
+            // Add capabilities to the host configuration.
+            let mut capabilities = Array::default();
+            for capability in registry.capabilities {
+                capabilities.push(Value::from(capability));
+            }
+            host_config_table.insert("capabilities", value(capabilities));
+
+            // Add X-Dragonfly-Registry header to the host configuration.
+            let mut headers_table = Table::new();
+            headers_table.insert(DRAGONFLY_REGISTRY_HEADER, value(registry.server_addr));
+            host_config_table.insert("header", Item::Table(headers_table));
+
+            // Add host configuration to the registry table.
+            let mut host_table = Table::new();
+            host_table.set_implicit(true);
+            host_table.insert(proxy_config.addr.as_str(), Item::Table(host_config_table));
+            registry_table.insert("host", Item::Table(host_table));
+
+            let registry_config_dir = PathBuf::from(config_path).join(registry.host_namespace);
+            fs::create_dir_all(registry_config_dir.as_os_str()).await?;
+            fs::write(
+                registry_config_dir.join("config.toml").as_os_str(),
+                registry_table.to_string().as_bytes(),
+            )
+            .await?;
+        }
+
+        Ok(())
     }
 
     // add_registries_by_mirrors adds registries to the containerd configuration, when containerd
@@ -101,22 +149,22 @@ impl Containerd {
 
         for registry in registries {
             info!("add registry: {:?}", registry);
+
+            // Add endpoints to the mirror configuration.
             let mut endpoints = Array::default();
             endpoints.push(Value::from(proxy_config.addr.clone()));
-
-            for host in registry.hosts {
-                endpoints.push(Value::from(host.host))
-            }
+            endpoints.push(Value::from(registry.server_addr));
 
             let mut mirror_table = Table::new();
             mirror_table.insert("endpoint", value(endpoints));
+
             mirrors_table.insert(&registry.host_namespace, Item::Table(mirror_table));
         }
 
-        let registry = containerd_config["plugins"]["io.containerd.grpc.v1.cri"]["registry"]
+        let registry_table = containerd_config["plugins"]["io.containerd.grpc.v1.cri"]["registry"]
             .as_table_mut()
             .ok_or(Error::Unknown("registry field not found".to_string()))?;
-        registry.insert("mirrors", Item::Table(mirrors_table));
+        registry_table.insert("mirrors", Item::Table(mirrors_table));
 
         Ok(containerd_config)
     }
