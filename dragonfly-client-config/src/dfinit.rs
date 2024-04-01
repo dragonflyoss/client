@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
+use crate::dfdaemon::default_proxy_server_port;
 use dragonfly_client_core::Result;
 use serde::Deserialize;
 use std::fs;
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use tracing::info;
 use validator::Validate;
@@ -39,6 +41,16 @@ pub fn default_dfinit_log_dir() -> PathBuf {
 #[inline]
 fn default_container_runtime_containerd_config_path() -> PathBuf {
     PathBuf::from("/etc/containerd/config.toml")
+}
+
+// default_proxy_addr is the default proxy address of dfdaemon.
+#[inline]
+fn default_proxy_addr() -> String {
+    format!(
+        "http://{}:{}",
+        Ipv4Addr::LOCALHOST,
+        default_proxy_server_port()
+    )
 }
 
 // Host is the host configuration for registry.
@@ -88,10 +100,32 @@ pub struct ContainerRuntime {
     pub containerd: Containerd,
 }
 
+// Proxy is the proxy server configuration for dfdaemon.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Proxy {
+    // addr is the proxy server address of dfdaemon.
+    #[serde(default = "default_proxy_addr")]
+    pub addr: String,
+}
+
+// Proxy implements Default.
+impl Default for Proxy {
+    fn default() -> Self {
+        Self {
+            addr: default_proxy_addr(),
+        }
+    }
+}
+
 // Config is the configuration for dfinit.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
+    // proxy is the configuration of the dfdaemon's HTTP/HTTPS proxy.
+    #[validate]
+    pub proxy: Proxy,
+
     // container_runtime is the container runtime configuration.
     #[validate]
     pub container_runtime: ContainerRuntime,
