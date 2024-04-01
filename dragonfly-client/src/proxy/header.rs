@@ -28,6 +28,9 @@ pub const DRAGONFLY_APPLICATION_HEADER: &str = "X-Dragonfly-Application";
 // refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L67.
 pub const DRAGONFLY_PRIORITY_HEADER: &str = "X-Dragonfly-Priority";
 
+// DRAGONFLY_REGISTRY_HEADER is the header key of custom address of container registry.
+pub const DRAGONFLY_REGISTRY_HEADER: &str = "X-Dragonfly-Registry";
+
 // DRAGONFLY_FILTERS_HEADER is the header key of filters in http request,
 // it is the filtered query params to generate the task id.
 // When filter is "X-Dragonfly-Filtered-Query-Params: Signature,Expires,ns" for example:
@@ -86,6 +89,20 @@ pub fn get_priority(header: &HeaderMap) -> i32 {
             }
         },
         None => default_priority,
+    }
+}
+
+// get_registry gets the custom address of container registry from http header.
+pub fn get_registry(header: &HeaderMap) -> Option<String> {
+    match header.get(DRAGONFLY_REGISTRY_HEADER) {
+        Some(registry) => match registry.to_str() {
+            Ok(registry) => Some(registry.to_string()),
+            Err(err) => {
+                error!("get registry from header failed: {}", err);
+                None
+            }
+        },
+        None => None,
     }
 }
 

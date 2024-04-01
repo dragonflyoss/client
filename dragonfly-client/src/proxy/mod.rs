@@ -721,12 +721,19 @@ fn make_registry_mirror_request(
     config: Arc<Config>,
     mut request: Request<hyper::body::Incoming>,
 ) -> ClientResult<Request<hyper::body::Incoming>> {
-    let registry_mirror_uri = format!(
-        "{}{}",
-        config.proxy.registry_mirror.addr,
-        request.uri().path()
-    )
-    .parse::<http::Uri>()?;
+    // Convert the Reqwest header to the Hyper header.
+    let reqwest_request_header = hyper_headermap_to_reqwest_headermap(request.headers());
+    let registry_mirror_uri = match header::get_registry(&reqwest_request_header) {
+        Some(registry) => registry.parse::<http::Uri>()?,
+        None => format!(
+            "{}{}",
+            config.proxy.registry_mirror.addr,
+            request.uri().path()
+        )
+        .parse::<http::Uri>()?,
+    };
+
+    header::get_registry(&reqwest_request_header);
 
     *request.uri_mut() = registry_mirror_uri.clone();
     request.headers_mut().insert(
