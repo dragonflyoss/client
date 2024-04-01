@@ -20,11 +20,15 @@ use std::sync::Arc;
 use tracing::info;
 
 pub mod containerd;
+pub mod docker;
 
 // ContainerRuntime represents the container runtime manager.
 pub struct ContainerRuntime {
     // containerd is the containerd runtime manager.
     containerd: containerd::Containerd,
+
+    // docker is the docker runtime manager.
+    docker: docker::Docker,
 }
 
 // ContainerRuntime implements the container runtime manager.
@@ -36,16 +40,26 @@ impl ContainerRuntime {
                 config.container_runtime.containerd.clone(),
                 config.proxy.clone(),
             ),
+            docker: docker::Docker::new(
+                config.container_runtime.docker.clone(),
+                config.proxy.clone(),
+            ),
         }
     }
 
     // run runs the container runtime to initialize runtime environment for the dfdaemon.
     pub async fn run(&self) -> Result<()> {
         // If containerd is enabled, override the default containerd
-        // configuration and restart containerd.
+        // configuration.
         if self.containerd.is_enabled() {
             info!("containerd feature is enabled");
             self.containerd.run().await?;
+        }
+
+        // If docker is enabled, override the default docker configuration.
+        if self.docker.is_enabled() {
+            info!("docker feature is enabled");
+            self.docker.run().await?;
         }
 
         Ok(())
