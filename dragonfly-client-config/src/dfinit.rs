@@ -53,12 +53,11 @@ fn default_proxy_addr() -> String {
     )
 }
 
-// Host is the host configuration for registry.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Host {
-    // host is the mirror host.
-    pub host: String,
+// default_container_runtime_containerd_registry_host_capabilities is the default
+// capabilities of the containerd registry.
+#[inline]
+fn default_container_runtime_containerd_registry_capabilities() -> Vec<String> {
+    vec!["pull".to_string(), "resolve".to_string()]
 }
 
 // Registry is the registry configuration for containerd.
@@ -71,10 +70,14 @@ pub struct Registry {
     // docker.io, ghcr.io, gcr.io, etc.
     pub host_namespace: String,
 
-    // hosts is the list of mirror hosts. When host(s) are specified,
-    // the hosts will be tried first in the order listed, refer to
-    // https://github.com/containerd/containerd/blob/main/docs/hosts.md#registry-configuration---examples.
-    pub hosts: Vec<Host>,
+    // server_addr specifies the default server for this registry host namespace, refer to
+    // https://github.com/containerd/containerd/blob/main/docs/hosts.md#server-field.
+    pub server_addr: String,
+
+    // capabilities is the list of capabilities in containerd configuration, refer to
+    // https://github.com/containerd/containerd/blob/main/docs/hosts.md#capabilities-field.
+    #[serde(default = "default_container_runtime_containerd_registry_capabilities")]
+    pub capabilities: Vec<String>,
 }
 
 // Containerd is the containerd configuration for dfinit.
