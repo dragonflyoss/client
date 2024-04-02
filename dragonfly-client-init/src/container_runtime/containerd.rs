@@ -15,7 +15,7 @@
  */
 
 use dragonfly_client::proxy::header::DRAGONFLY_REGISTRY_HEADER;
-use dragonfly_client_config::dfinit::{self, Registry};
+use dragonfly_client_config::dfinit::{self, ContainerdRegistry};
 use dragonfly_client_core::{Error, Result};
 use std::path::PathBuf;
 use tokio::{self, fs};
@@ -94,7 +94,7 @@ impl Containerd {
     pub async fn add_registries(
         &self,
         config_path: &str,
-        registries: Vec<Registry>,
+        registries: Vec<ContainerdRegistry>,
         proxy_config: dfinit::Proxy,
     ) -> Result<()> {
         for registry in registries {
@@ -140,7 +140,7 @@ impl Containerd {
     // supports mirror mode with old version.
     pub fn add_registries_by_mirrors(
         &self,
-        registries: Vec<Registry>,
+        registries: Vec<ContainerdRegistry>,
         proxy_config: dfinit::Proxy,
         mut containerd_config: DocumentMut,
     ) -> Result<DocumentMut> {

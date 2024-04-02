@@ -729,6 +729,7 @@ dependencies = [
  "toml",
  "toml_edit",
  "tracing",
+ "url",
 ]
 
 [[package]]

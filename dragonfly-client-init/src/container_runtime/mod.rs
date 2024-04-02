@@ -20,12 +20,16 @@ use std::sync::Arc;
 use tracing::info;
 
 pub mod containerd;
+pub mod crio;
 pub mod docker;
 
 // ContainerRuntime represents the container runtime manager.
 pub struct ContainerRuntime {
     // containerd is the containerd runtime manager.
     containerd: containerd::Containerd,
+
+    // crio is the cri-o runtime manager.
+    crio: crio::CRIO,
 
     // docker is the docker runtime manager.
     docker: docker::Docker,
@@ -40,6 +44,7 @@ impl ContainerRuntime {
                 config.container_runtime.containerd.clone(),
                 config.proxy.clone(),
             ),
+            crio: crio::CRIO::new(config.container_runtime.crio.clone(), config.proxy.clone()),
             docker: docker::Docker::new(
                 config.container_runtime.docker.clone(),
                 config.proxy.clone(),
@@ -54,6 +59,12 @@ impl ContainerRuntime {
         if self.containerd.is_enabled() {
             info!("containerd feature is enabled");
             self.containerd.run().await?;
+        }
+
+        // If cri-o is enabled, override the default cri-o configuration.
+        if self.crio.is_enabled() {
+            info!("cri-o feature is enabled");
+            self.crio.run().await?;
         }
 
         // If docker is enabled, override the default docker configuration.

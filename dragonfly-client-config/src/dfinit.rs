@@ -49,6 +49,23 @@ fn default_container_runtime_docker_config_path() -> PathBuf {
     PathBuf::from("/etc/docker/daemon.json")
 }
 
+// default_container_runtime_crio_config_path is the default cri-o configuration path.
+#[inline]
+fn default_container_runtime_crio_config_path() -> PathBuf {
+    PathBuf::from("/etc/containers/registries.conf")
+}
+
+// default_container_runtime_crio_unqualified_search_registries is the default unqualified search registries of cri-o,
+// refer to https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md#global-settings.
+#[inline]
+fn default_container_runtime_crio_unqualified_search_registries() -> Vec<String> {
+    vec![
+        "registry.fedoraproject.org".to_string(),
+        "registry.access.redhat.com".to_string(),
+        "docker.io".to_string(),
+    ]
+}
+
 // default_proxy_addr is the default proxy address of dfdaemon.
 #[inline]
 fn default_proxy_addr() -> String {
@@ -66,10 +83,10 @@ fn default_container_runtime_containerd_registry_capabilities() -> Vec<String> {
     vec!["pull".to_string(), "resolve".to_string()]
 }
 
-// Registry is the registry configuration for containerd.
+// ContainerdRegistry is the registry configuration for containerd.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct Registry {
+pub struct ContainerdRegistry {
     // host_namespace is the location where container images and artifacts are sourced,
     // refer to https://github.com/containerd/containerd/blob/main/docs/hosts.md#registry-host-namespace.
     // The registry host namespace portion is [registry_host_name|IP address][:port], such as
@@ -98,7 +115,41 @@ pub struct Containerd {
     pub config_path: PathBuf,
 
     // registries is the list of containerd registries.
-    pub registries: Vec<Registry>,
+    pub registries: Vec<ContainerdRegistry>,
+}
+
+// CRIORegistry is the registry configuration for cri-o.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CRIORegistry {
+    // prefix is the prefix of the user-specified image name, refer to
+    // https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md#choosing-a-registry-toml-table.
+    pub prefix: String,
+
+    // location accepts the same format as the prefix field, and specifies the physical location of the prefix-rooted namespace,
+    // refer to https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md#remapping-and-mirroring-registries.
+    pub location: String,
+}
+
+// CRIO is the cri-o configuration for dfinit.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CRIO {
+    // enable is a flag to enable cri-o feature.
+    pub enable: bool,
+
+    // config_path is the path of cri-o registries's configuration file.
+    #[serde(default = "default_container_runtime_crio_config_path")]
+    pub config_path: PathBuf,
+
+    // unqualified_search_registries is an array of host[:port] registries to try when pulling an unqualified image, in order.
+    // Refer to https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md#global-settings.
+    #[serde(default = "default_container_runtime_crio_unqualified_search_registries")]
+    pub unqualified_search_registries: Vec<String>,
+
+    // registries is the list of cri-o registries, refer to
+    // https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md#namespaced-registry-settings.
+    pub registries: Vec<CRIORegistry>,
 }
 
 // Docker is the docker configuration for dfinit.
@@ -119,6 +170,9 @@ pub struct Docker {
 pub struct ContainerRuntime {
     // containerd is the containerd configuration.
     pub containerd: Containerd,
+
+    // crio is the cri-o configuration.
+    pub crio: CRIO,
 
     // docker is the docker configuration.
     pub docker: Docker,
