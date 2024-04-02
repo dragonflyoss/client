@@ -43,6 +43,12 @@ fn default_container_runtime_containerd_config_path() -> PathBuf {
     PathBuf::from("/etc/containerd/config.toml")
 }
 
+// default_container_runtime_docker_config_path is the default docker configuration path.
+#[inline]
+fn default_container_runtime_docker_config_path() -> PathBuf {
+    PathBuf::from("/etc/docker/daemon.json")
+}
+
 // default_proxy_addr is the default proxy address of dfdaemon.
 #[inline]
 fn default_proxy_addr() -> String {
@@ -95,12 +101,27 @@ pub struct Containerd {
     pub registries: Vec<Registry>,
 }
 
+// Docker is the docker configuration for dfinit.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Docker {
+    // enable is a flag to enable docker feature.
+    pub enable: bool,
+
+    // config_path is the path of docker configuration file.
+    #[serde(default = "default_container_runtime_docker_config_path")]
+    pub config_path: PathBuf,
+}
+
 // ContainerRuntime is the container runtime configuration for dfinit.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ContainerRuntime {
     // containerd is the containerd configuration.
     pub containerd: Containerd,
+
+    // docker is the docker configuration.
+    pub docker: Docker,
 }
 
 // Proxy is the proxy server configuration for dfdaemon.
