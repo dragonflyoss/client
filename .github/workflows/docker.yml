@@ -8,8 +8,8 @@ on:
       - v*
 
 jobs:
-  push_image_to_registry:
-    name: Push Image
+  push_client_image_to_registry:
+    name: Push Client Image
     runs-on: ubuntu-latest
     timeout-minutes: 480
     steps:
@@ -84,7 +84,69 @@ jobs:
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new
 
-      - name: Push Dfinit to Registry
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+  push_dfinit_image_to_registry:
+    name: Push Dfinit Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Get Version
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          if [[ ${GITHUB_REF} == "refs/heads/main" ]]; then
+            VERSION=latest
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Get Git Revision
+        id: vars
+        shell: bash
+        run: |
+          echo "git_revision=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: PrepareReg Names
+        run: |
+           echo IMAGE_REPOSITORY=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]') >> $GITHUB_ENV
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Login Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push to Registry
         uses: docker/build-push-action@v5
         with:
           context: .
