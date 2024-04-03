@@ -31,8 +31,8 @@ use tracing::{error, info};
 // DEFAULT_DIR_NAME is the default directory name to store metadata.
 const DEFAULT_DIR_NAME: &str = "metadata";
 
-// DEFAULT_MEMTABLE_MEMORY_BUDGET is the default memory budget for memtable.
-const DEFAULT_MEMTABLE_MEMORY_BUDGET: usize = 32 * 1024 * 1024;
+// DEFAULT_MEMTABLE_MEMORY_BUDGET is the default memory budget for memtable, default is 64MB.
+const DEFAULT_MEMTABLE_MEMORY_BUDGET: usize = 64 * 1024 * 1024;
 
 // DEFAULT_MAX_OPEN_FILES is the default max open files for rocksdb.
 const DEFAULT_MAX_OPEN_FILES: i32 = 10_000;
