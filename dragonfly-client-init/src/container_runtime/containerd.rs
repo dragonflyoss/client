@@ -16,7 +16,7 @@
 
 use dragonfly_client::proxy::header::DRAGONFLY_REGISTRY_HEADER;
 use dragonfly_client_config::dfinit::{self, ContainerdRegistry};
-use dragonfly_client_core::{Error, Result};
+use dragonfly_client_core::Result;
 use std::path::PathBuf;
 use tokio::{self, fs};
 use toml_edit::{value, Array, DocumentMut, Item, Table, Value};
@@ -50,24 +50,25 @@ impl Containerd {
 
         // If containerd supports config_path mode and config_path is not empty,
         // add registries to the certs.d directory.
-        if let Some(config_path) =
-            containerd_config["plugins"]["io.containerd.grpc.v1.cri"]["registry"].get("config_path")
+        if let Some(config_path) = containerd_config
+            .get("plugins")
+            .and_then(|plugins| plugins.get("io.containerd.grpc.v1.cri"))
+            .and_then(|cri| cri.get("registry"))
+            .and_then(|registry| registry.get("config_path"))
+            .and_then(|config_path| config_path.as_str())
+            .filter(|config_path| !config_path.is_empty())
         {
-            if let Some(config_path) = config_path.as_str() {
-                if !config_path.is_empty() {
-                    info!(
-                        "containerd supports config_path mode, config_path: {}",
-                        config_path.to_string()
-                    );
-                    return self
-                        .add_registries(
-                            config_path,
-                            self.config.registries.clone(),
-                            self.proxy_config.clone(),
-                        )
-                        .await;
-                }
-            }
+            info!(
+                "containerd supports config_path mode, config_path: {}",
+                config_path.to_string()
+            );
+            return self
+                .add_registries(
+                    config_path,
+                    self.config.registries.clone(),
+                    self.proxy_config.clone(),
+                )
+                .await;
         }
 
         // If containerd is old version and supports mirror mode, add registries to the
@@ -161,10 +162,8 @@ impl Containerd {
             mirrors_table.insert(&registry.host_namespace, Item::Table(mirror_table));
         }
 
-        let registry_table = containerd_config["plugins"]["io.containerd.grpc.v1.cri"]["registry"]
-            .as_table_mut()
-            .ok_or(Error::Unknown("registry field not found".to_string()))?;
-        registry_table.insert("mirrors", Item::Table(mirrors_table));
+        containerd_config["plugins"]["io.containerd.grpc.v1.cri"]["registry"]["mirrors"] =
+            Item::Table(mirrors_table);
 
         Ok(containerd_config)
     }
