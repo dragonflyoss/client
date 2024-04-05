@@ -19,7 +19,6 @@ use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_config::dfinit;
 use dragonfly_client_init::container_runtime;
 use std::path::PathBuf;
-use std::sync::Arc;
 use tracing::{error, Level};
 
 #[derive(Debug, Parser)]
@@ -91,10 +90,8 @@ async fn main() -> Result<(), anyhow::Error> {
         error!("failed to load config: {}", err);
         err
     })?;
-    let config = Arc::new(config);
-
     // Handle features of the container runtime.
-    let container_runtime = container_runtime::ContainerRuntime::new(config);
+    let container_runtime = container_runtime::ContainerRuntime::new(&config);
     container_runtime.run().await.map_err(|err| {
         error!("failed to run container runtime: {}", err);
         err
