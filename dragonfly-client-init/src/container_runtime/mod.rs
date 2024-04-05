@@ -36,7 +36,9 @@ pub struct ContainerRuntime {
 impl ContainerRuntime {
     // new creates a new container runtime manager.
     pub fn new(config: &Config) -> Self {
-        Self { engine: Self::get_runtime_engine(&config) }
+        Self {
+            engine: Self::get_runtime_engine(&config),
+        }
     }
 
     // run runs the container runtime to initialize runtime environment for the dfdaemon.
@@ -62,14 +64,13 @@ impl ContainerRuntime {
             ),
             ContainerRuntimeConfig::Docker(docker) => {
                 RuntimeEngine::Docker(docker::Docker::new(docker.clone(), config.proxy.clone()))
-            },
+            }
             ContainerRuntimeConfig::CRIO(crio) => {
                 RuntimeEngine::CRIO(crio::CRIO::new(crio.clone(), config.proxy.clone()))
-            },
+            }
         };
         Some(engine)
     }
-
 }
 
 #[cfg(test)]
@@ -89,18 +90,26 @@ mod test {
     #[test]
     fn should_get_runtime_engine_from_config() {
         let runtime = ContainerRuntime::new(&Config {
-            container_runtime: dragonfly_client_config::dfinit::ContainerRuntime { 
-                config: Some(dragonfly_client_config::dfinit::ContainerRuntimeConfig::Containerd(Containerd {
-                    ..Default::default()
-                }))
+            container_runtime: dragonfly_client_config::dfinit::ContainerRuntime {
+                config: Some(
+                    dragonfly_client_config::dfinit::ContainerRuntimeConfig::Containerd(
+                        Containerd {
+                            ..Default::default()
+                        },
+                    ),
+                ),
             },
             ..Default::default()
         });
         assert!(runtime.engine.is_some());
 
         let runtime = ContainerRuntime::new(&Config {
-            container_runtime: dragonfly_client_config::dfinit::ContainerRuntime { 
-                config: Some(dragonfly_client_config::dfinit::ContainerRuntimeConfig::CRIO(Default::default()))
+            container_runtime: dragonfly_client_config::dfinit::ContainerRuntime {
+                config: Some(
+                    dragonfly_client_config::dfinit::ContainerRuntimeConfig::CRIO(
+                        Default::default(),
+                    ),
+                ),
             },
             ..Default::default()
         });
