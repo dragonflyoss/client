@@ -24,7 +24,7 @@ pub mod docker;
 enum RuntimeEngine {
     Containerd(containerd::Containerd),
     Docker(docker::Docker),
-    CRIO(crio::CRIO),
+    Crio(crio::CRIO),
 }
 
 // ContainerRuntime represents the container runtime manager.
@@ -37,7 +37,7 @@ impl ContainerRuntime {
     // new creates a new container runtime manager.
     pub fn new(config: &Config) -> Self {
         Self {
-            engine: Self::get_runtime_engine(&config),
+            engine: Self::get_runtime_engine(config),
         }
     }
 
@@ -46,36 +46,36 @@ impl ContainerRuntime {
         // If containerd is enabled, override the default containerd
         // configuration.
         match &self.engine {
-            None => return Ok(()),
+            None => Ok(()),
             Some(RuntimeEngine::Containerd(containerd)) => containerd.run().await,
             Some(RuntimeEngine::Docker(docker)) => docker.run().await,
-            Some(RuntimeEngine::CRIO(crio)) => crio.run().await,
+            Some(RuntimeEngine::Crio(crio)) => crio.run().await,
         }
     }
 
     fn get_runtime_engine(config: &Config) -> Option<RuntimeEngine> {
         use dragonfly_client_config::dfinit::ContainerRuntimeConfig;
-        let Some(ref cfg) = config.container_runtime.config else {
-            return None;
-        };
-        let engine = match cfg {
-            ContainerRuntimeConfig::Containerd(containerd) => RuntimeEngine::Containerd(
-                containerd::Containerd::new(containerd.clone(), config.proxy.clone()),
-            ),
-            ContainerRuntimeConfig::Docker(docker) => {
-                RuntimeEngine::Docker(docker::Docker::new(docker.clone(), config.proxy.clone()))
-            }
-            ContainerRuntimeConfig::CRIO(crio) => {
-                RuntimeEngine::CRIO(crio::CRIO::new(crio.clone(), config.proxy.clone()))
-            }
-        };
-        Some(engine)
+        if let Some(ref cfg) = config.container_runtime.config {
+            let engine = match cfg {
+                ContainerRuntimeConfig::Containerd(containerd) => RuntimeEngine::Containerd(
+                    containerd::Containerd::new(containerd.clone(), config.proxy.clone()),
+                ),
+                ContainerRuntimeConfig::Docker(docker) => {
+                    RuntimeEngine::Docker(docker::Docker::new(docker.clone(), config.proxy.clone()))
+                }
+                ContainerRuntimeConfig::CRIO(crio) => {
+                    RuntimeEngine::Crio(crio::CRIO::new(crio.clone(), config.proxy.clone()))
+                }
+            };
+            return Some(engine);
+        }
+        None
     }
 }
 
 #[cfg(test)]
 mod test {
-    use dragonfly_client_config::dfinit::{Containerd, CRIO};
+    use dragonfly_client_config::dfinit::Containerd;
 
     use super::*;
 
