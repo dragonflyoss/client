@@ -104,8 +104,4 @@ impl CRIO {
         Ok(())
     }
 
-    // is_enabled returns true if cri-o feature is enabled.
-    pub fn is_enabled(&self) -> bool {
-        self.config.enable
-    }
 }

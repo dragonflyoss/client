@@ -24,6 +24,7 @@ pub mod docker;
 enum RuntimeEngine {
     Containerd(containerd::Containerd),
     Docker(docker::Docker),
+    CRIO(crio::CRIO),
 }
 
 // ContainerRuntime represents the container runtime manager.
@@ -46,6 +47,7 @@ impl ContainerRuntime {
             None => return Ok(()),
             Some(RuntimeEngine::Containerd(containerd)) => containerd.run().await,
             Some(RuntimeEngine::Docker(docker)) => docker.run().await,
+            Some(RuntimeEngine::CRIO(crio)) => crio.run().await,
         }
     }
 
@@ -60,7 +62,10 @@ impl ContainerRuntime {
             ),
             ContainerRuntimeConfig::Docker(docker) => {
                 RuntimeEngine::Docker(docker::Docker::new(docker.clone(), config.proxy.clone()))
-            }
+            },
+            ContainerRuntimeConfig::CRIO(crio) => {
+                RuntimeEngine::CRIO(crio::CRIO::new(crio.clone(), config.proxy.clone()))
+            },
         };
         Some(engine)
     }
@@ -69,7 +74,7 @@ impl ContainerRuntime {
 
 #[cfg(test)]
 mod test {
-    use dragonfly_client_config::dfinit::Containerd;
+    use dragonfly_client_config::dfinit::{Containerd, CRIO};
 
     use super::*;
 
@@ -88,6 +93,14 @@ mod test {
                 config: Some(dragonfly_client_config::dfinit::ContainerRuntimeConfig::Containerd(Containerd {
                     ..Default::default()
                 }))
+            },
+            ..Default::default()
+        });
+        assert!(runtime.engine.is_some());
+
+        let runtime = ContainerRuntime::new(&Config {
+            container_runtime: dragonfly_client_config::dfinit::ContainerRuntime { 
+                config: Some(dragonfly_client_config::dfinit::ContainerRuntimeConfig::CRIO(Default::default()))
             },
             ..Default::default()
         });

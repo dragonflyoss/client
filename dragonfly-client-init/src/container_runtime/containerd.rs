@@ -167,9 +167,4 @@ impl Containerd {
 
         Ok(containerd_config)
     }
-
-    // is_enabled returns true if containerd feature is enabled.
-    pub fn is_enabled(&self) -> bool {
-        self.config.enable
-    }
 }

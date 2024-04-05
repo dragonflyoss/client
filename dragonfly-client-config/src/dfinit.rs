@@ -116,7 +116,7 @@ pub struct Containerd {
 }
 
 // CRIORegistry is the registry configuration for cri-o.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[derive(Debug, Clone, Default, Validate, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct CRIORegistry {
     // prefix is the prefix of the user-specified image name, refer to
@@ -129,12 +129,9 @@ pub struct CRIORegistry {
 }
 
 // CRIO is the cri-o configuration for dfinit.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[derive(Debug, Clone, Default, Validate, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct CRIO {
-    // enable is a flag to enable cri-o feature.
-    pub enable: bool,
-
     // config_path is the path of cri-o registries's configuration file.
     #[serde(default = "default_container_runtime_crio_config_path")]
     pub config_path: PathBuf,
@@ -170,6 +167,7 @@ pub struct ContainerRuntime {
 pub enum ContainerRuntimeConfig {
     Containerd(Containerd),
     Docker(Docker),
+    CRIO(CRIO),
 }
 
 impl Serialize for ContainerRuntimeConfig {
@@ -189,6 +187,11 @@ impl Serialize for ContainerRuntimeConfig {
                 state.serialize_field("docker", &cfg)?;
                 state.end()
             }
+            ContainerRuntimeConfig::CRIO(ref cfg) => {
+                let mut state = serializer.serialize_struct("crio", 1)?;
+                state.serialize_field("crio", &cfg)?;
+                state.end()
+            }
         }
     }
 }
@@ -202,18 +205,26 @@ impl<'de> Deserialize<'de> for ContainerRuntimeConfig {
         struct ContainerRuntimeHelper {
             containerd: Option<Containerd>,
             docker: Option<Docker>,
+            crio: Option<CRIO>,
         }
 
         let helper = ContainerRuntimeHelper::deserialize(deserializer)?;
-        if helper.containerd.is_some() {
-            Ok(ContainerRuntimeConfig::Containerd(
-                helper.containerd.unwrap(),
-            ))
-        } else if helper.docker.is_some() {
-            Ok(ContainerRuntimeConfig::Docker(helper.docker.unwrap()))
-        } else {
-            use serde::de::Error;
-            Err(D::Error::custom("expected containerd or docker"))
+        match helper {
+            ContainerRuntimeHelper {
+                containerd: Some(containerd),
+                ..
+            } => Ok(ContainerRuntimeConfig::Containerd(containerd)),
+            ContainerRuntimeHelper {
+                docker: Some(docker),
+                ..
+            } => Ok(ContainerRuntimeConfig::Docker(docker)),
+            ContainerRuntimeHelper {
+                crio: Some(crio), ..
+            } => Ok(ContainerRuntimeConfig::CRIO(crio)),
+            _ => {
+                use serde::de::Error;
+                Err(D::Error::custom("expected containerd or docker or crio"))
+            }
         }
     }
 }
@@ -325,12 +336,12 @@ containerRuntime:
     }
 
     #[test]
-    fn deserialize_container_runtime() {
+    fn deserialize_container_runtime_correctly() {
         let raw_data = r#"
             proxy: 
                 addr: "hello"
         "#;
-        let cfg: Config = serde_yaml::from_str(&raw_data).unwrap();
+        let cfg: Config = serde_yaml::from_str(&raw_data).expect("failed to deserialize");
         assert!(cfg.container_runtime.config.is_none());
         assert_eq!("hello".to_string(), cfg.proxy.addr);
 
@@ -341,14 +352,51 @@ containerRuntime:
                 containerd:
                     configPath: "test_path"
         "#;
-        let cfg: Config = serde_yaml::from_str(&raw_data).unwrap();
-        assert!(cfg.container_runtime.config.is_some());
-        match cfg.container_runtime.config {
-            Some(ContainerRuntimeConfig::Containerd(c)) => {
-                assert_eq!(PathBuf::from("test_path"), c.config_path);
-            }
-            _ => assert!(false)
-        }
+        let cfg: Config = serde_yaml::from_str(&raw_data).expect("failed to deserialize");
         assert_eq!("hello".to_string(), cfg.proxy.addr);
+        if let Some(ContainerRuntimeConfig::Containerd(c)) = cfg.container_runtime.config {
+            assert_eq!(PathBuf::from("test_path"), c.config_path);
+        } else {
+            panic!("failed to deserialize");
+        }
+    }
+
+    #[test]
+    fn deserialize_container_runtime_crio_correctly() {
+        let raw_data = r#"
+            proxy: 
+                addr: "hello"
+            containerRuntime:
+                crio:
+                    configPath: "test_path"
+                    unqualifiedSearchRegistries:
+                        - "reg1"
+                        - "reg2"
+                    registries:
+                        - prefix: "prefix1"
+                          location: "location1"
+                        - prefix: "prefix2"
+                          location: "location2"
+        "#;
+        let cfg: Config = serde_yaml::from_str(&raw_data).expect("failed to deserialize");
+        if let Some(ContainerRuntimeConfig::CRIO(c)) = cfg.container_runtime.config {
+            assert_eq!(PathBuf::from("test_path"), c.config_path);
+            assert_eq!(vec!["reg1", "reg2"], c.unqualified_search_registries);
+            assert_eq!(
+                vec![
+                    CRIORegistry {
+                        location: "location1".to_string(),
+                        prefix: "prefix1".to_string()
+                    },
+                    CRIORegistry {
+                        location: "location2".to_string(),
+                        prefix: "prefix2".to_string()
+                    },
+                ],
+                c.registries
+            );
+        } else {
+            panic!("failed to deserialize");
+        }
     }
 }
