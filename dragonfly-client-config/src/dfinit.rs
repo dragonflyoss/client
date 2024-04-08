@@ -16,7 +16,7 @@
 
 use crate::dfdaemon::default_proxy_server_port;
 use dragonfly_client_core::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
@@ -83,8 +83,8 @@ fn default_container_runtime_containerd_registry_capabilities() -> Vec<String> {
     vec!["pull".to_string(), "resolve".to_string()]
 }
 
-// ContainerdRegistry is the registry configuration for containerd.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+// Registry is the registry configuration for containerd.
+#[derive(Debug, Clone, Default, Validate, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ContainerdRegistry {
     // host_namespace is the location where container images and artifacts are sourced,
@@ -104,12 +104,9 @@ pub struct ContainerdRegistry {
 }
 
 // Containerd is the containerd configuration for dfinit.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[derive(Debug, Clone, Default, Validate, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Containerd {
-    // enable is a flag to enable containerd feature.
-    pub enable: bool,
-
     // config_path is the path of containerd configuration file.
     #[serde(default = "default_container_runtime_containerd_config_path")]
     pub config_path: PathBuf,
@@ -119,7 +116,7 @@ pub struct Containerd {
 }
 
 // CRIORegistry is the registry configuration for cri-o.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[derive(Debug, Clone, Default, Validate, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct CRIORegistry {
     // prefix is the prefix of the user-specified image name, refer to
@@ -132,12 +129,9 @@ pub struct CRIORegistry {
 }
 
 // CRIO is the cri-o configuration for dfinit.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[derive(Debug, Clone, Default, Validate, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct CRIO {
-    // enable is a flag to enable cri-o feature.
-    pub enable: bool,
-
     // config_path is the path of cri-o registries's configuration file.
     #[serde(default = "default_container_runtime_crio_config_path")]
     pub config_path: PathBuf,
@@ -153,33 +147,90 @@ pub struct CRIO {
 }
 
 // Docker is the docker configuration for dfinit.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[derive(Debug, Clone, Default, Validate, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Docker {
-    // enable is a flag to enable docker feature.
-    pub enable: bool,
-
     // config_path is the path of docker configuration file.
     #[serde(default = "default_container_runtime_docker_config_path")]
     pub config_path: PathBuf,
 }
 
 // ContainerRuntime is the container runtime configuration for dfinit.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[derive(Debug, Clone, Default, Validate, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ContainerRuntime {
-    // containerd is the containerd configuration.
-    pub containerd: Containerd,
+    #[serde(flatten)]
+    pub config: Option<ContainerRuntimeConfig>,
+}
 
-    // crio is the cri-o configuration.
-    pub crio: CRIO,
+#[derive(Debug, Clone)]
+pub enum ContainerRuntimeConfig {
+    Containerd(Containerd),
+    Docker(Docker),
+    CRIO(CRIO),
+}
 
-    // docker is the docker configuration.
-    pub docker: Docker,
+impl Serialize for ContainerRuntimeConfig {
+    fn serialize<S>(&self, serializer: S) -> std::prelude::v1::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        match *self {
+            ContainerRuntimeConfig::Containerd(ref cfg) => {
+                let mut state = serializer.serialize_struct("containerd", 1)?;
+                state.serialize_field("containerd", &cfg)?;
+                state.end()
+            }
+            ContainerRuntimeConfig::Docker(ref cfg) => {
+                let mut state = serializer.serialize_struct("docker", 1)?;
+                state.serialize_field("docker", &cfg)?;
+                state.end()
+            }
+            ContainerRuntimeConfig::CRIO(ref cfg) => {
+                let mut state = serializer.serialize_struct("crio", 1)?;
+                state.serialize_field("crio", &cfg)?;
+                state.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ContainerRuntimeConfig {
+    fn deserialize<D>(deserializer: D) -> std::prelude::v1::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct ContainerRuntimeHelper {
+            containerd: Option<Containerd>,
+            docker: Option<Docker>,
+            crio: Option<CRIO>,
+        }
+
+        let helper = ContainerRuntimeHelper::deserialize(deserializer)?;
+        match helper {
+            ContainerRuntimeHelper {
+                containerd: Some(containerd),
+                ..
+            } => Ok(ContainerRuntimeConfig::Containerd(containerd)),
+            ContainerRuntimeHelper {
+                docker: Some(docker),
+                ..
+            } => Ok(ContainerRuntimeConfig::Docker(docker)),
+            ContainerRuntimeHelper {
+                crio: Some(crio), ..
+            } => Ok(ContainerRuntimeConfig::CRIO(crio)),
+            _ => {
+                use serde::de::Error;
+                Err(D::Error::custom("expected containerd or docker or crio"))
+            }
+        }
+    }
 }
 
 // Proxy is the proxy server configuration for dfdaemon.
-#[derive(Debug, Clone, Validate, Deserialize)]
+#[derive(Debug, Clone, Validate, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Proxy {
     // addr is the proxy server address of dfdaemon.
@@ -197,7 +248,7 @@ impl Default for Proxy {
 }
 
 // Config is the configuration for dfinit.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[derive(Debug, Clone, Default, Validate, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
     // proxy is the configuration of the dfdaemon's HTTP/HTTPS proxy.
@@ -221,5 +272,131 @@ impl Config {
         // Validate configuration.
         config.validate()?;
         Ok(config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seralize_container_runtime() {
+        let cfg = ContainerRuntimeConfig::Containerd(Containerd {
+            ..Default::default()
+        });
+        let res = serde_yaml::to_string(&cfg).unwrap();
+        let expected = r#"
+containerd:
+  configPath: ''
+  registries: []"#;
+        assert_eq!(expected.trim(), res.trim());
+
+        let runtime_cfg = ContainerRuntimeConfig::Docker(Docker {
+            config_path: PathBuf::from("/root/.dragonfly/config/dfinit/yaml"),
+        });
+        let cfg = Config {
+            container_runtime: ContainerRuntime {
+                config: Some(runtime_cfg),
+            },
+            proxy: Proxy {
+                addr: String::from("hello"),
+            },
+        };
+
+        let res = serde_yaml::to_string(&cfg).unwrap();
+        let expected = r#"
+proxy:
+  addr: hello
+containerRuntime:
+  docker:
+    configPath: /root/.dragonfly/config/dfinit/yaml"#;
+        assert_eq!(expected.trim(), res.trim());
+
+        let runtime_cfg = ContainerRuntimeConfig::Containerd(Containerd {
+            config_path: PathBuf::from("/root/.dragonfly/config/dfinit/yaml"),
+            ..Default::default()
+        });
+        let cfg = Config {
+            container_runtime: ContainerRuntime {
+                config: Some(runtime_cfg),
+            },
+            proxy: Proxy {
+                addr: String::from("hello"),
+            },
+        };
+        let res = serde_yaml::to_string(&cfg).unwrap();
+        let expected = r#"
+proxy:
+  addr: hello
+containerRuntime:
+  containerd:
+    configPath: /root/.dragonfly/config/dfinit/yaml
+    registries: []"#;
+        assert_eq!(expected.trim(), res.trim());
+    }
+
+    #[test]
+    fn deserialize_container_runtime_correctly() {
+        let raw_data = r#"
+            proxy: 
+                addr: "hello"
+        "#;
+        let cfg: Config = serde_yaml::from_str(&raw_data).expect("failed to deserialize");
+        assert!(cfg.container_runtime.config.is_none());
+        assert_eq!("hello".to_string(), cfg.proxy.addr);
+
+        let raw_data = r#"
+            proxy: 
+                addr: "hello"
+            containerRuntime:
+                containerd:
+                    configPath: "test_path"
+        "#;
+        let cfg: Config = serde_yaml::from_str(&raw_data).expect("failed to deserialize");
+        assert_eq!("hello".to_string(), cfg.proxy.addr);
+        if let Some(ContainerRuntimeConfig::Containerd(c)) = cfg.container_runtime.config {
+            assert_eq!(PathBuf::from("test_path"), c.config_path);
+        } else {
+            panic!("failed to deserialize");
+        }
+    }
+
+    #[test]
+    fn deserialize_container_runtime_crio_correctly() {
+        let raw_data = r#"
+            proxy: 
+                addr: "hello"
+            containerRuntime:
+                crio:
+                    configPath: "test_path"
+                    unqualifiedSearchRegistries:
+                        - "reg1"
+                        - "reg2"
+                    registries:
+                        - prefix: "prefix1"
+                          location: "location1"
+                        - prefix: "prefix2"
+                          location: "location2"
+        "#;
+        let cfg: Config = serde_yaml::from_str(&raw_data).expect("failed to deserialize");
+        if let Some(ContainerRuntimeConfig::CRIO(c)) = cfg.container_runtime.config {
+            assert_eq!(PathBuf::from("test_path"), c.config_path);
+            assert_eq!(vec!["reg1", "reg2"], c.unqualified_search_registries);
+            assert_eq!(
+                vec![
+                    CRIORegistry {
+                        location: "location1".to_string(),
+                        prefix: "prefix1".to_string()
+                    },
+                    CRIORegistry {
+                        location: "location2".to_string(),
+                        prefix: "prefix2".to_string()
+                    },
+                ],
+                c.registries
+            );
+        } else {
+            panic!("failed to deserialize");
+        }
     }
 }

@@ -16,39 +16,28 @@
 
 use dragonfly_client_config::dfinit::Config;
 use dragonfly_client_core::Result;
-use std::sync::Arc;
-use tracing::info;
 
 pub mod containerd;
 pub mod crio;
 pub mod docker;
 
+enum RuntimeEngine {
+    Containerd(containerd::Containerd),
+    Docker(docker::Docker),
+    Crio(crio::CRIO),
+}
+
 // ContainerRuntime represents the container runtime manager.
 pub struct ContainerRuntime {
-    // containerd is the containerd runtime manager.
-    containerd: containerd::Containerd,
-
-    // crio is the cri-o runtime manager.
-    crio: crio::CRIO,
-
-    // docker is the docker runtime manager.
-    docker: docker::Docker,
+    engine: Option<RuntimeEngine>,
 }
 
 // ContainerRuntime implements the container runtime manager.
 impl ContainerRuntime {
     // new creates a new container runtime manager.
-    pub fn new(config: Arc<Config>) -> Self {
+    pub fn new(config: &Config) -> Self {
         Self {
-            containerd: containerd::Containerd::new(
-                config.container_runtime.containerd.clone(),
-                config.proxy.clone(),
-            ),
-            crio: crio::CRIO::new(config.container_runtime.crio.clone(), config.proxy.clone()),
-            docker: docker::Docker::new(
-                config.container_runtime.docker.clone(),
-                config.proxy.clone(),
-            ),
+            engine: Self::get_runtime_engine(config),
         }
     }
 
@@ -56,23 +45,74 @@ impl ContainerRuntime {
     pub async fn run(&self) -> Result<()> {
         // If containerd is enabled, override the default containerd
         // configuration.
-        if self.containerd.is_enabled() {
-            info!("containerd feature is enabled");
-            self.containerd.run().await?;
+        match &self.engine {
+            None => Ok(()),
+            Some(RuntimeEngine::Containerd(containerd)) => containerd.run().await,
+            Some(RuntimeEngine::Docker(docker)) => docker.run().await,
+            Some(RuntimeEngine::Crio(crio)) => crio.run().await,
         }
+    }
 
-        // If cri-o is enabled, override the default cri-o configuration.
-        if self.crio.is_enabled() {
-            info!("cri-o feature is enabled");
-            self.crio.run().await?;
+    fn get_runtime_engine(config: &Config) -> Option<RuntimeEngine> {
+        use dragonfly_client_config::dfinit::ContainerRuntimeConfig;
+        if let Some(ref cfg) = config.container_runtime.config {
+            let engine = match cfg {
+                ContainerRuntimeConfig::Containerd(containerd) => RuntimeEngine::Containerd(
+                    containerd::Containerd::new(containerd.clone(), config.proxy.clone()),
+                ),
+                ContainerRuntimeConfig::Docker(docker) => {
+                    RuntimeEngine::Docker(docker::Docker::new(docker.clone(), config.proxy.clone()))
+                }
+                ContainerRuntimeConfig::CRIO(crio) => {
+                    RuntimeEngine::Crio(crio::CRIO::new(crio.clone(), config.proxy.clone()))
+                }
+            };
+            return Some(engine);
         }
+        None
+    }
+}
 
-        // If docker is enabled, override the default docker configuration.
-        if self.docker.is_enabled() {
-            info!("docker feature is enabled");
-            self.docker.run().await?;
-        }
+#[cfg(test)]
+mod test {
+    use dragonfly_client_config::dfinit::Containerd;
 
-        Ok(())
+    use super::*;
+
+    #[tokio::test]
+    async fn should_return_ok_if_container_runtime_not_set() {
+        let runtime = ContainerRuntime::new(&Config {
+            ..Default::default()
+        });
+        assert!(runtime.run().await.is_ok());
+    }
+
+    #[test]
+    fn should_get_runtime_engine_from_config() {
+        let runtime = ContainerRuntime::new(&Config {
+            container_runtime: dragonfly_client_config::dfinit::ContainerRuntime {
+                config: Some(
+                    dragonfly_client_config::dfinit::ContainerRuntimeConfig::Containerd(
+                        Containerd {
+                            ..Default::default()
+                        },
+                    ),
+                ),
+            },
+            ..Default::default()
+        });
+        assert!(runtime.engine.is_some());
+
+        let runtime = ContainerRuntime::new(&Config {
+            container_runtime: dragonfly_client_config::dfinit::ContainerRuntime {
+                config: Some(
+                    dragonfly_client_config::dfinit::ContainerRuntimeConfig::CRIO(
+                        Default::default(),
+                    ),
+                ),
+            },
+            ..Default::default()
+        });
+        assert!(runtime.engine.is_some());
     }
 }

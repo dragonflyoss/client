@@ -44,14 +44,9 @@ impl Docker {
     // runtime environment for the dfdaemon.
     pub async fn run(&self) -> Result<()> {
         info!(
-            "docker feature is enabled, proxy_addr: {}",
-            self.proxy_config.addr
+            "docker feature is enabled, proxy_addr: {}, config_path: {:?}",
+            self.proxy_config.addr, self.config.config_path,
         );
         Err(Error::Unimplemented())
-    }
-
-    // is_enabled returns true if docker feature is enabled.
-    pub fn is_enabled(&self) -> bool {
-        self.config.enable
     }
 }
