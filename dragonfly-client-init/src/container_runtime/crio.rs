@@ -22,6 +22,7 @@ use tracing::info;
 use url::Url;
 
 // CRIO represents the cri-o runtime manager.
+#[derive(Debug, Clone)]
 pub struct CRIO {
     // config is the configuration for initializing
     // runtime environment for the dfdaemon.

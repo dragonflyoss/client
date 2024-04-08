@@ -16,7 +16,7 @@
 
 use crate::dfdaemon::default_proxy_server_port;
 use dragonfly_client_core::Result;
-use serde::{Deserialize, Serialize};
+use serde::{ser::SerializeStruct, Deserialize, Serialize};
 use std::fs;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
@@ -163,6 +163,7 @@ pub struct ContainerRuntime {
     pub config: Option<ContainerRuntimeConfig>,
 }
 
+// ContainerRuntimeConfig is the container runtime configuration for dfinit.
 #[derive(Debug, Clone)]
 pub enum ContainerRuntimeConfig {
     Containerd(Containerd),
@@ -170,12 +171,12 @@ pub enum ContainerRuntimeConfig {
     CRIO(CRIO),
 }
 
+// Serialize is the implementation of the Serialize trait for ContainerRuntimeConfig.
 impl Serialize for ContainerRuntimeConfig {
     fn serialize<S>(&self, serializer: S) -> std::prelude::v1::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        use serde::ser::SerializeStruct;
         match *self {
             ContainerRuntimeConfig::Containerd(ref cfg) => {
                 let mut state = serializer.serialize_struct("containerd", 1)?;
@@ -196,6 +197,7 @@ impl Serialize for ContainerRuntimeConfig {
     }
 }
 
+// Deserialize is the implementation of the Deserialize trait for ContainerRuntimeConfig.
 impl<'de> Deserialize<'de> for ContainerRuntimeConfig {
     fn deserialize<D>(deserializer: D) -> std::prelude::v1::Result<Self, D::Error>
     where

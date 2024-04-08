@@ -14,14 +14,17 @@
  * limitations under the License.
  */
 
-use dragonfly_client_config::dfinit::Config;
+use dragonfly_client_config::dfinit::{Config, ContainerRuntimeConfig};
 use dragonfly_client_core::Result;
+use tracing::info;
 
 pub mod containerd;
 pub mod crio;
 pub mod docker;
 
-enum RuntimeEngine {
+// Engine represents config of the container runtime engine.
+#[derive(Debug, Clone)]
+enum Engine {
     Containerd(containerd::Containerd),
     Docker(docker::Docker),
     Crio(crio::CRIO),
@@ -29,7 +32,7 @@ enum RuntimeEngine {
 
 // ContainerRuntime represents the container runtime manager.
 pub struct ContainerRuntime {
-    engine: Option<RuntimeEngine>,
+    engine: Option<Engine>,
 }
 
 // ContainerRuntime implements the container runtime manager.
@@ -37,7 +40,7 @@ impl ContainerRuntime {
     // new creates a new container runtime manager.
     pub fn new(config: &Config) -> Self {
         Self {
-            engine: Self::get_runtime_engine(config),
+            engine: Self::get_engine(config),
         }
     }
 
@@ -47,28 +50,32 @@ impl ContainerRuntime {
         // configuration.
         match &self.engine {
             None => Ok(()),
-            Some(RuntimeEngine::Containerd(containerd)) => containerd.run().await,
-            Some(RuntimeEngine::Docker(docker)) => docker.run().await,
-            Some(RuntimeEngine::Crio(crio)) => crio.run().await,
+            Some(Engine::Containerd(containerd)) => containerd.run().await,
+            Some(Engine::Docker(docker)) => docker.run().await,
+            Some(Engine::Crio(crio)) => crio.run().await,
         }
     }
 
-    fn get_runtime_engine(config: &Config) -> Option<RuntimeEngine> {
-        use dragonfly_client_config::dfinit::ContainerRuntimeConfig;
-        if let Some(ref cfg) = config.container_runtime.config {
-            let engine = match cfg {
-                ContainerRuntimeConfig::Containerd(containerd) => RuntimeEngine::Containerd(
+    // get_engine returns the runtime engine from the config.
+    fn get_engine(config: &Config) -> Option<Engine> {
+        if let Some(ref container_runtime_config) = config.container_runtime.config {
+            let engine = match container_runtime_config {
+                ContainerRuntimeConfig::Containerd(containerd) => Engine::Containerd(
                     containerd::Containerd::new(containerd.clone(), config.proxy.clone()),
                 ),
                 ContainerRuntimeConfig::Docker(docker) => {
-                    RuntimeEngine::Docker(docker::Docker::new(docker.clone(), config.proxy.clone()))
+                    Engine::Docker(docker::Docker::new(docker.clone(), config.proxy.clone()))
                 }
                 ContainerRuntimeConfig::CRIO(crio) => {
-                    RuntimeEngine::Crio(crio::CRIO::new(crio.clone(), config.proxy.clone()))
+                    Engine::Crio(crio::CRIO::new(crio.clone(), config.proxy.clone()))
                 }
             };
+
+            info!("container runtime engine is {:?}", engine);
             return Some(engine);
         }
+
+        info!("container runtime engine is not set");
         None
     }
 }
@@ -88,7 +95,7 @@ mod test {
     }
 
     #[test]
-    fn should_get_runtime_engine_from_config() {
+    fn should_get_engine_from_config() {
         let runtime = ContainerRuntime::new(&Config {
             container_runtime: dragonfly_client_config::dfinit::ContainerRuntime {
                 config: Some(
