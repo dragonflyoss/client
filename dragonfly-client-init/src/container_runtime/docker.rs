@@ -19,6 +19,7 @@ use dragonfly_client_core::{Error, Result};
 use tracing::info;
 
 // Docker represents the docker runtime manager.
+#[derive(Debug, Clone)]
 pub struct Docker {
     // config is the configuration for initializing
     // runtime environment for the dfdaemon.
