@@ -24,6 +24,7 @@ use dragonfly_api::dfdaemon::v2::{
 };
 use dragonfly_api::errordetails::v2::Http;
 use dragonfly_client_config::dfdaemon::{Config, Rule};
+use dragonfly_client_core::error::{ErrorType, ExternalError, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_util::{
     http::{
@@ -42,7 +43,7 @@ use hyper::client::conn::http1::Builder;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
-use hyper::{Method, Request};
+use hyper::{Error, Method, Request};
 use hyper_rustls::ConfigBuilderExt;
 use hyper_util::{
     client::legacy::Client,
@@ -377,7 +378,8 @@ async fn upgraded_tunnel(
     // Build TLS configuration.
     let mut server_config = ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(server_certs, server_key)?;
+        .with_single_cert(server_certs, server_key)
+        .or_err(ErrorType::TLSConfigError)?;
     server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
     let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
     let tls_stream = tls_acceptor.accept(upgraded).await?;
@@ -667,7 +669,8 @@ async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Res
         .preserve_header_case(true)
         .title_case_headers(true)
         .handshake(io)
-        .await?;
+        .await
+        .or_err(ErrorType::HTTPError)?;
 
     tokio::task::spawn(async move {
         if let Err(err) = conn.await {
@@ -675,8 +678,17 @@ async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Res
         }
     });
 
-    let response = client.send_request(request).await?;
-    Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
+    let response = client
+        .send_request(request)
+        .await
+        .or_err(ErrorType::HTTPError)?;
+    //Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
+    Ok(response.map(|b| {
+        b.map_err(|e| {
+            ClientError::from(ExternalError::new(ErrorType::HTTPError).with_cause(Box::new(e)))
+        })
+        .boxed()
+    }))
 }
 
 // proxy_https proxies the HTTPS request directly to the remote server.
@@ -711,8 +723,13 @@ async fn proxy_https(
     let client = Client::builder(TokioExecutor::new())
         .http2_only(true)
         .build::<_, hyper::body::Incoming>(https);
-    let response = client.request(request).await?;
-    Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
+    let response = client.request(request).await.or_err(ErrorType::HTTPError)?;
+    Ok(response.map(|b| 
+        b.map_err(|e| {
+            ClientError::from(ExternalError::new(ErrorType::HTTPError).with_cause(Box::new(e)))
+        })
+        .boxed()
+))
 }
 
 // make_registry_mirror_request makes a registry mirror request by the request.

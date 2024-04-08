@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use dragonfly_client_core::Result;
+use dragonfly_client_core::{error::{ErrorType, OrErr}, Result};
 use sha2::{Digest, Sha256};
 use url::Url;
 use uuid::Uuid;
@@ -63,7 +63,7 @@ impl IDGenerator {
         filtered_query_params: Vec<String>,
     ) -> Result<String> {
         // Filter the query parameters.
-        let url = Url::parse(url)?;
+        let url = Url::parse(url).or_err(ErrorType::ParseError)?;
         let query = url
             .query_pairs()
             .filter(|(k, _)| filtered_query_params.contains(&k.to_string()));

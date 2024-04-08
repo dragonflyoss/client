@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::Result;
 use local_ip_address::{local_ip, local_ipv6};
 use regex::Regex;
@@ -893,14 +894,15 @@ impl Config {
     pub async fn load(path: &PathBuf) -> Result<Config> {
         // Load configuration from file.
         let content = fs::read_to_string(path).await?;
-        let mut config: Config = serde_yaml::from_str(&content)?;
+        let mut config: Config =
+            serde_yaml::from_str(&content).or_err(ErrorType::ConfigError)?;
         info!("load config from {}", path.display());
 
         // Convert configuration.
         config.convert();
 
         // Validate configuration.
-        config.validate()?;
+        config.validate().or_err(ErrorType::ValidationError)?;
         Ok(config)
     }
 
