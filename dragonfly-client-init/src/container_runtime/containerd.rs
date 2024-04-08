@@ -16,7 +16,7 @@
 
 use dragonfly_client::proxy::header::DRAGONFLY_REGISTRY_HEADER;
 use dragonfly_client_config::dfinit::{self, ContainerdRegistry};
-use dragonfly_client_core::Result;
+use dragonfly_client_core::{Error, Result};
 use std::path::PathBuf;
 use tokio::{self, fs};
 use toml_edit::{value, Array, DocumentMut, Item, Table, Value};
@@ -49,6 +49,35 @@ impl Containerd {
         let content = fs::read_to_string(&self.config.config_path).await?;
         let mut containerd_config = content.parse::<DocumentMut>()?;
 
+        // If containerd is old version and supports mirror mode, add registries to the
+        // registry mirrors in containerd configuration.
+        if let Some(mirrors) = containerd_config
+            .get("plugins")
+            .and_then(|plugins| plugins.get("io.containerd.grpc.v1.cri"))
+            .and_then(|cri| cri.get("registry"))
+            .and_then(|registry| registry.get("mirrors"))
+            .and_then(|mirrors| mirrors.as_table())
+            .filter(|mirrors| !mirrors.is_empty())
+        {
+            info!("containerd supports mirror mode");
+            containerd_config = self.add_registries_by_mirrors(
+                self.config.registries.clone(),
+                self.proxy_config.clone(),
+                containerd_config.clone(),
+                mirrors.clone(),
+            )?;
+
+            // Override containerd configuration.
+            info!("override containerd configuration");
+            fs::write(
+                &self.config.config_path,
+                containerd_config.to_string().as_bytes(),
+            )
+            .await?;
+
+            return Ok(());
+        }
+
         // If containerd supports config_path mode and config_path is not empty,
         // add registries to the certs.d directory.
         if let Some(config_path) = containerd_config
@@ -63,6 +92,7 @@ impl Containerd {
                 "containerd supports config_path mode, config_path: {}",
                 config_path.to_string()
             );
+
             return self
                 .add_registries(
                     config_path,
@@ -72,14 +102,21 @@ impl Containerd {
                 .await;
         }
 
-        // If containerd is old version and supports mirror mode, add registries to the
-        // registry mirrors in containerd configuration.
-        info!("containerd not supports config_path mode, use mirror mode to add registries");
-        containerd_config = self.add_registries_by_mirrors(
-            self.config.registries.clone(),
-            self.proxy_config.clone(),
-            containerd_config,
-        )?;
+        // If containerd does not support mirror mode and config_path not set, create a new
+        // config_path for the registries.
+        info!("containerd not supports mirror mode and config_path not set");
+        let config_path = "/etc/containerd/certs.d";
+
+        // Add config_path to the containerd configuration.
+        let mut registry_table = Table::new();
+        registry_table.set_implicit(true);
+        registry_table.insert("config_path", value(config_path));
+        containerd_config["plugins"]["io.containerd.grpc.v1.cri"]
+            .as_table_mut()
+            .ok_or(Error::Unknown(
+                "io.containerd.grpc.v1.cri not found".to_string(),
+            ))?
+            .insert("registry", Item::Table(registry_table));
 
         // Override containerd configuration.
         info!("override containerd configuration");
@@ -88,6 +125,14 @@ impl Containerd {
             containerd_config.to_string().as_bytes(),
         )
         .await?;
+
+        self.add_registries(
+            config_path,
+            self.config.registries.clone(),
+            self.proxy_config.clone(),
+        )
+        .await?;
+
         Ok(())
     }
 
@@ -145,10 +190,9 @@ impl Containerd {
         registries: Vec<ContainerdRegistry>,
         proxy_config: dfinit::Proxy,
         mut containerd_config: DocumentMut,
+        mut mirrors_table: Table,
     ) -> Result<DocumentMut> {
-        let mut mirrors_table = Table::new();
         mirrors_table.set_implicit(true);
-
         for registry in registries {
             info!("add registry: {:?}", registry);
 
