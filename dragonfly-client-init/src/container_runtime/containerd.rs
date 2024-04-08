@@ -23,6 +23,7 @@ use toml_edit::{value, Array, DocumentMut, Item, Table, Value};
 use tracing::info;
 
 // Containerd represents the containerd runtime manager.
+#[derive(Debug, Clone)]
 pub struct Containerd {
     // config is the configuration for initializing
     // runtime environment for the dfdaemon.
