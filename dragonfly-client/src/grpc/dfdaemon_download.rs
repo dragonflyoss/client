@@ -29,6 +29,8 @@ use dragonfly_api::errordetails::v2::Http;
 use dragonfly_api::scheduler::v2::{
     LeaveHostRequest as SchedulerLeaveHostRequest, StatTaskRequest as SchedulerStatTaskRequest,
 };
+use dragonfly_client_core::error::ErrorType;
+use dragonfly_client_core::error::OrErr;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_util::http::{
     get_range, hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap,
@@ -492,7 +494,8 @@ impl DfdaemonDownloadClient {
             .map_err(|err| {
                 error!("connect failed: {}", err);
                 err
-            })?;
+            })
+            .or_err(ErrorType::ConnectError)?;
         let client = DfdaemonDownloadGRPCClient::new(channel).max_decoding_message_size(usize::MAX);
         Ok(Self { client })
     }

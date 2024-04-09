@@ -19,6 +19,7 @@ use dashmap::{DashMap, DashSet};
 use dragonfly_api::common::v2::Peer;
 use dragonfly_api::dfdaemon::v2::SyncPiecesRequest;
 use dragonfly_client_config::dfdaemon::Config;
+use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_storage::metadata;
 use std::sync::Arc;
@@ -172,7 +173,7 @@ impl PieceCollector {
                 let out_stream = response.into_inner().timeout(collected_piece_timeout);
                 tokio::pin!(out_stream);
 
-                while let Some(message) = out_stream.try_next().await? {
+                while let Some(message) = out_stream.try_next().await.or_err(ErrorType::StreamError)? {
                     let message = message?;
                     collected_pieces.entry(message.number).and_modify(|peers| {
                         peers.insert(parent.id.clone());

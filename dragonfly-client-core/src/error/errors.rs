@@ -12,6 +12,9 @@ pub enum ErrorType {
     ParseError,
     CertificateError,
     TLSConfigError,
+    AsyncRuntimeError,
+    StreamError,
+    ConnectError,
 }
 
 impl ErrorType {
@@ -25,6 +28,9 @@ impl ErrorType {
             ErrorType::CertificateError => "CertificateError",
             ErrorType::SerializeError => "SerializeError",
             ErrorType::TLSConfigError => "TLSConfigError",
+            ErrorType::AsyncRuntimeError => "AsyncRuntimeError",
+            ErrorType::StreamError => "StreamError",
+            ErrorType::ConnectError => "ConnectError",
         }
     }
 }

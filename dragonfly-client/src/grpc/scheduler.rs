@@ -23,6 +23,7 @@ use dragonfly_api::scheduler::v2::{
     AnnouncePeerRequest, AnnouncePeerResponse, ExchangePeerRequest, ExchangePeerResponse,
     LeaveHostRequest, LeavePeerRequest, StatPeerRequest, StatTaskRequest,
 };
+use dragonfly_client_core::error::{ErrorType, ExternalError, OrErr};
 use dragonfly_client_core::{Error, Result};
 use hashring::HashRing;
 use std::net::{IpAddr, SocketAddr};
@@ -163,7 +164,8 @@ impl SchedulerClient {
                     .map_err(|err| {
                         error!("connect to {} failed: {}", addr.to_string(), err);
                         err
-                    })?;
+                    })
+                    .or_err(ErrorType::ConnectError)?;
 
                 let mut client = SchedulerGRPCClient::new(channel);
                 client.announce_host(request).await?;
@@ -173,8 +175,13 @@ impl SchedulerClient {
             join_set.spawn(announce_host(*available_scheduler_addr, request).in_current_span());
         }
 
-        while let Some(message) = join_set.join_next().await {
-            if let Err(err) = message? {
+        while let Some(message) = join_set
+            .join_next()
+            .await
+            .transpose()
+            .or_err(ErrorType::AsyncRuntimeError)?
+        {
+            if let Err(err) = message {
                 error!("failed to init announce host: {}", err);
                 return Err(err);
             }
@@ -209,7 +216,8 @@ impl SchedulerClient {
                     .map_err(|err| {
                         error!("connect to {} failed: {}", addr.to_string(), err);
                         err
-                    })?;
+                    })
+                    .or_err(ErrorType::ConnectError)?;
 
                 let mut client = SchedulerGRPCClient::new(channel);
                 client.announce_host(request).await?;
@@ -219,8 +227,13 @@ impl SchedulerClient {
             join_set.spawn(announce_host(*available_scheduler_addr, request).in_current_span());
         }
 
-        while let Some(message) = join_set.join_next().await {
-            if let Err(err) = message? {
+        while let Some(message) = join_set
+            .join_next()
+            .await
+            .transpose()
+            .or_err(ErrorType::AsyncRuntimeError)?
+        {
+            if let Err(err) = message {
                 error!("failed to announce host: {}", err);
             }
         }
@@ -254,7 +267,8 @@ impl SchedulerClient {
                     .map_err(|err| {
                         error!("connect to {} failed: {}", addr.to_string(), err);
                         err
-                    })?;
+                    })
+                    .or_err(ErrorType::ConnectError)?;
 
                 let mut client = SchedulerGRPCClient::new(channel);
                 client.leave_host(request).await?;
@@ -264,8 +278,13 @@ impl SchedulerClient {
             join_set.spawn(leave_host(*available_scheduler_addr, request).in_current_span());
         }
 
-        while let Some(message) = join_set.join_next().await {
-            if let Err(err) = message? {
+        while let Some(message) = join_set
+            .join_next()
+            .await
+            .transpose()
+            .or_err(ErrorType::AsyncRuntimeError)?
+        {
+            if let Err(err) = message {
                 error!("failed to leave host: {}", err);
             }
         }
@@ -299,7 +318,7 @@ impl SchedulerClient {
                     error!("failed to refresh scheduler client: {}", err);
                 };
 
-                return Err(Error::TonicTransport(err));
+                return Err(ExternalError::new(ErrorType::ConnectError).with_cause(Box::new(err)).into());
             }
         };
 
@@ -314,7 +333,7 @@ impl SchedulerClient {
 
         // Check if the available schedulers is empty.
         if data.available_schedulers.is_empty() {
-            return Err(Error::AvailableSchedulersNotFound());
+            return Err(Error::AvailableSchedulersNotFound);
         }
 
         // Get the available schedulers.

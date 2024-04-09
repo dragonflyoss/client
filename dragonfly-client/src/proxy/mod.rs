@@ -43,7 +43,7 @@ use hyper::client::conn::http1::Builder;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
-use hyper::{Error, Method, Request};
+use hyper::{Method, Request};
 use hyper_rustls::ConfigBuilderExt;
 use hyper_util::{
     client::legacy::Client,
@@ -724,12 +724,12 @@ async fn proxy_https(
         .http2_only(true)
         .build::<_, hyper::body::Incoming>(https);
     let response = client.request(request).await.or_err(ErrorType::HTTPError)?;
-    Ok(response.map(|b| 
+    Ok(response.map(|b| {
         b.map_err(|e| {
             ClientError::from(ExternalError::new(ErrorType::HTTPError).with_cause(Box::new(e)))
         })
         .boxed()
-))
+    }))
 }
 
 // make_registry_mirror_request makes a registry mirror request by the request.
@@ -741,13 +741,16 @@ fn make_registry_mirror_request(
     // Convert the Reqwest header to the Hyper header.
     let reqwest_request_header = hyper_headermap_to_reqwest_headermap(request.headers());
     let registry_mirror_uri = match header::get_registry(&reqwest_request_header) {
-        Some(registry) => format!("{}{}", registry, request.uri().path()).parse::<http::Uri>()?,
+        Some(registry) => format!("{}{}", registry, request.uri().path())
+            .parse::<http::Uri>()
+            .or_err(ErrorType::ParseError)?,
         None => format!(
             "{}{}",
             config.proxy.registry_mirror.addr,
             request.uri().path()
         )
-        .parse::<http::Uri>()?,
+        .parse::<http::Uri>()
+        .or_err(ErrorType::ParseError)?,
     };
 
     header::get_registry(&reqwest_request_header);
@@ -758,7 +761,8 @@ fn make_registry_mirror_request(
         registry_mirror_uri
             .host()
             .ok_or_else(|| ClientError::Unknown("registry mirror host is not set".to_string()))?
-            .parse()?,
+            .parse()
+            .or_err(ErrorType::ParseError)?,
     );
 
     Ok(request)
@@ -827,7 +831,9 @@ fn make_download_url(
         )));
     }
 
-    Ok(http::Uri::from_parts(parts)?.to_string())
+    Ok(http::Uri::from_parts(parts)
+        .or_err(ErrorType::ParseError)?
+        .to_string())
 }
 
 // make_response_headers makes the response headers.

@@ -19,7 +19,7 @@ use dragonfly_api::manager::v2::{
     manager_client::ManagerClient as ManagerGRPCClient, DeleteSeedPeerRequest,
     ListSchedulersRequest, ListSchedulersResponse, SeedPeer, UpdateSeedPeerRequest,
 };
-use dragonfly_client_core::{Error, Result};
+use dragonfly_client_core::{error::{ErrorType, OrErr}, Error, Result};
 use tonic::transport::Channel;
 use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{error, info, instrument, warn};
@@ -62,7 +62,7 @@ impl ManagerClient {
 
         // Return error if no available address found.
         if available_addr.is_empty() {
-            return Err(Error::AvailableManagerNotFound());
+            return Err(Error::AvailableManagerNotFound);
         }
 
         // Initialize the manager client by the available address.
@@ -74,7 +74,8 @@ impl ManagerClient {
             .map_err(|err| {
                 error!("connect to {} failed: {}", available_addr.to_string(), err);
                 err
-            })?;
+            })
+            .or_err(ErrorType::ConnectError)?;
         let client = ManagerGRPCClient::new(channel);
         Ok(Self { client })
     }

@@ -4,8 +4,8 @@ pub mod message;
 pub use errors::ErrorType;
 pub use errors::ExternalError;
 
-use errors::DownloadFromRemotePeerFailed;
 pub use errors::OrErr;
+pub use errors::{DownloadFromRemotePeerFailed, HTTPError};
 
 #[derive(thiserror::Error, Debug)]
 pub enum DFError {
@@ -116,6 +116,10 @@ pub enum DFError {
 
     #[error(transparent)]
     TonicStatus(#[from] tonic::Status),
+
+    // Reqwest is the error for reqwest.
+    #[error(transparent)]
+    HTTP(HTTPError),
 
     #[error(transparent)]
     ExternalError(#[from] ExternalError),
