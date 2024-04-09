@@ -47,7 +47,9 @@ impl Containerd {
     // runtime environment for the dfdaemon.
     pub async fn run(&self) -> Result<()> {
         let content = fs::read_to_string(&self.config.config_path).await?;
-        let mut containerd_config = content.parse::<DocumentMut>().or_err(ErrorType::ParseError)?;
+        let mut containerd_config = content
+            .parse::<DocumentMut>()
+            .or_err(ErrorType::ParseError)?;
 
         // If containerd is old version and supports mirror mode, add registries to the
         // registry mirrors in containerd configuration.

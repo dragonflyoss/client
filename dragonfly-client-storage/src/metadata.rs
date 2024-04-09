@@ -639,7 +639,8 @@ impl Metadata {
 
         // Put the piece metadata.
         let json = serde_json::to_string(&piece).or_err(ErrorType::SerializeError)?;
-        txn.put_cf(handle, id.as_bytes(), json.as_bytes()).or_err(ErrorType::StorageError)?;
+        txn.put_cf(handle, id.as_bytes(), json.as_bytes())
+            .or_err(ErrorType::StorageError)?;
         txn.commit().or_err(ErrorType::StorageError)?;
         Ok(piece)
     }
@@ -654,10 +655,14 @@ impl Metadata {
 
         // Transaction is used to update the piece metadata.
         let txn = self.db.transaction();
-        let piece = match txn.get_for_update_cf(handle, id.as_bytes(), true).or_err(ErrorType::StorageError)? {
+        let piece = match txn
+            .get_for_update_cf(handle, id.as_bytes(), true)
+            .or_err(ErrorType::StorageError)?
+        {
             Some(bytes) => {
                 // If the piece exists, update the piece metadata.
-                let mut piece: Piece = serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?;
+                let mut piece: Piece =
+                    serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?;
                 piece.uploading_count -= 1;
                 piece.updated_at = Utc::now().naive_utc();
                 piece
@@ -668,7 +673,8 @@ impl Metadata {
 
         // Put the piece metadata.
         let json = serde_json::to_string(&piece).or_err(ErrorType::SerializeError)?;
-        txn.put_cf(handle, id.as_bytes(), json.as_bytes()).or_err(ErrorType::StorageError)?;
+        txn.put_cf(handle, id.as_bytes(), json.as_bytes())
+            .or_err(ErrorType::StorageError)?;
         txn.commit().or_err(ErrorType::StorageError)?;
         Ok(piece)
     }
@@ -677,8 +683,14 @@ impl Metadata {
     pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<Piece>> {
         let id = self.piece_id(task_id, number);
         let handle = self.cf_handle(PIECE_CF_NAME)?;
-        match self.db.get_cf(handle, id.as_bytes()).or_err(ErrorType::StorageError)? {
-            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?)),
+        match self
+            .db
+            .get_cf(handle, id.as_bytes())
+            .or_err(ErrorType::StorageError)?
+        {
+            Some(bytes) => Ok(Some(
+                serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?,
+            )),
             None => Ok(None),
         }
     }

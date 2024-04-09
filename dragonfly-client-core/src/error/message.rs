@@ -21,7 +21,6 @@ impl Message {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

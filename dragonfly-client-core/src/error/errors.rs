@@ -119,10 +119,13 @@ impl<T, E> OrErr<T, E> for Result<T, E> {
     where
         E: Into<Box<dyn ErrorTrait + Send + Sync>>,
     {
-        self.map_err(|e| ExternalError::new(et).with_cause(e.into()).with_context(context))
+        self.map_err(|e| {
+            ExternalError::new(et)
+                .with_cause(e.into())
+                .with_context(context)
+        })
     }
 }
-
 
 // HttpError is the error for http.
 #[derive(Debug, thiserror::Error)]
@@ -145,7 +148,6 @@ pub struct DownloadFromRemotePeerFailed {
     // parent_id is the parent id of the piece.
     pub parent_id: String,
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -61,7 +61,9 @@ pub fn generate_self_signed_certs_by_ca_cert(
     // Sign certificate with CA certificate by given subject alternative names.
     let params = CertificateParams::new(subject_alt_names);
     let cert = Certificate::from_params(params).or_err(ErrorType::CertificateError)?;
-    let cert_pem = cert.serialize_pem_with_signer(ca_cert).or_err(ErrorType::CertificateError)?;
+    let cert_pem = cert
+        .serialize_pem_with_signer(ca_cert)
+        .or_err(ErrorType::CertificateError)?;
     let key_pem = cert.serialize_private_key_pem();
 
     // Parse certificate.
@@ -80,9 +82,13 @@ pub fn generate_self_signed_certs_by_ca_cert(
 pub fn generate_simple_self_signed_certs(
     subject_alt_names: impl Into<Vec<String>>,
 ) -> ClientResult<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
-    let cert = rcgen::generate_simple_self_signed(subject_alt_names).or_err(ErrorType::CertificateError)?;
+    let cert = rcgen::generate_simple_self_signed(subject_alt_names)
+        .or_err(ErrorType::CertificateError)?;
     let key = rustls_pki_types::PrivateKeyDer::Pkcs8(cert.serialize_private_key_der().into());
-    let certs = vec![cert.serialize_der().or_err(ErrorType::CertificateError)?.into()];
+    let certs = vec![cert
+        .serialize_der()
+        .or_err(ErrorType::CertificateError)?
+        .into()];
 
     Ok((certs, key))
 }

@@ -173,7 +173,9 @@ impl PieceCollector {
                 let out_stream = response.into_inner().timeout(collected_piece_timeout);
                 tokio::pin!(out_stream);
 
-                while let Some(message) = out_stream.try_next().await.or_err(ErrorType::StreamError)? {
+                while let Some(message) =
+                    out_stream.try_next().await.or_err(ErrorType::StreamError)?
+                {
                     let message = message?;
                     collected_pieces.entry(message.number).and_modify(|peers| {
                         peers.insert(parent.id.clone());

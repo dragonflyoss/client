@@ -318,7 +318,9 @@ impl SchedulerClient {
                     error!("failed to refresh scheduler client: {}", err);
                 };
 
-                return Err(ExternalError::new(ErrorType::ConnectError).with_cause(Box::new(err)).into());
+                return Err(ExternalError::new(ErrorType::ConnectError)
+                    .with_cause(Box::new(err))
+                    .into());
             }
         };
 

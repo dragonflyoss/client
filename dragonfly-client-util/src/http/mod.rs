@@ -126,7 +126,9 @@ pub fn parse_range_header(range_header_value: &str, content_length: u64) -> Resu
         .or_err(ErrorType::HTTPError)?;
 
     // Not support multiple ranges.
-    let valid_range = valid_ranges.first().ok_or_else(|| Error::EmptyHTTPRangeError)?;
+    let valid_range = valid_ranges
+        .first()
+        .ok_or_else(|| Error::EmptyHTTPRangeError)?;
 
     let start = valid_range.start().to_owned();
     let length = valid_range.end() - start + 1;

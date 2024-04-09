@@ -20,7 +20,7 @@ use dragonfly_api::common::v2::{Peer, Range};
 use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
 use dragonfly_client_backend::http::{Request as HTTPRequest, HTTP};
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::{Error, error::HTTPError, Result};
+use dragonfly_client_core::{error::HTTPError, Error, Result};
 use dragonfly_client_storage::{metadata, Storage};
 use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};

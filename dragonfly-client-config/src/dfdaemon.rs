@@ -894,8 +894,7 @@ impl Config {
     pub async fn load(path: &PathBuf) -> Result<Config> {
         // Load configuration from file.
         let content = fs::read_to_string(path).await?;
-        let mut config: Config =
-            serde_yaml::from_str(&content).or_err(ErrorType::ConfigError)?;
+        let mut config: Config = serde_yaml::from_str(&content).or_err(ErrorType::ConfigError)?;
         info!("load config from {}", path.display());
 
         // Convert configuration.
