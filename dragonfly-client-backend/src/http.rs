@@ -137,7 +137,7 @@ impl HTTP {
             }
             None => {
                 // Default TLS client config with native roots.
-                let client = reqwest::Client::builder().build()?;
+                let client = reqwest::Client::builder().use_native_tls().build()?;
                 Ok(client)
             }
         }
