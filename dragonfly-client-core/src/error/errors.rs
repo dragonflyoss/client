@@ -177,4 +177,29 @@ mod tests {
             "StorageError context: error message with owned string cause: inner error"
         );
     }
+
+    #[test]
+    fn should_extend_result_with_error() {
+        let result: Result<(), std::io::Error> = Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "inner error",
+        ));
+
+        let error = result.or_err(ErrorType::StorageError).unwrap_err();
+        assert_eq!(format!("{}", error), "StorageError cause: inner error");
+
+        let result: Result<(), std::io::Error> = Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "inner error",
+        ));
+
+        let error = result
+            .or_context(ErrorType::StorageError, "error message")
+            .unwrap_err();
+
+        assert_eq!(
+            format!("{}", error),
+            "StorageError context: error message cause: inner error"
+        );
+    }
 }
