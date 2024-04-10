@@ -92,20 +92,23 @@ impl PieceCollector {
         let collected_pieces = self.collected_pieces.clone();
         let collected_piece_timeout = self.config.download.piece_timeout;
         let (collected_piece_tx, collected_piece_rx) = mpsc::channel(1024);
-        tokio::spawn(async move {
-            Self::collect_from_remote_peers(
-                task_id,
-                parents,
-                interested_pieces,
-                collected_pieces,
-                collected_piece_tx,
-                collected_piece_timeout,
-            )
-            .await
-            .unwrap_or_else(|err| {
-                error!("collect pieces failed: {}", err);
-            });
-        });
+        tokio::spawn(
+            async move {
+                Self::collect_from_remote_peers(
+                    task_id,
+                    parents,
+                    interested_pieces,
+                    collected_pieces,
+                    collected_piece_tx,
+                    collected_piece_timeout,
+                )
+                .await
+                .unwrap_or_else(|err| {
+                    error!("collect pieces failed: {}", err);
+                });
+            }
+            .in_current_span(),
+        );
 
         collected_piece_rx
     }

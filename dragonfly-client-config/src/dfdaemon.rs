@@ -763,6 +763,9 @@ pub struct Proxy {
     // disable_back_to_source indicates whether disable to download back-to-source
     // when download failed.
     pub disable_back_to_source: bool,
+
+    // prefetch pre-downloads full of the task when download with range request.
+    pub prefetch: bool,
 }
 
 // Security is the security configuration for dfdaemon.
