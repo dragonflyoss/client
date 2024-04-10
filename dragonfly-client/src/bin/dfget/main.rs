@@ -249,6 +249,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 need_back_to_source: false,
                 disable_back_to_source: args.disable_back_to_source,
                 certificate_chain: Vec::new(),
+                prefetch: false,
             }),
         })
         .await
