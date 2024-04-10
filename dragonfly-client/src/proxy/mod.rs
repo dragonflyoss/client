@@ -469,7 +469,7 @@ async fn proxy_by_dfdaemon(
         };
 
     // Make the download task request.
-    let download_task_request = match make_download_task_request(config, request, rule) {
+    let download_task_request = match make_download_task_request(config, rule, request) {
         Ok(download_task_request) => download_task_request,
         Err(err) => {
             error!("make download task request failed: {}", err);
@@ -751,8 +751,8 @@ fn make_registry_mirror_request(
 #[instrument(skip_all)]
 fn make_download_task_request(
     config: Arc<Config>,
-    request: Request<hyper::body::Incoming>,
     rule: Rule,
+    request: Request<hyper::body::Incoming>,
 ) -> ClientResult<DownloadTaskRequest> {
     // Convert the Reqwest header to the Hyper header.
     let mut reqwest_request_header = hyper_headermap_to_reqwest_headermap(request.headers());
@@ -781,6 +781,10 @@ fn make_download_task_request(
             need_back_to_source: false,
             disable_back_to_source: config.proxy.disable_back_to_source,
             certificate_chain: Vec::new(),
+            // Prefetch is set to true if the request header contains the range header and the
+            // prefetch is enabled in the configuration.
+            prefetch: config.proxy.prefetch
+                && reqwest_request_header.contains_key(reqwest::header::RANGE),
         }),
     })
 }

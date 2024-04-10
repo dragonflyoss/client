@@ -21,7 +21,7 @@ dragonfly-client-backend = { path = "dragonfly-client-backend", version = "0.1.2
 dragonfly-client-util = { path = "dragonfly-client-util", version = "0.1.28" }
 dragonfly-client-init = { path = "dragonfly-client-init", version = "0.1.28" }
 thiserror = "1.0"
-dragonfly-api = "2.0.106"
+dragonfly-api = "2.0.109"
 reqwest = { version = "0.11.27", features = ["stream", "native-tls", "default-tls", "rustls-tls"] }
 rcgen = { version = "0.12.1", features = ["x509-parser"] }
 hyper = { version = "1.2", features = ["full"] }

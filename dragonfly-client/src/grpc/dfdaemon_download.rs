@@ -74,9 +74,11 @@ impl DfdaemonDownloadServer {
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
         // Initialize the grpc service.
-        let service =
-            DfdaemonDownloadGRPCServer::new(DfdaemonDownloadServerHandler { task: task.clone() })
-                .max_decoding_message_size(usize::MAX);
+        let service = DfdaemonDownloadGRPCServer::new(DfdaemonDownloadServerHandler {
+            socket_path: socket_path.clone(),
+            task: task.clone(),
+        })
+        .max_decoding_message_size(usize::MAX);
 
         Self {
             socket_path,
@@ -136,6 +138,9 @@ impl DfdaemonDownloadServer {
 
 // DfdaemonDownloadServerHandler is the handler of the dfdaemon download grpc service.
 pub struct DfdaemonDownloadServerHandler {
+    // socket_path is the path of the unix domain socket.
+    socket_path: PathBuf,
+
     // task is the task manager.
     task: Arc<task::Task>,
 }
@@ -246,15 +251,17 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let task_manager = self.task.clone();
 
         // Initialize stream channel.
+        let download_clone = download.clone();
+        let task_clone = task.clone();
         let (out_stream_tx, out_stream_rx) = mpsc::channel(1024);
         tokio::spawn(
             async move {
                 match task_manager
                     .download(
-                        task.clone(),
+                        task_clone.clone(),
                         host_id.as_str(),
                         peer_id.as_str(),
-                        download.clone(),
+                        download_clone.clone(),
                         out_stream_tx.clone(),
                     )
                     .await
@@ -262,7 +269,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                     Ok(_) => {
                         // Download task succeeded.
                         info!("download task succeeded");
-                        if download.range.is_none() {
+                        if download_clone.range.is_none() {
                             if let Err(err) = task_manager.download_finished(task_id.as_str()) {
                                 error!("download task finished: {}", err);
                             }
@@ -270,13 +277,13 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
                         // Check whether the output path is empty. If output path is empty,
                         // should not hard link or copy the task content to the destination.
-                        if let Some(output_path) = download.output_path.clone() {
+                        if let Some(output_path) = download_clone.output_path.clone() {
                             // Hard link or copy the task content to the destination.
                             if let Err(err) = task_manager
                                 .hard_link_or_copy(
-                                    task,
+                                    task_clone,
                                     Path::new(output_path.as_str()),
-                                    download.range.clone(),
+                                    download_clone.range.clone(),
                                 )
                                 .await
                             {
@@ -306,7 +313,34 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 drop(out_stream_tx);
             }
             .in_current_span(),
-        );
+        )
+        .await
+        .map_err(|err| {
+            error!("download failed: {}", err);
+            Status::internal(err.to_string())
+        })?;
+
+        // If prefetch flag is true, prefetch the full task.
+        if download.prefetch && !task.is_finished() {
+            // Prefetch the task if prefetch flag is true.
+            let socket_path = self.socket_path.clone();
+            tokio::spawn(
+                async move {
+                    info!("prefetch task started");
+                    if let Err(err) = prefetch_task(
+                        socket_path.clone(),
+                        Request::new(DownloadTaskRequest {
+                            download: Some(download.clone()),
+                        }),
+                    )
+                    .await
+                    {
+                        error!("prefetch task failed: {}", err);
+                    }
+                }
+                .in_current_span(),
+            );
+        }
 
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
@@ -385,6 +419,56 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
         Ok(Response::new(()))
     }
+}
+
+// prefetch_task prefetches the task if prefetch flag is true.
+async fn prefetch_task(
+    socket_path: PathBuf,
+    request: Request<DownloadTaskRequest>,
+) -> ClientResult<()> {
+    // Initialize the dfdaemon download client.
+    let dfdaemon_download_client = DfdaemonDownloadClient::new_unix(socket_path.clone()).await?;
+
+    // Make the prefetch request.
+    let mut request = request.into_inner();
+    if let Some(download) = request.download.as_mut() {
+        // Remove the range flag for download full task.
+        download.range = None;
+        // Remove the prefetch flag for prevent the infinite loop.
+        download.prefetch = false;
+        // Remove the range header for download full task.
+        download
+            .request_header
+            .remove(reqwest::header::RANGE.as_str());
+    } else {
+        return Err(ClientError::InvalidParameter());
+    }
+
+    // Download task by dfdaemon download client.
+    let response = dfdaemon_download_client.download_task(request).await?;
+
+    // Spawn to handle the download task.
+    tokio::spawn(
+        async move {
+            let mut out_stream = response.into_inner();
+            loop {
+                match out_stream.message().await {
+                    Ok(Some(message)) => info!("prefetch piece finished {:?}", message),
+                    Ok(None) => {
+                        info!("prefetch task finished");
+                        return;
+                    }
+                    Err(err) => {
+                        error!("prefetch piece failed: {}", err);
+                        return;
+                    }
+                }
+            }
+        }
+        .in_current_span(),
+    );
+
+    Ok(())
 }
 
 // DfdaemonDownloadClient is a wrapper of DfdaemonDownloadGRPCClient.
