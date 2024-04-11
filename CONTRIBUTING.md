@@ -80,7 +80,7 @@ Just remember one principle:
 
 > WE ARE LOOKING FORWARD TO ANY PR FROM YOU.
 
-Since you are ready to improve dfdameon with a PR,
+Since you are ready to improve dfdaemon with a PR,
 we suggest you could take a look at the PR rules here.
 
 - [Workspace Preparation](#workspace-preparation)
