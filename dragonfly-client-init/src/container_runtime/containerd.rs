@@ -17,8 +17,7 @@
 use dragonfly_client::proxy::header::DRAGONFLY_REGISTRY_HEADER;
 use dragonfly_client_config::dfinit::{self, ContainerdRegistry};
 use dragonfly_client_core::{
-    error::{ErrorType, OrErr},
-    Result,
+    error::{ErrorType, OrErr}, Error, Result
 };
 use std::path::PathBuf;
 use tokio::{self, fs};

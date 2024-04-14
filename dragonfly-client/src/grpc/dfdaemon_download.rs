@@ -433,18 +433,18 @@ async fn prefetch_task(
 
     // Make the prefetch request.
     let mut request = request.into_inner();
-    if let Some(download) = request.download.as_mut() {
-        // Remove the range flag for download full task.
-        download.range = None;
-        // Remove the prefetch flag for prevent the infinite loop.
-        download.prefetch = false;
-        // Remove the range header for download full task.
-        download
-            .request_header
-            .remove(reqwest::header::RANGE.as_str());
-    } else {
-        return Err(ClientError::InvalidParameter());
-    }
+
+    let Some(download) = request.download.as_mut() else {
+        return Err(ClientError::InvalidParameter);
+    };
+    // Remove the range flag for download full task.
+    download.range = None;
+    // Remove the prefetch flag for prevent the infinite loop.
+    download.prefetch = false;
+    // Remove the range header for download full task.
+    download
+        .request_header
+        .remove(reqwest::header::RANGE.as_str());
 
     // Download task by dfdaemon download client.
     let response = dfdaemon_download_client.download_task(request).await?;
