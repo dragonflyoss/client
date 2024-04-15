@@ -49,8 +49,7 @@ use hyper_util::{
     rt::{tokio::TokioIo, TokioExecutor},
 };
 use rcgen::Certificate;
-use rustls::RootCertStore;
-use rustls::ServerConfig;
+use rustls::{RootCertStore, ServerConfig};
 use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -369,9 +368,13 @@ async fn upgraded_tunnel(
     let subject_alt_names = vec![host.to_string()];
     let (server_certs, server_key) = match server_ca_cert.as_ref() {
         Some(server_ca_cert) => {
+            info!("generate self-signed certificate by CA certificate");
             generate_self_signed_certs_by_ca_cert(server_ca_cert, subject_alt_names)?
         }
-        None => generate_simple_self_signed_certs(subject_alt_names)?,
+        None => {
+            info!("generate simple self-signed certificate");
+            generate_simple_self_signed_certs(subject_alt_names)?
+        }
     };
 
     // Build TLS configuration.
