@@ -15,6 +15,7 @@
  */
 
 use crate::dfdaemon::default_proxy_server_port;
+use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::Result;
 use serde::{ser::SerializeStruct, Deserialize, Serialize};
 use std::fs;
@@ -268,11 +269,11 @@ impl Config {
     pub fn load(path: &PathBuf) -> Result<Config> {
         // Load configuration from file.
         let content = fs::read_to_string(path)?;
-        let config: Config = serde_yaml::from_str(&content)?;
+        let config: Config = serde_yaml::from_str(&content).or_err(ErrorType::ConfigError)?;
         info!("load config from {}", path.display());
 
         // Validate configuration.
-        config.validate()?;
+        config.validate().or_err(ErrorType::ValidationError)?;
         Ok(config)
     }
 }

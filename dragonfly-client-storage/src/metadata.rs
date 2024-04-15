@@ -15,7 +15,10 @@
  */
 
 use chrono::{NaiveDateTime, Utc};
-use dragonfly_client_core::{Error, Result};
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Error, Result,
+};
 use dragonfly_client_util::http::reqwest_headermap_to_hashmap;
 use reqwest::header::{self, HeaderMap};
 use rocksdb::{
@@ -238,8 +241,8 @@ impl Metadata {
         // Open rocksdb.
         let dir = dir.join(DEFAULT_DIR_NAME);
         let cf_names = [TASK_CF_NAME, PIECE_CF_NAME];
-        let db =
-            TransactionDB::open_cf(&options, &TransactionDBOptions::default(), &dir, cf_names)?;
+        let db = TransactionDB::open_cf(&options, &TransactionDBOptions::default(), &dir, cf_names)
+            .or_err(ErrorType::StorageError)?;
         info!("metadata initialized directory: {:?}", dir);
 
         Ok(Metadata { db })
@@ -263,10 +266,14 @@ impl Metadata {
 
         // Transaction is used to update the task metadata.
         let txn = self.db.transaction();
-        let task = match txn.get_for_update_cf(handle, id, true)? {
+        let task = match txn
+            .get_for_update_cf(handle, id, true)
+            .or_err(ErrorType::StorageError)?
+        {
             Some(bytes) => {
                 // If the task exists, update the task metadata.
-                let mut task: Task = serde_json::from_slice(&bytes)?;
+                let mut task: Task =
+                    serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?;
                 task.updated_at = Utc::now().naive_utc();
 
                 // If the task has the response header, the response header
@@ -288,9 +295,10 @@ impl Metadata {
         };
 
         // Put the task metadata.
-        let json = serde_json::to_string(&task)?;
-        txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
-        txn.commit()?;
+        let json = serde_json::to_string(&task).or_err(ErrorType::SerializeError)?;
+        txn.put_cf(handle, id.as_bytes(), json.as_bytes())
+            .or_err(ErrorType::StorageError)?;
+        txn.commit().or_err(ErrorType::StorageError)?;
         Ok(task)
     }
 
@@ -301,10 +309,14 @@ impl Metadata {
 
         // Transaction is used to update the task metadata.
         let txn = self.db.transaction();
-        let task = match txn.get_for_update_cf(handle, id, true)? {
+        let task = match txn
+            .get_for_update_cf(handle, id, true)
+            .or_err(ErrorType::StorageError)?
+        {
             Some(bytes) => {
-                // If the task exists, update the task metadata.
-                let mut task: Task = serde_json::from_slice(&bytes)?;
+                //    If the task exists, update the task metadata.
+                let mut task: Task =
+                    serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?;
                 task.updated_at = Utc::now().naive_utc();
                 task.finished_at = Some(Utc::now().naive_utc());
                 task
@@ -314,9 +326,10 @@ impl Metadata {
         };
 
         // Put the task metadata.
-        let json = serde_json::to_string(&task)?;
-        txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
-        txn.commit()?;
+        let json = serde_json::to_string(&task).or_err(ErrorType::SerializeError)?;
+        txn.put_cf(handle, id.as_bytes(), json.as_bytes())
+            .or_err(ErrorType::StorageError)?;
+        txn.commit().or_err(ErrorType::StorageError)?;
         Ok(task)
     }
 
@@ -327,10 +340,14 @@ impl Metadata {
 
         // Transaction is used to update the task metadata.
         let txn = self.db.transaction();
-        let task = match txn.get_for_update_cf(handle, id, true)? {
+        let task = match txn
+            .get_for_update_cf(handle, id, true)
+            .or_err(ErrorType::StorageError)?
+        {
             Some(bytes) => {
                 // If the task exists, update the task metadata.
-                let mut task: Task = serde_json::from_slice(&bytes)?;
+                let mut task: Task =
+                    serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?;
                 task.uploading_count += 1;
                 task.updated_at = Utc::now().naive_utc();
                 task
@@ -340,9 +357,10 @@ impl Metadata {
         };
 
         // Put the task metadata.
-        let json = serde_json::to_string(&task)?;
-        txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
-        txn.commit()?;
+        let json = serde_json::to_string(&task).or_err(ErrorType::SerializeError)?;
+        txn.put_cf(handle, id.as_bytes(), json.as_bytes())
+            .or_err(ErrorType::StorageError)?;
+        txn.commit().or_err(ErrorType::StorageError)?;
         Ok(task)
     }
 
@@ -353,10 +371,14 @@ impl Metadata {
 
         // Transaction is used to update the task metadata.
         let txn = self.db.transaction();
-        let task = match txn.get_for_update_cf(handle, id, true)? {
+        let task = match txn
+            .get_for_update_cf(handle, id, true)
+            .or_err(ErrorType::StorageError)?
+        {
             Some(bytes) => {
                 // If the task exists, update the task metadata.
-                let mut task: Task = serde_json::from_slice(&bytes)?;
+                let mut task: Task =
+                    serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?;
                 task.uploading_count -= 1;
                 task.uploaded_count += 1;
                 task.updated_at = Utc::now().naive_utc();
@@ -367,9 +389,10 @@ impl Metadata {
         };
 
         // Put the task metadata.
-        let json = serde_json::to_string(&task)?;
-        txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
-        txn.commit()?;
+        let json = serde_json::to_string(&task).or_err(ErrorType::SerializeError)?;
+        txn.put_cf(handle, id.as_bytes(), json.as_bytes())
+            .or_err(ErrorType::StorageError)?;
+        txn.commit().or_err(ErrorType::StorageError)?;
         Ok(task)
     }
 
@@ -380,10 +403,14 @@ impl Metadata {
 
         // Transaction is used to update the task metadata.
         let txn = self.db.transaction();
-        let task = match txn.get_for_update_cf(handle, id, true)? {
+        let task = match txn
+            .get_for_update_cf(handle, id, true)
+            .or_err(ErrorType::StorageError)?
+        {
             Some(bytes) => {
                 // If the task exists, update the task metadata.
-                let mut task: Task = serde_json::from_slice(&bytes)?;
+                let mut task: Task =
+                    serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?;
                 task.uploading_count -= 1;
                 task.updated_at = Utc::now().naive_utc();
                 task
@@ -393,9 +420,10 @@ impl Metadata {
         };
 
         // Put the task metadata.
-        let json = serde_json::to_string(&task)?;
-        txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
-        txn.commit()?;
+        let json = serde_json::to_string(&task).or_err(ErrorType::SerializeError)?;
+        txn.put_cf(handle, id.as_bytes(), json.as_bytes())
+            .or_err(ErrorType::StorageError)?;
+        txn.commit().or_err(ErrorType::StorageError)?;
         Ok(task)
     }
 
@@ -403,8 +431,10 @@ impl Metadata {
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         // Get the column family handle of task.
         let handle = self.cf_handle(TASK_CF_NAME)?;
-        match self.db.get_cf(handle, id)? {
-            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+        match self.db.get_cf(handle, id).or_err(ErrorType::StorageError)? {
+            Some(bytes) => Ok(Some(
+                serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?,
+            )),
             None => Ok(None),
         }
     }
@@ -421,8 +451,8 @@ impl Metadata {
         // Iterate the task metadatas.
         let mut tasks = Vec::new();
         for ele in iter {
-            let (_, value) = ele?;
-            let task: Task = serde_json::from_slice(&value)?;
+            let (_, value) = ele.or_err(ErrorType::StorageError)?;
+            let task: Task = serde_json::from_slice(&value).or_err(ErrorType::SerializeError)?;
             tasks.push(task);
         }
 
@@ -436,8 +466,9 @@ impl Metadata {
 
         // Transaction is used to delete the task metadata.
         let txn = self.db.transaction();
-        txn.delete_cf(handle, task_id)?;
-        txn.commit()?;
+        txn.delete_cf(handle, task_id)
+            .or_err(ErrorType::SerializeError)?;
+        txn.commit().or_err(ErrorType::SerializeError)?;
         Ok(())
     }
 
@@ -461,9 +492,10 @@ impl Metadata {
         let txn = self.db.transaction();
 
         // Put the piece metadata.
-        let json = serde_json::to_string(&piece)?;
-        txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
-        txn.commit()?;
+        let json = serde_json::to_string(&piece).or_err(ErrorType::SerializeError)?;
+        txn.put_cf(handle, id.as_bytes(), json.as_bytes())
+            .or_err(ErrorType::StorageError)?;
+        txn.commit().or_err(ErrorType::StorageError)?;
         Ok(piece)
     }
 
@@ -485,10 +517,14 @@ impl Metadata {
 
         // Transaction is used to update the piece metadata.
         let txn = self.db.transaction();
-        let piece = match txn.get_for_update_cf(handle, id.as_bytes(), true)? {
+        let piece = match txn
+            .get_for_update_cf(handle, id.as_bytes(), true)
+            .or_err(ErrorType::StorageError)?
+        {
             Some(bytes) => {
                 // If the piece exists, update the piece metadata.
-                let mut piece: Piece = serde_json::from_slice(&bytes)?;
+                let mut piece: Piece =
+                    serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?;
                 piece.offset = offset;
                 piece.length = length;
                 piece.digest = digest.to_string();
@@ -502,9 +538,10 @@ impl Metadata {
         };
 
         // Put the piece metadata.
-        let json = serde_json::to_string(&piece)?;
-        txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
-        txn.commit()?;
+        let json = serde_json::to_string(&piece).or_err(ErrorType::SerializeError)?;
+        txn.put_cf(handle, id.as_bytes(), json.as_bytes())
+            .or_err(ErrorType::StorageError)?;
+        txn.commit().or_err(ErrorType::StorageError)?;
         Ok(piece)
     }
 
@@ -518,11 +555,16 @@ impl Metadata {
 
         // Transaction is used to update the piece metadata.
         let txn = self.db.transaction();
-        let piece = match txn.get_for_update_cf(handle, id.as_bytes(), true)? {
+        let piece = match txn
+            .get_for_update_cf(handle, id.as_bytes(), true)
+            .or_err(ErrorType::StorageError)?
+        {
             // If the piece exists, delete the piece metadata.
             Some(bytes) => {
-                txn.delete_cf(handle, id.as_bytes())?;
-                let piece: Piece = serde_json::from_slice(&bytes)?;
+                txn.delete_cf(handle, id.as_bytes())
+                    .or_err(ErrorType::StorageError)?;
+                let piece: Piece =
+                    serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?;
                 piece
             }
             // If the piece does not exist, return error.
@@ -530,7 +572,7 @@ impl Metadata {
         };
 
         // Commit the transaction.
-        txn.commit()?;
+        txn.commit().or_err(ErrorType::StorageError)?;
         Ok(piece)
     }
 
@@ -544,10 +586,14 @@ impl Metadata {
 
         // Transaction is used to update the piece metadata.
         let txn = self.db.transaction();
-        let piece = match txn.get_for_update_cf(handle, id.as_bytes(), true)? {
+        let piece = match txn
+            .get_for_update_cf(handle, id.as_bytes(), true)
+            .or_err(ErrorType::StorageError)?
+        {
             Some(bytes) => {
                 // If the piece exists, update the piece metadata.
-                let mut piece: Piece = serde_json::from_slice(&bytes)?;
+                let mut piece: Piece =
+                    serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?;
                 piece.uploading_count += 1;
                 piece.updated_at = Utc::now().naive_utc();
                 piece
@@ -557,9 +603,10 @@ impl Metadata {
         };
 
         // Put the piece metadata.
-        let json = serde_json::to_string(&piece)?;
-        txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
-        txn.commit()?;
+        let json = serde_json::to_string(&piece).or_err(ErrorType::SerializeError)?;
+        txn.put_cf(handle, id.as_bytes(), json.as_bytes())
+            .or_err(ErrorType::StorageError)?;
+        txn.commit().or_err(ErrorType::StorageError)?;
         Ok(piece)
     }
 
@@ -573,10 +620,14 @@ impl Metadata {
 
         // Transaction is used to update the piece metadata.
         let txn = self.db.transaction();
-        let piece = match txn.get_for_update_cf(handle, id.as_bytes(), true)? {
+        let piece = match txn
+            .get_for_update_cf(handle, id.as_bytes(), true)
+            .or_err(ErrorType::StorageError)?
+        {
             Some(bytes) => {
                 // If the piece exists, update the piece metadata.
-                let mut piece: Piece = serde_json::from_slice(&bytes)?;
+                let mut piece: Piece =
+                    serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?;
                 piece.uploading_count -= 1;
                 piece.uploaded_count += 1;
                 piece.updated_at = Utc::now().naive_utc();
@@ -587,9 +638,10 @@ impl Metadata {
         };
 
         // Put the piece metadata.
-        let json = serde_json::to_string(&piece)?;
-        txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
-        txn.commit()?;
+        let json = serde_json::to_string(&piece).or_err(ErrorType::SerializeError)?;
+        txn.put_cf(handle, id.as_bytes(), json.as_bytes())
+            .or_err(ErrorType::StorageError)?;
+        txn.commit().or_err(ErrorType::StorageError)?;
         Ok(piece)
     }
 
@@ -603,10 +655,14 @@ impl Metadata {
 
         // Transaction is used to update the piece metadata.
         let txn = self.db.transaction();
-        let piece = match txn.get_for_update_cf(handle, id.as_bytes(), true)? {
+        let piece = match txn
+            .get_for_update_cf(handle, id.as_bytes(), true)
+            .or_err(ErrorType::StorageError)?
+        {
             Some(bytes) => {
                 // If the piece exists, update the piece metadata.
-                let mut piece: Piece = serde_json::from_slice(&bytes)?;
+                let mut piece: Piece =
+                    serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?;
                 piece.uploading_count -= 1;
                 piece.updated_at = Utc::now().naive_utc();
                 piece
@@ -616,9 +672,10 @@ impl Metadata {
         };
 
         // Put the piece metadata.
-        let json = serde_json::to_string(&piece)?;
-        txn.put_cf(handle, id.as_bytes(), json.as_bytes())?;
-        txn.commit()?;
+        let json = serde_json::to_string(&piece).or_err(ErrorType::SerializeError)?;
+        txn.put_cf(handle, id.as_bytes(), json.as_bytes())
+            .or_err(ErrorType::StorageError)?;
+        txn.commit().or_err(ErrorType::StorageError)?;
         Ok(piece)
     }
 
@@ -626,8 +683,14 @@ impl Metadata {
     pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<Piece>> {
         let id = self.piece_id(task_id, number);
         let handle = self.cf_handle(PIECE_CF_NAME)?;
-        match self.db.get_cf(handle, id.as_bytes())? {
-            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+        match self
+            .db
+            .get_cf(handle, id.as_bytes())
+            .or_err(ErrorType::StorageError)?
+        {
+            Some(bytes) => Ok(Some(
+                serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?,
+            )),
             None => Ok(None),
         }
     }
@@ -644,8 +707,8 @@ impl Metadata {
         // Iterate the piece metadatas.
         let mut pieces = Vec::new();
         for ele in iter {
-            let (_, value) = ele?;
-            let piece: Piece = serde_json::from_slice(&value)?;
+            let (_, value) = ele.or_err(ErrorType::StorageError)?;
+            let piece: Piece = serde_json::from_slice(&value).or_err(ErrorType::SerializeError)?;
             pieces.push(piece);
         }
 
@@ -663,12 +726,12 @@ impl Metadata {
 
         // Iterate the piece metadatas.
         for ele in iter {
-            let (key, _) = ele?;
-            txn.delete_cf(handle, key)?;
+            let (key, _) = ele.or_err(ErrorType::StorageError)?;
+            txn.delete_cf(handle, key).or_err(ErrorType::StorageError)?;
         }
 
         // Commit the transaction.
-        txn.commit()?;
+        txn.commit().or_err(ErrorType::StorageError)?;
         Ok(())
     }
 

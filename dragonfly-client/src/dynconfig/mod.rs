@@ -126,7 +126,7 @@ impl Dynconfig {
 
         // If no available schedulers, return error.
         if available_schedulers.is_empty() {
-            return Err(Error::AvailableSchedulersNotFound());
+            return Err(Error::AvailableSchedulersNotFound);
         }
 
         // Get the data with write lock.

@@ -18,7 +18,10 @@ use dragonfly_api::security::{
     certificate_client::CertificateClient as CertificateGRPCClient, CertificateRequest,
     CertificateResponse,
 };
-use dragonfly_client_core::Result;
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Result,
+};
 use tonic::transport::Channel;
 use tracing::instrument;
 
@@ -36,7 +39,8 @@ impl CertificateClient {
         let channel = Channel::from_static(Box::leak(addr.into_boxed_str()))
             .connect_timeout(super::CONNECT_TIMEOUT)
             .connect()
-            .await?;
+            .await
+            .or_err(ErrorType::ConnectError)?;
         let client = CertificateGRPCClient::new(channel);
         Ok(Self { client })
     }

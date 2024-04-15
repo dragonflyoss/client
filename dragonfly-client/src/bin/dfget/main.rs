@@ -279,7 +279,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 pb.set_length(response.content_length);
             }
             Some(download_task_response::Response::DownloadPieceFinishedResponse(response)) => {
-                let piece = response.piece.ok_or(Error::InvalidParameter())?;
+                let piece = response.piece.ok_or(Error::InvalidParameter)?;
 
                 downloaded += piece.length;
                 let position = min(downloaded + piece.length, pb.length().unwrap_or(0));

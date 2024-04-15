@@ -171,7 +171,7 @@ impl Storage {
 
         // Check the digest of the piece.
         if expected_digest != digest.to_string() {
-            return Err(Error::PieceDigestMismatch());
+            return Err(Error::PieceDigestMismatch);
         }
 
         self.metadata.download_piece_finished(

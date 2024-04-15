@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 
-use dragonfly_client_core::{Error, Result};
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Error, Result,
+};
 use std::path::PathBuf;
 use tokio::net::UnixStream;
 use tonic::transport::{Channel, Endpoint, Uri};
@@ -43,7 +46,8 @@ impl HealthClient {
             .map_err(|err| {
                 error!("connect to {} failed: {}", addr, err);
                 err
-            })?;
+            })
+            .or_err(ErrorType::ConnectError)?;
         let client = HealthGRPCClient::new(channel);
         Ok(Self { client })
     }
@@ -61,7 +65,8 @@ impl HealthClient {
             .map_err(|err| {
                 error!("connect failed: {}", err);
                 err
-            })?;
+            })
+            .or_err(ErrorType::ConnectError)?;
         let client = HealthGRPCClient::new(channel).max_decoding_message_size(usize::MAX);
         Ok(Self { client })
     }

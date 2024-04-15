@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 
-use dragonfly_client_core::Result;
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Result,
+};
 use futures::TryStreamExt;
 use reqwest::header::HeaderMap;
 use rustls_pki_types::CertificateDer;
@@ -80,7 +83,8 @@ impl HTTP {
             .headers(request.header);
         request_builder = request_builder.timeout(request.timeout);
 
-        let response = request_builder.send().await?;
+        let response = request_builder.send().await.or_err(ErrorType::HTTPError)?;
+
         let header = response.headers().clone();
         let status_code = response.status();
 
@@ -98,7 +102,8 @@ impl HTTP {
             .headers(request.header);
         request_builder = request_builder.timeout(request.timeout);
 
-        let response = request_builder.send().await?;
+        let response = request_builder.send().await.or_err(ErrorType::HTTPError)?;
+
         let header = response.headers().clone();
         let status_code = response.status();
         let reader = response
@@ -131,13 +136,16 @@ impl HTTP {
 
                 let client = reqwest::Client::builder()
                     .use_preconfigured_tls(client_config)
-                    .build()?;
-
+                    .build()
+                    .or_err(ErrorType::HTTPError)?;
                 Ok(client)
             }
             None => {
                 // Default TLS client config with native roots.
-                let client = reqwest::Client::builder().use_native_tls().build()?;
+                let client = reqwest::Client::builder()
+                    .use_native_tls()
+                    .build()
+                    .or_err(ErrorType::HTTPError)?;
                 Ok(client)
             }
         }

@@ -33,8 +33,10 @@ use dragonfly_api::scheduler::v2::{
 };
 use dragonfly_client_backend::http::{Request as HTTPRequest, HTTP};
 use dragonfly_client_config::dfdaemon::Config;
+use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{
-    DownloadFromRemotePeerFailed, Error, HTTPError, Result as ClientResult,
+    error::{DownloadFromRemotePeerFailed, HTTPError},
+    Error, Result as ClientResult,
 };
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::{
@@ -193,7 +195,7 @@ impl Task {
                 .await
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
 
-            return Err(Error::InvalidContentLength());
+            return Err(Error::InvalidContentLength);
         };
 
         // Calculate the interested pieces to download.
@@ -454,7 +456,7 @@ impl Task {
             .timeout(self.config.scheduler.schedule_timeout);
         tokio::pin!(out_stream);
 
-        while let Some(message) = out_stream.try_next().await? {
+        while let Some(message) = out_stream.try_next().await.or_err(ErrorType::HTTPError)? {
             // Check if the schedule count is exceeded.
             schedule_count += 1;
             if schedule_count >= self.config.scheduler.max_schedule_count {
@@ -489,7 +491,7 @@ impl Task {
                 ));
             }
 
-            let response = message?.response.ok_or(Error::UnexpectedResponse())?;
+            let response = message?.response.ok_or(Error::UnexpectedResponse)?;
             match response {
                 announce_peer_response::Response::EmptyTaskResponse(response) => {
                     // If the task is empty, return an empty vector.
@@ -906,13 +908,18 @@ impl Task {
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
         // Wait for the pieces to be downloaded.
-        while let Some(message) = join_set.join_next().await {
+        while let Some(message) = join_set
+            .join_next()
+            .await
+            .transpose()
+            .or_err(ErrorType::AsyncRuntimeError)?
+        {
             match message {
-                Ok(Ok(metadata)) => {
+                Ok(metadata) => {
                     // Store the finished piece.
                     finished_pieces.push(metadata.clone());
                 }
-                Ok(Err(Error::DownloadFromRemotePeerFailed(err))) => {
+                Err(Error::DownloadFromRemotePeerFailed(err)) => {
                     error!(
                         "download piece {} from remote peer {} error: {:?}",
                         self.storage.piece_id(task.id.as_str(), err.piece_number),
@@ -946,16 +953,12 @@ impl Task {
 
                     continue;
                 }
-                Ok(Err(err)) => {
+                Err(err) => {
                     error!("download from remote peer error: {:?}", err);
                     continue;
                 }
-                Err(err) => {
-                    return Err(Error::Join(err));
-                }
             }
         }
-
         Ok(finished_pieces)
     }
 
@@ -972,7 +975,9 @@ impl Task {
         in_stream_tx: Sender<AnnouncePeerRequest>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Convert the header.
-        let request_header: HeaderMap = (&download.request_header).try_into()?;
+        let request_header: HeaderMap = (&download.request_header)
+            .try_into()
+            .or_err(ErrorType::HTTPError)?;
 
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
@@ -1004,7 +1009,8 @@ impl Task {
                     storage.piece_id(task_id.as_str(), number)
                 );
 
-                let _permit = semaphore.acquire().await?;
+                // SAFETY: unwrap the semaphore directly
+                let _permit = semaphore.acquire().await.unwrap();
                 let metadata = piece_manager
                     .download_from_source(
                         task_id.as_str(),
@@ -1096,13 +1102,18 @@ impl Task {
         }
 
         // Wait for the pieces to be downloaded.
-        while let Some(message) = join_set.join_next().await {
+        while let Some(message) = join_set
+            .join_next()
+            .await
+            .transpose()
+            .or_err(ErrorType::AsyncRuntimeError)?
+        {
             match message {
-                Ok(Ok(metadata)) => {
+                Ok(metadata) => {
                     // Store the finished piece.
                     finished_pieces.push(metadata.clone());
                 }
-                Ok(Err(Error::HTTP(err))) => {
+                Err(Error::HTTP(err)) => {
                     // Send the download piece http failed request.
                     in_stream_tx.send_timeout(AnnouncePeerRequest {
                                     host_id: host_id.to_string(),
@@ -1126,7 +1137,7 @@ impl Task {
                     join_set.abort_all();
                     return Err(Error::HTTP(err));
                 }
-                Ok(Err(err)) => {
+                Err(err) => {
                     // Send the download piece failed request.
                     in_stream_tx.send_timeout(AnnouncePeerRequest {
                                     host_id: host_id.to_string(),
@@ -1143,9 +1154,6 @@ impl Task {
                                 .unwrap_or_else(|err| error!("send download piece failed request error: {:?}", err));
 
                     return Err(err);
-                }
-                Err(err) => {
-                    return Err(Error::Join(err));
                 }
             }
         }
@@ -1285,7 +1293,9 @@ impl Task {
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Convert the header.
-        let request_header: HeaderMap = (&download.request_header).try_into()?;
+        let request_header: HeaderMap = (&download.request_header)
+            .try_into()
+            .or_err(ErrorType::HTTPError)?;
 
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
@@ -1316,7 +1326,7 @@ impl Task {
                     storage.piece_id(task_id.as_str(), number)
                 );
 
-                let _permit = semaphore.acquire().await?;
+                let _permit = semaphore.acquire().await.unwrap();
                 let metadata = piece_manager
                     .download_from_source(
                         task_id.as_str(),
@@ -1388,18 +1398,20 @@ impl Task {
         }
 
         // Wait for the pieces to be downloaded.
-        while let Some(message) = join_set.join_next().await {
+        while let Some(message) = join_set
+            .join_next()
+            .await
+            .transpose()
+            .or_err(ErrorType::AsyncRuntimeError)?
+        {
             match message {
-                Ok(Ok(metadata)) => {
+                Ok(metadata) => {
                     // Store the finished piece.
                     finished_pieces.push(metadata.clone());
                 }
-                Ok(Err(err)) => {
+                Err(err) => {
                     join_set.abort_all();
                     return Err(err);
-                }
-                Err(err) => {
-                    return Err(Error::Join(err));
                 }
             }
         }
