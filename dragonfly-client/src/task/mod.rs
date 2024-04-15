@@ -31,7 +31,7 @@ use dragonfly_api::scheduler::v2::{
     DownloadPieceFailedRequest, DownloadPieceFinishedRequest, RegisterPeerRequest,
     RescheduleRequest,
 };
-use dragonfly_client_backend::http::{Request as HTTPRequest, HTTP};
+use dragonfly_client_backend::{BackendFactory, HeadRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{
@@ -75,9 +75,6 @@ pub struct Task {
     // scheduler_client is the grpc client of the scheduler.
     pub scheduler_client: Arc<SchedulerClient>,
 
-    // http_client is the http client.
-    http_client: Arc<HTTP>,
-
     // piece is the piece manager.
     pub piece: Arc<piece::Piece>,
 }
@@ -90,9 +87,8 @@ impl Task {
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
-        http_client: Arc<HTTP>,
     ) -> Self {
-        let piece = piece::Piece::new(config.clone(), storage.clone(), http_client.clone());
+        let piece = piece::Piece::new(config.clone(), storage.clone());
         let piece = Arc::new(piece);
 
         Self {
@@ -100,7 +96,6 @@ impl Task {
             id_generator,
             storage: storage.clone(),
             scheduler_client: scheduler_client.clone(),
-            http_client: http_client.clone(),
             piece: piece.clone(),
         }
     }
@@ -132,26 +127,36 @@ impl Task {
         request_header.remove(reqwest::header::RANGE);
 
         // Head the url to get the content length.
-        let response = self
-            .http_client
-            .head(HTTPRequest {
+        let backend = BackendFactory::new_backend(download.url.as_str())?;
+        let response = backend
+            .head(HeadRequest {
                 url: download.url,
-                header: request_header,
+                http_header: Some(request_header),
                 timeout: self.config.download.piece_timeout,
                 client_certs: None,
             })
             .await?;
 
         // Check if the status code is success.
-        if !response.status_code.is_success() {
-            return Err(Error::HTTP(HTTPError {
-                status_code: response.status_code,
-                header: response.header,
-            }));
+        if let Some(http_status_code) = response.http_status_code {
+            let http_header = response.http_header.ok_or(Error::InvalidParameter)?;
+
+            if !http_status_code.is_success() {
+                return Err(Error::HTTP(HTTPError {
+                    status_code: http_status_code,
+                    header: http_header,
+                }));
+            }
+
+            return self.storage.download_task_started(
+                id,
+                download.piece_length,
+                Some(http_header),
+            );
         }
 
-        self.storage
-            .download_task_started(id, download.piece_length, Some(response.header))
+        error!("backend returns invalid response");
+        Err(Error::InvalidParameter)
     }
 
     // download_finished updates the metadata of the task when the task downloads finished.

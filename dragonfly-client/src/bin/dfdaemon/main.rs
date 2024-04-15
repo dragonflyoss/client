@@ -27,7 +27,6 @@ use dragonfly_client::proxy::Proxy;
 use dragonfly_client::shutdown;
 use dragonfly_client::task::Task;
 use dragonfly_client::tracing::init_tracing;
-use dragonfly_client_backend::http::HTTP;
 use dragonfly_client_config::dfdaemon;
 use dragonfly_client_storage::Storage;
 use dragonfly_client_util::id_generator::IDGenerator;
@@ -129,10 +128,6 @@ async fn main() -> Result<(), anyhow::Error> {
     );
     let id_generator = Arc::new(id_generator);
 
-    // Initialize http client.
-    let http_client = HTTP::new();
-    let http_client = Arc::new(http_client);
-
     // Initialize manager client.
     let manager_client = ManagerClient::new(config.manager.addrs.clone())
         .await
@@ -175,7 +170,6 @@ async fn main() -> Result<(), anyhow::Error> {
         id_generator.clone(),
         storage.clone(),
         scheduler_client.clone(),
-        http_client.clone(),
     );
     let task = Arc::new(task);
 
