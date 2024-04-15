@@ -25,6 +25,8 @@ use dragonfly_api::dfdaemon::v2::{
     SyncPiecesResponse, TriggerDownloadTaskRequest,
 };
 use dragonfly_client_config::dfdaemon::Config;
+use dragonfly_client_core::error::ErrorType;
+use dragonfly_client_core::error::OrErr;
 use dragonfly_client_core::Result as ClientResult;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -400,7 +402,8 @@ impl DfdaemonUploadClient {
             .map_err(|err| {
                 error!("connect to {} failed: {}", addr, err);
                 err
-            })?;
+            })
+            .or_err(ErrorType::ConnectError)?;
         let client = DfdaemonUploadGRPCClient::new(channel).max_decoding_message_size(usize::MAX);
         Ok(Self { client })
     }

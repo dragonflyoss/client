@@ -20,7 +20,7 @@ use dragonfly_api::common::v2::{Peer, Range};
 use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
 use dragonfly_client_backend::http::{Request as HTTPRequest, HTTP};
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::{Error, HTTPError, Result};
+use dragonfly_client_core::{error::HTTPError, Error, Result};
 use dragonfly_client_storage::{metadata, Storage};
 use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};
@@ -107,7 +107,7 @@ impl Piece {
         // If range is not None, calculate the pieces by range.
         if let Some(range) = range {
             if range.length == 0 {
-                return Err(Error::InvalidParameter());
+                return Err(Error::InvalidParameter);
             }
 
             let mut number = 0;
@@ -116,7 +116,7 @@ impl Piece {
             loop {
                 // If offset is greater than content_length, break the loop.
                 if offset >= content_length {
-                    let mut piece = pieces.pop().ok_or(Error::InvalidParameter())?;
+                    let mut piece = pieces.pop().ok_or(Error::InvalidParameter)?;
                     piece.length = piece_length + content_length - offset;
                     pieces.push(piece);
                     break;
@@ -160,7 +160,7 @@ impl Piece {
         loop {
             // If offset is greater than content_length, break the loop.
             if offset >= content_length {
-                let mut piece = pieces.pop().ok_or(Error::InvalidParameter())?;
+                let mut piece = pieces.pop().ok_or(Error::InvalidParameter)?;
                 piece.length = piece_length + content_length - offset;
                 pieces.push(piece);
                 break;
@@ -296,7 +296,7 @@ impl Piece {
             if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
                 error!("set piece metadata failed: {}", err)
             };
-            Error::InvalidParameter()
+            Error::InvalidParameter
         })?;
 
         // Get the piece content.
@@ -305,7 +305,7 @@ impl Piece {
             if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
                 error!("set piece metadata failed: {}", err)
             };
-            Error::InvalidParameter()
+            Error::InvalidParameter
         })?;
 
         // Record the finish of downloading piece.

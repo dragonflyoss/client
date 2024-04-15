@@ -48,6 +48,6 @@ impl Docker {
             "docker feature is enabled, proxy_addr: {}, config_path: {:?}",
             self.proxy_config.addr, self.config.config_path,
         );
-        Err(Error::Unimplemented())
+        Err(Error::Unimplemented)
     }
 }

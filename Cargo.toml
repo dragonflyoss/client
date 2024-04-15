@@ -1,6 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["dragonfly-client", "dragonfly-client-backend","dragonfly-client-config","dragonfly-client-core", "dragonfly-client-init", "dragonfly-client-storage", "dragonfly-client-util"]
+members = [
+    "dragonfly-client",
+    "dragonfly-client-backend",
+    "dragonfly-client-config",
+    "dragonfly-client-core",
+    "dragonfly-client-init",
+    "dragonfly-client-storage",
+    "dragonfly-client-util",
+]
 
 [workspace.package]
 version = "0.1.30"
@@ -25,8 +33,15 @@ dragonfly-api = "2.0.109"
 reqwest = { version = "0.11.27", features = ["stream", "native-tls", "default-tls", "rustls-tls"] }
 rcgen = { version = "0.12.1", features = ["x509-parser"] }
 hyper = { version = "1.2", features = ["full"] }
-hyper-util = { version = "0.1.2", features = ["client", "client-legacy", "tokio", "server-auto", "http1", "http2"] }
-hyper-rustls = { version = "0.26", features = [ "http1", "http2", "logging" ] }
+hyper-util = { version = "0.1.2", features = [
+    "client",
+    "client-legacy",
+    "tokio",
+    "server-auto",
+    "http1",
+    "http2",
+] }
+hyper-rustls = { version = "0.26", features = ["http1", "http2", "logging"] }
 http-range-header = "0.4.0"
 tracing = "0.1"
 url = "2.4.0"
@@ -53,7 +68,7 @@ humantime = "2.1.0"
 prost-wkt-types = "0.4"
 chrono = { version = "0.4.35", features = ["serde"] }
 openssl = { version = "0.10", features = ["vendored"] }
-clap = { version = "4.5.3", features = [ "derive" ] }
+clap = { version = "4.5.3", features = ["derive"] }
 anyhow = "1.0.81"
 toml_edit = "0.22.8"
 toml = "0.8.12"

@@ -15,7 +15,10 @@
  */
 
 use dragonfly_client_config::dfinit;
-use dragonfly_client_core::{Error, Result};
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Error, Result,
+};
 use tokio::{self, fs};
 use toml_edit::{value, Array, ArrayOfTables, Item, Table, Value};
 use tracing::info;
@@ -59,7 +62,8 @@ impl CRIO {
         );
 
         // Parse proxy address to get host and port.
-        let proxy_url = Url::parse(self.proxy_config.addr.as_str())?;
+        let proxy_url =
+            Url::parse(self.proxy_config.addr.as_str()).or_err(ErrorType::ParseError)?;
         let proxy_host = proxy_url
             .host_str()
             .ok_or(Error::Unknown("host not found".to_string()))?;

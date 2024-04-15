@@ -16,7 +16,10 @@
 
 use dragonfly_client::proxy::header::DRAGONFLY_REGISTRY_HEADER;
 use dragonfly_client_config::dfinit::{self, ContainerdRegistry};
-use dragonfly_client_core::{Error, Result};
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Error, Result,
+};
 use std::path::PathBuf;
 use tokio::{self, fs};
 use toml_edit::{value, Array, DocumentMut, Item, Table, Value};
@@ -47,7 +50,9 @@ impl Containerd {
     // runtime environment for the dfdaemon.
     pub async fn run(&self) -> Result<()> {
         let content = fs::read_to_string(&self.config.config_path).await?;
-        let mut containerd_config = content.parse::<DocumentMut>()?;
+        let mut containerd_config = content
+            .parse::<DocumentMut>()
+            .or_err(ErrorType::ParseError)?;
 
         // If containerd is old version and supports mirror mode, add registries to the
         // registry mirrors in containerd configuration.
