@@ -1,7 +1,24 @@
+/*
+ *     Copyright 2024 The Dragonfly Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 use std::{error::Error as ErrorTrait, fmt};
 
 use super::message::Message;
 
+// ErrorType is the type of the error.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ErrorType {
     StorageError,
@@ -17,7 +34,9 @@ pub enum ErrorType {
     ConnectError,
 }
 
+// ErrorType implements the display for the error type.
 impl ErrorType {
+    // as_str returns the string of the error type.
     pub fn as_str(&self) -> &'static str {
         match self {
             ErrorType::StorageError => "StorageError",
@@ -35,6 +54,7 @@ impl ErrorType {
     }
 }
 
+// ExternalError is the external error.
 #[derive(Debug)]
 pub struct ExternalError {
     pub etype: ErrorType,
@@ -42,7 +62,9 @@ pub struct ExternalError {
     pub context: Option<Message>,
 }
 
+// ExternalError implements the error trait.
 impl ExternalError {
+    // new returns a new ExternalError.
     pub fn new(etype: ErrorType) -> Self {
         ExternalError {
             etype,
@@ -51,16 +73,19 @@ impl ExternalError {
         }
     }
 
+    // with_context returns a new ExternalError with the context.
     pub fn with_context(mut self, message: impl Into<Message>) -> Self {
         self.context = Some(message.into());
         self
     }
 
+    // with_cause returns a new ExternalError with the cause.
     pub fn with_cause(mut self, cause: Box<dyn ErrorTrait + Send + Sync>) -> Self {
         self.cause = Some(cause);
         self
     }
 
+    // chain_display returns the display of the error with the previous error.
     fn chain_display(
         &self,
         previous: Option<&ExternalError>,
@@ -73,6 +98,7 @@ impl ExternalError {
         if let Some(c) = self.context.as_ref() {
             write!(f, " context: {}", c.as_str())?;
         }
+
         if let Some(c) = self.cause.as_ref() {
             if let Some(e) = c.downcast_ref::<Box<ExternalError>>() {
                 write!(f, " cause: ")?;
@@ -86,14 +112,17 @@ impl ExternalError {
     }
 }
 
+// ExternalError implements the display for the error.
 impl fmt::Display for ExternalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.chain_display(None, f)
     }
 }
 
+// ExternalError implements the error trait.
 impl ErrorTrait for ExternalError {}
 
+// OrErr is the trait to extend the result with error.
 pub trait OrErr<T, E> {
     /// Wrap the E in [Result] with new [ErrorType] and context, the existing E will be the cause.
     ///
@@ -107,21 +136,22 @@ pub trait OrErr<T, E> {
         E: Into<Box<dyn ErrorTrait + Send + Sync>>;
 }
 
+// OrErr implements the OrErr for Result.
 impl<T, E> OrErr<T, E> for Result<T, E> {
     fn or_err(self, et: ErrorType) -> Result<T, ExternalError>
     where
         E: Into<Box<dyn ErrorTrait + Send + Sync>>,
     {
-        self.map_err(|e| ExternalError::new(et).with_cause(e.into()))
+        self.map_err(|err| ExternalError::new(et).with_cause(err.into()))
     }
 
     fn or_context(self, et: ErrorType, context: &'static str) -> Result<T, ExternalError>
     where
         E: Into<Box<dyn ErrorTrait + Send + Sync>>,
     {
-        self.map_err(|e| {
+        self.map_err(|err| {
             ExternalError::new(et)
-                .with_cause(e.into())
+                .with_cause(err.into())
                 .with_context(context)
         })
     }
