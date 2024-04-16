@@ -14,21 +14,26 @@
  * limitations under the License.
  */
 
-use crate::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use crate::shutdown;
 use crate::task;
 use dragonfly_api::common::v2::Piece;
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient,
     dfdaemon_upload_server::{DfdaemonUpload, DfdaemonUploadServer as DfdaemonUploadGRPCServer},
-    DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest, SyncPiecesRequest,
-    SyncPiecesResponse, TriggerDownloadTaskRequest,
+    DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest, DownloadTaskResponse,
+    SyncPiecesRequest, SyncPiecesResponse,
 };
+use dragonfly_api::errordetails::v2::Http;
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::error::ErrorType;
-use dragonfly_client_core::error::OrErr;
-use dragonfly_client_core::Result as ClientResult;
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Error as ClientError, Result as ClientResult,
+};
+use dragonfly_client_util::http::{
+    get_range, hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap,
+};
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
@@ -36,7 +41,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{
     transport::{Channel, Server},
-    Request, Response, Status,
+    Code, Request, Response, Status,
 };
 use tracing::{error, info, instrument, Instrument, Span};
 
@@ -67,7 +72,7 @@ impl DfdaemonUploadServer {
     ) -> Self {
         // Initialize the grpc service.
         let service = DfdaemonUploadGRPCServer::new(DfdaemonUploadServerHandler {
-            config: config.clone(),
+            socket_path: config.download.server.socket_path.clone(),
             task,
         })
         .max_decoding_message_size(usize::MAX);
@@ -118,8 +123,8 @@ impl DfdaemonUploadServer {
 
 // DfdaemonUploadServerHandler is the handler of the dfdaemon upload grpc service.
 pub struct DfdaemonUploadServerHandler {
-    // config is the configuration of the dfdaemon.
-    config: Arc<Config>,
+    // socket_path is the path of the unix domain socket.
+    socket_path: PathBuf,
 
     // task is the task manager.
     task: Arc<task::Task>,
@@ -317,70 +322,203 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         }))
     }
 
-    // trigger_download_task triggers the download task.
-    #[instrument(skip_all, fields(host_id, url))]
-    async fn trigger_download_task(
+    // DownloadTaskStream is the stream of the download task response.
+    type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
+
+    // download_task d
+    #[instrument(skip_all, fields(host_id, task_id, peer_id))]
+    async fn download_task(
         &self,
-        request: Request<TriggerDownloadTaskRequest>,
-    ) -> Result<Response<()>, Status> {
+        request: Request<DownloadTaskRequest>,
+    ) -> Result<Response<Self::DownloadTaskStream>, Status> {
+        info!("download task in upload server");
+
         // Clone the request.
         let request = request.into_inner();
+
+        // Check whether the download is empty.
+        let mut download = request
+            .download
+            .ok_or(Status::invalid_argument("missing download"))?;
+
+        // Generate the task id.
+        let task_id = self
+            .task
+            .id_generator
+            .task_id(
+                download.url.as_str(),
+                download.digest.as_deref(),
+                download.tag.as_deref(),
+                download.application.as_deref(),
+                download.piece_length,
+                download.filtered_query_params.clone(),
+            )
+            .map_err(|e| {
+                error!("generate task id: {}", e);
+                Status::invalid_argument(e.to_string())
+            })?;
 
         // Generate the host id.
         let host_id = self.task.id_generator.host_id();
 
-        // Get the download from the request.
-        let download = request.download.ok_or_else(|| {
-            error!("download not found");
-            Status::invalid_argument("download not found")
-        })?;
+        // Generate the peer id.
+        let peer_id = self.task.id_generator.peer_id();
 
-        // Span record the host id and download url.
+        // Span record the host id, task id and peer id.
         Span::current().record("host_id", host_id.as_str());
-        Span::current().record("url", download.url.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record("peer_id", peer_id.as_str());
 
-        // Initialize the dfdaemon download client.
-        let dfdaemon_download_client =
-            DfdaemonDownloadClient::new_unix(self.config.download.server.socket_path.clone())
-                .await
-                .map_err(|err| {
-                    error!("create dfdaemon download client: {}", err);
-                    Status::internal(format!("create dfdaemon download client: {}", err))
-                })?;
-
-        // Download task by dfdaemon download client.
-        let response = dfdaemon_download_client
-            .download_task(DownloadTaskRequest {
-                download: Some(download),
-            })
+        // Download task started.
+        info!("download task started: {:?}", download);
+        let task = match self
+            .task
+            .download_started(task_id.as_str(), download.clone())
             .await
-            .map_err(|err| {
-                error!("download task: {}", err);
-                Status::internal(format!("download task: {}", err))
-            })?;
-
-        // Spawn to handle the download task.
-        tokio::spawn(
-            async move {
-                let mut out_stream = response.into_inner();
-                loop {
-                    match out_stream.message().await {
-                        Ok(Some(message)) => info!("download piece finished {:?}", message),
-                        Ok(None) => {
-                            info!("download task finished");
-                            return;
-                        }
-                        Err(err) => {
-                            error!("download piece failed: {}", err);
-                            return;
-                        }
+        {
+            Err(ClientError::HTTP(err)) => {
+                error!("download started failed by HTTP error: {}", err);
+                match serde_json::to_vec::<Http>(&Http {
+                    header: reqwest_headermap_to_hashmap(&err.header),
+                    status_code: err.status_code.as_u16() as i32,
+                }) {
+                    Ok(json) => {
+                        return Err(Status::with_details(
+                            Code::Internal,
+                            err.to_string(),
+                            json.into(),
+                        ));
+                    }
+                    Err(e) => {
+                        error!("serialize HTTP error: {}", e);
+                        return Err(Status::internal(e.to_string()));
                     }
                 }
             }
-            .in_current_span(),
-        );
+            Err(err) => {
+                error!("download started failed: {}", err);
+                return Err(Status::internal(err.to_string()));
+            }
+            Ok(task) => task,
+        };
 
-        Ok(Response::new(()))
+        // Download's range priority is higher than the request header's range.
+        // If download protocol is http, use the range of the request header.
+        // If download protocol is not http, use the range of the download.
+        if download.range.is_none() {
+            let content_length = task
+                .content_length()
+                .ok_or(Status::internal("missing content length in the response"))?;
+
+            // Convert the header.
+            let request_header =
+                hashmap_to_reqwest_headermap(&download.request_header).map_err(|e| {
+                    error!("convert header: {}", e);
+                    Status::invalid_argument(e.to_string())
+                })?;
+
+            download.range = get_range(&request_header, content_length).map_err(|err| {
+                error!("get range failed: {}", err);
+                Status::failed_precondition(err.to_string())
+            })?;
+        }
+
+        // Clone the task.
+        let task_manager = self.task.clone();
+
+        // Initialize stream channel.
+        let download_clone = download.clone();
+        let task_clone = task.clone();
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(1024);
+        tokio::spawn(
+            async move {
+                match task_manager
+                    .download(
+                        task_clone.clone(),
+                        host_id.as_str(),
+                        peer_id.as_str(),
+                        download_clone.clone(),
+                        out_stream_tx.clone(),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        // Download task succeeded.
+                        info!("download task succeeded");
+                        if download_clone.range.is_none() {
+                            if let Err(err) = task_manager.download_finished(task_id.as_str()) {
+                                error!("download task finished: {}", err);
+                            }
+                        }
+
+                        // Check whether the output path is empty. If output path is empty,
+                        // should not hard link or copy the task content to the destination.
+                        if let Some(output_path) = download_clone.output_path.clone() {
+                            // Hard link or copy the task content to the destination.
+                            if let Err(err) = task_manager
+                                .hard_link_or_copy(
+                                    task_clone,
+                                    Path::new(output_path.as_str()),
+                                    download_clone.range.clone(),
+                                )
+                                .await
+                            {
+                                error!("hard link or copy task: {}", err);
+                                out_stream_tx
+                                    .send(Err(Status::internal(err.to_string())))
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        error!("send download progress error: {:?}", err);
+                                    });
+                            };
+                        }
+                    }
+                    Err(e) => {
+                        // Download task failed.
+                        task_manager
+                            .download_failed(task_id.as_str())
+                            .await
+                            .unwrap_or_else(|err| {
+                                error!("download task failed: {}", err);
+                            });
+
+                        error!("download failed: {}", e);
+                    }
+                }
+
+                drop(out_stream_tx);
+            }
+            .in_current_span(),
+        )
+        .await
+        .map_err(|err| {
+            error!("download failed: {}", err);
+            Status::internal(err.to_string())
+        })?;
+
+        // If prefetch flag is true, prefetch the full task.
+        if download.prefetch && !task.is_finished() {
+            // Prefetch the task if prefetch flag is true.
+            let socket_path = self.socket_path.clone();
+            tokio::spawn(
+                async move {
+                    info!("prefetch task started");
+                    if let Err(err) = super::prefetch_task(
+                        socket_path.clone(),
+                        Request::new(DownloadTaskRequest {
+                            download: Some(download.clone()),
+                        }),
+                    )
+                    .await
+                    {
+                        error!("prefetch task failed: {}", err);
+                    }
+                }
+                .in_current_span(),
+            );
+        }
+
+        Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 }
 
@@ -435,12 +573,27 @@ impl DfdaemonUploadClient {
 
     // trigger_download_task triggers the download task.
     #[instrument(skip_all)]
-    pub async fn trigger_download_task(
+    pub async fn download_task(
         &self,
-        request: TriggerDownloadTaskRequest,
-    ) -> Result<Response<()>, Status> {
-        let request = Self::make_request(request);
-        let response = self.client.clone().trigger_download_task(request).await?;
+        request: DownloadTaskRequest,
+    ) -> ClientResult<tonic::Response<tonic::codec::Streaming<DownloadTaskResponse>>> {
+        // Get the download from the request.
+        let download = request.clone().download.ok_or_else(|| {
+            tonic::Status::invalid_argument("missing download in download task request")
+        })?;
+
+        // Initialize the request.
+        let mut request = tonic::Request::new(request);
+
+        // Set the timeout to the request.
+        if let Some(timeout) = download.timeout {
+            request.set_timeout(
+                Duration::try_from(timeout)
+                    .map_err(|_| tonic::Status::invalid_argument("invalid timeout"))?,
+            );
+        }
+
+        let response = self.client.clone().download_task(request).await?;
         Ok(response)
     }
 

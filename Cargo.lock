@@ -586,9 +586,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.0.109"
+version = "2.0.110"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b911d8c5f6af80510e89bc8182eacaacf8a4e47bbcb9c35753cf142b8a2ba96"
+checksum = "477f701c22a2a3d9f3cfaef271b064ea418b0deb5437115c62217569606b4204"
 dependencies = [
  "prost 0.11.9",
  "prost-types 0.12.4",
@@ -601,7 +601,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "anyhow",
  "bytes",
@@ -660,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "dragonfly-client-core",
  "futures",
@@ -676,7 +676,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "dragonfly-client-core",
  "home",
@@ -695,7 +695,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "reqwest",
  "thiserror",
@@ -705,7 +705,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "anyhow",
  "clap",
@@ -721,7 +721,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "base16ct",
  "chrono",
@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-core",
