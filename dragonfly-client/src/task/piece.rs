@@ -361,7 +361,7 @@ impl Piece {
         let mut response = backend
             .get(GetRequest {
                 url: url.to_string(),
-                http_header: Some(request_header.to_owned()),
+                http_header: Some(request_header),
                 timeout: self.config.download.piece_timeout,
                 client_certs: None,
             })
