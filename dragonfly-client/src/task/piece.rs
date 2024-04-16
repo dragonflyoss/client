@@ -18,7 +18,7 @@ use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use chrono::Utc;
 use dragonfly_api::common::v2::{Peer, Range};
 use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
-use dragonfly_client_backend::http::{Request as HTTPRequest, HTTP};
+use dragonfly_client_backend::{BackendFactory, GetRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{error::HTTPError, Error, Result};
 use dragonfly_client_storage::{metadata, Storage};
@@ -46,9 +46,6 @@ pub struct Piece {
     // manager_client is the grpc client of the manager.
     storage: Arc<Storage>,
 
-    // http_client is the http client.
-    http_client: Arc<HTTP>,
-
     // download_rate_limiter is the rate limiter of the download speed in bps(bytes per second).
     download_rate_limiter: Arc<RateLimiter>,
 
@@ -59,11 +56,10 @@ pub struct Piece {
 // Piece implements the piece manager.
 impl Piece {
     // new returns a new Piece.
-    pub fn new(config: Arc<Config>, storage: Arc<Storage>, http_client: Arc<HTTP>) -> Self {
+    pub fn new(config: Arc<Config>, storage: Arc<Storage>) -> Self {
         Self {
             config: config.clone(),
             storage,
-            http_client,
             download_rate_limiter: Arc::new(
                 RateLimiter::builder()
                     .initial(config.download.rate_limit as usize)
@@ -361,11 +357,11 @@ impl Piece {
         );
 
         // Download the piece from the source.
-        let mut response = self
-            .http_client
-            .get(HTTPRequest {
+        let backend = BackendFactory::new_backend(url)?;
+        let mut response = backend
+            .get(GetRequest {
                 url: url.to_string(),
-                header: request_header.to_owned(),
+                http_header: Some(request_header.to_owned()),
                 timeout: self.config.download.piece_timeout,
                 client_certs: None,
             })
@@ -381,42 +377,49 @@ impl Piece {
             })?;
 
         // HTTP status code is not OK, handle the error.
-        if !response.status_code.is_success() {
-            // Record the failure of downloading piece,
-            // if the status code is not OK.
-            self.storage.download_piece_failed(task_id, number)?;
+        if let Some(http_status_code) = response.http_status_code {
+            let http_header = response.http_header.ok_or(Error::InvalidParameter)?;
+            if !http_status_code.is_success() {
+                // Record the failure of downloading piece,
+                // if the status code is not OK.
+                self.storage.download_piece_failed(task_id, number)?;
 
-            let mut buffer = String::new();
-            response.reader.read_to_string(&mut buffer).await?;
-            error!("http error {}: {}", response.status_code, buffer.as_str());
-            return Err(Error::HTTP(HTTPError {
-                status_code: response.status_code,
-                header: response.header,
-            }));
+                let mut buffer = String::new();
+                response.reader.read_to_string(&mut buffer).await?;
+                error!("http error {}: {}", http_status_code, buffer.as_str());
+                return Err(Error::HTTP(HTTPError {
+                    status_code: http_status_code,
+                    header: http_header,
+                }));
+            }
+
+            // Record the finish of downloading piece.
+            self.storage
+                .download_piece_from_source_finished(
+                    task_id,
+                    number,
+                    offset,
+                    length,
+                    &mut response.reader,
+                )
+                .await
+                .map_err(|err| {
+                    // Record the failure of downloading piece,
+                    // If storage fails to record piece.
+                    error!("download piece finished: {}", err);
+                    if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                        error!("set piece metadata failed: {}", err)
+                    };
+                    err
+                })?;
+
+            return self
+                .storage
+                .get_piece(task_id, number)?
+                .ok_or(Error::PieceNotFound(number.to_string()));
         }
 
-        // Record the finish of downloading piece.
-        self.storage
-            .download_piece_from_source_finished(
-                task_id,
-                number,
-                offset,
-                length,
-                &mut response.reader,
-            )
-            .await
-            .map_err(|err| {
-                // Record the failure of downloading piece,
-                // If storage fails to record piece.
-                error!("download piece finished: {}", err);
-                if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
-                    error!("set piece metadata failed: {}", err)
-                };
-                err
-            })?;
-
-        self.storage
-            .get_piece(task_id, number)?
-            .ok_or(Error::PieceNotFound(number.to_string()))
+        error!("backend returns invalid response");
+        Err(Error::InvalidParameter)
     }
 }
