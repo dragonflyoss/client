@@ -29,24 +29,23 @@ use dragonfly_api::errordetails::v2::Http;
 use dragonfly_api::scheduler::v2::{
     LeaveHostRequest as SchedulerLeaveHostRequest, StatTaskRequest as SchedulerStatTaskRequest,
 };
-use dragonfly_client_core::error::ErrorType;
-use dragonfly_client_core::error::OrErr;
-use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Error as ClientError, Result as ClientResult,
+};
 use dragonfly_client_util::http::{
     get_range, hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap,
 };
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
-use tonic::Code;
 use tonic::{
     transport::{Channel, Endpoint, Server, Uri},
-    Request, Response, Status,
+    Code, Request, Response, Status,
 };
 use tower::service_fn;
 use tracing::{error, info, instrument, Instrument, Span};
@@ -159,6 +158,8 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         &self,
         request: Request<DownloadTaskRequest>,
     ) -> Result<Response<Self::DownloadTaskStream>, Status> {
+        info!("download task in download server");
+
         // Clone the request.
         let request = request.into_inner();
 
@@ -329,7 +330,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             tokio::spawn(
                 async move {
                     info!("prefetch task started");
-                    if let Err(err) = prefetch_task(
+                    if let Err(err) = super::prefetch_task(
                         socket_path.clone(),
                         Request::new(DownloadTaskRequest {
                             download: Some(download.clone()),
@@ -421,56 +422,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
         Ok(Response::new(()))
     }
-}
-
-// prefetch_task prefetches the task if prefetch flag is true.
-async fn prefetch_task(
-    socket_path: PathBuf,
-    request: Request<DownloadTaskRequest>,
-) -> ClientResult<()> {
-    // Initialize the dfdaemon download client.
-    let dfdaemon_download_client = DfdaemonDownloadClient::new_unix(socket_path.clone()).await?;
-
-    // Make the prefetch request.
-    let mut request = request.into_inner();
-
-    let Some(download) = request.download.as_mut() else {
-        return Err(ClientError::InvalidParameter);
-    };
-    // Remove the range flag for download full task.
-    download.range = None;
-    // Remove the prefetch flag for prevent the infinite loop.
-    download.prefetch = false;
-    // Remove the range header for download full task.
-    download
-        .request_header
-        .remove(reqwest::header::RANGE.as_str());
-
-    // Download task by dfdaemon download client.
-    let response = dfdaemon_download_client.download_task(request).await?;
-
-    // Spawn to handle the download task.
-    tokio::spawn(
-        async move {
-            let mut out_stream = response.into_inner();
-            loop {
-                match out_stream.message().await {
-                    Ok(Some(message)) => info!("prefetch piece finished {:?}", message),
-                    Ok(None) => {
-                        info!("prefetch task finished");
-                        return;
-                    }
-                    Err(err) => {
-                        error!("prefetch piece failed: {}", err);
-                        return;
-                    }
-                }
-            }
-        }
-        .in_current_span(),
-    );
-
-    Ok(())
 }
 
 // DfdaemonDownloadClient is a wrapper of DfdaemonDownloadGRPCClient.
