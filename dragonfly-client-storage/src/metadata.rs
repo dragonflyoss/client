@@ -46,11 +46,17 @@ const DEFAULT_BLOCK_SIZE: usize = 64 * 1024;
 // DEFAULT_CACHE_SIZE is the default cache size for rocksdb.
 const DEFAULT_CACHE_SIZE: usize = 16 * 1024 * 1024;
 
-// TASK_CF_NAME is the column family name of task.
+/// The column family name of [Task].
 const TASK_CF_NAME: &str = "task";
 
-// PIECE_CF_NAME is the column family name of piece.
+/// The column family name of [Piece].
 const PIECE_CF_NAME: &str = "piece";
+
+/// Trait that marks a type can be stored in rocksdb, which has a cf name.
+trait RocksdbStorable: Default + Serialize + for<'de> Deserialize<'de> {
+    /// Return the column family name.
+    const CF_NAME: &'static str;
+}
 
 // Task is the metadata of the task.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -79,6 +85,10 @@ pub struct Task {
 
     // finished_at is the time when the task downloads finished.
     pub finished_at: Option<NaiveDateTime>,
+}
+
+impl RocksdbStorable for Task {
+    const CF_NAME: &'static str = TASK_CF_NAME;
 }
 
 // Task implements the task metadata.
@@ -164,6 +174,10 @@ pub struct Piece {
     pub finished_at: Option<NaiveDateTime>,
 }
 
+impl RocksdbStorable for Piece {
+    const CF_NAME: &'static str = PIECE_CF_NAME;
+}
+
 // Piece implements the piece metadata.
 impl Piece {
     // is_started returns whether the piece downloads started.
@@ -239,7 +253,7 @@ impl Metadata {
 
         // Open rocksdb.
         let dir = dir.join(DEFAULT_DIR_NAME);
-        let cf_names = [TASK_CF_NAME, PIECE_CF_NAME];
+        let cf_names = [Task::CF_NAME, Piece::CF_NAME];
         let db = TransactionDB::open_cf(&options, &TransactionDBOptions::default(), &dir, cf_names)
             .or_err(ErrorType::StorageError)?;
         info!("metadata initialized directory: {:?}", dir);
@@ -261,16 +275,15 @@ impl Metadata {
     /// will be created; or return an error to abort the transaction.
     fn transactional_update_or_else<T>(
         &self,
-        cf_name: &str,
         key: &str,
         update: impl FnOnce(T) -> Result<T>,
         or_else: impl FnOnce() -> Result<T>,
     ) -> Result<T>
     where
-        T: Serialize + for<'de> Deserialize<'de>,
+        T: RocksdbStorable,
     {
         self.with_txn(|txn| {
-            let handle = self.cf_handle(cf_name)?;
+            let handle = self.cf_handle::<T>()?;
             let object = match txn
                 .get_for_update_cf(handle, key, true)
                 .or_err(ErrorType::StorageError)?
@@ -302,7 +315,6 @@ impl Metadata {
         };
 
         self.transactional_update_or_else(
-            TASK_CF_NAME,
             id,
             |mut task: Task| {
                 // If the task exists, update the task metadata.
@@ -331,7 +343,6 @@ impl Metadata {
     /// Update the metadata of the task when the task downloads finished.
     pub fn download_task_finished(&self, id: &str) -> Result<Task> {
         self.transactional_update_or_else(
-            TASK_CF_NAME,
             id,
             |mut task: Task| {
                 task.updated_at = Utc::now().naive_utc();
@@ -345,7 +356,6 @@ impl Metadata {
     /// Update the metadata of the task when task uploads started.
     pub fn upload_task_started(&self, id: &str) -> Result<Task> {
         self.transactional_update_or_else(
-            TASK_CF_NAME,
             id,
             |mut task: Task| {
                 task.uploading_count += 1;
@@ -359,7 +369,6 @@ impl Metadata {
     /// Update the metadata of the task when task uploads finished.
     pub fn upload_task_finished(&self, id: &str) -> Result<Task> {
         self.transactional_update_or_else(
-            TASK_CF_NAME,
             id,
             |mut task: Task| {
                 task.uploading_count -= 1;
@@ -374,7 +383,6 @@ impl Metadata {
     /// Update the metadata of the task when the task uploads failed.
     pub fn upload_task_failed(&self, id: &str) -> Result<Task> {
         self.transactional_update_or_else(
-            TASK_CF_NAME,
             id,
             |mut task: Task| {
                 task.uploading_count -= 1;
@@ -388,7 +396,7 @@ impl Metadata {
     /// Get the task metadata.
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         // Get the column family handle of task.
-        let handle = self.cf_handle(TASK_CF_NAME)?;
+        let handle = self.cf_handle::<Task>()?;
         match self.db.get_cf(handle, id).or_err(ErrorType::StorageError)? {
             Some(bytes) => Ok(Some(
                 serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?,
@@ -400,7 +408,7 @@ impl Metadata {
     /// Get the task metadatas.
     pub fn get_tasks(&self) -> Result<Vec<Task>> {
         // Get the column family handle of task.
-        let handle = self.cf_handle(TASK_CF_NAME)?;
+        let handle = self.cf_handle::<Task>()?;
 
         self.with_txn(|txn| {
             let iter = txn.iterator_cf(handle, IteratorMode::Start);
@@ -421,7 +429,7 @@ impl Metadata {
     /// Delete the task metadata.
     pub fn delete_task(&self, task_id: &str) -> Result<()> {
         // Get the column family handle of task.
-        let handle = self.cf_handle(TASK_CF_NAME)?;
+        let handle = self.cf_handle::<Task>()?;
 
         self.with_txn(|txn| {
             txn.delete_cf(handle, task_id)
@@ -433,7 +441,7 @@ impl Metadata {
     /// Update the metadata of the piece when the piece downloads started.
     pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Get the column family handle of piece.
-        let handle = self.cf_handle(PIECE_CF_NAME)?;
+        let handle = self.cf_handle::<Piece>()?;
 
         // Get the piece id.
         let id = self.piece_id(task_id, number);
@@ -469,7 +477,6 @@ impl Metadata {
         let id = self.piece_id(task_id, number);
 
         self.transactional_update_or_else(
-            PIECE_CF_NAME,
             id.as_str(),
             |mut piece: Piece| {
                 piece.offset = offset;
@@ -487,7 +494,7 @@ impl Metadata {
     /// Update the metadata of the piece when the piece downloads failed.
     pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Get the column family handle of piece.
-        let handle = self.cf_handle(PIECE_CF_NAME)?;
+        let handle = self.cf_handle::<Piece>()?;
 
         // Get the piece id.
         let id = self.piece_id(task_id, number);
@@ -519,7 +526,6 @@ impl Metadata {
         let id = self.piece_id(task_id, number);
 
         self.transactional_update_or_else(
-            PIECE_CF_NAME,
             id.as_str(),
             |mut piece: Piece| {
                 piece.uploading_count += 1;
@@ -536,7 +542,6 @@ impl Metadata {
         let id = self.piece_id(task_id, number);
 
         self.transactional_update_or_else(
-            PIECE_CF_NAME,
             id.as_str(),
             |mut piece: Piece| {
                 piece.uploading_count -= 1;
@@ -554,7 +559,6 @@ impl Metadata {
         let id = self.piece_id(task_id, number);
 
         self.transactional_update_or_else(
-            PIECE_CF_NAME,
             id.as_str(),
             |mut piece: Piece| {
                 piece.uploading_count -= 1;
@@ -568,7 +572,7 @@ impl Metadata {
     /// Get the piece metadata.
     pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<Piece>> {
         let id = self.piece_id(task_id, number);
-        let handle = self.cf_handle(PIECE_CF_NAME)?;
+        let handle = self.cf_handle::<Piece>()?;
         match self
             .db
             .get_cf(handle, id.as_bytes())
@@ -584,7 +588,7 @@ impl Metadata {
     /// Get the piece metadatas.
     pub fn get_pieces(&self, task_id: &str) -> Result<Vec<Piece>> {
         // Get the column family handle of piece.
-        let handle = self.cf_handle(PIECE_CF_NAME)?;
+        let handle = self.cf_handle::<Piece>()?;
 
         self.with_txn(|txn| {
             let iter = txn.prefix_iterator_cf(handle, task_id.as_bytes());
@@ -605,7 +609,7 @@ impl Metadata {
     /// Delete the piece metadatas.
     pub fn delete_pieces(&self, task_id: &str) -> Result<()> {
         // Get the column family handle of piece.
-        let handle = self.cf_handle(PIECE_CF_NAME)?;
+        let handle = self.cf_handle::<Piece>()?;
 
         self.with_txn(|txn| {
             let iter = txn.prefix_iterator_cf(handle, task_id.as_bytes());
@@ -625,7 +629,11 @@ impl Metadata {
     }
 
     // Return the column family handle.
-    fn cf_handle(&self, cf_name: &str) -> Result<&ColumnFamily> {
+    fn cf_handle<T>(&self) -> Result<&ColumnFamily>
+    where
+        T: RocksdbStorable,
+    {
+        let cf_name = T::CF_NAME;
         self.db
             .cf_handle(cf_name)
             .ok_or_else(|| Error::ColumnFamilyNotFound(cf_name.to_string()))
