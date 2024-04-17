@@ -20,8 +20,8 @@ use dragonfly_client_core::{
 };
 use futures::TryStreamExt;
 use rustls_pki_types::CertificateDer;
-use tokio::io::AsyncRead;
-use tokio_util::compat::FuturesAsyncReadCompatExt;
+use std::io::{Error as IOError, ErrorKind};
+use tokio_util::io::StreamReader;
 
 // HTTP is the HTTP backend.
 pub struct HTTP;
@@ -68,9 +68,9 @@ impl HTTP {
 
 // Backend implements the Backend trait.
 #[tonic::async_trait]
-impl super::Backend for HTTP {
+impl crate::Backend for HTTP {
     // head gets the header of the request.
-    async fn head(&self, request: super::HeadRequest) -> Result<super::HeadResponse> {
+    async fn head(&self, request: crate::HeadRequest) -> Result<crate::HeadResponse> {
         // The header of the request is required.
         let header = request.http_header.ok_or(Error::InvalidParameter)?;
 
@@ -78,50 +78,45 @@ impl super::Backend for HTTP {
         // the request method. Therefore, the signed URL of the GET method cannot be requested
         // through the HEAD method. Use GET request to replace of HEAD request
         // to get header and status code.
-        let mut request_builder = self
+        let response = self
             .client(request.client_certs)?
             .get(&request.url)
-            .headers(header);
-        request_builder = request_builder.timeout(request.timeout);
-
-        let response = request_builder.send().await.or_err(ErrorType::HTTPError)?;
+            .headers(header)
+            .timeout(request.timeout)
+            .send()
+            .await
+            .or_err(ErrorType::HTTPError)?;
 
         let header = response.headers().clone();
         let status_code = response.status();
 
-        Ok(super::HeadResponse {
+        Ok(crate::HeadResponse {
             http_header: Some(header),
             http_status_code: Some(status_code),
         })
     }
 
     // get gets the content of the request.
-    async fn get(
-        &self,
-        request: super::GetRequest,
-    ) -> Result<super::GetResponse<Box<dyn AsyncRead + Send + Sync + Unpin>>> {
+    async fn get(&self, request: crate::GetRequest) -> Result<crate::GetResponse<crate::Body>> {
         // The header of the request is required.
         let header = request.http_header.ok_or(Error::InvalidParameter)?;
-
-        let mut request_builder = self
+        let response = self
             .client(request.client_certs)?
             .get(&request.url)
-            .headers(header);
-        request_builder = request_builder.timeout(request.timeout);
-
-        let response = request_builder.send().await.or_err(ErrorType::HTTPError)?;
+            .headers(header)
+            .timeout(request.timeout)
+            .send()
+            .await
+            .or_err(ErrorType::HTTPError)?;
 
         let header = response.headers().clone();
         let status_code = response.status();
-        let reader: Box<dyn AsyncRead + Send + Sync + Unpin> = Box::new(
+        let reader = Box::new(StreamReader::new(
             response
                 .bytes_stream()
-                .map_err(|err| futures::io::Error::new(futures::io::ErrorKind::Other, err))
-                .into_async_read()
-                .compat(),
-        );
-
-        Ok(super::GetResponse {
+                .map_err(|err| IOError::new(ErrorKind::Other, err)),
+        ));
+        Ok(crate::GetResponse {
             http_header: Some(header),
             http_status_code: Some(status_code),
             reader,
@@ -134,5 +129,86 @@ impl Default for HTTP {
     // default returns a new default HTTP.
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Backend, GetRequest, HeadRequest};
+    use httpmock::{Method, MockServer};
+    use reqwest::{header::HeaderMap, StatusCode};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn should_get_head_response() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(Method::GET).path("/head");
+            then.status(200)
+                .header("content-type", "text/html; charset=UTF-8")
+                .body("");
+        });
+
+        let http_backend = HTTP::new();
+        let resp = http_backend
+            .head(HeadRequest {
+                url: server.url("/head"),
+                http_header: Some(HeaderMap::new()),
+                timeout: std::time::Duration::from_secs(5),
+                client_certs: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp.http_status_code, Some(StatusCode::OK))
+    }
+
+    #[tokio::test]
+    async fn should_return_error_response_when_head_notexists() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(Method::GET).path("/head");
+            then.status(200)
+                .header("content-type", "text/html; charset=UTF-8")
+                .body("");
+        });
+
+        let http_backend = HTTP::new();
+        let resp = http_backend
+            .head(HeadRequest {
+                url: server.url("/head"),
+                http_header: None,
+                timeout: std::time::Duration::from_secs(5),
+                client_certs: None,
+            })
+            .await;
+
+        assert!(resp.is_err());
+    }
+
+    #[tokio::test]
+    async fn should_get_response() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(Method::GET).path("/get");
+            then.status(200)
+                .header("content-type", "text/html; charset=UTF-8")
+                .body("OK");
+        });
+
+        let http_backend = HTTP::new();
+        let mut resp = http_backend
+            .get(GetRequest {
+                url: server.url("/get"),
+                http_header: Some(HeaderMap::new()),
+                timeout: std::time::Duration::from_secs(5),
+                client_certs: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp.http_status_code, Some(StatusCode::OK));
+        assert_eq!(resp.text().await.unwrap(), "OK");
     }
 }
