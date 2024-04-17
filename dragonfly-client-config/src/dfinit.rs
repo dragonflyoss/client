@@ -30,12 +30,12 @@ pub const NAME: &str = "dfinit";
 // default_dfinit_config_path is the default config path for dfinit.
 #[inline]
 pub fn default_dfinit_config_path() -> PathBuf {
-    super::default_config_dir().join("dfinit.yaml")
+    crate::default_config_dir().join("dfinit.yaml")
 }
 
 // default_dfinit_log_dir is the default log directory for dfinit.
 pub fn default_dfinit_log_dir() -> PathBuf {
-    super::default_log_dir().join(NAME)
+    crate::default_log_dir().join(NAME)
 }
 
 // default_container_runtime_containerd_config_path is the default containerd configuration path.
