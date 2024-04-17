@@ -15,48 +15,19 @@
  */
 
 use chrono::{NaiveDateTime, Utc};
-use dragonfly_client_core::{
-    error::{ErrorType, OrErr},
-    Error, Result,
-};
+use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::http::reqwest_headermap_to_hashmap;
 use reqwest::header::{self, HeaderMap};
-use rocksdb::{
-    BlockBasedOptions, Cache, ColumnFamily, IteratorMode, Options, Transaction, TransactionDB,
-    TransactionDBOptions,
-};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::error;
 
-// DEFAULT_DIR_NAME is the default directory name to store metadata.
-const DEFAULT_DIR_NAME: &str = "metadata";
-
-// DEFAULT_MEMTABLE_MEMORY_BUDGET is the default memory budget for memtable, default is 64MB.
-const DEFAULT_MEMTABLE_MEMORY_BUDGET: usize = 64 * 1024 * 1024;
-
-// DEFAULT_MAX_OPEN_FILES is the default max open files for rocksdb.
-const DEFAULT_MAX_OPEN_FILES: i32 = 10_000;
-
-// DEFAULT_BLOCK_SIZE is the default block size for rocksdb.
-const DEFAULT_BLOCK_SIZE: usize = 64 * 1024;
-
-// DEFAULT_CACHE_SIZE is the default cache size for rocksdb.
-const DEFAULT_CACHE_SIZE: usize = 16 * 1024 * 1024;
-
-/// TASK_CF_NAME is the column family name of [Task].
-const TASK_CF_NAME: &str = "task";
-
-/// PIECE_CF_NAME is the column family name of [Piece].
-const PIECE_CF_NAME: &str = "piece";
-
-/// ColumnFamilyDescriptor marks a type can be stored in rocksdb, which has a cf name.
-trait ColumnFamilyDescriptor: Default + Serialize + DeserializeOwned {
-    /// CF_NAME returns the column family name.
-    const CF_NAME: &'static str;
-}
+use crate::storage_engine::{
+    rocksdb::RocksdbStorageEngine, DatabaseObject, Operations, StorageEngine, StorageEngineOwned,
+    Transaction,
+};
 
 // Task is the metadata of the task.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -87,8 +58,9 @@ pub struct Task {
     pub finished_at: Option<NaiveDateTime>,
 }
 
-impl ColumnFamilyDescriptor for Task {
-    const CF_NAME: &'static str = TASK_CF_NAME;
+impl DatabaseObject for Task {
+    /// NAMESPACE is the namespace of [Task] objects.
+    const NAMESPACE: &'static str = "task";
 }
 
 // Task implements the task metadata.
@@ -174,8 +146,9 @@ pub struct Piece {
     pub finished_at: Option<NaiveDateTime>,
 }
 
-impl ColumnFamilyDescriptor for Piece {
-    const CF_NAME: &'static str = PIECE_CF_NAME;
+impl DatabaseObject for Piece {
+    /// NAMESPACE is the namespace of [Piece] objects.
+    const NAMESPACE: &'static str = "piece";
 }
 
 // Piece implements the piece metadata.
@@ -223,49 +196,29 @@ impl Piece {
 }
 
 /// Metadata manages the metadata of [Task] and [Piece].
-pub struct Metadata {
+pub struct Metadata<E>
+where
+    E: StorageEngineOwned,
+{
     /// db is the underlying rocksdb instance.
-    db: TransactionDB,
+    db: E,
 }
 
-impl Metadata {
+impl Metadata<RocksdbStorageEngine> {
     /// new creates a new metadata instance.
-    pub fn new(dir: &Path) -> Result<Metadata> {
-        // Initialize rocksdb options.
-        let mut options = Options::default();
-        options.create_if_missing(true);
-        options.create_missing_column_families(true);
-        options.optimize_level_style_compaction(DEFAULT_MEMTABLE_MEMORY_BUDGET);
-        options.increase_parallelism(num_cpus::get() as i32);
-        options.set_max_open_files(DEFAULT_MAX_OPEN_FILES);
-        // Set prefix extractor to reduce the memory usage of bloom filter and length of task id is 64.
-        options.set_prefix_extractor(rocksdb::SliceTransform::create_fixed_prefix(64));
-        options.set_memtable_prefix_bloom_ratio(0.2);
-
-        // Initialize rocksdb block based table options.
-        let mut block_options = BlockBasedOptions::default();
-        block_options.set_block_cache(&Cache::new_lru_cache(DEFAULT_CACHE_SIZE));
-        block_options.set_block_size(DEFAULT_BLOCK_SIZE);
-        block_options.set_cache_index_and_filter_blocks(true);
-        block_options.set_pin_l0_filter_and_index_blocks_in_cache(true);
-        block_options.set_bloom_filter(10.0, false);
-        options.set_block_based_table_factory(&block_options);
-
-        // Open rocksdb.
-        let dir = dir.join(DEFAULT_DIR_NAME);
-        let cf_names = [Task::CF_NAME, Piece::CF_NAME];
-        let db = TransactionDB::open_cf(&options, &TransactionDBOptions::default(), &dir, cf_names)
-            .or_err(ErrorType::StorageError)?;
-        info!("metadata initialized directory: {:?}", dir);
+    pub fn new(dir: &Path) -> Result<Metadata<RocksdbStorageEngine>> {
+        let db = RocksdbStorageEngine::open(dir, &[Task::NAMESPACE, Piece::NAMESPACE])?;
 
         Ok(Metadata { db })
     }
+}
 
+impl<E: StorageEngineOwned> Metadata<E> {
     /// with_txn executes the enclosed closure within a transaction.
-    fn with_txn<T>(&self, f: impl FnOnce(&Transaction<TransactionDB>) -> Result<T>) -> Result<T> {
-        let txn = self.db.transaction();
+    fn with_txn<T>(&self, f: impl FnOnce(&<E as StorageEngine>::Txn) -> Result<T>) -> Result<T> {
+        let txn = self.db.start_transaction();
         let result = f(&txn)?;
-        txn.commit().or_err(ErrorType::StorageError)?;
+        txn.commit()?;
         Ok(result)
     }
 
@@ -281,21 +234,15 @@ impl Metadata {
         or_else: impl FnOnce() -> Result<T>,
     ) -> Result<T>
     where
-        T: ColumnFamilyDescriptor,
+        T: DatabaseObject,
     {
         self.with_txn(|txn| {
-            let handle = self.cf_handle::<T>()?;
-            let object = match txn
-                .get_for_update_cf(handle, key, true)
-                .or_err(ErrorType::StorageError)?
-            {
-                Some(bytes) => serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?,
+            let object: T = match txn.get_for_update(key.as_bytes())? {
+                Some(object) => object,
                 None => or_else()?,
             };
             let object = update(object)?;
-            let json = serde_json::to_string(&object).or_err(ErrorType::SerializeError)?;
-            txn.put_cf(handle, key.as_bytes(), json.as_bytes())
-                .or_err(ErrorType::StorageError)?;
+            txn.put(key.as_bytes(), &object)?;
             Ok(object)
         })
     }
@@ -396,54 +343,24 @@ impl Metadata {
 
     /// get_task gets the task metadata.
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
-        // Get the column family handle of task.
-        let handle = self.cf_handle::<Task>()?;
-        match self.db.get_cf(handle, id).or_err(ErrorType::StorageError)? {
-            Some(bytes) => Ok(Some(
-                serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?,
-            )),
-            None => Ok(None),
-        }
+        self.db.get(id.as_bytes())
     }
 
     /// get_tasks gets the task metadatas.
     pub fn get_tasks(&self) -> Result<Vec<Task>> {
-        // Get the column family handle of task.
-        let handle = self.cf_handle::<Task>()?;
-
-        self.with_txn(|txn| {
-            let iter = txn.iterator_cf(handle, IteratorMode::Start);
-
-            // Iterate the task metadatas.
-            let mut tasks = Vec::new();
-            for ele in iter {
-                let (_, value) = ele.or_err(ErrorType::StorageError)?;
-                let task: Task =
-                    serde_json::from_slice(&value).or_err(ErrorType::SerializeError)?;
-                tasks.push(task);
-            }
-
-            Ok(tasks)
-        })
+        self.with_txn(|txn| txn.iter()?.map(|ele| ele.map(|(_, task)| task)).collect())
     }
 
     /// delete_task deletes the task metadata.
     pub fn delete_task(&self, task_id: &str) -> Result<()> {
-        // Get the column family handle of task.
-        let handle = self.cf_handle::<Task>()?;
-
         self.with_txn(|txn| {
-            txn.delete_cf(handle, task_id)
-                .or_err(ErrorType::SerializeError)?;
+            txn.delete::<Task>(task_id.as_bytes())?;
             Ok(())
         })
     }
 
     /// download_piece_started updates the metadata of the piece when the piece downloads started.
     pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<Piece> {
-        // Get the column family handle of piece.
-        let handle = self.cf_handle::<Piece>()?;
-
         // Get the piece id.
         let id = self.piece_id(task_id, number);
 
@@ -457,9 +374,7 @@ impl Metadata {
 
         self.with_txn(|txn| {
             // Put the piece metadata.
-            let json = serde_json::to_string(&piece).or_err(ErrorType::SerializeError)?;
-            txn.put_cf(handle, id.as_bytes(), json.as_bytes())
-                .or_err(ErrorType::StorageError)?;
+            txn.put(id.as_bytes(), &piece)?;
             Ok(piece)
         })
     }
@@ -494,23 +409,14 @@ impl Metadata {
 
     /// download_piece_failed updates the metadata of the piece when the piece downloads failed.
     pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<Piece> {
-        // Get the column family handle of piece.
-        let handle = self.cf_handle::<Piece>()?;
-
         // Get the piece id.
         let id = self.piece_id(task_id, number);
 
         self.with_txn(|txn| {
-            let piece = match txn
-                .get_for_update_cf(handle, id.as_bytes(), true)
-                .or_err(ErrorType::StorageError)?
-            {
+            let piece = match txn.get_for_update(id.as_bytes())? {
                 // If the piece exists, delete the piece metadata.
-                Some(bytes) => {
-                    txn.delete_cf(handle, id.as_bytes())
-                        .or_err(ErrorType::StorageError)?;
-                    let piece: Piece =
-                        serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?;
+                Some(piece) => {
+                    txn.delete::<Piece>(id.as_bytes())?;
                     piece
                 }
                 // If the piece does not exist, return error.
@@ -573,52 +479,28 @@ impl Metadata {
     /// get_piece gets the piece metadata.
     pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<Piece>> {
         let id = self.piece_id(task_id, number);
-        let handle = self.cf_handle::<Piece>()?;
-        match self
-            .db
-            .get_cf(handle, id.as_bytes())
-            .or_err(ErrorType::StorageError)?
-        {
-            Some(bytes) => Ok(Some(
-                serde_json::from_slice(&bytes).or_err(ErrorType::SerializeError)?,
-            )),
-            None => Ok(None),
-        }
+        self.db.get(id.as_bytes())
     }
 
     /// get_pieces gets the piece metadatas.
     pub fn get_pieces(&self, task_id: &str) -> Result<Vec<Piece>> {
-        // Get the column family handle of piece.
-        let handle = self.cf_handle::<Piece>()?;
-
         self.with_txn(|txn| {
-            let iter = txn.prefix_iterator_cf(handle, task_id.as_bytes());
-
             // Iterate the piece metadatas.
-            let mut pieces = Vec::new();
-            for ele in iter {
-                let (_, value) = ele.or_err(ErrorType::StorageError)?;
-                let piece: Piece =
-                    serde_json::from_slice(&value).or_err(ErrorType::SerializeError)?;
-                pieces.push(piece);
-            }
-
-            Ok(pieces)
+            txn.prefix_iter(task_id.as_bytes())?
+                .map(|ele| ele.map(|(_, piece)| piece))
+                .collect()
         })
     }
 
     /// delete_pieces deletes the piece metadatas.
     pub fn delete_pieces(&self, task_id: &str) -> Result<()> {
-        // Get the column family handle of piece.
-        let handle = self.cf_handle::<Piece>()?;
-
         self.with_txn(|txn| {
-            let iter = txn.prefix_iterator_cf(handle, task_id.as_bytes());
+            let iter = txn.prefix_iter::<Piece>(task_id.as_bytes())?;
 
             // Iterate the piece metadatas.
             for ele in iter {
-                let (key, _) = ele.or_err(ErrorType::StorageError)?;
-                txn.delete_cf(handle, key).or_err(ErrorType::StorageError)?;
+                let (key, _) = ele?;
+                txn.delete::<Piece>(&key)?;
             }
             Ok(())
         })
@@ -627,16 +509,5 @@ impl Metadata {
     /// piece_id returns the piece id.
     pub fn piece_id(&self, task_id: &str, number: u32) -> String {
         format!("{}-{}", task_id, number)
-    }
-
-    // cf_handle returns the column family handle.
-    fn cf_handle<T>(&self) -> Result<&ColumnFamily>
-    where
-        T: ColumnFamilyDescriptor,
-    {
-        let cf_name = T::CF_NAME;
-        self.db
-            .cf_handle(cf_name)
-            .ok_or_else(|| Error::ColumnFamilyNotFound(cf_name.to_string()))
     }
 }

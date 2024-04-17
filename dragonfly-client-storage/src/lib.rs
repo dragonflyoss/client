@@ -22,10 +22,13 @@ use reqwest::header::HeaderMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use storage_engine::rocksdb::RocksdbStorageEngine;
 use tokio::io::AsyncRead;
 
 pub mod content;
 pub mod metadata;
+
+pub mod storage_engine;
 
 // DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.
 pub const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(500);
@@ -36,7 +39,7 @@ pub struct Storage {
     config: Arc<Config>,
 
     // metadata implements the metadata storage.
-    metadata: metadata::Metadata,
+    metadata: metadata::Metadata<RocksdbStorageEngine>,
 
     // content implements the content storage.
     content: content::Content,
