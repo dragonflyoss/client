@@ -168,8 +168,7 @@ mod tests {
     async fn should_return_error_response_when_head_notexists() {
         let server = MockServer::start();
         server.mock(|when, then| {
-            when.method(Method::GET
-            ).path("/head");
+            when.method(Method::GET).path("/head");
             then.status(200)
                 .header("content-type", "text/html; charset=UTF-8")
                 .body("");
