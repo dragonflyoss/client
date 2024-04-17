@@ -59,7 +59,7 @@ impl Content {
     // hard_link_or_copy_task hard links or copies the task content to the destination.
     pub async fn hard_link_or_copy_task(
         &self,
-        task: super::metadata::Task,
+        task: crate::metadata::Task,
         to: &Path,
         range: Option<Range>,
     ) -> Result<()> {
