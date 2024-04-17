@@ -337,9 +337,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let request = request.into_inner();
 
         // Check whether the download is empty.
-        let mut download = request
-            .download
-            .ok_or(Status::invalid_argument("missing download"))?;
+        let mut download = request.download.ok_or_else(|| {
+            error!("missing download");
+            Status::invalid_argument("missing download")
+        })?;
 
         // Generate the task id.
         let task_id = self
@@ -406,9 +407,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // If download protocol is http, use the range of the request header.
         // If download protocol is not http, use the range of the download.
         if download.range.is_none() {
-            let content_length = task
-                .content_length()
-                .ok_or(Status::internal("missing content length in the response"))?;
+            let content_length = task.content_length().ok_or_else(|| {
+                error!("missing content length in the response");
+                Status::internal("missing content length in the response")
+            })?;
 
             // Convert the header.
             let request_header =
