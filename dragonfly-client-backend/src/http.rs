@@ -70,7 +70,7 @@ impl HTTP {
 #[tonic::async_trait]
 impl crate::Backend for HTTP {
     // head gets the header of the request.
-    async fn head(&self, request: super::HeadRequest) -> Result<super::HeadResponse> {
+    async fn head(&self, request: crate::HeadRequest) -> Result<crate::HeadResponse> {
         // The header of the request is required.
         let header = request.http_header.ok_or(Error::InvalidParameter)?;
 
@@ -80,7 +80,7 @@ impl crate::Backend for HTTP {
         // to get header and status code.
         let response = self
             .client(request.client_certs)?
-            .head(&request.url)
+            .get(&request.url)
             .headers(header)
             .timeout(request.timeout)
             .send()
@@ -90,14 +90,14 @@ impl crate::Backend for HTTP {
         let header = response.headers().clone();
         let status_code = response.status();
 
-        Ok(super::HeadResponse {
+        Ok(crate::HeadResponse {
             http_header: Some(header),
             http_status_code: Some(status_code),
         })
     }
 
     // get gets the content of the request.
-    async fn get(&self, request: super::GetRequest) -> Result<super::GetResponse<crate::Body>> {
+    async fn get(&self, request: crate::GetRequest) -> Result<crate::GetResponse<crate::Body>> {
         // The header of the request is required.
         let header = request.http_header.ok_or(Error::InvalidParameter)?;
         let response = self
@@ -116,7 +116,7 @@ impl crate::Backend for HTTP {
                 .bytes_stream()
                 .map_err(|err| IOError::new(ErrorKind::Other, err)),
         ));
-        Ok(super::GetResponse {
+        Ok(crate::GetResponse {
             http_header: Some(header),
             http_status_code: Some(status_code),
             reader,
@@ -144,7 +144,7 @@ mod tests {
     async fn should_get_head_response() {
         let server = MockServer::start();
         server.mock(|when, then| {
-            when.method(Method::HEAD).path("/head");
+            when.method(Method::GET).path("/head");
             then.status(200)
                 .header("content-type", "text/html; charset=UTF-8")
                 .body("");
@@ -168,7 +168,8 @@ mod tests {
     async fn should_return_error_response_when_head_notexists() {
         let server = MockServer::start();
         server.mock(|when, then| {
-            when.method(Method::HEAD).path("/head");
+            when.method(Method::GET
+            ).path("/head");
             then.status(200)
                 .header("content-type", "text/html; charset=UTF-8")
                 .body("");
