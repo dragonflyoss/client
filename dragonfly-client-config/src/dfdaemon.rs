@@ -34,23 +34,23 @@ pub const NAME: &str = "dfdaemon";
 // default_dfdaemon_config_path is the default config path for dfdaemon.
 #[inline]
 pub fn default_dfdaemon_config_path() -> PathBuf {
-    super::default_config_dir().join("dfdaemon.yaml")
+    crate::default_config_dir().join("dfdaemon.yaml")
 }
 
 // default_dfdaemon_log_dir is the default log directory for dfdaemon.
 #[inline]
 pub fn default_dfdaemon_log_dir() -> PathBuf {
-    super::default_log_dir().join(NAME)
+    crate::default_log_dir().join(NAME)
 }
 
 // default_download_unix_socket_path is the default unix socket path for download GRPC service.
 pub fn default_download_unix_socket_path() -> PathBuf {
-    super::default_root_dir().join("dfdaemon.sock")
+    crate::default_root_dir().join("dfdaemon.sock")
 }
 
 // default_dfdaemon_lock_path is the default file lock path for dfdaemon service.
 pub fn default_dfdaemon_lock_path() -> PathBuf {
-    super::default_lock_dir().join("dfdaemon.lock")
+    crate::default_lock_dir().join("dfdaemon.lock")
 }
 
 // default_host_hostname is the default hostname of the host.
@@ -62,13 +62,13 @@ fn default_host_hostname() -> String {
 // default_dfdaemon_plugin_dir is the default plugin directory for dfdaemon.
 #[inline]
 fn default_dfdaemon_plugin_dir() -> PathBuf {
-    super::default_plugin_dir().join(NAME)
+    crate::default_plugin_dir().join(NAME)
 }
 
 // default_dfdaemon_cache_dir is the default cache directory for dfdaemon.
 #[inline]
 fn default_dfdaemon_cache_dir() -> PathBuf {
-    super::default_cache_dir().join(NAME)
+    crate::default_cache_dir().join(NAME)
 }
 
 // default_upload_grpc_server_port is the default port of the upload grpc server.
@@ -564,7 +564,7 @@ impl Default for Dynconfig {
 #[serde(default, rename_all = "camelCase")]
 pub struct Storage {
     // dir is the directory to store task's metadata and content.
-    #[serde(default = "super::default_storage_dir")]
+    #[serde(default = "crate::default_storage_dir")]
     pub dir: PathBuf,
 }
 
@@ -572,7 +572,7 @@ pub struct Storage {
 impl Default for Storage {
     fn default() -> Self {
         Storage {
-            dir: super::default_storage_dir(),
+            dir: crate::default_storage_dir(),
         }
     }
 }

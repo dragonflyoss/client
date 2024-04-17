@@ -21,5 +21,5 @@ pub const NAME: &str = "dfget";
 
 // default_dfget_log_dir is the default log directory for dfget.
 pub fn default_dfget_log_dir() -> PathBuf {
-    super::default_log_dir().join(NAME)
+    crate::default_log_dir().join(NAME)
 }
