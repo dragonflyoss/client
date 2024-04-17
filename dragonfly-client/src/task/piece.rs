@@ -112,7 +112,10 @@ impl Piece {
             loop {
                 // If offset is greater than content_length, break the loop.
                 if offset >= content_length {
-                    let mut piece = pieces.pop().ok_or(Error::InvalidParameter)?;
+                    let mut piece = pieces.pop().ok_or_else(|| {
+                        error!("piece not found");
+                        Error::InvalidParameter
+                    })?;
                     piece.length = piece_length + content_length - offset;
                     pieces.push(piece);
                     break;
@@ -156,7 +159,10 @@ impl Piece {
         loop {
             // If offset is greater than content_length, break the loop.
             if offset >= content_length {
-                let mut piece = pieces.pop().ok_or(Error::InvalidParameter)?;
+                let mut piece = pieces.pop().ok_or_else(|| {
+                    error!("piece not found");
+                    Error::InvalidParameter
+                })?;
                 piece.length = piece_length + content_length - offset;
                 pieces.push(piece);
                 break;
@@ -254,10 +260,10 @@ impl Piece {
         self.storage.download_piece_started(task_id, number).await?;
 
         // Create a dfdaemon client.
-        let host = parent
-            .host
-            .clone()
-            .ok_or(Error::InvalidPeer(parent.id.clone()))?;
+        let host = parent.host.clone().ok_or_else(|| {
+            error!("peer host is empty");
+            Error::InvalidPeer(parent.id.clone())
+        })?;
         let dfdaemon_upload_client =
             DfdaemonUploadClient::new(format!("http://{}:{}", host.ip, host.port))
                 .await
@@ -325,9 +331,10 @@ impl Piece {
                 err
             })?;
 
-        self.storage
-            .get_piece(task_id, number)?
-            .ok_or(Error::PieceNotFound(number.to_string()))
+        self.storage.get_piece(task_id, number)?.ok_or_else(|| {
+            error!("piece not found");
+            Error::PieceNotFound(number.to_string())
+        })
     }
 
     // download_from_source downloads a single piece from the source.
@@ -378,7 +385,10 @@ impl Piece {
 
         // HTTP status code is not OK, handle the error.
         if let Some(http_status_code) = response.http_status_code {
-            let http_header = response.http_header.ok_or(Error::InvalidParameter)?;
+            let http_header = response.http_header.ok_or_else(|| {
+                error!("http header is empty");
+                Error::InvalidParameter
+            })?;
             if !http_status_code.is_success() {
                 // Record the failure of downloading piece,
                 // if the status code is not OK.
@@ -413,10 +423,10 @@ impl Piece {
                     err
                 })?;
 
-            return self
-                .storage
-                .get_piece(task_id, number)?
-                .ok_or(Error::PieceNotFound(number.to_string()));
+            return self.storage.get_piece(task_id, number)?.ok_or_else(|| {
+                error!("piece not found");
+                Error::PieceNotFound(number.to_string())
+            });
         }
 
         error!("backend returns invalid response");
