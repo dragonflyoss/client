@@ -32,6 +32,7 @@ pub enum ErrorType {
     AsyncRuntimeError,
     StreamError,
     ConnectError,
+    PluginError,
 }
 
 // ErrorType implements the display for the error type.
@@ -50,6 +51,7 @@ impl ErrorType {
             ErrorType::AsyncRuntimeError => "AsyncRuntimeError",
             ErrorType::StreamError => "StreamError",
             ErrorType::ConnectError => "ConnectError",
+            ErrorType::PluginError => "PluginError",
         }
     }
 }

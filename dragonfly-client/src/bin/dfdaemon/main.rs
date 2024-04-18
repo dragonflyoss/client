@@ -27,6 +27,7 @@ use dragonfly_client::proxy::Proxy;
 use dragonfly_client::shutdown;
 use dragonfly_client::task::Task;
 use dragonfly_client::tracing::init_tracing;
+use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::dfdaemon;
 use dragonfly_client_storage::Storage;
 use dragonfly_client_util::id_generator::IDGenerator;
@@ -164,12 +165,20 @@ async fn main() -> Result<(), anyhow::Error> {
         })?;
     let scheduler_client = Arc::new(scheduler_client);
 
+    let backend_factory =
+        BackendFactory::new(Some(config.server.plugin_dir.as_path())).map_err(|err| {
+            error!("initialize backend factory failed: {}", err);
+            err
+        })?;
+    let backend_factory = Arc::new(backend_factory);
+
     // Initialize task manager.
     let task = Task::new(
         config.clone(),
         id_generator.clone(),
         storage.clone(),
         scheduler_client.clone(),
+        backend_factory.clone(),
     );
     let task = Arc::new(task);
 
