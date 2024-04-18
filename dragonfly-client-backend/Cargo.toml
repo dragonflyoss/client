@@ -20,6 +20,7 @@ url.workspace = true
 tracing.workspace = true
 futures = "0.3.28"
 rustls = "0.21.6"
+libloading = "0.8.3"
 
 [dev-dependencies]
 httpmock = "0.7.0"

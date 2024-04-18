@@ -75,6 +75,9 @@ pub struct Task {
     // scheduler_client is the grpc client of the scheduler.
     pub scheduler_client: Arc<SchedulerClient>,
 
+    // backend_factory is the backend factory.
+    pub backend_factory: Arc<BackendFactory>,
+
     // piece is the piece manager.
     pub piece: Arc<piece::Piece>,
 }
@@ -87,8 +90,9 @@ impl Task {
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
+        backend_factory: Arc<BackendFactory>,
     ) -> Self {
-        let piece = piece::Piece::new(config.clone(), storage.clone());
+        let piece = piece::Piece::new(config.clone(), storage.clone(), backend_factory.clone());
         let piece = Arc::new(piece);
 
         Self {
@@ -96,6 +100,7 @@ impl Task {
             id_generator,
             storage: storage.clone(),
             scheduler_client: scheduler_client.clone(),
+            backend_factory: backend_factory.clone(),
             piece: piece.clone(),
         }
     }
@@ -127,7 +132,7 @@ impl Task {
         request_header.remove(reqwest::header::RANGE);
 
         // Head the url to get the content length.
-        let backend = BackendFactory::new_backend(download.url.as_str())?;
+        let backend = self.backend_factory.build(download.url.as_str())?;
         let response = backend
             .head(HeadRequest {
                 url: download.url,

@@ -46,6 +46,9 @@ pub struct Piece {
     // manager_client is the grpc client of the manager.
     storage: Arc<Storage>,
 
+    // backend_factory is the backend factory.
+    backend_factory: Arc<BackendFactory>,
+
     // download_rate_limiter is the rate limiter of the download speed in bps(bytes per second).
     download_rate_limiter: Arc<RateLimiter>,
 
@@ -56,10 +59,15 @@ pub struct Piece {
 // Piece implements the piece manager.
 impl Piece {
     // new returns a new Piece.
-    pub fn new(config: Arc<Config>, storage: Arc<Storage>) -> Self {
+    pub fn new(
+        config: Arc<Config>,
+        storage: Arc<Storage>,
+        backend_factory: Arc<BackendFactory>,
+    ) -> Self {
         Self {
             config: config.clone(),
             storage,
+            backend_factory,
             download_rate_limiter: Arc::new(
                 RateLimiter::builder()
                     .initial(config.download.rate_limit as usize)
@@ -364,7 +372,7 @@ impl Piece {
         );
 
         // Download the piece from the source.
-        let backend = BackendFactory::new_backend(url)?;
+        let backend = self.backend_factory.build(url)?;
         let mut response = backend
             .get(GetRequest {
                 url: url.to_string(),
