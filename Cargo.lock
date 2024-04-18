@@ -978,6 +978,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dragonfly-client-backend-example-plugin"
+version = "0.1.31"
+
+[[package]]
 name = "dragonfly-client-config"
 version = "0.1.31"
 dependencies = [

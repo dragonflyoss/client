@@ -1,0 +1,13 @@
+[package]
+name = "dragonfly-client-backend-example-plugin"
+description = "An example plugin for the Dragonfly client backend"
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["dylib"]
