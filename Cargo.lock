@@ -967,6 +967,7 @@ dependencies = [
  "dragonfly-client-core",
  "futures",
  "httpmock",
+ "libloading",
  "reqwest",
  "rustls 0.21.10",
  "rustls-pki-types",
@@ -976,10 +977,6 @@ dependencies = [
  "tracing",
  "url",
 ]
-
-[[package]]
-name = "dragonfly-client-backend-example-plugin"
-version = "0.1.31"
 
 [[package]]
 name = "dragonfly-client-config"
@@ -1004,6 +1001,7 @@ dependencies = [
 name = "dragonfly-client-core"
 version = "0.1.31"
 dependencies = [
+ "libloading",
  "reqwest",
  "thiserror",
  "tokio",
@@ -1486,6 +1484,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aa283406d74fcfeb4778f4e300beaae30db96793371da168d003cbc833e149e0"
 dependencies = [
  "siphasher",
+]
+
+[[package]]
+name = "hdfs"
+version = "0.1.31"
+dependencies = [
+ "dragonfly-client-backend",
+ "dragonfly-client-core",
+ "tonic",
 ]
 
 [[package]]
@@ -2036,12 +2043,12 @@ checksum = "13e3bf6590cbc649f4d1a3eefc9d5d6eb746f5200ffb04e5e142700b8faa56e7"
 
 [[package]]
 name = "libloading"
-version = "0.8.1"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c571b676ddfc9a8c12f1f3d3085a7b163966a8fd8098a90640953ce5f6170161"
+checksum = "0c2a198fb6b0eada2a8df47933734e6d35d350665a33a3593d7164fa52c75c19"
 dependencies = [
  "cfg-if",
- "windows-sys 0.48.0",
+ "windows-targets 0.52.0",
 ]
 
 [[package]]
