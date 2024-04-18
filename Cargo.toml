@@ -8,6 +8,8 @@ members = [
     "dragonfly-client-init",
     "dragonfly-client-storage",
     "dragonfly-client-util",
+
+    "dragonfly-client-backend/examples/plugin"
 ]
 
 [workspace.package]

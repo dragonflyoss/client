@@ -1,0 +1,18 @@
+[package]
+name = "hdfs"
+description = "An example of HDFS plugin for the Dragonfly client backend"
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["dylib"]
+
+[dependencies]
+dragonfly-client-core.workspace = true
+dragonfly-client-backend.workspace = true
+tonic.workspace = true

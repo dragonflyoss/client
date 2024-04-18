@@ -1487,6 +1487,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hdfs"
+version = "0.1.31"
+dependencies = [
+ "dragonfly-client-backend",
+ "dragonfly-client-core",
+ "tonic",
+]
+
+[[package]]
 name = "headers"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

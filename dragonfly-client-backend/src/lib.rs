@@ -136,14 +136,14 @@ pub struct BackendFactory {
 // in macos. The plugin directory can be set by the dfdaemon configuration.
 //
 // For example:
-// If implement a plugin backend named `ftp`, the shared library
-// should be named `ftp.so` and move the file to the backend plugin directory
+// If implement a plugin backend named `hdfs`, the shared library
+// should be named `libhdfs.so` or `libhdfs.dylib` and move the file to the backend plugin directory
 // `/var/lib/dragonfly/plugins/backend/` in linux or `~/.dragonfly/plugins/backend/`
-// in macos. When the dfdaemon starts, it will load the `ftp` plugin backend in the
-// backend plugin directory. So the dfdaemon or dfget can use the `ftp` plugin backend
-// to download the file by the url `ftp://example.com/file`.
+// in macos. When the dfdaemon starts, it will load the `hdfs` plugin backend in the
+// backend plugin directory. So the dfdaemon or dfget can use the `hdfs` plugin backend
+// to download the file by the url `hdfs://example.com/file`.
 // The backend plugin implementation can refer to
-// https://github.com/dragonflyoss/client/tree/main/dragonfly-client-backend/examples/ftp/.
+// https://github.com/dragonflyoss/client/tree/main/dragonfly-client-backend/examples/plugin/.
 impl BackendFactory {
     // new returns a new BackendFactory.
     pub fn new(plugin_dir: Option<&Path>) -> Result<Self> {
@@ -186,12 +186,16 @@ impl BackendFactory {
 
     // load_plugin_backends loads the plugin backends.
     fn load_plugin_backends(&mut self, plugin_dir: &Path) -> Result<()> {
-        if !plugin_dir.exists() {
-            warn!("skip loading plugin backends, because the plugin directory does not exist");
+        let backend_plugin_dir = plugin_dir.join(NAME);
+        if !backend_plugin_dir.exists() {
+            warn!(
+                "skip loading plugin backends, because the plugin directory {} does not exist",
+                plugin_dir.display()
+            );
             return Ok(());
         }
 
-        for entry in fs::read_dir(plugin_dir.join(NAME))? {
+        for entry in fs::read_dir(backend_plugin_dir)? {
             let path = entry?.path();
 
             // Load shared libraries by register_plugin function,
@@ -202,11 +206,14 @@ impl BackendFactory {
                     unsafe extern "C" fn() -> Box<dyn Backend + Send + Sync>,
                 > = lib.get(b"register_plugin").or_err(ErrorType::PluginError)?;
 
-                if let Some(file_name) = path.file_name() {
-                    let file_name = file_name.to_string_lossy();
-                    self.backends
-                        .insert(file_name.to_string(), register_plugin());
-                    info!("load [{}] plugin backend", file_name.to_string());
+                if let Some(file_stem) = path.file_stem() {
+                    if let Some(plugin_name) =
+                        file_stem.to_string_lossy().to_string().strip_prefix("lib")
+                    {
+                        self.backends
+                            .insert(plugin_name.to_string(), register_plugin());
+                        info!("load [{}] plugin backend", plugin_name);
+                    }
                 }
             }
         }
