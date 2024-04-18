@@ -8,6 +8,7 @@ repository.workspace = true
 keywords.workspace = true
 license.workspace = true
 edition.workspace = true
+publish = false
 
 [lib]
 crate-type = ["dylib"]
