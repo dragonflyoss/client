@@ -22,7 +22,6 @@ use reqwest::header::HeaderMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use storage_engine::rocksdb::RocksdbStorageEngine;
 use tokio::io::AsyncRead;
 
 pub mod content;
@@ -39,7 +38,7 @@ pub struct Storage {
     config: Arc<Config>,
 
     // metadata implements the metadata storage.
-    metadata: metadata::Metadata<RocksdbStorageEngine>,
+    metadata: metadata::Metadata,
 
     // content implements the content storage.
     content: content::Content,

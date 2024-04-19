@@ -26,3 +26,6 @@ tokio-util.workspace = true
 sha2.workspace = true
 num_cpus = "1.0"
 base16ct = { version = "0.2", features = ["alloc"] }
+
+[dev-dependencies]
+tempdir = "0.3"

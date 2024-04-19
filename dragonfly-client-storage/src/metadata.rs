@@ -30,7 +30,7 @@ use crate::storage_engine::{
 };
 
 // Task is the metadata of the task.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Task {
     // id is the task id.
     pub id: String,
@@ -112,7 +112,7 @@ impl Task {
 }
 
 // Piece is the metadata of the piece.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Piece {
     // number is the piece number.
     pub number: u32,
@@ -196,21 +196,12 @@ impl Piece {
 }
 
 /// Metadata manages the metadata of [Task] and [Piece].
-pub struct Metadata<E>
+pub struct Metadata<E = RocksdbStorageEngine>
 where
     E: StorageEngineOwned,
 {
-    /// db is the underlying rocksdb instance.
+    /// db is the underlying storage engine instance.
     db: E,
-}
-
-impl Metadata<RocksdbStorageEngine> {
-    /// new creates a new metadata instance.
-    pub fn new(dir: &Path) -> Result<Metadata<RocksdbStorageEngine>> {
-        let db = RocksdbStorageEngine::open(dir, &[Task::NAMESPACE, Piece::NAMESPACE])?;
-
-        Ok(Metadata { db })
-    }
 }
 
 impl<E: StorageEngineOwned> Metadata<E> {
@@ -509,5 +500,178 @@ impl<E: StorageEngineOwned> Metadata<E> {
     /// piece_id returns the piece id.
     pub fn piece_id(&self, task_id: &str, number: u32) -> String {
         format!("{}-{}", task_id, number)
+    }
+}
+
+impl Metadata<RocksdbStorageEngine> {
+    /// new creates a new metadata instance.
+    pub fn new(dir: &Path) -> Result<Metadata<RocksdbStorageEngine>> {
+        let db = RocksdbStorageEngine::open(dir, &[Task::NAMESPACE, Piece::NAMESPACE])?;
+
+        Ok(Metadata { db })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tempdir::TempDir;
+
+    #[test]
+    fn should_create_metadata_db() {
+        let dir = TempDir::new("metadata_db").unwrap();
+        let metadata = Metadata::new(dir.path()).unwrap();
+        assert!(metadata.get_tasks().unwrap().is_empty());
+        assert!(metadata.get_pieces("task").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_task_lifecycle() {
+        let dir = TempDir::new("metadata_db").unwrap();
+        let metadata = Metadata::new(dir.path()).unwrap();
+
+        let task_id = "task1";
+
+        // Test download_task_started
+        metadata.download_task_started(task_id, 1024, None).unwrap();
+        let task = metadata
+            .get_task(task_id)
+            .unwrap()
+            .expect("task should exist after download_task_started");
+        assert_eq!(task.id, task_id);
+        assert_eq!(task.piece_length, 1024);
+        assert!(task.response_header.is_empty());
+        assert_eq!(task.uploading_count, 0);
+        assert_eq!(task.uploaded_count, 0);
+
+        // Test download_task_finished
+        metadata.download_task_finished(task_id).unwrap();
+        let task = metadata.get_task(task_id).unwrap().unwrap();
+        assert!(
+            task.is_finished(),
+            "task should be finished after download_task_finished"
+        );
+
+        // Test upload_task_started
+        metadata.upload_task_started(task_id).unwrap();
+        let task = metadata.get_task(task_id).unwrap().unwrap();
+        assert_eq!(
+            task.uploading_count, 1,
+            "uploading_count should be increased by 1 after upload_task_started"
+        );
+
+        // Test upload_task_finished
+        metadata.upload_task_finished(task_id).unwrap();
+        let task = metadata.get_task(task_id).unwrap().unwrap();
+        assert_eq!(
+            task.uploading_count, 0,
+            "uploading_count should be decreased by 1 after upload_task_finished"
+        );
+        assert_eq!(
+            task.uploaded_count, 1,
+            "uploaded_count should be increased by 1 after upload_task_finished"
+        );
+
+        // Test upload_task_failed
+        let task = metadata.upload_task_started(task_id).unwrap();
+        assert_eq!(task.uploading_count, 1);
+        let task = metadata.upload_task_failed(task_id).unwrap();
+        assert_eq!(
+            task.uploading_count, 0,
+            "uploading_count should be decreased by 1 after upload_task_failed"
+        );
+        assert_eq!(
+            task.uploaded_count, 1,
+            "uploaded_count should not be changed after upload_task_failed"
+        );
+
+        // Test get_tasks
+        let task_id = "task2";
+        metadata.download_task_started(task_id, 1024, None).unwrap();
+        let tasks = metadata.get_tasks().unwrap();
+        assert_eq!(tasks.len(), 2, "should get 2 tasks in total");
+
+        // Test delete_task
+        metadata.delete_task(task_id).unwrap();
+        let task = metadata.get_task(task_id).unwrap();
+        assert!(task.is_none(), "task should be deleted after delete_task");
+    }
+
+    #[test]
+    fn test_piece_lifecycle() {
+        let dir = TempDir::new("metadata_db").unwrap();
+        let metadata = Metadata::new(dir.path()).unwrap();
+        let task_id = "task3";
+
+        // Test download_piece_started
+        metadata.download_piece_started(task_id, 1).unwrap();
+        let piece = metadata.get_piece(task_id, 1).unwrap().unwrap();
+        assert_eq!(
+            piece.number, 1,
+            "should get newly created piece with number specified"
+        );
+
+        // Test download_piece_finished
+        metadata
+            .download_piece_finished(task_id, 1, 0, 1024, "digest1", None)
+            .unwrap();
+        let piece = metadata.get_piece(task_id, 1).unwrap().unwrap();
+        assert_eq!(
+            piece.length, 1024,
+            "piece should be updated after download_piece_finished"
+        );
+        assert_eq!(
+            piece.digest, "digest1",
+            "piece should be updated after download_piece_finished"
+        );
+
+        // Test get_pieces
+        metadata.download_piece_started(task_id, 2).unwrap();
+        metadata.download_piece_started(task_id, 3).unwrap();
+        let pieces = metadata.get_pieces(task_id).unwrap();
+        assert_eq!(pieces.len(), 3, "should get 3 pieces in total");
+
+        // Test download_piece_failed
+        metadata.download_piece_failed(task_id, 2).unwrap();
+        let piece = metadata.get_piece(task_id, 2).unwrap();
+        assert!(
+            piece.is_none(),
+            "piece should be deleted after download_piece_failed"
+        );
+
+        // Test upload_piece_started
+        metadata.upload_piece_started(task_id, 3).unwrap();
+        let piece = metadata.get_piece(task_id, 3).unwrap().unwrap();
+        assert_eq!(
+            piece.uploading_count, 1,
+            "piece should be updated after upload_piece_started"
+        );
+
+        // Test upload_piece_finished
+        metadata.upload_piece_finished(task_id, 3).unwrap();
+        let piece = metadata.get_piece(task_id, 3).unwrap().unwrap();
+        assert_eq!(
+            piece.uploading_count, 0,
+            "piece should be updated after upload_piece_finished"
+        );
+        assert_eq!(
+            piece.uploaded_count, 1,
+            "piece should be updated after upload_piece_finished"
+        );
+
+        // Test upload_piece_failed
+        metadata.upload_piece_started(task_id, 3).unwrap();
+        metadata.upload_piece_failed(task_id, 3).unwrap();
+        let piece = metadata.get_piece(task_id, 3).unwrap().unwrap();
+        assert_eq!(
+            piece.uploading_count, 0,
+            "piece should be updated after upload_piece_failed"
+        );
+
+        // Test delete_pieces
+        metadata.delete_pieces(task_id).unwrap();
+        let pieces = metadata.get_pieces(task_id).unwrap();
+        assert!(pieces.is_empty(), "should get 0 pieces after delete_pieces");
     }
 }
