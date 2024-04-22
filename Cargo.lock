@@ -903,7 +903,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "0.1.34"
+version = "0.1.35"
 dependencies = [
  "anyhow",
  "bytes",
@@ -962,7 +962,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "0.1.34"
+version = "0.1.35"
 dependencies = [
  "dragonfly-client-core",
  "futures",
@@ -980,7 +980,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "0.1.34"
+version = "0.1.35"
 dependencies = [
  "dragonfly-client-core",
  "home",
@@ -999,7 +999,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "0.1.34"
+version = "0.1.35"
 dependencies = [
  "libloading",
  "reqwest",
@@ -1010,7 +1010,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "0.1.34"
+version = "0.1.35"
 dependencies = [
  "anyhow",
  "clap",
@@ -1026,7 +1026,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "0.1.34"
+version = "0.1.35"
 dependencies = [
  "base16ct",
  "chrono",
@@ -1048,7 +1048,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "0.1.34"
+version = "0.1.35"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-core",
@@ -1488,7 +1488,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "0.1.34"
+version = "0.1.35"
 dependencies = [
  "dragonfly-client-backend",
  "dragonfly-client-core",
@@ -3862,9 +3862,9 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
-version = "0.22.8"
+version = "0.22.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c12219811e0c1ba077867254e5ad62ee2c9c190b0d957110750ac0cda1ae96cd"
+checksum = "d3328d4f68a705b2a4498da1d580585d39a6510f98318a2cec3018a7ec61ddef"
 dependencies = [
  "indexmap 2.2.1",
  "serde",
