@@ -34,7 +34,7 @@ thiserror = "1.0"
 dragonfly-api = "2.0.110"
 reqwest = { version = "0.11.27", features = ["stream", "native-tls", "default-tls", "rustls-tls"] }
 rcgen = { version = "0.12.1", features = ["x509-parser"] }
-hyper = { version = "1.2", features = ["full"] }
+hyper = { version = "1.3", features = ["full"] }
 hyper-util = { version = "0.1.2", features = [
     "client",
     "client-legacy",
