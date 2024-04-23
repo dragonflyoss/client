@@ -444,7 +444,7 @@ pub struct Scheduler {
     )]
     pub announce_interval: Duration,
 
-    // schedule_timeout is the timeout for scheduling. If the scheduling timesout, dfdaemon will back-to-source
+    // schedule_timeout is the timeout for scheduling. If the scheduling timeout, dfdaemon will back-to-source
     // download if enable_back_to_source is true, otherwise dfdaemon will return download failed.
     #[serde(
         default = "default_scheduler_schedule_timeout",
