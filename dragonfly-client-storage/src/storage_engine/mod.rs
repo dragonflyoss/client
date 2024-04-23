@@ -1,3 +1,19 @@
+/*
+ *     Copyright 2024 The Dragonfly Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Result,
@@ -41,12 +57,16 @@ impl<T: for<'db> StorageEngine<'db>> StorageEngineOwned for T {}
 pub trait Operations {
     /// get gets the object by key.
     fn get<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>>;
+
     /// put puts the object by key.
     fn put<O: DatabaseObject>(&self, key: &[u8], value: &O) -> Result<()>;
+
     /// delete deletes the object by key.
     fn delete<O: DatabaseObject>(&self, key: &[u8]) -> Result<()>;
+
     /// iter iterates all objects.
     fn iter<O: DatabaseObject>(&self) -> Result<impl Iterator<Item = Result<(Box<[u8]>, O)>>>;
+
     /// prefix_iter iterates all objects with prefix.
     fn prefix_iter<O: DatabaseObject>(
         &self,
@@ -58,8 +78,10 @@ pub trait Operations {
 pub trait Transaction: Operations {
     /// get_for_update gets the object for update.
     fn get_for_update<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>>;
+
     /// commit commits the transaction.
     fn commit(self) -> Result<()>;
+
     /// rollback rolls back the transaction.
     fn rollback(&self) -> Result<()>;
 }
