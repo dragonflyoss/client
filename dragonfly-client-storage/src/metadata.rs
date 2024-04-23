@@ -58,8 +58,9 @@ pub struct Task {
     pub finished_at: Option<NaiveDateTime>,
 }
 
+// Task implements the task database object.
 impl DatabaseObject for Task {
-    /// NAMESPACE is the namespace of [Task] objects.
+    // NAMESPACE is the namespace of [Task] objects.
     const NAMESPACE: &'static str = "task";
 }
 
@@ -146,8 +147,9 @@ pub struct Piece {
     pub finished_at: Option<NaiveDateTime>,
 }
 
+// Piece implements the piece database object.
 impl DatabaseObject for Piece {
-    /// NAMESPACE is the namespace of [Piece] objects.
+    // NAMESPACE is the namespace of [Piece] objects.
     const NAMESPACE: &'static str = "piece";
 }
 
