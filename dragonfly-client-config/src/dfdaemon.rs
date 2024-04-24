@@ -84,6 +84,12 @@ fn default_upload_rate_limit() -> u64 {
     10_000_000_000
 }
 
+// default_health_server_port is the default port of the health server.
+#[inline]
+fn default_health_server_port() -> u16 {
+    4003
+}
+
 // default_metrics_server_port is the default port of the metrics server.
 #[inline]
 fn default_metrics_server_port() -> u16 {
@@ -785,6 +791,36 @@ pub struct Network {
     pub enable_ipv6: bool,
 }
 
+// HealthServer is the health server configuration for dfdaemon.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HealthServer {
+    // ip is the listen ip of the health server.
+    pub ip: Option<IpAddr>,
+
+    // port is the port to the health server.
+    #[serde(default = "default_health_server_port")]
+    pub port: u16,
+}
+
+// HealthServer implements Default.
+impl Default for HealthServer {
+    fn default() -> Self {
+        Self {
+            ip: None,
+            port: default_health_server_port(),
+        }
+    }
+}
+
+// Health is the health configuration for dfdaemon.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Health {
+    // server is the health server configuration for dfdaemon.
+    pub server: HealthServer,
+}
+
 // MetricsServer is the metrics server configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -875,6 +911,10 @@ pub struct Config {
     #[validate]
     pub security: Security,
 
+    // health is the health configuration for dfdaemon.
+    #[validate]
+    pub health: Health,
+
     // metrics is the metrics configuration for dfdaemon.
     #[validate]
     pub metrics: Metrics,
@@ -919,6 +959,15 @@ impl Config {
         // Convert upload grpc server listen ip.
         if self.upload.server.ip.is_none() {
             self.upload.server.ip = if self.network.enable_ipv6 {
+                Some(Ipv6Addr::UNSPECIFIED.into())
+            } else {
+                Some(Ipv4Addr::UNSPECIFIED.into())
+            }
+        }
+
+        // Convert metrics server listen ip.
+        if self.health.server.ip.is_none() {
+            self.health.server.ip = if self.network.enable_ipv6 {
                 Some(Ipv6Addr::UNSPECIFIED.into())
             } else {
                 Some(Ipv4Addr::UNSPECIFIED.into())
