@@ -234,13 +234,6 @@ async fn main() -> anyhow::Result<()> {
                         http_err.status_code
                     );
                     eprintln!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-                    eprintln!(
                         "{}{}{}Header:{}",
                         color::Fg(color::Cyan),
                         style::Italic,
@@ -250,97 +243,24 @@ async fn main() -> anyhow::Result<()> {
                     for (key, value) in http_err.header.iter() {
                         eprintln!("  [{}]: {}", key.as_str(), value.as_str());
                     }
-                    eprintln!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
                 } else {
+                    eprintln!("Error Code: {}", status.code());
+                    eprintln!("Message: {}", status.message());
                     eprintln!(
-                        "{}{}{}Downloading failed, bad code:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        status.code()
-                    );
-                    eprintln!(
-                        "{}{}{}*********************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-                    eprintln!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        status.message()
-                    );
-                    eprintln!(
-                        "{}{}{}Details:{} {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        std::str::from_utf8(status.details()).unwrap()
-                    );
-                    eprintln!(
-                        "{}{}{}*********************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
+                        "Details: {}",
+                        std::str::from_utf8(status.details()).unwrap().to_string()
                     );
                 }
             }
             Error::HTTP(err) => {
-                eprintln!(
-                    "{}{}{}Downloading failed, bad status code:{} {}",
-                    color::Fg(color::Red),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset,
-                    err.status_code
-                );
-                eprintln!(
-                    "{}{}{}****************************************{}",
-                    color::Fg(color::Black),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
-                eprintln!(
-                    "{}{}{}Header:{}",
-                    color::Fg(color::Cyan),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
+                eprintln!("Error Status Code: {}", err.status_code);
+                eprintln!("Header:");
                 for (key, value) in err.header.iter() {
-                    eprintln!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
+                    eprintln!("{}: {}", key.as_str(), value.to_str().unwrap());
                 }
-                eprintln!(
-                    "{}{}{}****************************************{}",
-                    color::Fg(color::Black),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
             }
             err => {
-                eprintln!(
-                    "{}{}{}Downloading failed, error message:{} {}",
-                    color::Fg(color::Red),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset,
-                    err
-                );
+                eprintln!("Message: {}", err);
             }
         }
 

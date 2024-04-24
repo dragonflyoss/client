@@ -22,6 +22,7 @@ use futures::TryStreamExt;
 use rustls_pki_types::CertificateDer;
 use std::io::{Error as IOError, ErrorKind};
 use tokio_util::io::StreamReader;
+use tracing::error;
 
 // HTTP is the HTTP backend.
 pub struct HTTP;
@@ -85,7 +86,11 @@ impl crate::Backend for HTTP {
             .timeout(request.timeout)
             .send()
             .await
-            .or_err(ErrorType::HTTPError)?;
+            .or_err(ErrorType::HTTPError)
+            .map_err(|err| {
+                error!("head request failed: {}", err);
+                err
+            })?;
 
         let header = response.headers().clone();
         let status_code = response.status();
@@ -107,7 +112,11 @@ impl crate::Backend for HTTP {
             .timeout(request.timeout)
             .send()
             .await
-            .or_err(ErrorType::HTTPError)?;
+            .or_err(ErrorType::HTTPError)
+            .map_err(|err| {
+                error!("get request failed: {}", err);
+                err
+            })?;
 
         let header = response.headers().clone();
         let status_code = response.status();
