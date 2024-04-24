@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom};
 use tokio_util::io::InspectReader;
-use tracing::info;
+use tracing::{error, info, warn};
 
 // DEFAULT_DIR_NAME is the default directory name to store content.
 const DEFAULT_DIR_NAME: &str = "content";
@@ -63,6 +63,8 @@ impl Content {
         to: &Path,
         range: Option<Range>,
     ) -> Result<()> {
+        let task_path = self.dir.join(task.id.as_str());
+
         // Copy the task content to the destination by range
         // if the range is specified.
         if let Some(range) = range {
@@ -70,52 +72,73 @@ impl Content {
             // ensure the file exists.
             if range.length == 0 {
                 info!("range length is 0, no need to copy");
-                File::create(to).await?;
+                File::create(to).await.map_err(|err| {
+                    error!("create {:?} failed: {}", to, err);
+                    err
+                })?;
+
                 return Ok(());
             }
 
-            self.copy_task_by_range(task.id.as_str(), to, range).await?;
-            info!("copy range of task success");
+            self.copy_task_by_range(task.id.as_str(), to, range)
+                .await
+                .map_err(|err| {
+                    error!("copy range {:?} to {:?} failed: {}", task_path, to, err);
+                    err
+                })?;
+
+            info!("copy range {:?} to {:?} success", task_path, to);
             return Ok(());
         }
 
         // If the hard link fails,
         // copy the task content to the destination.
+        fs::remove_file(to).await.unwrap_or_else(|err| {
+            info!("remove {:?} failed: {}", to, err);
+        });
+
         if let Err(err) = self.hard_link_task(task.id.as_str(), to).await {
-            info!("hard link task failed: {}", err);
+            warn!("hard link {:?} to {:?} failed: {}", task_path, to, err);
 
             // If the task is empty, no need to copy. Need to open the file to
             // ensure the file exists.
             if task.is_empty() {
                 info!("task is empty, no need to copy");
-                File::create(to).await?;
+                File::create(to).await.map_err(|err| {
+                    error!("create {:?} failed: {}", to, err);
+                    err
+                })?;
+
                 return Ok(());
             }
 
-            fs::remove_file(to).await?;
-            self.copy_task(task.id.as_str(), to).await?;
-            info!("copy task success");
+            self.copy_task(task.id.as_str(), to).await.map_err(|err| {
+                error!("copy {:?} to {:?} failed: {}", task_path, to, err);
+                err
+            })?;
+
+            info!("copy {:?} to {:?} success", task_path, to);
             return Ok(());
         }
 
-        info!("hard link task success");
+        info!("hard link {:?} to {:?} success", task_path, to);
         Ok(())
     }
 
     // hard_link_task hard links the task content.
-    pub async fn hard_link_task(&self, task_id: &str, link: &Path) -> Result<()> {
+    async fn hard_link_task(&self, task_id: &str, link: &Path) -> Result<()> {
         fs::hard_link(self.dir.join(task_id), link).await?;
         Ok(())
     }
 
     // copy_task copies the task content to the destination.
-    pub async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
+    async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
         fs::copy(self.dir.join(task_id), to).await?;
         Ok(())
     }
 
     // copy_task_by_range copies the task content to the destination by range.
-    pub async fn copy_task_by_range(&self, task_id: &str, to: &Path, range: Range) -> Result<()> {
+    async fn copy_task_by_range(&self, task_id: &str, to: &Path, range: Range) -> Result<()> {
         let mut from_f = File::open(self.dir.join(task_id)).await?;
         from_f.seek(SeekFrom::Start(range.start)).await?;
         let range_reader = from_f.take(range.length);
@@ -136,15 +159,33 @@ impl Content {
 
     // read_task reads the task content by range.
     pub async fn read_task_by_range(&self, task_id: &str, range: Range) -> Result<impl AsyncRead> {
-        let mut from_f = File::open(self.dir.join(task_id)).await?;
-        from_f.seek(SeekFrom::Start(range.start)).await?;
+        let task_path = self.dir.join(task_id);
+
+        let mut from_f = File::open(task_path.as_path()).await.map_err(|err| {
+            error!("open {:?} failed: {}", task_path, err);
+            err
+        })?;
+
+        from_f
+            .seek(SeekFrom::Start(range.start))
+            .await
+            .map_err(|err| {
+                error!("seek {:?} failed: {}", task_path, err);
+                err
+            })?;
+
         let range_reader = from_f.take(range.length);
         Ok(range_reader)
     }
 
     // delete_task deletes the task content.
     pub async fn delete_task(&self, task_id: &str) -> Result<()> {
-        fs::remove_file(self.dir.join(task_id)).await?;
+        let task_path = self.dir.join(task_id);
+
+        fs::remove_file(task_path.as_path()).await.map_err(|err| {
+            error!("remove {:?} failed: {}", task_path, err);
+            err
+        })?;
         Ok(())
     }
 
@@ -156,18 +197,36 @@ impl Content {
         length: u64,
         range: Option<Range>,
     ) -> Result<impl AsyncRead> {
+        let task_path = self.dir.join(task_id);
+
         if let Some(range) = range {
             let target_offset = max(offset, range.start);
             let target_length =
                 min(offset + length - 1, range.start + range.length - 1) - target_offset + 1;
 
-            let mut f = File::open(self.dir.join(task_id)).await?;
-            f.seek(SeekFrom::Start(target_offset)).await?;
+            let mut f = File::open(task_path.as_path()).await.map_err(|err| {
+                error!("open {:?} failed: {}", task_path, err);
+                err
+            })?;
+
+            f.seek(SeekFrom::Start(target_offset))
+                .await
+                .map_err(|err| {
+                    error!("seek {:?} failed: {}", task_path, err);
+                    err
+                })?;
             return Ok(f.take(target_length));
         }
 
-        let mut f = File::open(self.dir.join(task_id)).await?;
-        f.seek(SeekFrom::Start(offset)).await?;
+        let mut f = File::open(task_path.as_path()).await.map_err(|err| {
+            error!("open {:?} failed: {}", task_path, err);
+            err
+        })?;
+
+        f.seek(SeekFrom::Start(offset)).await.map_err(|err| {
+            error!("seek {:?} failed: {}", task_path, err);
+            err
+        })?;
         Ok(f.take(length))
     }
 
@@ -178,6 +237,8 @@ impl Content {
         offset: u64,
         reader: &mut R,
     ) -> Result<WritePieceResponse> {
+        let task_path = self.dir.join(task_id);
+
         // Use a buffer to read the piece.
         let reader = BufReader::with_capacity(DEFAULT_BUFFER_SIZE, reader);
 
@@ -192,12 +253,23 @@ impl Content {
             .create(true)
             .truncate(false)
             .write(true)
-            .open(self.dir.join(task_id))
-            .await?;
-        f.seek(SeekFrom::Start(offset)).await?;
+            .open(task_path.as_path())
+            .await
+            .map_err(|err| {
+                error!("open {:?} failed: {}", task_path, err);
+                err
+            })?;
+
+        f.seek(SeekFrom::Start(offset)).await.map_err(|err| {
+            error!("seek {:?} failed: {}", task_path, err);
+            err
+        })?;
 
         // Copy the piece to the file.
-        let length = io::copy(&mut tee, &mut f).await?;
+        let length = io::copy(&mut tee, &mut f).await.map_err(|err| {
+            error!("copy {:?} failed: {}", task_path, err);
+            err
+        })?;
 
         // Calculate the hash of the piece.
         let hash = hasher.finalize();
