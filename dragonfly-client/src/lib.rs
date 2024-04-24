@@ -18,6 +18,7 @@ pub mod announcer;
 pub mod dynconfig;
 pub mod gc;
 pub mod grpc;
+pub mod health;
 pub mod metrics;
 pub mod proxy;
 pub mod shutdown;

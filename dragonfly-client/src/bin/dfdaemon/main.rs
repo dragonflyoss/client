@@ -22,6 +22,7 @@ use dragonfly_client::grpc::{
     dfdaemon_download::DfdaemonDownloadServer, dfdaemon_upload::DfdaemonUploadServer,
     manager::ManagerClient, scheduler::SchedulerClient,
 };
+use dragonfly_client::health::Health;
 use dragonfly_client::metrics::Metrics;
 use dragonfly_client::proxy::Proxy;
 use dragonfly_client::shutdown;
@@ -182,6 +183,13 @@ async fn main() -> Result<(), anyhow::Error> {
     );
     let task = Arc::new(task);
 
+    // Initialize health server.
+    let health = Health::new(
+        SocketAddr::new(config.health.server.ip.unwrap(), config.health.server.port),
+        shutdown.clone(),
+        shutdown_complete_tx.clone(),
+    );
+
     // Initialize metrics server.
     let metrics = Metrics::new(
         SocketAddr::new(
@@ -254,6 +262,10 @@ async fn main() -> Result<(), anyhow::Error> {
     tokio::select! {
         _ = tokio::spawn(async move { dynconfig.run().await }) => {
             info!("dynconfig manager exited");
+        },
+
+        _ = tokio::spawn(async move { health.run().await }) => {
+            info!("health server exited");
         },
 
         _ = tokio::spawn(async move { metrics.run().await }) => {
