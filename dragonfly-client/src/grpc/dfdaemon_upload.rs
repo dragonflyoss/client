@@ -491,12 +491,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 drop(out_stream_tx);
             }
             .in_current_span(),
-        )
-        .await
-        .map_err(|err| {
-            error!("download failed: {}", err);
-            Status::internal(err.to_string())
-        })?;
+        );
 
         // If prefetch flag is true, prefetch the full task.
         if download.prefetch && !task.is_finished() {
