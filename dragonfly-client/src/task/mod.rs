@@ -49,7 +49,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{
     mpsc::{self, Sender},
-    Semaphore,
+    OwnedSemaphorePermit, Semaphore,
 };
 use tokio::task::JoinSet;
 use tokio::time::sleep;
@@ -792,7 +792,6 @@ impl Task {
 
         // Download the pieces from the remote peers.
         while let Some(collect_piece) = piece_collector_rx.recv().await {
-            let semaphore = semaphore.clone();
             async fn download_from_remote_peer(
                 task_id: String,
                 host_id: String,
@@ -802,7 +801,7 @@ impl Task {
                 parent: Peer,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
-                semaphore: Arc<Semaphore>,
+                _permit: OwnedSemaphorePermit,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnouncePeerRequest>,
             ) -> ClientResult<metadata::Piece> {
@@ -811,14 +810,6 @@ impl Task {
                     storage.piece_id(task_id.as_str(), number),
                     parent.id.clone()
                 );
-
-                let _permit = semaphore.acquire().await.map_err(|err| {
-                    error!("acquire semaphore error: {:?}", err);
-                    Error::DownloadFromRemotePeerFailed(DownloadFromRemotePeerFailed {
-                        piece_number: number,
-                        parent_id: parent.id.clone(),
-                    })
-                })?;
 
                 let metadata = piece_manager
                     .download_from_remote_peer(task_id.as_str(), number, length, parent.clone())
@@ -896,6 +887,7 @@ impl Task {
                 Ok(metadata)
             }
 
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 download_from_remote_peer(
                     task.id.clone(),
@@ -906,7 +898,7 @@ impl Task {
                     collect_piece.parent.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
-                    semaphore.clone(),
+                    permit,
                     download_progress_tx.clone(),
                     in_stream_tx.clone(),
                 )
@@ -998,7 +990,6 @@ impl Task {
             self.config.download.concurrent_piece_count as usize,
         ));
         for interested_piece in interested_pieces {
-            let semaphore = semaphore.clone();
             async fn download_from_source(
                 task_id: String,
                 host_id: String,
@@ -1010,7 +1001,7 @@ impl Task {
                 request_header: HeaderMap,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
-                semaphore: Arc<Semaphore>,
+                _permit: OwnedSemaphorePermit,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnouncePeerRequest>,
             ) -> ClientResult<metadata::Piece> {
@@ -1019,8 +1010,6 @@ impl Task {
                     storage.piece_id(task_id.as_str(), number)
                 );
 
-                // SAFETY: unwrap the semaphore directly
-                let _permit = semaphore.acquire().await.unwrap();
                 let metadata = piece_manager
                     .download_from_source(
                         task_id.as_str(),
@@ -1091,6 +1080,7 @@ impl Task {
                 Ok(metadata)
             }
 
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 download_from_source(
                     task.id.clone(),
@@ -1103,7 +1093,7 @@ impl Task {
                     request_header.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
-                    semaphore.clone(),
+                    permit,
                     download_progress_tx.clone(),
                     in_stream_tx.clone(),
                 )
@@ -1316,7 +1306,6 @@ impl Task {
             self.config.download.concurrent_piece_count as usize,
         ));
         for interested_piece in &interested_pieces {
-            let semaphore = semaphore.clone();
             async fn download_from_source(
                 task_id: String,
                 host_id: String,
@@ -1328,7 +1317,7 @@ impl Task {
                 request_header: HeaderMap,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
-                semaphore: Arc<Semaphore>,
+                _permit: OwnedSemaphorePermit,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
             ) -> ClientResult<metadata::Piece> {
                 info!(
@@ -1336,7 +1325,6 @@ impl Task {
                     storage.piece_id(task_id.as_str(), number)
                 );
 
-                let _permit = semaphore.acquire().await.unwrap();
                 let metadata = piece_manager
                     .download_from_source(
                         task_id.as_str(),
@@ -1388,6 +1376,7 @@ impl Task {
                 Ok(metadata)
             }
 
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 download_from_source(
                     task.id.clone(),
@@ -1400,7 +1389,7 @@ impl Task {
                     request_header.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
-                    semaphore.clone(),
+                    permit,
                     download_progress_tx.clone(),
                 )
                 .in_current_span(),
