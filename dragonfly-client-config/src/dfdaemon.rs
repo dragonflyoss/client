@@ -106,7 +106,7 @@ fn default_download_rate_limit() -> u64 {
 // default_download_piece_timeout is the default timeout for downloading a piece from source.
 #[inline]
 fn default_download_piece_timeout() -> Duration {
-    Duration::from_secs(30)
+    Duration::from_secs(300)
 }
 
 // default_download_concurrent_piece_count is the default number of concurrent pieces to download.
