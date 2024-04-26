@@ -47,7 +47,9 @@ RUN if [ "$(uname -m)" = "ppc64le" ]; then \
 
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends wget curl apache2-utils ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends wget curl \
+    bash-completion procps apache2-utils ca-certificates binutils bpfcc-tools \
+    dnsutils git iputils-ping jq vim \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/client/target/release/dfget /usr/local/bin/dfget
