@@ -154,8 +154,13 @@ impl Piece {
             }
 
             info!(
-                "calculate interested pieces by range: {:?}, {:?}",
-                range, pieces
+                "calculate interested pieces by range: {:?}, piece length: {:?}. pieces: {:?}",
+                range,
+                piece_length,
+                pieces
+                    .iter()
+                    .map(|piece| piece.number)
+                    .collect::<Vec<u32>>()
             );
             return Ok(pieces);
         }
@@ -194,8 +199,12 @@ impl Piece {
         }
 
         info!(
-            "calculate interested pieces by content length: {:?}",
+            "calculate interested pieces by content length, piece length: {:?}, pieces: {:?}",
+            piece_length,
             pieces
+                .iter()
+                .map(|piece| piece.number)
+                .collect::<Vec<u32>>()
         );
         Ok(pieces)
     }
