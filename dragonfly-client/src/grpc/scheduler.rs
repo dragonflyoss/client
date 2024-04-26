@@ -352,6 +352,9 @@ impl SchedulerClient {
             info!(
                 "available schedulers is not changed: {:?}",
                 data.available_schedulers
+                    .iter()
+                    .map(|s| s.ip.clone())
+                    .collect::<Vec<String>>()
             );
             return Ok(());
         }
@@ -396,6 +399,9 @@ impl SchedulerClient {
         info!(
             "refresh available scheduler addresses: {:?}",
             available_scheduler_addrs
+                .iter()
+                .map(|s| s.ip().to_string())
+                .collect::<Vec<String>>()
         );
         Ok(())
     }
