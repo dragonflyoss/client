@@ -231,7 +231,13 @@ impl Task {
                 return Err(err);
             }
         };
-        info!("interested pieces: {:?}", interested_pieces);
+        info!(
+            "interested pieces: {:?}",
+            interested_pieces
+                .iter()
+                .map(|p| p.number)
+                .collect::<Vec<u32>>()
+        );
 
         // Construct the pieces for the download task started response.
         let mut pieces = Vec::new();
@@ -338,6 +344,9 @@ impl Task {
         info!(
             "interested pieces after removing the finished piece: {:?}",
             interested_pieces
+                .iter()
+                .map(|p| p.number)
+                .collect::<Vec<u32>>()
         );
 
         // Check if all pieces are downloaded.
@@ -552,7 +561,14 @@ impl Task {
                 }
                 announce_peer_response::Response::NormalTaskResponse(response) => {
                     // If the task is normal, download the pieces from the remote peer.
-                    info!("normal task response: {:?}", response);
+                    info!(
+                        "normal task response: {:?}",
+                        response
+                            .candidate_parents
+                            .iter()
+                            .map(|p| p.id.clone())
+                            .collect::<Vec<String>>()
+                    );
 
                     // Send the download peer started request.
                     in_stream_tx
