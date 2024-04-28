@@ -96,6 +96,12 @@ fn default_metrics_server_port() -> u16 {
     4002
 }
 
+// default_stats_server_port is the default port of the stats server.
+#[inline]
+fn default_stats_server_port() -> u16 {
+    4004
+}
+
 // default_download_rate_limit is the default rate limit of the download speed in bps(bytes per second).
 #[inline]
 fn default_download_rate_limit() -> u64 {
@@ -851,6 +857,36 @@ pub struct Metrics {
     pub server: MetricsServer,
 }
 
+// StatsServer is the stats server configuration for dfdaemon.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct StatsServer {
+    // ip is the listen ip of the stats server.
+    pub ip: Option<IpAddr>,
+
+    // port is the port to the stats server.
+    #[serde(default = "default_stats_server_port")]
+    pub port: u16,
+}
+
+// StatsServer implements Default.
+impl Default for StatsServer {
+    fn default() -> Self {
+        Self {
+            ip: None,
+            port: default_stats_server_port(),
+        }
+    }
+}
+
+// Stats is the stats configuration for dfdaemon.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Stats {
+    // server is the stats server configuration for dfdaemon.
+    pub server: StatsServer,
+}
+
 // Tracing is the tracing configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -919,6 +955,10 @@ pub struct Config {
     #[validate]
     pub metrics: Metrics,
 
+    // stats is the stats configuration for dfdaemon.
+    #[validate]
+    pub stats: Stats,
+
     // tracing is the tracing configuration for dfdaemon.
     #[validate]
     pub tracing: Tracing,
@@ -977,6 +1017,15 @@ impl Config {
         // Convert metrics server listen ip.
         if self.metrics.server.ip.is_none() {
             self.metrics.server.ip = if self.network.enable_ipv6 {
+                Some(Ipv6Addr::UNSPECIFIED.into())
+            } else {
+                Some(Ipv4Addr::UNSPECIFIED.into())
+            }
+        }
+
+        // Convert stats server listen ip.
+        if self.stats.server.ip.is_none() {
+            self.stats.server.ip = if self.network.enable_ipv6 {
                 Some(Ipv6Addr::UNSPECIFIED.into())
             } else {
                 Some(Ipv4Addr::UNSPECIFIED.into())
