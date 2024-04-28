@@ -30,10 +30,10 @@ const DEFAULT_PROFILER_SECONDS: u64 = 10;
 // DEFAULT_PROFILER_FREQUENCY is the default frequency to start profiling.
 const DEFAULT_PROFILER_FREQUENCY: i32 = 1000;
 
-// PProfQueryParams is the query params to start profiling.
+// PProfProfileQueryParams is the query params to start profiling.
 #[derive(Deserialize, Serialize)]
 #[serde(default)]
-pub struct PProfQueryParams {
+pub struct PProfProfileQueryParams {
     // seconds is the seconds to start profiling.
     pub seconds: u64,
 
@@ -41,8 +41,8 @@ pub struct PProfQueryParams {
     pub frequency: i32,
 }
 
-// PProfQueryParams implements the default.
-impl Default for PProfQueryParams {
+// PProfProfileQueryParams implements the default.
+impl Default for PProfProfileQueryParams {
     fn default() -> Self {
         Self {
             seconds: DEFAULT_PROFILER_SECONDS,
@@ -84,16 +84,24 @@ impl Stats {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
 
-        // Create the stats route.
-        let stats_route = warp::path!("debug" / "pprof" / "profile")
+        // Create the pprof profile route.
+        let pprof_profile_route = warp::path!("debug" / "pprof" / "profile")
             .and(warp::get())
-            .and(warp::query::<PProfQueryParams>())
-            .and_then(Self::stats_handler);
+            .and(warp::query::<PProfProfileQueryParams>())
+            .and_then(Self::pprof_profile_handler);
+
+        // Create the pprof heap route.
+        let pprof_heap_route = warp::path!("debug" / "pprof" / "heap")
+            .and(warp::get())
+            .and_then(Self::pprof_heap_handler);
+
+        // Create the pprof routes.
+        let pprof_routes = pprof_profile_route.or(pprof_heap_route);
 
         // Start the stats server and wait for it to finish.
         info!("stats server listening on {}", self.addr);
         tokio::select! {
-            _ = warp::serve(stats_route).run(self.addr) => {
+            _ = warp::serve(pprof_routes).run(self.addr) => {
                 // Stats server ended.
                 info!("stats server ended");
             }
@@ -105,35 +113,29 @@ impl Stats {
     }
 
     // stats_handler handles the stats request.
-    async fn stats_handler(query_params: PProfQueryParams) -> Result<impl Reply, Rejection> {
+    async fn pprof_profile_handler(
+        query_params: PProfProfileQueryParams,
+    ) -> Result<impl Reply, Rejection> {
         info!(
             "start profiling for {} seconds with {} frequency",
             query_params.seconds, query_params.frequency
         );
-        let guard = match ProfilerGuard::new(query_params.frequency) {
-            Ok(guard) => guard,
-            Err(err) => {
-                error!("failed to create profiler guard: {}", err);
-                return Err(warp::reject::reject());
-            }
-        };
+
+        let guard = ProfilerGuard::new(query_params.frequency).map_err(|err| {
+            error!("failed to create profiler guard: {}", err);
+            warp::reject::reject()
+        })?;
 
         tokio::time::sleep(Duration::from_secs(query_params.seconds)).await;
-        let report = match guard.report().build() {
-            Ok(report) => report,
-            Err(err) => {
-                error!("failed to build profiler report: {}", err);
-                return Err(warp::reject::reject());
-            }
-        };
+        let report = guard.report().build().map_err(|err| {
+            error!("failed to build profiler report: {}", err);
+            warp::reject::reject()
+        })?;
 
-        let profile = match report.pprof() {
-            Ok(profile) => profile,
-            Err(err) => {
-                error!("failed to get pprof profile: {}", err);
-                return Err(warp::reject::reject());
-            }
-        };
+        let profile = report.pprof().map_err(|err| {
+            error!("failed to get pprof profile: {}", err);
+            warp::reject::reject()
+        })?;
 
         let mut body: Vec<u8> = Vec::new();
         profile.write_to_vec(&mut body).map_err(|err| {
@@ -142,5 +144,27 @@ impl Stats {
         })?;
 
         Ok(body)
+    }
+
+    // pprof_heap_handler handles the pprof heap request.
+    async fn pprof_heap_handler() -> Result<impl Reply, Rejection> {
+        info!("start heap profiling");
+        #[cfg(target_os = "linux")]
+        {
+            let mut prof_ctl = jemalloc_pprof::PROF_CTL.as_ref().unwrap().lock().await;
+            if !prof_ctl.activated() {
+                return Err(warp::reject::reject());
+            }
+
+            let pprof = prof_ctl.dump_pprof().map_err(|err| {
+                error!("failed to dump pprof: {}", err);
+                warp::reject::reject()
+            })?;
+
+            Ok(pprof)
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        Err::<warp::http::Error, Rejection>(warp::reject::reject())
     }
 }
