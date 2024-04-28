@@ -67,7 +67,7 @@ pub async fn prefetch_task(
             let mut out_stream = response.into_inner();
             loop {
                 match out_stream.message().await {
-                    Ok(Some(message)) => info!("prefetch piece finished {:?}", message),
+                    Ok(Some(_)) => info!("prefetch piece finished"),
                     Ok(None) => {
                         info!("prefetch task finished");
                         return;
