@@ -26,6 +26,7 @@ use dragonfly_client::health::Health;
 use dragonfly_client::metrics::Metrics;
 use dragonfly_client::proxy::Proxy;
 use dragonfly_client::shutdown;
+use dragonfly_client::stats::Stats;
 use dragonfly_client::task::Task;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::BackendFactory;
@@ -200,6 +201,13 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     );
 
+    // Initialize stats server.
+    let stats = Stats::new(
+        SocketAddr::new(config.stats.server.ip.unwrap(), config.stats.server.port),
+        shutdown.clone(),
+        shutdown_complete_tx.clone(),
+    );
+
     // Initialize proxy server.
     let proxy = Proxy::new(
         config.clone(),
@@ -270,6 +278,10 @@ async fn main() -> Result<(), anyhow::Error> {
 
         _ = tokio::spawn(async move { metrics.run().await }) => {
             info!("metrics server exited");
+        },
+
+        _ = tokio::spawn(async move { stats.run().await }) => {
+            info!("stats server exited");
         },
 
         _ = tokio::spawn(async move { proxy.run().await }) => {
