@@ -27,8 +27,8 @@ use tracing::{error, info, warn};
 // DEFAULT_DIR_NAME is the default directory name to store content.
 const DEFAULT_DIR_NAME: &str = "content";
 
-// DEFAULT_BUFFER_SIZE is the buffer size to read and write, default is 2MB.
-const DEFAULT_BUFFER_SIZE: usize = 2 * 1024 * 1024;
+// DEFAULT_BUFFER_SIZE is the buffer size to read and write, default is 32KB.
+const DEFAULT_BUFFER_SIZE: usize = 32 * 1024;
 
 // Content is the content of a piece.
 pub struct Content {
