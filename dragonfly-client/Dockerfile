@@ -1,8 +1,9 @@
 FROM rust:1.75.0 as builder
 
+WORKDIR /app/client
+
 RUN apt-get update && apt-get install -y openssl libclang-dev pkg-config protobuf-compiler
 
-WORKDIR /app/client
 COPY Cargo.toml ./
 COPY Cargo.lock ./
 
@@ -45,16 +46,21 @@ RUN if [ "$(uname -m)" = "ppc64le" ]; then \
     fi && \
     chmod +x /bin/grpc_health_probe
 
+FROM golang:1.21.1-alpine3.17 as pprof
+
+RUN go install github.com/google/pprof@latest
+
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends wget curl \
     bash-completion procps apache2-utils ca-certificates binutils bpfcc-tools \
-    dnsutils git iputils-ping jq vim linux-perf \
+    dnsutils git iputils-ping jq vim linux-perf graphviz \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/client/target/release/dfget /usr/local/bin/dfget
 COPY --from=builder /app/client/target/release/dfdaemon /usr/local/bin/dfdaemon
 COPY --from=builder /app/client/target/release/dfstore /usr/local/bin/dfstore
 COPY --from=health /bin/grpc_health_probe /bin/grpc_health_probe
+COPY --from=pprof /go/bin/pprof /bin/pprof
 
 ENTRYPOINT ["/usr/local/bin/dfdaemon"]
