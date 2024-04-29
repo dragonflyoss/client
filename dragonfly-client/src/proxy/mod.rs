@@ -65,8 +65,8 @@ use tracing::{error, info, instrument, Span};
 
 pub mod header;
 
-// DEFAULT_BUFFER_SIZE is the buffer size to read and write, default is 2MB.
-const DEFAULT_BUFFER_SIZE: usize = 2 * 1024 * 1024;
+// DEFAULT_BUFFER_SIZE is the buffer size to read and write, default is 32KB.
+const DEFAULT_BUFFER_SIZE: usize = 32 * 1024;
 
 // Response is the response of the proxy server.
 pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
