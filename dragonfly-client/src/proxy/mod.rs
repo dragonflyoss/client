@@ -65,9 +65,6 @@ use tracing::{error, info, instrument, Span};
 
 pub mod header;
 
-// DEFAULT_BUFFER_SIZE is the buffer size to read and write, default is 32KB.
-const DEFAULT_BUFFER_SIZE: usize = 32 * 1024;
-
 // Response is the response of the proxy server.
 pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
 
@@ -474,7 +471,7 @@ async fn proxy_by_dfdaemon(
         };
 
     // Make the download task request.
-    let download_task_request = match make_download_task_request(config, rule, request) {
+    let download_task_request = match make_download_task_request(config.clone(), rule, request) {
         Ok(download_task_request) => download_task_request,
         Err(err) => {
             error!("make download task request failed: {}", err);
@@ -562,6 +559,9 @@ async fn proxy_by_dfdaemon(
     *response.headers_mut() = make_response_headers(download_task_started_response.clone())?;
     *response.status_mut() = http::StatusCode::OK;
 
+    // Get the read buffer size from the config.
+    let read_buffer_size = config.proxy.read_buffer_size;
+
     // Write task data to pipe. If grpc received error message,
     // shutdown the writer.
     tokio::spawn(async move {
@@ -616,8 +616,9 @@ async fn proxy_by_dfdaemon(
                         return;
                     }
                 };
+
                 // Use a buffer to read the piece.
-                let piece_reader = BufReader::with_capacity(DEFAULT_BUFFER_SIZE, piece_reader);
+                let piece_reader = BufReader::with_capacity(read_buffer_size, piece_reader);
 
                 // Write the piece data to the pipe in order.
                 finished_piece_readers.insert(piece.number, piece_reader);

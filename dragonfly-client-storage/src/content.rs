@@ -15,10 +15,12 @@
  */
 
 use dragonfly_api::common::v2::Range;
+use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
 use sha2::{Digest, Sha256};
 use std::cmp::{max, min};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom};
 use tokio_util::io::InspectReader;
@@ -27,11 +29,11 @@ use tracing::{error, info, warn};
 // DEFAULT_DIR_NAME is the default directory name to store content.
 const DEFAULT_DIR_NAME: &str = "content";
 
-// DEFAULT_BUFFER_SIZE is the buffer size to read and write, default is 32KB.
-const DEFAULT_BUFFER_SIZE: usize = 32 * 1024;
-
 // Content is the content of a piece.
 pub struct Content {
+    // config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
     // dir is the directory to store content.
     dir: PathBuf,
 }
@@ -48,12 +50,12 @@ pub struct WritePieceResponse {
 // Content implements the content storage.
 impl Content {
     // new returns a new content.
-    pub async fn new(dir: &Path) -> Result<Content> {
+    pub async fn new(config: Arc<Config>, dir: &Path) -> Result<Content> {
         let dir = dir.join(DEFAULT_DIR_NAME);
         fs::create_dir_all(&dir).await?;
         info!("content initialized directory: {:?}", dir);
 
-        Ok(Content { dir })
+        Ok(Content { config, dir })
     }
 
     // hard_link_or_copy_task hard links or copies the task content to the destination.
@@ -144,7 +146,8 @@ impl Content {
         let range_reader = from_f.take(range.length);
 
         // Use a buffer to read the range.
-        let mut range_reader = BufReader::with_capacity(DEFAULT_BUFFER_SIZE, range_reader);
+        let mut range_reader =
+            BufReader::with_capacity(self.config.storage.read_buffer_size, range_reader);
 
         let mut to_f = OpenOptions::new()
             .create(true)
@@ -240,7 +243,7 @@ impl Content {
         let task_path = self.dir.join(task_id);
 
         // Use a buffer to read the piece.
-        let reader = BufReader::with_capacity(DEFAULT_BUFFER_SIZE, reader);
+        let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
 
         // Sha256 is used to calculate the hash of the piece.
         let mut hasher = Sha256::new();
