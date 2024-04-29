@@ -145,6 +145,18 @@ fn default_dynconfig_refresh_interval() -> Duration {
     Duration::from_secs(300)
 }
 
+// default_storage_write_buffer_size is the default buffer size for writing piece to disk, default is 16KB.
+#[inline]
+fn default_storage_write_buffer_size() -> usize {
+    16 * 1024
+}
+
+// default_storage_read_buffer_size is the default buffer size for reading piece from disk, default is 16KB.
+#[inline]
+fn default_storage_read_buffer_size() -> usize {
+    16 * 1024
+}
+
 // default_seed_peer_cluster_id is the default cluster id of seed peer.
 #[inline]
 fn default_seed_peer_cluster_id() -> u64 {
@@ -185,6 +197,12 @@ fn default_gc_policy_dist_low_threshold_percent() -> u8 {
 #[inline]
 pub fn default_proxy_server_port() -> u16 {
     4001
+}
+
+// default_proxy_read_buffer_size is the default buffer size for reading piece, default is 16KB.
+#[inline]
+pub fn default_proxy_read_buffer_size() -> usize {
+    16 * 1024
 }
 
 // default_s3_filtered_query_params is the default filtered query params with s3 protocol to generate the task id.
@@ -578,6 +596,14 @@ pub struct Storage {
     // dir is the directory to store task's metadata and content.
     #[serde(default = "crate::default_storage_dir")]
     pub dir: PathBuf,
+
+    // write_buffer_size is the buffer size for writing piece to disk, default is 16KB.
+    #[serde(default = "default_storage_write_buffer_size")]
+    pub write_buffer_size: usize,
+
+    // read_buffer_size is the buffer size for reading piece from disk, default is 16KB.
+    #[serde(default = "default_storage_read_buffer_size")]
+    pub read_buffer_size: usize,
 }
 
 // Storage implements Default.
@@ -585,6 +611,8 @@ impl Default for Storage {
     fn default() -> Self {
         Storage {
             dir: crate::default_storage_dir(),
+            write_buffer_size: default_storage_write_buffer_size(),
+            read_buffer_size: default_storage_read_buffer_size(),
         }
     }
 }
@@ -761,7 +789,7 @@ impl Default for RegistryMirror {
 }
 
 // Proxy is the proxy configuration for dfdaemon.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Proxy {
     // server is the proxy server configuration for dfdaemon.
@@ -779,6 +807,24 @@ pub struct Proxy {
 
     // prefetch pre-downloads full of the task when download with range request.
     pub prefetch: bool,
+
+    // read_buffer_size is the buffer size for reading piece from disk, default is 16KB.
+    #[serde(default = "default_proxy_read_buffer_size")]
+    pub read_buffer_size: usize,
+}
+
+// Proxy implements Default.
+impl Default for Proxy {
+    fn default() -> Self {
+        Self {
+            server: ProxyServer::default(),
+            rules: None,
+            registry_mirror: RegistryMirror::default(),
+            disable_back_to_source: false,
+            prefetch: false,
+            read_buffer_size: default_proxy_read_buffer_size(),
+        }
+    }
 }
 
 // Security is the security configuration for dfdaemon.
