@@ -54,7 +54,7 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends wget curl \
     bash-completion procps apache2-utils ca-certificates binutils bpfcc-tools \
-    dnsutils git iputils-ping jq vim linux-perf graphviz \
+    dnsutils git iputils-ping jq vim linux-perf llvm graphviz \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/client/target/release/dfget /usr/local/bin/dfget
