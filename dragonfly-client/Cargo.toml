@@ -61,7 +61,7 @@ opentelemetry = { version = "0.18.0", default-features = false, features = ["tra
 opentelemetry-jaeger = { version = "0.17.0", features = ["rt-tokio"] }
 pprof = { version = "0.13", features = ["flamegraph", "protobuf-codec"] }
 lazy_static = "1.4"
-prometheus = "0.13.3"
+prometheus = "0.13.4"
 tonic-health = "0.9.2"
 tonic-reflection = "0.9.2"
 bytes = "1.4"
