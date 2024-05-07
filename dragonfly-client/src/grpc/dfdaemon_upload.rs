@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 
+use crate::metrics::{
+    collect_download_task_failure_metrics, collect_download_task_finished_metrics,
+    collect_download_task_started_metrics, collect_upload_piece_failure_metrics,
+    collect_upload_piece_finished_metrics, collect_upload_piece_started_metrics,
+};
 use crate::shutdown;
 use crate::task;
 use dragonfly_api::common::v2::Piece;
@@ -35,7 +40,7 @@ use dragonfly_client_util::http::{
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -282,6 +287,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 Status::not_found("piece metadata not found")
             })?;
 
+        // Collect upload piece started metrics.
+        collect_upload_piece_started_metrics();
+
         // Get the piece content from the local storage.
         let mut reader = self
             .task
@@ -295,6 +303,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             )
             .await
             .map_err(|err| {
+                // Collect upload piece failure metrics.
+                collect_upload_piece_failure_metrics();
+
                 error!("read piece content from local storage: {}", err);
                 Status::internal(err.to_string())
             })?;
@@ -302,9 +313,15 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Read the content of the piece.
         let mut content = Vec::new();
         reader.read_to_end(&mut content).await.map_err(|err| {
+            // Collect upload piece failure metrics.
+            collect_upload_piece_failure_metrics();
+
             error!("read piece content: {}", err);
             Status::internal(err.to_string())
         })?;
+
+        // Collect upload piece finished metrics.
+        collect_upload_piece_finished_metrics();
 
         // Return the piece.
         Ok(Response::new(DownloadPieceResponse {
@@ -325,13 +342,16 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     // DownloadTaskStream is the stream of the download task response.
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
-    // download_task d
+    // download_task downloads the task.
     #[instrument(skip_all, fields(host_id, task_id, peer_id))]
     async fn download_task(
         &self,
         request: Request<DownloadTaskRequest>,
     ) -> Result<Response<Self::DownloadTaskStream>, Status> {
         info!("download task in upload server");
+
+        // Record the start time.
+        let start_time = Instant::now();
 
         // Clone the request.
         let request = request.into_inner();
@@ -400,33 +420,90 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 error!("download started failed: {}", err);
                 return Err(Status::internal(err.to_string()));
             }
-            Ok(task) => task,
+            Ok(task) => {
+                // Collect download task started metrics.
+                collect_download_task_started_metrics(
+                    download.r#type.to_string().as_str(),
+                    download.tag.clone().unwrap_or_default().as_str(),
+                    download.application.clone().unwrap_or_default().as_str(),
+                    download.priority.to_string().as_str(),
+                );
+
+                task
+            }
         };
+
+        // Clone the task.
+        let task_manager = self.task.clone();
 
         // Download's range priority is higher than the request header's range.
         // If download protocol is http, use the range of the request header.
         // If download protocol is not http, use the range of the download.
         if download.range.is_none() {
-            let content_length = task.content_length().ok_or_else(|| {
+            let Some(content_length) = task.content_length() else {
+                // Download task failed.
+                task_manager
+                    .download_failed(task_id.as_str())
+                    .await
+                    .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+                // Collect download task failure metrics.
+                collect_download_task_failure_metrics(
+                    download.r#type.to_string().as_str(),
+                    download.tag.clone().unwrap_or_default().as_str(),
+                    download.application.clone().unwrap_or_default().as_str(),
+                    download.priority.to_string().as_str(),
+                );
+
                 error!("missing content length in the response");
-                Status::internal("missing content length in the response")
-            })?;
+                return Err(Status::internal("missing content length in the response"));
+            };
 
             // Convert the header.
-            let request_header =
-                hashmap_to_reqwest_headermap(&download.request_header).map_err(|e| {
+            let request_header = match hashmap_to_reqwest_headermap(&download.request_header) {
+                Ok(header) => header,
+                Err(e) => {
+                    // Download task failed.
+                    task_manager
+                        .download_failed(task_id.as_str())
+                        .await
+                        .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+                    // Collect download task failure metrics.
+                    collect_download_task_failure_metrics(
+                        download.r#type.to_string().as_str(),
+                        download.tag.clone().unwrap_or_default().as_str(),
+                        download.application.clone().unwrap_or_default().as_str(),
+                        download.priority.to_string().as_str(),
+                    );
+
                     error!("convert header: {}", e);
-                    Status::invalid_argument(e.to_string())
-                })?;
+                    return Err(Status::invalid_argument(e.to_string()));
+                }
+            };
 
-            download.range = get_range(&request_header, content_length).map_err(|err| {
-                error!("get range failed: {}", err);
-                Status::failed_precondition(err.to_string())
-            })?;
+            download.range = match get_range(&request_header, content_length) {
+                Ok(range) => range,
+                Err(e) => {
+                    // Download task failed.
+                    task_manager
+                        .download_failed(task_id.as_str())
+                        .await
+                        .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+                    // Collect download task failure metrics.
+                    collect_download_task_failure_metrics(
+                        download.r#type.to_string().as_str(),
+                        download.tag.clone().unwrap_or_default().as_str(),
+                        download.application.clone().unwrap_or_default().as_str(),
+                        download.priority.to_string().as_str(),
+                    );
+
+                    error!("get range failed: {}", e);
+                    return Err(Status::failed_precondition(e.to_string()));
+                }
+            };
         }
-
-        // Clone the task.
-        let task_manager = self.task.clone();
 
         // Initialize stream channel.
         let download_clone = download.clone();
@@ -445,6 +522,21 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     .await
                 {
                     Ok(_) => {
+                        // Collect download task finished metrics.
+                        collect_download_task_finished_metrics(
+                            download_clone.r#type.to_string().as_str(),
+                            download_clone.tag.clone().unwrap_or_default().as_str(),
+                            download_clone
+                                .application
+                                .clone()
+                                .unwrap_or_default()
+                                .as_str(),
+                            download_clone.priority.to_string().as_str(),
+                            task_clone.content_length().unwrap_or_default(),
+                            download_clone.range.clone(),
+                            start_time.elapsed(),
+                        );
+
                         // Download task succeeded.
                         info!("download task succeeded");
                         if download_clone.range.is_none() {
@@ -483,6 +575,18 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             .unwrap_or_else(|err| {
                                 error!("download task failed: {}", err);
                             });
+
+                        // Collect download task failure metrics.
+                        collect_download_task_failure_metrics(
+                            download_clone.r#type.to_string().as_str(),
+                            download_clone.tag.clone().unwrap_or_default().as_str(),
+                            download_clone
+                                .application
+                                .clone()
+                                .unwrap_or_default()
+                                .as_str(),
+                            download_clone.priority.to_string().as_str(),
+                        );
 
                         error!("download failed: {}", e);
                     }
