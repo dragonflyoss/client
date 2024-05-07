@@ -34,14 +34,18 @@ use tokio::task::JoinSet;
 use tonic::transport::Channel;
 use tracing::{error, info, instrument, Instrument};
 
+// VNode is the virtual node of the hashring.
 #[derive(Debug, Copy, Clone, Hash, PartialEq)]
 struct VNode {
+    // addr is the address of the virtual node.
     addr: SocketAddr,
 }
 
-impl ToString for VNode {
-    fn to_string(&self) -> String {
-        format!("{}", self.addr)
+// VNode implements the Display trait.
+impl std::fmt::Display for VNode {
+    // fmt formats the virtual node.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.addr)
     }
 }
 
@@ -305,7 +309,7 @@ impl SchedulerClient {
             .ok_or_else(|| Error::HashRing(key.clone()))?;
         info!("{} picked {:?}", key, addr);
 
-        let channel = match Channel::from_shared(format!("http://{}", addr.to_string()))
+        let channel = match Channel::from_shared(format!("http://{}", addr))
             .map_err(|_| Error::InvalidURI(addr.to_string()))?
             .connect_timeout(super::CONNECT_TIMEOUT)
             .connect()
