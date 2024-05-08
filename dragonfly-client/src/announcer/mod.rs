@@ -18,7 +18,7 @@ use crate::grpc::{manager::ManagerClient, scheduler::SchedulerClient};
 use crate::shutdown;
 use dragonfly_api::common::v2::{Build, Cpu, Host, Memory, Network};
 use dragonfly_api::manager::v2::{DeleteSeedPeerRequest, SourceType, UpdateSeedPeerRequest};
-use dragonfly_api::scheduler::v2::AnnounceHostRequest;
+use dragonfly_api::scheduler::v2::{AnnounceHostRequest, LeaveHostRequest};
 use dragonfly_client_config::{
     dfdaemon::{Config, HostType},
     CARGO_PKG_RUSTC_VERSION, CARGO_PKG_VERSION, GIT_HASH,
@@ -175,6 +175,12 @@ impl SchedulerAnnouncer {
                 }
                 _ = shutdown.recv() => {
                     // Announce to scheduler shutting down with signals.
+                    if let Err(err) = self.scheduler_client.leave_host(LeaveHostRequest{
+                        id: self.host_id.clone(),
+                    }).await {
+                        error!("leave host from scheduler failed: {}", err);
+                    }
+
                     info!("announce to scheduler shutting down");
                     return
                 }
