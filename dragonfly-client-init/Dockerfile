@@ -8,6 +8,7 @@ COPY Cargo.lock ./
 
 COPY dragonfly-client/Cargo.toml ./dragonfly-client/Cargo.toml
 COPY dragonfly-client/src ./dragonfly-client/src
+COPY dragonfly-client/build.rs ./dragonfly-client/build.rs
 
 COPY dragonfly-client-core/Cargo.toml ./dragonfly-client-core/Cargo.toml
 COPY dragonfly-client-core/src ./dragonfly-client-core/src
