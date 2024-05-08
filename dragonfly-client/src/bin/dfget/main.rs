@@ -23,7 +23,7 @@ use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_config::{self, default_piece_length, dfdaemon, dfget};
 use dragonfly_client_core::{
-    error::{ErrorType, OrErr},
+    error::{ErrorType, ExternalError, OrErr},
     Error, Result,
 };
 use dragonfly_client_util::http::header_vec_to_hashmap;
@@ -35,7 +35,7 @@ use std::time::Duration;
 use std::{cmp::min, fmt::Write};
 use termion::{color, style};
 use tokio::process::{Child, Command};
-use tracing::{debug, error, info, Level};
+use tracing::{error, info, Level};
 use url::Url;
 
 // DEFAULT_DFDAEMON_CHECK_HEALTH_INTERVAL is the default interval of checking dfdaemon's health.
@@ -450,7 +450,7 @@ async fn get_or_create_dfdaemon_download_client(
     // Get dfdaemon download client and check its health.
     match get_dfdaemon_download_client(endpoint.clone()).await {
         Ok(dfdaemon_download_client) => return Ok(dfdaemon_download_client),
-        Err(err) => debug!("get dfdaemon download client failed: {}", err),
+        Err(err) => error!("get dfdaemon download client failed: {}", err),
     }
 
     // Create a lock file to prevent multiple dfdaemon processes from being created.
@@ -460,11 +460,18 @@ async fn get_or_create_dfdaemon_download_client(
     // Check dfdaemon download client again.
     match get_dfdaemon_download_client(endpoint.clone()).await {
         Ok(dfdaemon_download_client) => return Ok(dfdaemon_download_client),
-        Err(err) => debug!("get dfdaemon download client failed: {}", err),
+        Err(err) => error!("get dfdaemon download client failed: {}", err),
     }
 
     // Spawn a dfdaemon process.
-    let child = spawn_dfdaemon(config_path, log_dir, log_level, log_max_files)?;
+    let child = spawn_dfdaemon(config_path, log_dir, log_level, log_max_files).map_err(|err| {
+        error!("spawn dfdaemon process failed: {}", err);
+        ExternalError::new(ErrorType::ConfigError).with_context(format!(
+            "Dfdaemon's unix socket is not exist in path: {:?}. dfget will spawn a dfdaemon process automatically, but spawn failed: {}. If you need to use the existing dfdaemon, please set the correct path of the dfdaemon's unix socket with --endpoint option.",
+            endpoint.to_string_lossy(),
+            err
+        ))
+    })?;
     info!("spawn dfdaemon process: {:?}", child);
 
     // Initialize the timeout of checking dfdaemon's health.
@@ -481,7 +488,7 @@ async fn get_or_create_dfdaemon_download_client(
                         f.unlock()?;
                         return Ok(dfdaemon_download_client);
                     }
-                    Err(err) => debug!("get dfdaemon download client failed: {}", err),
+                    Err(err) => error!("get dfdaemon download client failed: {}", err),
                 }
             }
             _ = &mut check_health_timeout => {
