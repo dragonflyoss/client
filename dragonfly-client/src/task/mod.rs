@@ -108,11 +108,12 @@ impl Task {
     pub async fn download_started(
         &self,
         id: &str,
+        peer_id: &str,
         download: Download,
     ) -> ClientResult<metadata::Task> {
         let task = self
             .storage
-            .download_task_started(id, download.piece_length, None)?;
+            .download_task_started(id, peer_id, download.piece_length, None)?;
 
         // Handle the request header.
         let mut request_header =
@@ -154,6 +155,7 @@ impl Task {
 
             return self.storage.download_task_started(
                 id,
+                peer_id,
                 download.piece_length,
                 Some(http_header),
             );

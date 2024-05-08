@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
+use crate::grpc::scheduler::SchedulerClient;
 use crate::shutdown;
+use dragonfly_api::scheduler::v2::LeavePeerRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
-use dragonfly_client_storage::Storage;
+use dragonfly_client_storage::{metadata, Storage};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
@@ -27,8 +29,14 @@ pub struct GC {
     // config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
+    // host_id is the id of the host.
+    host_id: String,
+
     // storage is the local storage.
     storage: Arc<Storage>,
+
+    // scheduler_client is the grpc client of the scheduler.
+    scheduler_client: Arc<SchedulerClient>,
 
     // shutdown is used to shutdown the garbage collector.
     shutdown: shutdown::Shutdown,
@@ -41,13 +49,17 @@ impl GC {
     // new creates a new GC.
     pub fn new(
         config: Arc<Config>,
+        host_id: String,
         storage: Arc<Storage>,
+        scheduler_client: Arc<SchedulerClient>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
         GC {
             config,
+            host_id,
             storage,
+            scheduler_client,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -95,6 +107,9 @@ impl GC {
                         info!("failed to evict task {}: {}", task.id, err);
                     });
                 info!("evict task {}", task.id);
+
+                self.leave_task_from_scheduler(task.clone()).await;
+                info!("leave task {} from scheduler", task.id);
             }
         }
 
@@ -169,9 +184,31 @@ impl GC {
             // Update the evicted space.
             evicted_space += task_space;
             info!("evict task {} size {}", task.id, task_space);
+
+            self.leave_task_from_scheduler(task.clone()).await;
+            info!("leave task {} from scheduler", task.id);
         }
 
         info!("evict total size {}", evicted_space);
         Ok(())
+    }
+
+    // leave_task_from_scheduler leaves the task from the scheduler.
+    async fn leave_task_from_scheduler(&self, task: metadata::Task) {
+        for peer_id in task.peer_ids {
+            self.scheduler_client
+                .leave_peer(
+                    task.id.as_str(),
+                    LeavePeerRequest {
+                        host_id: self.host_id.clone(),
+                        task_id: task.id.clone(),
+                        peer_id: peer_id.clone(),
+                    },
+                )
+                .await
+                .unwrap_or_else(|err| {
+                    error!("failed to leave peer {}: {}", peer_id, err);
+                });
+        }
     }
 }

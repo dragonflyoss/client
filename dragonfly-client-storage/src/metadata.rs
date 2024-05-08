@@ -19,7 +19,7 @@ use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::http::reqwest_headermap_to_hashmap;
 use reqwest::header::{self, HeaderMap};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 use tracing::error;
@@ -34,6 +34,8 @@ use crate::storage_engine::{
 pub struct Task {
     // id is the task id.
     pub id: String,
+
+    pub peer_ids: HashSet<String>,
 
     // piece_length is the length of the piece.
     pub piece_length: u64,
@@ -244,6 +246,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     pub fn download_task_started(
         &self,
         id: &str,
+        peer_id: &str,
         piece_length: u64,
         response_header: Option<HeaderMap>,
     ) -> Result<Task> {
@@ -260,6 +263,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
             |mut task: Task| {
                 // If the task exists, update the task metadata.
                 task.updated_at = Utc::now().naive_utc();
+                task.peer_ids.insert(peer_id.to_string());
 
                 // If the task has the response header, the response header
                 // will not be covered.
@@ -272,6 +276,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
             || {
                 Ok(Task {
                     id: id.to_string(),
+                    peer_ids: vec![peer_id.to_string()].into_iter().collect(),
                     piece_length,
                     response_header: get_response_header(),
                     updated_at: Utc::now().naive_utc(),
@@ -535,20 +540,24 @@ mod tests {
         let metadata = Metadata::new(dir.path()).unwrap();
 
         let task_id = "task1";
+        let peer_id = "peer1";
 
-        // Test download_task_started
-        metadata.download_task_started(task_id, 1024, None).unwrap();
-        let task = metadata
+        // Test download_task_started.
+        metadata
+            .download_task_started(task_id, peer_id, 1024, None)
+            .unwrap();
+        let mut task = metadata
             .get_task(task_id)
             .unwrap()
             .expect("task should exist after download_task_started");
         assert_eq!(task.id, task_id);
+        assert_eq!(task.peer_ids.take(peer_id), Some(peer_id.to_string()));
         assert_eq!(task.piece_length, 1024);
         assert!(task.response_header.is_empty());
         assert_eq!(task.uploading_count, 0);
         assert_eq!(task.uploaded_count, 0);
 
-        // Test download_task_finished
+        // Test download_task_finished.
         metadata.download_task_finished(task_id).unwrap();
         let task = metadata.get_task(task_id).unwrap().unwrap();
         assert!(
@@ -556,7 +565,7 @@ mod tests {
             "task should be finished after download_task_finished"
         );
 
-        // Test upload_task_started
+        // Test upload_task_started.
         metadata.upload_task_started(task_id).unwrap();
         let task = metadata.get_task(task_id).unwrap().unwrap();
         assert_eq!(
@@ -564,7 +573,7 @@ mod tests {
             "uploading_count should be increased by 1 after upload_task_started"
         );
 
-        // Test upload_task_finished
+        // Test upload_task_finished.
         metadata.upload_task_finished(task_id).unwrap();
         let task = metadata.get_task(task_id).unwrap().unwrap();
         assert_eq!(
@@ -576,7 +585,7 @@ mod tests {
             "uploaded_count should be increased by 1 after upload_task_finished"
         );
 
-        // Test upload_task_failed
+        // Test upload_task_failed.
         let task = metadata.upload_task_started(task_id).unwrap();
         assert_eq!(task.uploading_count, 1);
         let task = metadata.upload_task_failed(task_id).unwrap();
@@ -589,13 +598,17 @@ mod tests {
             "uploaded_count should not be changed after upload_task_failed"
         );
 
-        // Test get_tasks
+        // Test get_tasks.
         let task_id = "task2";
-        metadata.download_task_started(task_id, 1024, None).unwrap();
+        let peer_id = "peer2";
+
+        metadata
+            .download_task_started(task_id, peer_id, 1024, None)
+            .unwrap();
         let tasks = metadata.get_tasks().unwrap();
         assert_eq!(tasks.len(), 2, "should get 2 tasks in total");
 
-        // Test delete_task
+        // Test delete_task.
         metadata.delete_task(task_id).unwrap();
         let task = metadata.get_task(task_id).unwrap();
         assert!(task.is_none(), "task should be deleted after delete_task");
@@ -607,7 +620,7 @@ mod tests {
         let metadata = Metadata::new(dir.path()).unwrap();
         let task_id = "task3";
 
-        // Test download_piece_started
+        // Test download_piece_started.
         metadata.download_piece_started(task_id, 1).unwrap();
         let piece = metadata.get_piece(task_id, 1).unwrap().unwrap();
         assert_eq!(
@@ -615,7 +628,7 @@ mod tests {
             "should get newly created piece with number specified"
         );
 
-        // Test download_piece_finished
+        // Test download_piece_finished.
         metadata
             .download_piece_finished(task_id, 1, 0, 1024, "digest1", None)
             .unwrap();
@@ -629,13 +642,13 @@ mod tests {
             "piece should be updated after download_piece_finished"
         );
 
-        // Test get_pieces
+        // Test get_pieces.
         metadata.download_piece_started(task_id, 2).unwrap();
         metadata.download_piece_started(task_id, 3).unwrap();
         let pieces = metadata.get_pieces(task_id).unwrap();
         assert_eq!(pieces.len(), 3, "should get 3 pieces in total");
 
-        // Test download_piece_failed
+        // Test download_piece_failed.
         metadata.download_piece_failed(task_id, 2).unwrap();
         let piece = metadata.get_piece(task_id, 2).unwrap();
         assert!(
@@ -643,7 +656,7 @@ mod tests {
             "piece should be deleted after download_piece_failed"
         );
 
-        // Test upload_piece_started
+        // Test upload_piece_started.
         metadata.upload_piece_started(task_id, 3).unwrap();
         let piece = metadata.get_piece(task_id, 3).unwrap().unwrap();
         assert_eq!(
@@ -651,7 +664,7 @@ mod tests {
             "piece should be updated after upload_piece_started"
         );
 
-        // Test upload_piece_finished
+        // Test upload_piece_finished.
         metadata.upload_piece_finished(task_id, 3).unwrap();
         let piece = metadata.get_piece(task_id, 3).unwrap().unwrap();
         assert_eq!(
@@ -663,7 +676,7 @@ mod tests {
             "piece should be updated after upload_piece_finished"
         );
 
-        // Test upload_piece_failed
+        // Test upload_piece_failed.
         metadata.upload_piece_started(task_id, 3).unwrap();
         metadata.upload_piece_failed(task_id, 3).unwrap();
         let piece = metadata.get_piece(task_id, 3).unwrap().unwrap();
@@ -672,7 +685,7 @@ mod tests {
             "piece should be updated after upload_piece_failed"
         );
 
-        // Test delete_pieces
+        // Test delete_pieces.
         metadata.delete_pieces(task_id).unwrap();
         let pieces = metadata.get_pieces(task_id).unwrap();
         assert!(pieces.is_empty(), "should get 0 pieces after delete_pieces");

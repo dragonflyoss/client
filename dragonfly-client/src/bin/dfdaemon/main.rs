@@ -266,7 +266,9 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize garbage collector.
     let gc = GC::new(
         config.clone(),
+        id_generator.host_id(),
         storage.clone(),
+        scheduler_client.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
