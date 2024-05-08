@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+use crate::metrics::{
+    collect_prefetch_task_failure_metrics, collect_prefetch_task_started_metrics,
+};
 use dragonfly_api::dfdaemon::v2::DownloadTaskRequest;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use std::path::PathBuf;
@@ -45,21 +48,43 @@ pub async fn prefetch_task(
 
     // Make the prefetch request.
     let mut request = request.into_inner();
-
     let Some(download) = request.download.as_mut() else {
         return Err(ClientError::InvalidParameter);
     };
+
     // Remove the range flag for download full task.
     download.range = None;
+
     // Remove the prefetch flag for prevent the infinite loop.
     download.prefetch = false;
+
     // Remove the range header for download full task.
     download
         .request_header
         .remove(reqwest::header::RANGE.as_str());
 
+    // Get the fields from the download task.
+    let task_type = download.r#type.to_string();
+    let tag = download.tag.clone();
+    let application = download.application.clone();
+    let priority = download.priority;
+
     // Download task by dfdaemon download client.
-    let response = dfdaemon_download_client.download_task(request).await?;
+    let response = dfdaemon_download_client
+        .download_task(request)
+        .await
+        .map_err(|err| {
+            error!("prefetch task failed: {}", err);
+            err
+        })?;
+
+    // Collect the prefetch task started metrics.
+    collect_prefetch_task_started_metrics(
+        task_type.as_str(),
+        tag.clone().unwrap_or_default().as_str(),
+        application.clone().unwrap_or_default().as_str(),
+        priority.to_string().as_str(),
+    );
 
     // Spawn to handle the download task.
     tokio::spawn(
@@ -73,6 +98,14 @@ pub async fn prefetch_task(
                         return;
                     }
                     Err(err) => {
+                        // Collect the prefetch task failure metrics.
+                        collect_prefetch_task_failure_metrics(
+                            task_type.as_str(),
+                            tag.clone().unwrap_or_default().as_str(),
+                            application.clone().unwrap_or_default().as_str(),
+                            priority.to_string().as_str(),
+                        );
+
                         error!("prefetch piece failed: {}", err);
                         return;
                     }

@@ -15,8 +15,11 @@
  */
 
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
+use crate::metrics::{
+    collect_download_piece_traffic_metrics, collect_upload_piece_traffic_metrics,
+};
 use chrono::Utc;
-use dragonfly_api::common::v2::{Peer, Range};
+use dragonfly_api::common::v2::{Peer, Range, TrafficType};
 use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
 use dragonfly_client_backend::{BackendFactory, GetRequest};
 use dragonfly_client_config::dfdaemon::Config;
@@ -241,7 +244,13 @@ impl Piece {
         }
 
         // Upload the piece content.
-        self.storage.upload_piece(task_id, number, range).await
+        self.storage
+            .upload_piece(task_id, number, range)
+            .await
+            .map(|reader| {
+                collect_upload_piece_traffic_metrics(length);
+                reader
+            })
     }
 
     // download_from_local_peer_into_async_read downloads a single piece from a local peer.
@@ -259,7 +268,13 @@ impl Piece {
         }
 
         // Upload the piece content.
-        self.storage.upload_piece(task_id, number, range).await
+        self.storage
+            .upload_piece(task_id, number, range)
+            .await
+            .map(|reader| {
+                collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
+                reader
+            })
     }
 
     // download_from_remote_peer downloads a single piece from a remote peer.
@@ -348,10 +363,16 @@ impl Piece {
                 err
             })?;
 
-        self.storage.get_piece(task_id, number)?.ok_or_else(|| {
-            error!("piece not found");
-            Error::PieceNotFound(number.to_string())
-        })
+        self.storage
+            .get_piece(task_id, number)?
+            .ok_or_else(|| {
+                error!("piece not found");
+                Error::PieceNotFound(number.to_string())
+            })
+            .map(|piece| {
+                collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
+                piece
+            })
     }
 
     // download_from_source downloads a single piece from the source.
@@ -440,10 +461,17 @@ impl Piece {
                     err
                 })?;
 
-            return self.storage.get_piece(task_id, number)?.ok_or_else(|| {
-                error!("piece not found");
-                Error::PieceNotFound(number.to_string())
-            });
+            return self
+                .storage
+                .get_piece(task_id, number)?
+                .ok_or_else(|| {
+                    error!("piece not found");
+                    Error::PieceNotFound(number.to_string())
+                })
+                .map(|piece| {
+                    collect_download_piece_traffic_metrics(&TrafficType::BackToSource, length);
+                    piece
+                });
         }
 
         error!("backend returns invalid response");

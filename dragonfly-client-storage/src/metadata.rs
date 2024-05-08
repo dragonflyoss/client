@@ -260,6 +260,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
             |mut task: Task| {
                 // If the task exists, update the task metadata.
                 task.updated_at = Utc::now().naive_utc();
+
                 // If the task has the response header, the response header
                 // will not be covered.
                 if task.response_header.is_empty() {

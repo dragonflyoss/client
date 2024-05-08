@@ -15,8 +15,7 @@
  */
 
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
-use dragonfly_api::common::v2::Range;
-use dragonfly_api::common::v2::{Download, Peer, Piece, TrafficType};
+use dragonfly_api::common::v2::{Download, Peer, Piece, Range, TrafficType};
 use dragonfly_api::dfdaemon::{
     self,
     v2::{download_task_response, DownloadTaskResponse},
