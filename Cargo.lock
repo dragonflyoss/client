@@ -934,7 +934,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "anyhow",
  "bytes",
@@ -997,7 +997,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "dragonfly-client-core",
  "futures",
@@ -1015,7 +1015,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "dragonfly-client-core",
  "home",
@@ -1034,7 +1034,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "libloading",
  "reqwest",
@@ -1045,7 +1045,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "anyhow",
  "clap",
@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "base16ct",
  "chrono",
@@ -1084,7 +1084,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-core",
@@ -1542,7 +1542,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "dragonfly-client-backend",
  "dragonfly-client-core",
