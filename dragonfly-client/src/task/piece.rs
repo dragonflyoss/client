@@ -268,13 +268,13 @@ impl Piece {
         }
 
         // Upload the piece content.
-        self.storage
-            .upload_piece(task_id, number, range)
-            .await
-            .map(|reader| {
-                collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
-                reader
-            })
+        self.storage.upload_piece(task_id, number, range).await
+    }
+
+    // download_from_local_peer downloads a single piece from a local peer. Fake the download piece
+    // from the local peer, just collect the metrics.
+    pub fn download_from_local_peer(&self, length: u64) {
+        collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
     }
 
     // download_from_remote_peer downloads a single piece from a remote peer.

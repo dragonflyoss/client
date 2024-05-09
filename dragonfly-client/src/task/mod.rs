@@ -1254,6 +1254,8 @@ impl Task {
                 }
             };
 
+            // Fake the download from the local peer.
+            self.piece.download_from_local_peer(piece.length);
             info!(
                 "finished piece {} from local peer",
                 self.storage.piece_id(task.id.as_str(), piece.number)
