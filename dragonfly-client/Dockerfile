@@ -53,8 +53,8 @@ RUN go install github.com/google/pprof@latest
 
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl bash-completion \
-    procps apache2-utils ca-certificates binutils bpfcc-tools \
+RUN apt-get update && apt-get install -y --no-install-recommends wget curl \
+    bash-completion procps apache2-utils ca-certificates binutils bpfcc-tools \
     dnsutils iputils-ping vim linux-perf llvm graphviz \
     && rm -rf /var/lib/apt/lists/*
 
