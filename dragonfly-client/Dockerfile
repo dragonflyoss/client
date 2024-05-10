@@ -2,7 +2,7 @@ FROM rust:1.75.0 as builder
 
 WORKDIR /app/client
 
-RUN apt-get update && apt-get install -y openssl libclang-dev pkg-config protobuf-compiler
+RUN apt-get update && apt-get install -y openssl libclang-dev pkg-config protobuf-compiler git
 
 COPY Cargo.toml ./
 COPY Cargo.lock ./
