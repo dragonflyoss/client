@@ -145,7 +145,7 @@ impl Storage {
         reader: &mut R,
     ) -> Result<metadata::Piece> {
         let response = self.content.write_piece(task_id, offset, reader).await?;
-        let digest = Digest::new(Algorithm::Sha256, response.hash);
+        let digest = Digest::new(Algorithm::Blake3, response.hash);
 
         self.metadata.download_piece_finished(
             task_id,
@@ -169,7 +169,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self.content.write_piece(task_id, offset, reader).await?;
         let length = response.length;
-        let digest = Digest::new(Algorithm::Sha256, response.hash);
+        let digest = Digest::new(Algorithm::Blake3, response.hash);
 
         // Check the digest of the piece.
         if expected_digest != digest.to_string() {

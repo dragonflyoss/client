@@ -23,6 +23,9 @@ pub const SEPARATOR: &str = ":";
 // Algorithm is a enum of the algorithm that is used to generate digest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Algorithm {
+    // Blake3 is blake3 algorithm for generate digest.
+    Blake3,
+
     // Sha256 is sha256 algorithm for generate digest.
     Sha256,
 
@@ -35,6 +38,7 @@ impl fmt::Display for Algorithm {
     // fmt formats the value using the given formatter.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Algorithm::Blake3 => write!(f, "blake3"),
             Algorithm::Sha256 => write!(f, "sha256"),
             Algorithm::Sha512 => write!(f, "sha512"),
         }
@@ -48,6 +52,7 @@ impl FromStr for Algorithm {
     // from_str parses a algorithm string.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "blake3" => Ok(Algorithm::Blake3),
             "sha256" => Ok(Algorithm::Sha256),
             "sha512" => Ok(Algorithm::Sha512),
             _ => Err(format!("invalid digest algorithm: {}", s)),
@@ -102,6 +107,7 @@ impl FromStr for Digest {
         }
 
         let algorithm = match parts[0] {
+            "blake3" => Algorithm::Blake3,
             "sha256" => Algorithm::Sha256,
             "sha512" => Algorithm::Sha512,
             _ => return Err(format!("invalid digest algorithm: {}", parts[0])),
