@@ -18,16 +18,26 @@ use std::env;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+// git_commit_hash returns the short hash of the current git commit.
+fn git_commit_hash() -> String {
+    if let Ok(output) = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+    {
+        if let Ok(commit) = String::from_utf8(output.stdout) {
+            return commit.trim().to_string();
+        }
+    }
+
+    "unknown".to_string()
+}
+
 fn main() {
     // Set the environment variables for the cargo package version.
     println!("cargo:rustc-env=GIT_VERSION={}", env!("CARGO_PKG_VERSION"));
 
     // Set the environment variables for the git commit.
-    if let Ok(output) = Command::new("git").args(["rev-parse", "HEAD"]).output() {
-        if let Ok(commit) = String::from_utf8(output.stdout) {
-            println!("cargo:rustc-env=GIT_COMMIT={}", commit.trim());
-        }
-    }
+    println!("cargo:rustc-env=GIT_COMMIT={}", git_commit_hash());
 
     // Set the environment variables for the build platform.
     if let Ok(target) = env::var("TARGET") {
