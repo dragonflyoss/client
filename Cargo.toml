@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.49"
+version = "0.1.50"
 authors = ["The Dragonfly Developers"]
 homepage = "https://d7y.io/"
 repository = "https://github.com/dragonflyoss/client.git"
@@ -22,15 +22,15 @@ readme = "README.md"
 edition = "2021"
 
 [workspace.dependencies]
-dragonfly-client = { path = "dragonfly-client", version = "0.1.49" }
-dragonfly-client-core = { path = "dragonfly-client-core", version = "0.1.49" }
-dragonfly-client-config = { path = "dragonfly-client-config", version = "0.1.49" }
-dragonfly-client-storage = { path = "dragonfly-client-storage", version = "0.1.49" }
-dragonfly-client-backend = { path = "dragonfly-client-backend", version = "0.1.49" }
-dragonfly-client-util = { path = "dragonfly-client-util", version = "0.1.49" }
-dragonfly-client-init = { path = "dragonfly-client-init", version = "0.1.49" }
+dragonfly-client = { path = "dragonfly-client", version = "0.1.50" }
+dragonfly-client-core = { path = "dragonfly-client-core", version = "0.1.50" }
+dragonfly-client-config = { path = "dragonfly-client-config", version = "0.1.50" }
+dragonfly-client-storage = { path = "dragonfly-client-storage", version = "0.1.50" }
+dragonfly-client-backend = { path = "dragonfly-client-backend", version = "0.1.50" }
+dragonfly-client-util = { path = "dragonfly-client-util", version = "0.1.50" }
+dragonfly-client-init = { path = "dragonfly-client-init", version = "0.1.50" }
 thiserror = "1.0"
-dragonfly-api = "2.0.110"
+dragonfly-api = "2.0.112"
 reqwest = { version = "0.11.27", features = ["stream", "native-tls", "default-tls", "rustls-tls"] }
 rcgen = { version = "0.12.1", features = ["x509-parser"] }
 hyper = { version = "1.2", features = ["full"] }
@@ -50,6 +50,7 @@ rustls = "0.22.2"
 rustls-pki-types = "1.4.1"
 rustls-pemfile = "2.1.1"
 sha2 = "0.10"
+blake3 = "1.5.1"
 uuid = { version = "1.8", features = ["v4"] }
 hex = "0.4"
 rocksdb = "0.22.0"

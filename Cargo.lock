@@ -115,6 +115,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0952808a6c2afd1aa8947271f3a60f1a6763c7b912d210184c5149b5cf147247"
 
 [[package]]
+name = "arrayref"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b4930d2cb77ce62f89ee5d5289b4ac049559b1c45539271f5ed4fdc7db34545"
+
+[[package]]
 name = "arrayvec"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -553,6 +559,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed570934406eb16438a4e976b1b4500774099c13b8cb96eec99f620f05090ddf"
 
 [[package]]
+name = "blake3"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30cca6d3674597c30ddf2c587bf8d9d65c9a84d2326d941cc79c9842dfe0ef52"
+dependencies = [
+ "arrayref",
+ "arrayvec",
+ "cc",
+ "cfg-if",
+ "constant_time_eq",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -730,6 +749,12 @@ dependencies = [
  "unicode-width",
  "windows-sys 0.52.0",
 ]
+
+[[package]]
+name = "constant_time_eq"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7144d30dcf0fafbce74250a3963025d8d52177934239851c917d29f1df280c2"
 
 [[package]]
 name = "core-foundation"
@@ -919,9 +944,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.0.110"
+version = "2.0.112"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "477f701c22a2a3d9f3cfaef271b064ea418b0deb5437115c62217569606b4204"
+checksum = "867c43c3b87241820911d2fceb1faf05c6878d01d8ff9ad16524a899db9f77a4"
 dependencies = [
  "prost 0.11.9",
  "prost-types 0.12.4",
@@ -934,7 +959,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "0.1.49"
+version = "0.1.50"
 dependencies = [
  "anyhow",
  "bytes",
@@ -997,7 +1022,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "0.1.49"
+version = "0.1.50"
 dependencies = [
  "dragonfly-client-core",
  "futures",
@@ -1015,7 +1040,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "0.1.49"
+version = "0.1.50"
 dependencies = [
  "dragonfly-client-core",
  "home",
@@ -1034,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "0.1.49"
+version = "0.1.50"
 dependencies = [
  "libloading",
  "reqwest",
@@ -1045,7 +1070,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "0.1.49"
+version = "0.1.50"
 dependencies = [
  "anyhow",
  "clap",
@@ -1061,9 +1086,10 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "0.1.49"
+version = "0.1.50"
 dependencies = [
  "base16ct",
+ "blake3",
  "chrono",
  "dragonfly-api",
  "dragonfly-client-config",
@@ -1084,7 +1110,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "0.1.49"
+version = "0.1.50"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-core",
@@ -1542,7 +1568,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "0.1.49"
+version = "0.1.50"
 dependencies = [
  "dragonfly-client-backend",
  "dragonfly-client-core",

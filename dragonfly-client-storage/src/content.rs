@@ -17,7 +17,6 @@
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
-use sha2::{Digest, Sha256};
 use std::cmp::{max, min};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -245,11 +244,13 @@ impl Content {
         // Use a buffer to read the piece.
         let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
 
-        // Sha256 is used to calculate the hash of the piece.
-        let mut hasher = Sha256::new();
+        // Blake3 is used to calculate the hash of the piece.
+        let mut hasher = blake3::Hasher::new();
 
         // InspectReader is used to calculate the hash of the piece.
-        let mut tee = InspectReader::new(reader, |bytes| hasher.update(bytes));
+        let mut tee = InspectReader::new(reader, |bytes| {
+            hasher.update(bytes);
+        });
 
         // Open the file and seek to the offset.
         let mut f = OpenOptions::new()
@@ -279,7 +280,7 @@ impl Content {
 
         Ok(WritePieceResponse {
             length,
-            hash: base16ct::lower::encode_string(&hash),
+            hash: base16ct::lower::encode_string(hash.as_bytes()),
         })
     }
 }
