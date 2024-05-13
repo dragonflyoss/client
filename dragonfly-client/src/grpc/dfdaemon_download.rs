@@ -250,29 +250,32 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Clone the task.
         let task_manager = self.task.clone();
 
+        // Check whether the content length is empty.
+        let Some(content_length) = task.content_length() else {
+            // Download task failed.
+            task_manager
+                .download_failed(task_id.as_str())
+                .await
+                .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+            // Collect download task failure metrics.
+            collect_download_task_failure_metrics(
+                download.r#type.to_string().as_str(),
+                download.tag.clone().unwrap_or_default().as_str(),
+                download.application.clone().unwrap_or_default().as_str(),
+                download.priority.to_string().as_str(),
+            );
+
+            error!("missing content length in the response");
+            return Err(Status::internal("missing content length in the response"));
+        };
+
+        info!("content length: {}", content_length);
+
         // Download's range priority is higher than the request header's range.
         // If download protocol is http, use the range of the request header.
         // If download protocol is not http, use the range of the download.
         if download.range.is_none() {
-            let Some(content_length) = task.content_length() else {
-                // Download task failed.
-                task_manager
-                    .download_failed(task_id.as_str())
-                    .await
-                    .unwrap_or_else(|err| error!("download task failed: {}", err));
-
-                // Collect download task failure metrics.
-                collect_download_task_failure_metrics(
-                    download.r#type.to_string().as_str(),
-                    download.tag.clone().unwrap_or_default().as_str(),
-                    download.application.clone().unwrap_or_default().as_str(),
-                    download.priority.to_string().as_str(),
-                );
-
-                error!("missing content length in the response");
-                return Err(Status::internal("missing content length in the response"));
-            };
-
             // Convert the header.
             let request_header = match hashmap_to_reqwest_headermap(&download.request_header) {
                 Ok(header) => header,
