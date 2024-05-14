@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::storage_engine::{DatabaseObject, Operations, StorageEngine, Transaction};
+use crate::storage_engine::{DatabaseObject, Operations, StorageEngine};
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -145,109 +145,8 @@ impl Operations for RocksdbStorageEngine {
     }
 }
 
-// RocksdbStorageEngine implements the transaction of the storage engine.
-impl<'db> StorageEngine<'db> for RocksdbStorageEngine {
-    // Txn is the transaction type.
-    type Txn = RocksdbTransaction<'db>;
-
-    // start_transaction starts a transaction.
-    fn start_transaction(&'db self) -> RocksdbTransaction<'db> {
-        let txn = self.transaction();
-        RocksdbTransaction { txn, db: self }
-    }
-}
-
-/// RocksdbTransaction wraps a rocksdb transaction.
-pub struct RocksdbTransaction<'db> {
-    // txn is the inner rocksdb transaction.
-    txn: rocksdb::Transaction<'db, rocksdb::TransactionDB>,
-
-    // db is the rocksdb storage engine.
-    db: &'db rocksdb::TransactionDB,
-}
-
-// RocksdbTransaction implements the transaction operations.
-impl Operations for RocksdbTransaction<'_> {
-    // get gets the object by key.
-    fn get<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>> {
-        let cf = cf_handle::<O>(self.db)?;
-        let value = self.txn.get_cf(cf, key).or_err(ErrorType::StorageError)?;
-        match value {
-            Some(value) => Ok(Some(O::deserialize_from(&value)?)),
-            None => Ok(None),
-        }
-    }
-
-    // put puts the object by key.
-    fn put<O: DatabaseObject>(&self, key: &[u8], value: &O) -> Result<()> {
-        let cf = cf_handle::<O>(self.db)?;
-        let serialized = value.serialized()?;
-        self.txn
-            .put_cf(cf, key, serialized)
-            .or_err(ErrorType::StorageError)?;
-        Ok(())
-    }
-
-    // delete deletes the object by key.
-    fn delete<O: DatabaseObject>(&self, key: &[u8]) -> Result<()> {
-        let cf = cf_handle::<O>(self.db)?;
-        self.txn
-            .delete_cf(cf, key)
-            .or_err(ErrorType::StorageError)?;
-        Ok(())
-    }
-
-    // iter iterates all objects.
-    fn iter<O: DatabaseObject>(&self) -> Result<impl Iterator<Item = Result<(Box<[u8]>, O)>>> {
-        let cf = cf_handle::<O>(self.db)?;
-        let iter = self.txn.iterator_cf(cf, rocksdb::IteratorMode::Start);
-        Ok(iter.map(|ele| {
-            let (key, value) = ele.or_err(ErrorType::StorageError)?;
-            Ok((key, O::deserialize_from(&value)?))
-        }))
-    }
-
-    // prefix_iter iterates all objects with prefix.
-    fn prefix_iter<O: DatabaseObject>(
-        &self,
-        prefix: &[u8],
-    ) -> Result<impl Iterator<Item = Result<(Box<[u8]>, O)>>> {
-        let cf = cf_handle::<O>(self.db)?;
-        let iter = self.txn.prefix_iterator_cf(cf, prefix);
-        Ok(iter.map(|ele| {
-            let (key, value) = ele.or_err(ErrorType::StorageError)?;
-            Ok((key, O::deserialize_from(&value)?))
-        }))
-    }
-}
-
-// RocksdbTransaction implements the transaction operations.
-impl Transaction for RocksdbTransaction<'_> {
-    // get_for_update gets the object for update.
-    fn get_for_update<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>> {
-        let cf = cf_handle::<O>(self.db)?;
-        let value = self
-            .txn
-            .get_for_update_cf(cf, key, true)
-            .or_err(ErrorType::StorageError)?;
-        match value {
-            Some(value) => Ok(Some(O::deserialize_from(&value)?)),
-            None => Ok(None),
-        }
-    }
-
-    // commit commits the transaction.
-    fn commit(self) -> Result<()> {
-        self.txn.commit().or_err(ErrorType::StorageError)?;
-        Ok(())
-    }
-
-    // rollback rolls back the transaction.
-    fn rollback(&self) -> Result<()> {
-        self.txn.rollback().or_err(ErrorType::StorageError)?;
-        Ok(())
-    }
-}
+// RocksdbStorageEngine implements the rocksdb of the storage engine.
+impl<'db> StorageEngine<'db> for RocksdbStorageEngine {}
 
 /// cf_handle returns the column family handle for the given object.
 fn cf_handle<T>(db: &rocksdb::TransactionDB) -> Result<&rocksdb::ColumnFamily>

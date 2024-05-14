@@ -41,13 +41,7 @@ pub trait DatabaseObject: Serialize + DeserializeOwned {
 }
 
 /// StorageEngine defines basic storage engine operations.
-pub trait StorageEngine<'db>: Operations {
-    /// Txn is the transaction type.
-    type Txn: Transaction;
-
-    /// start_transaction starts a transaction.
-    fn start_transaction(&'db self) -> Self::Txn;
-}
+pub trait StorageEngine<'db>: Operations {}
 
 /// StorageEngineOwned is a marker trait to indicate the storage engine is owned.
 pub trait StorageEngineOwned: for<'db> StorageEngine<'db> {}
@@ -72,16 +66,4 @@ pub trait Operations {
         &self,
         prefix: &[u8],
     ) -> Result<impl Iterator<Item = Result<(Box<[u8]>, O)>>>;
-}
-
-/// Transaction defines transactional operations.
-pub trait Transaction: Operations {
-    /// get_for_update gets the object for update.
-    fn get_for_update<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>>;
-
-    /// commit commits the transaction.
-    fn commit(self) -> Result<()>;
-
-    /// rollback rolls back the transaction.
-    fn rollback(&self) -> Result<()>;
 }

@@ -24,9 +24,7 @@ use std::path::Path;
 use std::time::Duration;
 use tracing::error;
 
-use crate::storage_engine::{
-    rocksdb::RocksdbStorageEngine, DatabaseObject, Operations, StorageEngineOwned, Transaction,
-};
+use crate::storage_engine::{rocksdb::RocksdbStorageEngine, DatabaseObject, StorageEngineOwned};
 
 // Task is the metadata of the task.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,8 +220,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
             .map(reqwest_headermap_to_hashmap)
             .unwrap_or_default();
 
-        let txn = self.db.start_transaction();
-        let task = match txn.get_for_update::<Task>(id.as_bytes())? {
+        let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
                 // If the task exists, update the task metadata.
                 task.updated_at = Utc::now().naive_utc();
@@ -248,15 +245,13 @@ impl<E: StorageEngineOwned> Metadata<E> {
             },
         };
 
-        txn.put(id.as_bytes(), &task)?;
-        txn.commit()?;
+        self.db.put(id.as_bytes(), &task)?;
         Ok(task)
     }
 
     /// download_task_finished updates the metadata of the task when the task downloads finished.
     pub fn download_task_finished(&self, id: &str) -> Result<Task> {
-        let txn = self.db.start_transaction();
-        let task = match txn.get_for_update::<Task>(id.as_bytes())? {
+        let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
                 task.updated_at = Utc::now().naive_utc();
                 task.finished_at = Some(Utc::now().naive_utc());
@@ -265,15 +260,13 @@ impl<E: StorageEngineOwned> Metadata<E> {
             None => return Err(Error::TaskNotFound(id.to_string())),
         };
 
-        txn.put(id.as_bytes(), &task)?;
-        txn.commit()?;
+        self.db.put(id.as_bytes(), &task)?;
         Ok(task)
     }
 
     /// upload_task_started updates the metadata of the task when task uploads started.
     pub fn upload_task_started(&self, id: &str) -> Result<Task> {
-        let txn = self.db.start_transaction();
-        let task = match txn.get_for_update::<Task>(id.as_bytes())? {
+        let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
                 task.uploading_count += 1;
                 task.updated_at = Utc::now().naive_utc();
@@ -282,15 +275,13 @@ impl<E: StorageEngineOwned> Metadata<E> {
             None => return Err(Error::TaskNotFound(id.to_string())),
         };
 
-        txn.put(id.as_bytes(), &task)?;
-        txn.commit()?;
+        self.db.put(id.as_bytes(), &task)?;
         Ok(task)
     }
 
     /// upload_task_finished updates the metadata of the task when task uploads finished.
     pub fn upload_task_finished(&self, id: &str) -> Result<Task> {
-        let txn = self.db.start_transaction();
-        let task = match txn.get_for_update::<Task>(id.as_bytes())? {
+        let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
                 task.uploading_count -= 1;
                 task.uploaded_count += 1;
@@ -300,15 +291,13 @@ impl<E: StorageEngineOwned> Metadata<E> {
             None => return Err(Error::TaskNotFound(id.to_string())),
         };
 
-        txn.put(id.as_bytes(), &task)?;
-        txn.commit()?;
+        self.db.put(id.as_bytes(), &task)?;
         Ok(task)
     }
 
     /// upload_task_failed updates the metadata of the task when the task uploads failed.
     pub fn upload_task_failed(&self, id: &str) -> Result<Task> {
-        let txn = self.db.start_transaction();
-        let task = match txn.get_for_update::<Task>(id.as_bytes())? {
+        let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
                 task.uploading_count -= 1;
                 task.updated_at = Utc::now().naive_utc();
@@ -317,8 +306,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
             None => return Err(Error::TaskNotFound(id.to_string())),
         };
 
-        txn.put(id.as_bytes(), &task)?;
-        txn.commit()?;
+        self.db.put(id.as_bytes(), &task)?;
         Ok(task)
     }
 
@@ -329,8 +317,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
     /// get_tasks gets the task metadatas.
     pub fn get_tasks(&self) -> Result<Vec<Task>> {
-        let txn = self.db.start_transaction();
-        let iter = txn.iter::<Task>()?;
+        let iter = self.db.iter::<Task>()?;
         iter.map(|ele| ele.map(|(_, task)| task)).collect()
     }
 
@@ -367,8 +354,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     ) -> Result<Piece> {
         // Get the piece id.
         let id = self.piece_id(task_id, number);
-        let txn = self.db.start_transaction();
-        let piece = match txn.get_for_update::<Piece>(id.as_bytes())? {
+        let piece = match self.db.get::<Piece>(id.as_bytes())? {
             Some(mut piece) => {
                 piece.offset = offset;
                 piece.length = length;
@@ -381,8 +367,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
             None => return Err(Error::PieceNotFound(id)),
         };
 
-        txn.put(id.as_bytes(), &piece)?;
-        txn.commit()?;
+        self.db.put(id.as_bytes(), &piece)?;
         Ok(piece)
     }
 
@@ -396,8 +381,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     pub fn upload_piece_started(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Get the piece id.
         let id = self.piece_id(task_id, number);
-        let txn = self.db.start_transaction();
-        let piece = match txn.get_for_update::<Piece>(id.as_bytes())? {
+        let piece = match self.db.get::<Piece>(id.as_bytes())? {
             Some(mut piece) => {
                 piece.uploading_count += 1;
                 piece.updated_at = Utc::now().naive_utc();
@@ -406,8 +390,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
             None => return Err(Error::PieceNotFound(id)),
         };
 
-        txn.put(id.as_bytes(), &piece)?;
-        txn.commit()?;
+        self.db.put(id.as_bytes(), &piece)?;
         Ok(piece)
     }
 
@@ -415,8 +398,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     pub fn upload_piece_finished(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Get the piece id.
         let id = self.piece_id(task_id, number);
-        let txn = self.db.start_transaction();
-        let piece = match txn.get_for_update::<Piece>(id.as_bytes())? {
+        let piece = match self.db.get::<Piece>(id.as_bytes())? {
             Some(mut piece) => {
                 piece.uploading_count -= 1;
                 piece.uploaded_count += 1;
@@ -426,8 +408,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
             None => return Err(Error::PieceNotFound(id)),
         };
 
-        txn.put(id.as_bytes(), &piece)?;
-        txn.commit()?;
+        self.db.put(id.as_bytes(), &piece)?;
         Ok(piece)
     }
 
@@ -435,8 +416,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     pub fn upload_piece_failed(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Get the piece id.
         let id = self.piece_id(task_id, number);
-        let txn = self.db.start_transaction();
-        let piece = match txn.get_for_update::<Piece>(id.as_bytes())? {
+        let piece = match self.db.get::<Piece>(id.as_bytes())? {
             Some(mut piece) => {
                 piece.uploading_count -= 1;
                 piece.updated_at = Utc::now().naive_utc();
@@ -445,8 +425,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
             None => return Err(Error::PieceNotFound(id)),
         };
 
-        txn.put(id.as_bytes(), &piece)?;
-        txn.commit()?;
+        self.db.put(id.as_bytes(), &piece)?;
         Ok(piece)
     }
 
@@ -457,21 +436,18 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
     /// get_pieces gets the piece metadatas.
     pub fn get_pieces(&self, task_id: &str) -> Result<Vec<Piece>> {
-        let txn = self.db.start_transaction();
-        let iter = txn.prefix_iter::<Piece>(task_id.as_bytes())?;
+        let iter = self.db.prefix_iter::<Piece>(task_id.as_bytes())?;
         iter.map(|ele| ele.map(|(_, piece)| piece)).collect()
     }
 
     /// delete_pieces deletes the piece metadatas.
     pub fn delete_pieces(&self, task_id: &str) -> Result<()> {
-        let txn = self.db.start_transaction();
-        let iter = txn.prefix_iter::<Piece>(task_id.as_bytes())?;
+        let iter = self.db.prefix_iter::<Piece>(task_id.as_bytes())?;
         for ele in iter {
             let (key, _) = ele?;
-            txn.delete::<Piece>(&key)?;
+            self.db.delete::<Piece>(&key)?;
         }
 
-        txn.commit()?;
         Ok(())
     }
 
