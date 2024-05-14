@@ -212,40 +212,16 @@ impl<E: StorageEngineOwned> Metadata<E> {
     /// with_txn executes the enclosed closure within a transaction.
     fn with_txn<T>(&self, f: impl FnOnce(&<E as StorageEngine>::Txn) -> Result<T>) -> Result<T> {
         let txn = self.db.start_transaction();
-        let result = f(&txn).map_err(|err| {
-            txn.rollback().unwrap_or_else(|rollback_err| {
-                error!("rollback error: {:?}", rollback_err);
-            });
-            err
-        })?;
-
-        txn.commit()?;
-        Ok(result)
-    }
-
-    /// transactional_update_or_else gets the object from the database and updates
-    /// it within a transaction.
-    /// If the object does not exist, execute the `or_else` closure.
-    /// `or_else` can either return an new object, which means that a new object
-    /// will be created; or return an error to abort the transaction.
-    fn transactional_update_or_else<T>(
-        &self,
-        key: &str,
-        update: impl FnOnce(T) -> Result<T>,
-        or_else: impl FnOnce() -> Result<T>,
-    ) -> Result<T>
-    where
-        T: DatabaseObject,
-    {
-        self.with_txn(|txn| {
-            let object: T = match txn.get_for_update(key.as_bytes())? {
-                Some(object) => object,
-                None => or_else()?,
-            };
-            let object = update(object)?;
-            txn.put(key.as_bytes(), &object)?;
-            Ok(object)
-        })
+        match f(&txn) {
+            Ok(result) => {
+                txn.commit()?;
+                Ok(result)
+            }
+            Err(err) => {
+                txn.rollback()?;
+                Err(err)
+            }
+        }
     }
 
     /// download_task_started updates the metadata of the task when the task downloads started.
@@ -264,23 +240,22 @@ impl<E: StorageEngineOwned> Metadata<E> {
                 .unwrap_or_default()
         };
 
-        self.transactional_update_or_else(
-            id,
-            |mut task: Task| {
-                // If the task exists, update the task metadata.
-                task.updated_at = Utc::now().naive_utc();
-                task.peer_ids.insert(peer_id.to_string());
+        self.with_txn(|txn| {
+            let task = match txn.get_for_update::<Task>(id.as_bytes())? {
+                Some(mut task) => {
+                    // If the task exists, update the task metadata.
+                    task.updated_at = Utc::now().naive_utc();
+                    task.peer_ids.insert(peer_id.to_string());
 
-                // If the task has the response header, the response header
-                // will not be covered.
-                if task.response_header.is_empty() {
-                    task.response_header = get_response_header();
+                    // If the task has the response header, the response header
+                    // will not be covered.
+                    if task.response_header.is_empty() {
+                        task.response_header = get_response_header();
+                    }
+
+                    task
                 }
-
-                Ok(task)
-            },
-            || {
-                Ok(Task {
+                None => Task {
                     id: id.to_string(),
                     peer_ids: vec![peer_id.to_string()].into_iter().collect(),
                     piece_length,
@@ -288,62 +263,81 @@ impl<E: StorageEngineOwned> Metadata<E> {
                     updated_at: Utc::now().naive_utc(),
                     created_at: Utc::now().naive_utc(),
                     ..Default::default()
-                })
-            },
-        )
+                },
+            };
+
+            txn.put(id.as_bytes(), &task)?;
+            Ok(task)
+        })
     }
 
     /// download_task_finished updates the metadata of the task when the task downloads finished.
     pub fn download_task_finished(&self, id: &str) -> Result<Task> {
-        self.transactional_update_or_else(
-            id,
-            |mut task: Task| {
-                task.updated_at = Utc::now().naive_utc();
-                task.finished_at = Some(Utc::now().naive_utc());
-                Ok(task)
-            },
-            || Err(Error::TaskNotFound(id.to_string())),
-        )
+        self.with_txn(|txn| {
+            let task = match txn.get_for_update::<Task>(id.as_bytes())? {
+                Some(mut task) => {
+                    task.updated_at = Utc::now().naive_utc();
+                    task.finished_at = Some(Utc::now().naive_utc());
+                    task
+                }
+                None => return Err(Error::TaskNotFound(id.to_string())),
+            };
+
+            txn.put(id.as_bytes(), &task)?;
+            Ok(task)
+        })
     }
 
     /// upload_task_started updates the metadata of the task when task uploads started.
     pub fn upload_task_started(&self, id: &str) -> Result<Task> {
-        self.transactional_update_or_else(
-            id,
-            |mut task: Task| {
-                task.uploading_count += 1;
-                task.updated_at = Utc::now().naive_utc();
-                Ok(task)
-            },
-            || Err(Error::TaskNotFound(id.to_string())),
-        )
+        self.with_txn(|txn| {
+            let task = match txn.get_for_update::<Task>(id.as_bytes())? {
+                Some(mut task) => {
+                    task.uploading_count += 1;
+                    task.updated_at = Utc::now().naive_utc();
+                    task
+                }
+                None => return Err(Error::TaskNotFound(id.to_string())),
+            };
+
+            txn.put(id.as_bytes(), &task)?;
+            Ok(task)
+        })
     }
 
     /// upload_task_finished updates the metadata of the task when task uploads finished.
     pub fn upload_task_finished(&self, id: &str) -> Result<Task> {
-        self.transactional_update_or_else(
-            id,
-            |mut task: Task| {
-                task.uploading_count -= 1;
-                task.uploaded_count += 1;
-                task.updated_at = Utc::now().naive_utc();
-                Ok(task)
-            },
-            || Err(Error::TaskNotFound(id.to_string())),
-        )
+        self.with_txn(|txn| {
+            let task = match txn.get_for_update::<Task>(id.as_bytes())? {
+                Some(mut task) => {
+                    task.uploading_count -= 1;
+                    task.uploaded_count += 1;
+                    task.updated_at = Utc::now().naive_utc();
+                    task
+                }
+                None => return Err(Error::TaskNotFound(id.to_string())),
+            };
+
+            txn.put(id.as_bytes(), &task)?;
+            Ok(task)
+        })
     }
 
     /// upload_task_failed updates the metadata of the task when the task uploads failed.
     pub fn upload_task_failed(&self, id: &str) -> Result<Task> {
-        self.transactional_update_or_else(
-            id,
-            |mut task: Task| {
-                task.uploading_count -= 1;
-                task.updated_at = Utc::now().naive_utc();
-                Ok(task)
-            },
-            || Err(Error::TaskNotFound(id.to_string())),
-        )
+        self.with_txn(|txn| {
+            let task = match txn.get_for_update::<Task>(id.as_bytes())? {
+                Some(mut task) => {
+                    task.uploading_count -= 1;
+                    task.updated_at = Utc::now().naive_utc();
+                    task
+                }
+                None => return Err(Error::TaskNotFound(id.to_string())),
+            };
+
+            txn.put(id.as_bytes(), &task)?;
+            Ok(task)
+        })
     }
 
     /// get_task gets the task metadata.
@@ -397,19 +391,23 @@ impl<E: StorageEngineOwned> Metadata<E> {
         // Get the piece id.
         let id = self.piece_id(task_id, number);
 
-        self.transactional_update_or_else(
-            id.as_str(),
-            |mut piece: Piece| {
-                piece.offset = offset;
-                piece.length = length;
-                piece.digest = digest.to_string();
-                piece.parent_id = parent_id;
-                piece.updated_at = Utc::now().naive_utc();
-                piece.finished_at = Some(Utc::now().naive_utc());
-                Ok(piece)
-            },
-            || Err(Error::PieceNotFound(id.to_string())),
-        )
+        self.with_txn(|txn| {
+            let piece = match txn.get_for_update::<Piece>(id.as_bytes())? {
+                Some(mut piece) => {
+                    piece.offset = offset;
+                    piece.length = length;
+                    piece.digest = digest.to_string();
+                    piece.parent_id = parent_id;
+                    piece.updated_at = Utc::now().naive_utc();
+                    piece.finished_at = Some(Utc::now().naive_utc());
+                    piece
+                }
+                None => return Err(Error::PieceNotFound(id)),
+            };
+
+            txn.put(id.as_bytes(), &piece)?;
+            Ok(piece)
+        })
     }
 
     /// download_piece_failed updates the metadata of the piece when the piece downloads failed.
@@ -437,15 +435,19 @@ impl<E: StorageEngineOwned> Metadata<E> {
         // Get the piece id.
         let id = self.piece_id(task_id, number);
 
-        self.transactional_update_or_else(
-            id.as_str(),
-            |mut piece: Piece| {
-                piece.uploading_count += 1;
-                piece.updated_at = Utc::now().naive_utc();
-                Ok(piece)
-            },
-            || Err(Error::PieceNotFound(id.to_string())),
-        )
+        self.with_txn(|txn| {
+            let piece = match txn.get_for_update::<Piece>(id.as_bytes())? {
+                Some(mut piece) => {
+                    piece.uploading_count += 1;
+                    piece.updated_at = Utc::now().naive_utc();
+                    piece
+                }
+                None => return Err(Error::PieceNotFound(id)),
+            };
+
+            txn.put(id.as_bytes(), &piece)?;
+            Ok(piece)
+        })
     }
 
     /// upload_piece_finished updates the metadata of the piece when piece uploads finished.
@@ -453,16 +455,20 @@ impl<E: StorageEngineOwned> Metadata<E> {
         // Get the piece id.
         let id = self.piece_id(task_id, number);
 
-        self.transactional_update_or_else(
-            id.as_str(),
-            |mut piece: Piece| {
-                piece.uploading_count -= 1;
-                piece.uploaded_count += 1;
-                piece.updated_at = Utc::now().naive_utc();
-                Ok(piece)
-            },
-            || Err(Error::PieceNotFound(id.to_string())),
-        )
+        self.with_txn(|txn| {
+            let piece = match txn.get_for_update::<Piece>(id.as_bytes())? {
+                Some(mut piece) => {
+                    piece.uploading_count -= 1;
+                    piece.uploaded_count += 1;
+                    piece.updated_at = Utc::now().naive_utc();
+                    piece
+                }
+                None => return Err(Error::PieceNotFound(id)),
+            };
+
+            txn.put(id.as_bytes(), &piece)?;
+            Ok(piece)
+        })
     }
 
     /// upload_piece_failed updates the metadata of the piece when the piece uploads failed.
@@ -470,15 +476,19 @@ impl<E: StorageEngineOwned> Metadata<E> {
         // Get the piece id.
         let id = self.piece_id(task_id, number);
 
-        self.transactional_update_or_else(
-            id.as_str(),
-            |mut piece: Piece| {
-                piece.uploading_count -= 1;
-                piece.updated_at = Utc::now().naive_utc();
-                Ok(piece)
-            },
-            || Err(Error::PieceNotFound(id.to_string())),
-        )
+        self.with_txn(|txn| {
+            let piece = match txn.get_for_update::<Piece>(id.as_bytes())? {
+                Some(mut piece) => {
+                    piece.uploading_count -= 1;
+                    piece.updated_at = Utc::now().naive_utc();
+                    piece
+                }
+                None => return Err(Error::PieceNotFound(id)),
+            };
+
+            txn.put(id.as_bytes(), &piece)?;
+            Ok(piece)
+        })
     }
 
     /// get_piece gets the piece metadata.
