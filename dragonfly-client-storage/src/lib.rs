@@ -187,7 +187,7 @@ impl Storage {
     }
 
     // download_piece_failed updates the metadata of the piece when the piece downloads failed.
-    pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<metadata::Piece> {
+    pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
         self.metadata.download_piece_failed(task_id, number)
     }
 
