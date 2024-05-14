@@ -212,7 +212,13 @@ impl<E: StorageEngineOwned> Metadata<E> {
     /// with_txn executes the enclosed closure within a transaction.
     fn with_txn<T>(&self, f: impl FnOnce(&<E as StorageEngine>::Txn) -> Result<T>) -> Result<T> {
         let txn = self.db.start_transaction();
-        let result = f(&txn)?;
+        let result = f(&txn).map_err(|err| {
+            txn.rollback().unwrap_or_else(|rollback_err| {
+                error!("rollback error: {:?}", rollback_err);
+            });
+            err
+        })?;
+
         txn.commit()?;
         Ok(result)
     }
