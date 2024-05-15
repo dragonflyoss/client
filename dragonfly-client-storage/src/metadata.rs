@@ -53,6 +53,9 @@ pub struct Task {
     // created_at is the time when the task metadata is created.
     pub created_at: NaiveDateTime,
 
+    // prefetched_at is the time when the task prefetched.
+    pub prefetched_at: Option<NaiveDateTime>,
+
     // finished_at is the time when the task downloads finished.
     pub finished_at: Option<NaiveDateTime>,
 }
@@ -78,6 +81,11 @@ impl Task {
     // is_expired returns whether the task is expired.
     pub fn is_expired(&self, ttl: Duration) -> bool {
         self.created_at + ttl < Utc::now().naive_utc()
+    }
+
+    // is_prefetched returns whether the task is prefetched.
+    pub fn is_prefetched(&self) -> bool {
+        self.prefetched_at.is_some()
     }
 
     // is_finished returns whether the task downloads finished.
@@ -255,6 +263,36 @@ impl<E: StorageEngineOwned> Metadata<E> {
             Some(mut task) => {
                 task.updated_at = Utc::now().naive_utc();
                 task.finished_at = Some(Utc::now().naive_utc());
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    // prefetch_task_started updates the metadata of the task when the task prefetch started.
+    pub fn prefetch_task_started(&self, id: &str) -> Result<Task> {
+        let task = match self.db.get::<Task>(id.as_bytes())? {
+            Some(mut task) => {
+                task.updated_at = Utc::now().naive_utc();
+                task.prefetched_at = Some(Utc::now().naive_utc());
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    // prefetch_task_failed updates the metadata of the task when the task prefetch failed.
+    pub fn prefetch_task_failed(&self, id: &str) -> Result<Task> {
+        let task = match self.db.get::<Task>(id.as_bytes())? {
+            Some(mut task) => {
+                task.updated_at = Utc::now().naive_utc();
+                task.prefetched_at = None;
                 task
             }
             None => return Err(Error::TaskNotFound(id.to_string())),
