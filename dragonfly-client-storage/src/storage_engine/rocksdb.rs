@@ -24,16 +24,16 @@ use tracing::info;
 
 /// RocksdbStorageEngine is a storage engine based on rocksdb.
 pub struct RocksdbStorageEngine {
-    // inner is the inner rocksdb transaction db.
-    inner: rocksdb::TransactionDB,
+    // inner is the inner rocksdb DB.
+    inner: rocksdb::DB,
 }
 
 // RocksdbStorageEngine implements deref of the storage engine.
 impl Deref for RocksdbStorageEngine {
-    // Target is the inner rocksdb transaction db.
-    type Target = rocksdb::TransactionDB;
+    // Target is the inner rocksdb DB.
+    type Target = rocksdb::DB;
 
-    // deref returns the inner rocksdb transaction db.
+    // deref returns the inner rocksdb DB.
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
@@ -80,13 +80,7 @@ impl RocksdbStorageEngine {
 
         // Open rocksdb.
         let dir = dir.join(Self::DEFAULT_DIR_NAME);
-        let db = rocksdb::TransactionDB::open_cf(
-            &options,
-            &rocksdb::TransactionDBOptions::default(),
-            &dir,
-            cf_names,
-        )
-        .or_err(ErrorType::StorageError)?;
+        let db = rocksdb::DB::open_cf(&options, &dir, cf_names).or_err(ErrorType::StorageError)?;
         info!("metadata initialized directory: {:?}", dir);
 
         Ok(Self { inner: db })
@@ -149,7 +143,7 @@ impl Operations for RocksdbStorageEngine {
 impl<'db> StorageEngine<'db> for RocksdbStorageEngine {}
 
 /// cf_handle returns the column family handle for the given object.
-fn cf_handle<T>(db: &rocksdb::TransactionDB) -> Result<&rocksdb::ColumnFamily>
+fn cf_handle<T>(db: &rocksdb::DB) -> Result<&rocksdb::ColumnFamily>
 where
     T: DatabaseObject,
 {
