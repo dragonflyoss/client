@@ -19,6 +19,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
+use rocksdb::WriteOptions;
 use std::{ops::Deref, path::Path};
 use tracing::info;
 
@@ -103,7 +104,10 @@ impl Operations for RocksdbStorageEngine {
     fn put<O: DatabaseObject>(&self, key: &[u8], value: &O) -> Result<()> {
         let cf = cf_handle::<O>(self)?;
         let serialized = value.serialized()?;
-        self.put_cf(cf, key, serialized)
+        let mut options = WriteOptions::default();
+        options.set_sync(true);
+
+        self.put_cf_opt(cf, key, serialized, &options)
             .or_err(ErrorType::StorageError)?;
         Ok(())
     }
@@ -111,7 +115,11 @@ impl Operations for RocksdbStorageEngine {
     // delete deletes the object by key.
     fn delete<O: DatabaseObject>(&self, key: &[u8]) -> Result<()> {
         let cf = cf_handle::<O>(self)?;
-        self.delete_cf(cf, key).or_err(ErrorType::StorageError)?;
+        let mut options = WriteOptions::default();
+        options.set_sync(true);
+
+        self.delete_cf_opt(cf, key, &options)
+            .or_err(ErrorType::StorageError)?;
         Ok(())
     }
 
