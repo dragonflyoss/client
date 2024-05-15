@@ -19,7 +19,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use rocksdb::WriteOptions;
+use rocksdb::{ReadOptions, WriteOptions};
 use std::{ops::Deref, path::Path};
 use tracing::info;
 
@@ -55,7 +55,7 @@ impl RocksdbStorageEngine {
     const DEFAULT_BLOCK_SIZE: usize = 64 * 1024;
 
     /// DEFAULT_CACHE_SIZE is the default cache size for rocksdb.
-    const DEFAULT_CACHE_SIZE: usize = 16 * 1024 * 1024;
+    const DEFAULT_CACHE_SIZE: usize = 32 * 1024 * 1024;
 
     /// open opens a rocksdb storage engine with the given directory and column families.
     pub fn open(dir: &Path, cf_names: &[&str]) -> Result<Self> {
@@ -67,7 +67,7 @@ impl RocksdbStorageEngine {
         options.increase_parallelism(num_cpus::get() as i32);
         options.set_max_open_files(Self::DEFAULT_MAX_OPEN_FILES);
         // Set prefix extractor to reduce the memory usage of bloom filter.
-        options.set_prefix_extractor(rocksdb::SliceTransform::create_fixed_prefix(128));
+        options.set_prefix_extractor(rocksdb::SliceTransform::create_fixed_prefix(64));
         options.set_memtable_prefix_bloom_ratio(0.2);
 
         // Initialize rocksdb block based table options.
@@ -93,7 +93,12 @@ impl Operations for RocksdbStorageEngine {
     // get gets the object by key.
     fn get<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>> {
         let cf = cf_handle::<O>(self)?;
-        let value = self.get_cf(cf, key).or_err(ErrorType::StorageError)?;
+        let mut options = ReadOptions::default();
+        options.set_total_order_seek(true);
+
+        let value = self
+            .get_cf_opt(cf, key, &options)
+            .or_err(ErrorType::StorageError)?;
         match value {
             Some(value) => Ok(Some(O::deserialize_from(&value)?)),
             None => Ok(None),
