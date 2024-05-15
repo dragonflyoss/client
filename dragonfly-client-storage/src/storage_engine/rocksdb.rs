@@ -66,8 +66,8 @@ impl RocksdbStorageEngine {
         options.optimize_level_style_compaction(Self::DEFAULT_MEMTABLE_MEMORY_BUDGET);
         options.increase_parallelism(num_cpus::get() as i32);
         options.set_max_open_files(Self::DEFAULT_MAX_OPEN_FILES);
-        // Set prefix extractor to reduce the memory usage of bloom filter and length of task id is 64.
-        options.set_prefix_extractor(rocksdb::SliceTransform::create_fixed_prefix(64));
+        // Set prefix extractor to reduce the memory usage of bloom filter.
+        options.set_prefix_extractor(rocksdb::SliceTransform::create_fixed_prefix(128));
         options.set_memtable_prefix_bloom_ratio(0.2);
 
         // Initialize rocksdb block based table options.
