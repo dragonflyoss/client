@@ -324,11 +324,13 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
         // Initialize stream channel.
         let download_clone = download.clone();
+        let task_manager_clone = task_manager.clone();
         let task_clone = task.clone();
+        let task_id_clone = task_id.clone();
         let (out_stream_tx, out_stream_rx) = mpsc::channel(1024);
         tokio::spawn(
             async move {
-                match task_manager
+                match task_manager_clone
                     .download(
                         task_clone.clone(),
                         host_id.as_str(),
@@ -357,7 +359,9 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         // Download task succeeded.
                         info!("download task succeeded");
                         if download_clone.range.is_none() {
-                            if let Err(err) = task_manager.download_finished(task_id.as_str()) {
+                            if let Err(err) =
+                                task_manager_clone.download_finished(task_id_clone.as_str())
+                            {
                                 error!("download task finished: {}", err);
                             }
                         }
@@ -366,7 +370,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         // should not hard link or copy the task content to the destination.
                         if let Some(output_path) = download_clone.output_path.clone() {
                             // Hard link or copy the task content to the destination.
-                            if let Err(err) = task_manager
+                            if let Err(err) = task_manager_clone
                                 .hard_link_or_copy(
                                     task_clone,
                                     Path::new(output_path.as_str()),
@@ -386,8 +390,8 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                     }
                     Err(e) => {
                         // Download task failed.
-                        task_manager
-                            .download_failed(task_id.as_str())
+                        task_manager_clone
+                            .download_failed(task_id_clone.as_str())
                             .await
                             .unwrap_or_else(|err| error!("download task failed: {}", err));
 
@@ -413,12 +417,26 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         );
 
         // If prefetch flag is true, prefetch the full task.
-        if download.prefetch && !task.is_finished() {
+        if download.prefetch && !task.is_prefetched() && !task.is_finished() {
             // Prefetch the task if prefetch flag is true.
             let socket_path = self.socket_path.clone();
+            let task_manager_clone = task_manager.clone();
+            let task_id_clone = task_id.clone();
             tokio::spawn(
                 async move {
-                    info!("prefetch task started");
+                    match task_manager_clone
+                        .prefetch_task_started(task_id_clone.as_str())
+                        .await
+                    {
+                        Ok(_) => {
+                            info!("prefetch task started");
+                        }
+                        Err(err) => {
+                            error!("prefetch task started: {}", err);
+                            return;
+                        }
+                    }
+
                     if let Err(err) = super::prefetch_task(
                         socket_path.clone(),
                         Request::new(DownloadTaskRequest {
@@ -427,7 +445,17 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                     )
                     .await
                     {
-                        error!("prefetch task failed: {}", err);
+                        match task_manager_clone
+                            .prefetch_task_failed(task_id_clone.as_str())
+                            .await
+                        {
+                            Ok(_) => {
+                                error!("prefetch task failed: {}", err);
+                            }
+                            Err(err) => {
+                                error!("prefetch task failed: {}", err);
+                            }
+                        }
                     }
                 }
                 .in_current_span(),

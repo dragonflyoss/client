@@ -175,6 +175,16 @@ impl Task {
         self.storage.download_task_failed(id).await
     }
 
+    // prefetch_task_started updates the metadata of the task when the task prefetch started.
+    pub async fn prefetch_task_started(&self, id: &str) -> ClientResult<metadata::Task> {
+        self.storage.prefetch_task_started(id).await
+    }
+
+    // prefetch_task_failed updates the metadata of the task when the task prefetch failed.
+    pub async fn prefetch_task_failed(&self, id: &str) -> ClientResult<metadata::Task> {
+        self.storage.prefetch_task_failed(id).await
+    }
+
     // hard_link_or_copy hard links or copies the task content to the destination.
     pub async fn hard_link_or_copy(
         &self,
