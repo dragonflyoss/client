@@ -65,8 +65,8 @@ use tracing::{error, info, instrument, Span};
 
 pub mod header;
 
-// DEFAULT_SERVER_BUFFER_SIZE is the default buffer size for connection to the server, default is 8192.
-const DEFAULT_SERVER_BUFFER_SIZE: usize = 8192;
+// DEFAULT_SERVER_BUFFER_SIZE is the default buffer size for connection to the server, default is 64KB.
+const DEFAULT_SERVER_BUFFER_SIZE: usize = 64 * 1024;
 
 // Response is the response of the proxy server.
 pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
