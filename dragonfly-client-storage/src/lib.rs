@@ -97,6 +97,16 @@ impl Storage {
         self.delete_task(id).await
     }
 
+    // prefetch_task_started updates the metadata of the task when the task prefetches started.
+    pub async fn prefetch_task_started(&self, id: &str) -> Result<metadata::Task> {
+        self.metadata.prefetch_task_started(id)
+    }
+
+    // prefetch_task_failed updates the metadata of the task when the task prefetches failed.
+    pub async fn prefetch_task_failed(&self, id: &str) -> Result<metadata::Task> {
+        self.metadata.prefetch_task_failed(id)
+    }
+
     // upload_task_finished updates the metadata of the task when task uploads finished.
     pub fn upload_task_finished(&self, id: &str) -> Result<metadata::Task> {
         self.metadata.upload_task_finished(id)
