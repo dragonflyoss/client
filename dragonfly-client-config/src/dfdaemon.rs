@@ -145,16 +145,16 @@ fn default_dynconfig_refresh_interval() -> Duration {
     Duration::from_secs(300)
 }
 
-// default_storage_write_buffer_size is the default buffer size for writing piece to disk, default is 16KB.
+// default_storage_write_buffer_size is the default buffer size for writing piece to disk, default is 4KB.
 #[inline]
 fn default_storage_write_buffer_size() -> usize {
-    16 * 1024
+    4 * 1024
 }
 
-// default_storage_read_buffer_size is the default buffer size for reading piece from disk, default is 16KB.
+// default_storage_read_buffer_size is the default buffer size for reading piece from disk, default is 4KB.
 #[inline]
 fn default_storage_read_buffer_size() -> usize {
-    16 * 1024
+    4 * 1024
 }
 
 // default_seed_peer_cluster_id is the default cluster id of seed peer.
@@ -199,10 +199,10 @@ pub fn default_proxy_server_port() -> u16 {
     4001
 }
 
-// default_proxy_read_buffer_size is the default buffer size for reading piece, default is 16KB.
+// default_proxy_read_buffer_size is the default buffer size for reading piece, default is 1KB.
 #[inline]
 pub fn default_proxy_read_buffer_size() -> usize {
-    16 * 1024
+    1024
 }
 
 // default_s3_filtered_query_params is the default filtered query params with s3 protocol to generate the task id.
@@ -597,11 +597,11 @@ pub struct Storage {
     #[serde(default = "crate::default_storage_dir")]
     pub dir: PathBuf,
 
-    // write_buffer_size is the buffer size for writing piece to disk, default is 16KB.
+    // write_buffer_size is the buffer size for writing piece to disk, default is 4KB.
     #[serde(default = "default_storage_write_buffer_size")]
     pub write_buffer_size: usize,
 
-    // read_buffer_size is the buffer size for reading piece from disk, default is 16KB.
+    // read_buffer_size is the buffer size for reading piece from disk, default is 4KB.
     #[serde(default = "default_storage_read_buffer_size")]
     pub read_buffer_size: usize,
 }
@@ -808,7 +808,7 @@ pub struct Proxy {
     // prefetch pre-downloads full of the task when download with range request.
     pub prefetch: bool,
 
-    // read_buffer_size is the buffer size for reading piece from disk, default is 16KB.
+    // read_buffer_size is the buffer size for reading piece from disk, default is 1KB.
     #[serde(default = "default_proxy_read_buffer_size")]
     pub read_buffer_size: usize,
 }
