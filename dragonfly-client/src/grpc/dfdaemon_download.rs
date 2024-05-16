@@ -208,7 +208,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         info!("download task started: {:?}", download);
         let task = match self
             .task
-            .download_started(task_id.as_str(), peer_id.as_str(), download.clone())
+            .download_started(task_id.as_str(), download.clone())
             .await
         {
             Err(ClientError::HTTP(err)) => {

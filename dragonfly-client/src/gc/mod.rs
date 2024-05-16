@@ -16,7 +16,7 @@
 
 use crate::grpc::scheduler::SchedulerClient;
 use crate::shutdown;
-use dragonfly_api::scheduler::v2::LeavePeerRequest;
+use dragonfly_api::scheduler::v2::LeaveTaskRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
 use dragonfly_client_storage::{metadata, Storage};
@@ -195,20 +195,17 @@ impl GC {
 
     // leave_task_from_scheduler leaves the task from the scheduler.
     async fn leave_task_from_scheduler(&self, task: metadata::Task) {
-        for peer_id in task.peer_ids {
-            self.scheduler_client
-                .leave_peer(
-                    task.id.as_str(),
-                    LeavePeerRequest {
-                        host_id: self.host_id.clone(),
-                        task_id: task.id.clone(),
-                        peer_id: peer_id.clone(),
-                    },
-                )
-                .await
-                .unwrap_or_else(|err| {
-                    error!("failed to leave peer {}: {}", peer_id, err);
-                });
-        }
+        self.scheduler_client
+            .leave_task(
+                task.id.as_str(),
+                LeaveTaskRequest {
+                    host_id: self.host_id.clone(),
+                    task_id: task.id.clone(),
+                },
+            )
+            .await
+            .unwrap_or_else(|err| {
+                error!("failed to leave peer {}: {}", task.id, err);
+            });
     }
 }
