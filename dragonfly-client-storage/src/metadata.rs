@@ -276,6 +276,11 @@ impl<E: StorageEngineOwned> Metadata<E> {
     pub fn prefetch_task_started(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
+                // If the task is prefetched, return an error.
+                if task.is_prefetched() {
+                    return Err(Error::InvalidState("prefetched".to_string()));
+                }
+
                 task.updated_at = Utc::now().naive_utc();
                 task.prefetched_at = Some(Utc::now().naive_utc());
                 task
