@@ -172,7 +172,8 @@ impl Task {
 
     // download_failed updates the metadata of the task when the task downloads failed.
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
-        self.storage.download_task_failed(id).await
+        let _ = self.storage.download_task_failed(id).await?;
+        Ok(())
     }
 
     // prefetch_task_started updates the metadata of the task when the task prefetch started.

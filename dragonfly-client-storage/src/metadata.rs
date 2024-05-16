@@ -56,6 +56,9 @@ pub struct Task {
     // prefetched_at is the time when the task prefetched.
     pub prefetched_at: Option<NaiveDateTime>,
 
+    // failed_at is the time when the task downloads failed.
+    pub failed_at: Option<NaiveDateTime>,
+
     // finished_at is the time when the task downloads finished.
     pub finished_at: Option<NaiveDateTime>,
 }
@@ -86,6 +89,11 @@ impl Task {
     // is_prefetched returns whether the task is prefetched.
     pub fn is_prefetched(&self) -> bool {
         self.prefetched_at.is_some()
+    }
+
+    // is_failed returns whether the task downloads failed.
+    pub fn is_failed(&self) -> bool {
+        self.failed_at.is_some()
     }
 
     // is_finished returns whether the task downloads finished.
@@ -232,6 +240,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
             Some(mut task) => {
                 // If the task exists, update the task metadata.
                 task.updated_at = Utc::now().naive_utc();
+                task.failed_at = None;
                 task.peer_ids.insert(peer_id.to_string());
 
                 // If the task has the response header, the response header
@@ -262,7 +271,23 @@ impl<E: StorageEngineOwned> Metadata<E> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
                 task.updated_at = Utc::now().naive_utc();
+                task.failed_at = None;
                 task.finished_at = Some(Utc::now().naive_utc());
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    // download_task_failed updates the metadata of the task when the task downloads failed.
+    pub fn download_task_failed(&self, id: &str) -> Result<Task> {
+        let task = match self.db.get::<Task>(id.as_bytes())? {
+            Some(mut task) => {
+                task.updated_at = Utc::now().naive_utc();
+                task.failed_at = Some(Utc::now().naive_utc());
                 task
             }
             None => return Err(Error::TaskNotFound(id.to_string())),
@@ -283,6 +308,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
                 task.updated_at = Utc::now().naive_utc();
                 task.prefetched_at = Some(Utc::now().naive_utc());
+                task.failed_at = None;
                 task
             }
             None => return Err(Error::TaskNotFound(id.to_string())),
@@ -298,6 +324,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
             Some(mut task) => {
                 task.updated_at = Utc::now().naive_utc();
                 task.prefetched_at = None;
+                task.failed_at = Some(Utc::now().naive_utc());
                 task
             }
             None => return Err(Error::TaskNotFound(id.to_string())),

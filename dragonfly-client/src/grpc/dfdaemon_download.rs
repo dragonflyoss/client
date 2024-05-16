@@ -213,6 +213,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         {
             Err(ClientError::HTTP(err)) => {
                 error!("download started failed by HTTP error: {}", err);
+                self.task
+                    .download_failed(task_id.as_str())
+                    .await
+                    .unwrap_or_else(|err| error!("download task failed: {}", err));
+
                 match serde_json::to_vec::<Http>(&Http {
                     header: reqwest_headermap_to_hashmap(&err.header),
                     status_code: err.status_code.as_u16() as i32,
