@@ -512,7 +512,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let download_clone = download.clone();
         let task_manager_clone = task_manager.clone();
         let task_clone = task.clone();
-        let task_id_clone = task_id.clone();
         let (out_stream_tx, out_stream_rx) = mpsc::channel(1024);
         tokio::spawn(
             async move {
@@ -546,7 +545,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         info!("download task succeeded");
                         if download_clone.range.is_none() {
                             if let Err(err) =
-                                task_manager_clone.download_finished(task_id_clone.as_str())
+                                task_manager_clone.download_finished(task_clone.id.as_str())
                             {
                                 error!("download task finished: {}", err);
                             }
@@ -574,10 +573,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             };
                         }
                     }
-                    Err(e) => {
+                    Err(err) => {
                         // Download task failed.
                         task_manager_clone
-                            .download_failed(task_id_clone.as_str())
+                            .download_failed(task_clone.id.as_str())
                             .await
                             .unwrap_or_else(|err| error!("download task failed: {}", err));
 
@@ -593,7 +592,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             download_clone.priority.to_string().as_str(),
                         );
 
-                        error!("download failed: {}", e);
+                        error!("download failed: {}", err);
                     }
                 }
 
@@ -603,49 +602,45 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         );
 
         // If prefetch flag is true, prefetch the full task.
-        if download.prefetch && !task.is_prefetched() && !task.is_finished() {
-            // Prefetch the task if prefetch flag is true.
-            let socket_path = self.socket_path.clone();
-            let task_manager_clone = task_manager.clone();
-            let task_id_clone = task_id.clone();
-            tokio::spawn(
-                async move {
-                    match task_manager_clone
-                        .prefetch_task_started(task_id_clone.as_str())
-                        .await
-                    {
-                        Ok(_) => {
-                            info!("prefetch task started");
-                        }
-                        Err(err) => {
-                            error!("prefetch task started: {}", err);
-                            return;
-                        }
-                    }
-
-                    if let Err(err) = super::prefetch_task(
-                        socket_path.clone(),
-                        Request::new(DownloadTaskRequest {
-                            download: Some(download.clone()),
-                        }),
-                    )
-                    .await
-                    {
-                        match task_manager_clone
-                            .prefetch_task_failed(task_id_clone.as_str())
+        if download.prefetch {
+            match task_manager.prefetch_task_started(task_id.as_str()).await {
+                Ok(_) => {
+                    info!("prefetch task started");
+                    let socket_path = self.socket_path.clone();
+                    let task_manager_clone = task_manager.clone();
+                    tokio::spawn(
+                        async move {
+                            if let Err(err) = super::prefetch_task(
+                                socket_path.clone(),
+                                Request::new(DownloadTaskRequest {
+                                    download: Some(download.clone()),
+                                }),
+                            )
                             .await
-                        {
-                            Ok(_) => {
-                                error!("prefetch task failed: {}", err);
-                            }
-                            Err(err) => {
-                                error!("prefetch task failed: {}", err);
+                            {
+                                match task_manager_clone
+                                    .prefetch_task_failed(task_id.clone().as_str())
+                                    .await
+                                {
+                                    Ok(_) => {
+                                        error!("prefetch task failed: {}", err);
+                                    }
+                                    Err(err) => {
+                                        error!(
+                                            "prefetch succeeded, but failed to update metadata: {}",
+                                            err
+                                        );
+                                    }
+                                }
                             }
                         }
-                    }
+                        .in_current_span(),
+                    );
                 }
-                .in_current_span(),
-            );
+                Err(err) => {
+                    error!("prefetch task started: {}", err);
+                }
+            }
         }
 
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
