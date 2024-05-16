@@ -100,6 +100,11 @@ impl GC {
         for task in self.storage.get_tasks()? {
             // If the task is expired and not uploading, evict the task.
             if task.is_expired(self.config.gc.policy.task_ttl) && !task.is_uploading() {
+                // If the task is uploading, skip it.
+                if task.is_uploading() {
+                    continue;
+                }
+
                 self.storage
                     .delete_task(&task.id)
                     .await
@@ -154,11 +159,6 @@ impl GC {
             // Evict enough space.
             if evicted_space >= need_evict_space {
                 break;
-            }
-
-            // If the task is started, skip it.
-            if task.is_started() {
-                continue;
             }
 
             // If the task is uploading, skip it.
