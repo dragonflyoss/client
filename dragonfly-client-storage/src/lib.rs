@@ -93,8 +93,8 @@ impl Storage {
     }
 
     // download_task_failed updates the metadata of the task when the task downloads failed.
-    pub async fn download_task_failed(&self, id: &str) -> Result<()> {
-        self.delete_task(id).await
+    pub async fn download_task_failed(&self, id: &str) -> Result<metadata::Task> {
+        self.metadata.download_task_failed(id)
     }
 
     // prefetch_task_started updates the metadata of the task when the task prefetches started.
