@@ -78,7 +78,7 @@ leaky-bucket = "1.0.1"
 tokio-rustls = "0.25.0-alpha.4"
 http-body-util = "0.1.0"
 futures-util = "0.3.30"
-termion = "3.0.0"
+termion = "4.0.0"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { version = "0.5.4", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
