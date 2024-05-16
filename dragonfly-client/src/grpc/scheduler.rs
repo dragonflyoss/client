@@ -21,7 +21,7 @@ use dragonfly_api::manager::v2::Scheduler;
 use dragonfly_api::scheduler::v2::{
     scheduler_client::SchedulerClient as SchedulerGRPCClient, AnnounceHostRequest,
     AnnouncePeerRequest, AnnouncePeerResponse, ExchangePeerRequest, ExchangePeerResponse,
-    LeaveHostRequest, LeavePeerRequest, StatPeerRequest, StatTaskRequest,
+    LeaveHostRequest, LeavePeerRequest, LeaveTaskRequest, StatPeerRequest, StatTaskRequest,
 };
 use dragonfly_client_core::error::{ErrorType, ExternalError, OrErr};
 use dragonfly_client_core::{Error, Result};
@@ -144,6 +144,17 @@ impl SchedulerClient {
             .stat_task(request)
             .await?;
         Ok(response.into_inner())
+    }
+
+    // leave_task tells the scheduler that the task is leaving.
+    #[instrument(skip(self))]
+    pub async fn leave_task(&self, task_id: &str, request: LeaveTaskRequest) -> Result<()> {
+        let request = Self::make_request(request);
+        self.client(task_id.to_string())
+            .await?
+            .leave_task(request)
+            .await?;
+        Ok(())
     }
 
     // init_announce_host announces the host to the scheduler.
