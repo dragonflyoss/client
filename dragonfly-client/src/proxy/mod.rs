@@ -65,9 +65,6 @@ use tracing::{error, info, instrument, Span};
 
 pub mod header;
 
-// DEFAULT_SERVER_BUFFER_SIZE is the default buffer size for connection to the server, default is 128KB.
-const DEFAULT_SERVER_BUFFER_SIZE: usize = 128 * 1024;
-
 // Response is the response of the proxy server.
 pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
 
@@ -180,7 +177,6 @@ impl Proxy {
                         if let Err(err) = http1::Builder::new()
                             .preserve_header_case(true)
                             .title_case_headers(true)
-                            .max_buf_size(DEFAULT_SERVER_BUFFER_SIZE)
                             .serve_connection(
                                 io,
                                 service_fn(move |request| handler(config.clone(), task.clone(), request, registry_certs.clone(), server_ca_cert.clone())),
