@@ -19,7 +19,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use rocksdb::WriteOptions;
+use rocksdb::{ReadOptions, WriteOptions};
 use std::{ops::Deref, path::Path};
 use tracing::info;
 
@@ -76,7 +76,7 @@ impl RocksdbStorageEngine {
         block_options.set_block_size(Self::DEFAULT_BLOCK_SIZE);
         block_options.set_cache_index_and_filter_blocks(true);
         block_options.set_pin_l0_filter_and_index_blocks_in_cache(true);
-        block_options.set_bloom_filter(10.0, false);
+        block_options.set_bloom_filter(10.0, true);
         options.set_block_based_table_factory(&block_options);
 
         // Open rocksdb.
@@ -93,7 +93,12 @@ impl Operations for RocksdbStorageEngine {
     // get gets the object by key.
     fn get<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>> {
         let cf = cf_handle::<O>(self)?;
-        let value = self.get_cf(cf, key).or_err(ErrorType::StorageError)?;
+        let mut options = ReadOptions::default();
+        options.set_total_order_seek(true);
+
+        let value = self
+            .get_cf_opt(cf, key, &options)
+            .or_err(ErrorType::StorageError)?;
         match value {
             Some(value) => Ok(Some(O::deserialize_from(&value)?)),
             None => Ok(None),

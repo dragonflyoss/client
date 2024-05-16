@@ -1223,7 +1223,7 @@ impl Task {
 
         // If not all pieces are downloaded, return an error.
         Err(Error::Unknown(
-            "not all pieces are downloaded from source".to_string(),
+            "not all pieces are downloaded from local peer".to_string(),
         ))
     }
 
