@@ -108,12 +108,11 @@ impl Task {
     pub async fn download_started(
         &self,
         id: &str,
-        peer_id: &str,
         download: Download,
     ) -> ClientResult<metadata::Task> {
         let task = self
             .storage
-            .download_task_started(id, peer_id, download.piece_length, None)?;
+            .download_task_started(id, download.piece_length, None)?;
 
         // Handle the request header.
         let mut request_header =
@@ -155,7 +154,6 @@ impl Task {
 
             return self.storage.download_task_started(
                 id,
-                peer_id,
                 download.piece_length,
                 Some(http_header),
             );
@@ -291,42 +289,8 @@ impl Task {
             )
             .await?;
 
-        // If the task is finished, return the file.
-        if task.is_finished() {
-            info!("task is finished, download the pieces from the local peer");
-
-            // Download the pieces from the local peer.
-            if let Err(err) = self
-                .download_from_local_peer(
-                    task.clone(),
-                    host_id,
-                    peer_id,
-                    interested_pieces.clone(),
-                    download_progress_tx.clone(),
-                )
-                .await
-            {
-                error!("download from local peer error: {:?}", err);
-                download_progress_tx
-                    .send_timeout(
-                        Err(Status::internal(format!(
-                            "download from local peer error: {:?}",
-                            err
-                        ))),
-                        REQUEST_TIMEOUT,
-                    )
-                    .await
-                    .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
-                return Err(err);
-            };
-
-            info!("all pieces are downloaded from local peer");
-            return Ok(());
-        }
-        info!("download the pieces from local peer");
-
         // Download the pieces from the local peer.
+        info!("download the pieces from local peer");
         let finished_pieces = match self
             .download_partial_from_local_peer(
                 task.clone(),
@@ -1187,45 +1151,6 @@ impl Task {
         }
 
         Ok(finished_pieces)
-    }
-
-    // download_from_local_peer downloads a task from a local peer.
-    #[allow(clippy::too_many_arguments)]
-    async fn download_from_local_peer(
-        &self,
-        task: metadata::Task,
-        host_id: &str,
-        peer_id: &str,
-        interested_pieces: Vec<metadata::Piece>,
-        download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
-    ) -> ClientResult<()> {
-        let finished_pieces = self
-            .download_partial_from_local_peer(
-                task,
-                host_id,
-                peer_id,
-                interested_pieces.clone(),
-                download_progress_tx.clone(),
-            )
-            .await?;
-
-        // Check if all pieces are downloaded.
-        if finished_pieces.len() == interested_pieces.len() {
-            return Ok(());
-        }
-
-        // Send the download progress.
-        download_progress_tx
-            .send_timeout(
-                Err(Status::internal("not all pieces are downloaded")),
-                REQUEST_TIMEOUT,
-            )
-            .await?;
-
-        // If not all pieces are downloaded, return an error.
-        Err(Error::Unknown(
-            "not all pieces are downloaded from local peer".to_string(),
-        ))
     }
 
     // download_partial_from_local_peer downloads a partial task from a local peer.

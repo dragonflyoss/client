@@ -19,7 +19,7 @@ use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::http::reqwest_headermap_to_hashmap;
 use reqwest::header::{self, HeaderMap};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 use tracing::error;
@@ -31,8 +31,6 @@ use crate::storage_engine::{rocksdb::RocksdbStorageEngine, DatabaseObject, Stora
 pub struct Task {
     // id is the task id.
     pub id: String,
-
-    pub peer_ids: HashSet<String>,
 
     // piece_length is the length of the piece.
     pub piece_length: u64,
@@ -226,7 +224,6 @@ impl<E: StorageEngineOwned> Metadata<E> {
     pub fn download_task_started(
         &self,
         id: &str,
-        peer_id: &str,
         piece_length: u64,
         response_header: Option<HeaderMap>,
     ) -> Result<Task> {
@@ -241,7 +238,6 @@ impl<E: StorageEngineOwned> Metadata<E> {
                 // If the task exists, update the task metadata.
                 task.updated_at = Utc::now().naive_utc();
                 task.failed_at = None;
-                task.peer_ids.insert(peer_id.to_string());
 
                 // If the task has the response header, the response header
                 // will not be covered.
@@ -253,7 +249,6 @@ impl<E: StorageEngineOwned> Metadata<E> {
             }
             None => Task {
                 id: id.to_string(),
-                peer_ids: vec![peer_id.to_string()].into_iter().collect(),
                 piece_length,
                 response_header,
                 updated_at: Utc::now().naive_utc(),
@@ -556,18 +551,14 @@ mod tests {
         let metadata = Metadata::new(dir.path()).unwrap();
 
         let task_id = "task1";
-        let peer_id = "peer1";
 
         // Test download_task_started.
-        metadata
-            .download_task_started(task_id, peer_id, 1024, None)
-            .unwrap();
+        metadata.download_task_started(task_id, 1024, None).unwrap();
         let mut task = metadata
             .get_task(task_id)
             .unwrap()
             .expect("task should exist after download_task_started");
         assert_eq!(task.id, task_id);
-        assert_eq!(task.peer_ids.take(peer_id), Some(peer_id.to_string()));
         assert_eq!(task.piece_length, 1024);
         assert!(task.response_header.is_empty());
         assert_eq!(task.uploading_count, 0);
@@ -616,11 +607,8 @@ mod tests {
 
         // Test get_tasks.
         let task_id = "task2";
-        let peer_id = "peer2";
 
-        metadata
-            .download_task_started(task_id, peer_id, 1024, None)
-            .unwrap();
+        metadata.download_task_started(task_id, 1024, None).unwrap();
         let tasks = metadata.get_tasks().unwrap();
         assert_eq!(tasks.len(), 2, "should get 2 tasks in total");
 
