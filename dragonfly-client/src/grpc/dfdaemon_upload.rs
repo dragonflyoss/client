@@ -637,6 +637,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         .in_current_span(),
                     );
                 }
+                // If the task is already prefetched, ignore the error.
+                Err(ClientError::InvalidState(_)) => {}
                 Err(err) => {
                     error!("prefetch task started: {}", err);
                 }
