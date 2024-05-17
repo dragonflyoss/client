@@ -287,7 +287,11 @@ impl Task {
                 }),
                 REQUEST_TIMEOUT,
             )
-            .await?;
+            .await
+            .map_err(|err| {
+                error!("send DownloadTaskStartedResponse failed: {:?}", err);
+                err
+            })?;
 
         // Download the pieces from the local peer.
         info!("download the pieces from local peer");
@@ -436,7 +440,11 @@ impl Task {
                 },
                 REQUEST_TIMEOUT,
             )
-            .await?;
+            .await
+            .map_err(|err| {
+                error!("send RegisterPeerRequest failed: {:?}", err);
+                err
+            })?;
         info!("sent RegisterPeerRequest");
 
         // Initialize the stream.
@@ -507,7 +515,11 @@ impl Task {
                             },
                             REQUEST_TIMEOUT,
                         )
-                        .await?;
+                        .await
+                        .map_err(|err| {
+                            error!("send DownloadPeerStartedRequest failed: {:?}", err);
+                            err
+                        })?;
                     info!("sent DownloadPeerStartedRequest");
 
                     // Send the download peer finished request.
@@ -528,7 +540,11 @@ impl Task {
                             },
                             REQUEST_TIMEOUT,
                         )
-                        .await?;
+                        .await
+                        .map_err(|err| {
+                            error!("send DownloadPeerFinishedRequest failed: {:?}", err);
+                            err
+                        })?;
                     info!("sent DownloadPeerFinishedRequest");
 
                     // Wait for the latest message to be sent.
@@ -561,7 +577,11 @@ impl Task {
                             },
                             REQUEST_TIMEOUT,
                         )
-                        .await?;
+                        .await
+                        .map_err(|err| {
+                            error!("send DownloadPeerStartedRequest failed: {:?}", err);
+                            err
+                        })?;
                     info!("sent DownloadPeerStartedRequest");
 
                     // Download the pieces from the remote peer.
@@ -602,7 +622,11 @@ impl Task {
                                 },
                                 REQUEST_TIMEOUT,
                             )
-                            .await?;
+                            .await
+                            .map_err(|err| {
+                                error!("send DownloadPeerFinishedRequest failed: {:?}", err);
+                                err
+                            })?;
                         info!("sent DownloadPeerFinishedRequest");
 
                         // Wait for the latest message to be sent.
@@ -629,7 +653,11 @@ impl Task {
                             },
                             REQUEST_TIMEOUT,
                         )
-                        .await?;
+                        .await
+                        .map_err(|err| {
+                            error!("send RescheduleRequest failed: {:?}", err);
+                            err
+                        })?;
                     info!("sent RescheduleRequest");
                 }
                 announce_peer_response::Response::NeedBackToSourceResponse(response) => {
@@ -650,7 +678,10 @@ impl Task {
                                 ),
                             ),
                         }, REQUEST_TIMEOUT)
-                        .await?;
+                        .await.map_err(|err| {
+                            error!("send DownloadPeerBackToSourceStartedRequest failed: {:?}", err);
+                            err
+                        })?;
                     info!("sent DownloadPeerBackToSourceStartedRequest");
 
                     // Remove the finished pieces from the pieces.
@@ -718,7 +749,10 @@ impl Task {
                                 },
                                 REQUEST_TIMEOUT,
                             )
-                            .await?;
+                            .await.map_err(|err| {
+                                error!("send DownloadPeerBackToSourceFinishedRequest failed: {:?}", err);
+                                err
+                            })?;
                         info!("sent DownloadPeerBackToSourceFinishedRequest");
 
                         // Wait for the latest message to be sent.
@@ -739,7 +773,10 @@ impl Task {
                                 ),
                             ),
                         }, REQUEST_TIMEOUT)
-                        .await?;
+                        .await.map_err(|err| {
+                            error!("send DownloadPeerBackToSourceFailedRequest failed: {:?}", err);
+                            err
+                        })?;
                     info!("sent DownloadPeerBackToSourceFailedRequest");
 
                     // Wait for the latest message to be sent.
@@ -849,7 +886,11 @@ impl Task {
                         },
                         REQUEST_TIMEOUT,
                     )
-                    .await?;
+                    .await
+                    .map_err(|err| {
+                        error!("send DownloadPieceFinishedRequest failed: {:?}", err);
+                        err
+                    })?;
 
                 // Send the download progress.
                 download_progress_tx
@@ -868,7 +909,11 @@ impl Task {
                         }),
                         REQUEST_TIMEOUT,
                     )
-                    .await?;
+                    .await
+                    .map_err(|err| {
+                        error!("send DownloadPieceFinishedResponse failed: {:?}", err);
+                        err
+                    })?;
 
                 info!(
                     "finished piece {} from remote peer {:?}",
@@ -942,7 +987,7 @@ impl Task {
                         )
                         .await
                         .unwrap_or_else(|err| {
-                            error!("send download piece failed request error: {:?}", err)
+                            error!("send DownloadPieceFailedRequest failed: {:?}", err)
                         });
 
                     continue;
@@ -1043,7 +1088,10 @@ impl Task {
                             },
                             REQUEST_TIMEOUT,
                         )
-                        .await?;
+                        .await.map_err(|err| {
+                            error!("send DownloadPieceBackToSourceFinishedRequest failed: {:?}", err);
+                            err
+                        })?;
 
                 // Send the download progress.
                 download_progress_tx
@@ -1062,7 +1110,11 @@ impl Task {
                         }),
                         REQUEST_TIMEOUT,
                     )
-                    .await?;
+                    .await
+                    .map_err(|err| {
+                        error!("send DownloadPieceFinishedResponse failed: {:?}", err);
+                        err
+                    })?;
 
                 info!(
                     "finished piece {} from source",
@@ -1124,7 +1176,7 @@ impl Task {
                                     )),
                                 }, REQUEST_TIMEOUT)
                                 .await
-                                .unwrap_or_else(|err| error!("send download piece failed request error: {:?}", err));
+                                .unwrap_or_else(|err| error!("send DownloadPieceBackToSourceFailedRequest error: {:?}", err));
 
                     join_set.abort_all();
                     return Err(Error::HTTP(err));
@@ -1143,7 +1195,7 @@ impl Task {
                                     )),
                                 }, REQUEST_TIMEOUT)
                                 .await
-                                .unwrap_or_else(|err| error!("send download piece failed request error: {:?}", err));
+                                .unwrap_or_else(|err| error!("send DownloadPieceBackToSourceFailedRequest error: {:?}", err));
 
                     return Err(err);
                 }
@@ -1227,7 +1279,11 @@ impl Task {
                     }),
                     REQUEST_TIMEOUT,
                 )
-                .await?;
+                .await
+                .map_err(|err| {
+                    error!("send DownloadPieceFinishedResponse failed: {:?}", err);
+                    err
+                })?;
 
             // Store the finished piece.
             finished_pieces.push(interested_piece.clone());
@@ -1321,7 +1377,11 @@ impl Task {
                         }),
                         REQUEST_TIMEOUT,
                     )
-                    .await?;
+                    .await
+                    .map_err(|err| {
+                        error!("send DownloadPieceFinishedResponse failed: {:?}", err);
+                        err
+                    })?;
 
                 info!(
                     "finished piece {} from source",
