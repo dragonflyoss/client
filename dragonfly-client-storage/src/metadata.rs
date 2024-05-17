@@ -81,7 +81,7 @@ impl Task {
 
     // is_expired returns whether the task is expired.
     pub fn is_expired(&self, ttl: Duration) -> bool {
-        self.created_at + ttl < Utc::now().naive_utc()
+        self.updated_at + ttl < Utc::now().naive_utc()
     }
 
     // is_prefetched returns whether the task is prefetched.
