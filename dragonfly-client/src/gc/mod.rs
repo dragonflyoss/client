@@ -99,7 +99,7 @@ impl GC {
         info!("start to evict by task ttl");
         for task in self.storage.get_tasks()? {
             // If the task is expired and not uploading, evict the task.
-            if task.is_expired(self.config.gc.policy.task_ttl) && !task.is_uploading() {
+            if task.is_expired(self.config.gc.policy.task_ttl) {
                 // If the task is uploading, skip it.
                 if task.is_uploading() {
                     continue;
