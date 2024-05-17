@@ -204,7 +204,11 @@ impl PieceCollector {
                                         length,
                                         parent: parent.clone(),
                                     })
-                                    .await?;
+                                    .await
+                                    .map_err(|err| {
+                                        error!("send CollectedPiece failed: {}", err);
+                                        err
+                                    })?;
                             }
                         }
                         None => continue,
