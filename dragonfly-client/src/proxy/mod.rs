@@ -570,7 +570,7 @@ async fn proxy_by_dfdaemon(
 
         // Get the first piece number from the started response.
         let Some(first_piece) = download_task_started_response.pieces.first() else {
-            error!("reponse pieces is empty");
+            error!("response pieces is empty");
             if let Err(err) = writer.shutdown().await {
                 error!("writer shutdown error: {}", err);
             }
@@ -772,7 +772,7 @@ fn make_registry_mirror_request(
     Ok(request)
 }
 
-// make_download_task_requet makes a download task request by the request.
+// make_download_task_request makes a download task request by the request.
 #[instrument(skip_all)]
 fn make_download_task_request(
     config: Arc<Config>,
@@ -845,7 +845,7 @@ fn make_download_url(
 fn make_response_headers(
     mut download_task_started_response: DownloadTaskStartedResponse,
 ) -> ClientResult<hyper::header::HeaderMap> {
-    // Insert the content range header to the resopnse header.
+    // Insert the content range header to the response header.
     if let Some(range) = download_task_started_response.range.as_ref() {
         download_task_started_response.response_header.insert(
             reqwest::header::CONTENT_RANGE.to_string(),
