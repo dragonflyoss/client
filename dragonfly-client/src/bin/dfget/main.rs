@@ -209,7 +209,7 @@ async fn main() -> anyhow::Result<()> {
     // Parse command line arguments.
     let args = Args::parse();
 
-    // Initialize tracting.
+    // Initialize tracing.
     let _guards = init_tracing(
         dfget::NAME,
         &args.log_dir,
@@ -412,7 +412,7 @@ async fn run(args: Args) -> Result<()> {
         .progress_chars("#>-"),
     );
 
-    //  Dwonload file.
+    //  Download file.
     let mut downloaded = 0;
     let mut out_stream = response.into_inner();
     while let Some(message) = out_stream.message().await.map_err(|err| {

@@ -283,7 +283,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn seralize_container_runtime() {
+    fn serialize_container_runtime() {
         let cfg = ContainerRuntimeConfig::Containerd(Containerd {
             ..Default::default()
         });

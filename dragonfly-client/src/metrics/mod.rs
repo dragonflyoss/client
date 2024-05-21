@@ -105,7 +105,7 @@ lazy_static! {
 
 // TaskSize represents the size of the task.
 pub enum TaskSize {
-    // Level0 represents unknow size.
+    // Level0 represents unknown size.
     Level0,
 
     // Level0 represents size range is from 0 to 1M.

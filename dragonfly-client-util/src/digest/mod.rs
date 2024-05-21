@@ -20,7 +20,7 @@ use std::str::FromStr;
 // SEPARATOR is the separator of digest.
 pub const SEPARATOR: &str = ":";
 
-// Algorithm is a enum of the algorithm that is used to generate digest.
+// Algorithm is an enum of the algorithm that is used to generate digest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Algorithm {
     // Blake3 is blake3 algorithm for generate digest.
@@ -49,7 +49,7 @@ impl fmt::Display for Algorithm {
 impl FromStr for Algorithm {
     type Err = String;
 
-    // from_str parses a algorithm string.
+    // from_str parses an algorithm string.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "blake3" => Ok(Algorithm::Blake3),

@@ -53,7 +53,7 @@ pub fn hashmap_to_hyper_header_map(
     Ok(header)
 }
 
-// TODO: Remove the convertion after the http crate version is the same.
+// TODO: Remove the conversion after the http crate version is the same.
 // Convert the Reqwest header to the Hyper header, because of the http crate
 // version is different. Reqwest header depends on the http crate
 // version 0.2, but the Hyper header depends on the http crate version 0.1.

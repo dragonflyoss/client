@@ -70,7 +70,7 @@ impl CRIO {
         let proxy_port = proxy_url
             .port_or_known_default()
             .ok_or(Error::Unknown("port not found".to_string()))?;
-        let proxy_locaiton = format!("{}:{}", proxy_host, proxy_port);
+        let proxy_location = format!("{}:{}", proxy_host, proxy_port);
 
         // Add registries to the registries config.
         let mut registries_table = ArrayOfTables::new();
@@ -79,7 +79,7 @@ impl CRIO {
             let mut registry_mirror_table = Table::new();
             registry_mirror_table.set_implicit(true);
             registry_mirror_table.insert("insecure", value(true));
-            registry_mirror_table.insert("location", value(proxy_locaiton.as_str()));
+            registry_mirror_table.insert("location", value(proxy_location.as_str()));
 
             let mut registry_mirrors_table = ArrayOfTables::new();
             registry_mirrors_table.push(registry_mirror_table);
