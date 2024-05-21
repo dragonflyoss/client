@@ -133,7 +133,7 @@ pub enum DFError {
     #[error{"RangeUnsatisfiable: Failed to parse range fallback error, please file an issue"}]
     EmptyHTTPRangeError,
 
-    // ToniceStatus is the error for tonic status.
+    // TonicStatus is the error for tonic status.
     #[error(transparent)]
     TonicStatus(#[from] tonic::Status),
 
