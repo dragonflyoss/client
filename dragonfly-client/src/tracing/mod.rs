@@ -56,6 +56,7 @@ pub fn init_tracing(
     let rolling_appender = RollingFileAppender::builder()
         .rotation(Rotation::HOURLY)
         .filename_prefix(name)
+        .filename_suffix("log")
         .max_log_files(log_max_files)
         .build(log_dir)
         .expect("failed to create rolling file appender");
