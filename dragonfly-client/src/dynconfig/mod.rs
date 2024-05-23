@@ -35,9 +35,6 @@ pub struct Data {
 
     // available_schedulers is the available schedulers of the dfdaemon.
     pub available_schedulers: Vec<Scheduler>,
-
-    // available_scheduler_cluster_id is the id of the available scheduler cluster of the dfdaemon.
-    pub available_scheduler_cluster_id: Option<u64>,
 }
 
 // Dynconfig supports dynamic configuration of the client.
@@ -133,9 +130,6 @@ impl Dynconfig {
         let mut data = self.data.write().await;
         data.schedulers = schedulers;
         data.available_schedulers = available_schedulers;
-        if let Some(available_scheduler) = data.available_schedulers.first() {
-            data.available_scheduler_cluster_id = Some(available_scheduler.scheduler_cluster_id);
-        }
         Ok(())
     }
 
