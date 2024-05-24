@@ -54,7 +54,7 @@ http.workspace = true
 openssl.workspace = true
 clap.workspace = true
 anyhow.workspace = true
-tracing-log = "0.1"
+tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2.3"
 tracing-opentelemetry = "0.18.0"
