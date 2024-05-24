@@ -15,7 +15,9 @@
  */
 
 use opentelemetry::sdk::propagation::TraceContextPropagator;
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::os::unix::io::AsRawFd;
+use std::path::{Path, PathBuf};
 use tracing::{info, Level};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
@@ -71,16 +73,16 @@ pub fn init_tracing(
         .with_thread_names(false)
         .with_thread_ids(false)
         .compact();
-
     guards.push(rolling_writer_guard);
 
+    // Setup env filter for log level.
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::default().add_directive(log_level.into()));
 
     let subscriber = Registry::default()
         .with(env_filter)
-        .with(stdout_logging_layer)
-        .with(file_logging_layer);
+        .with(file_logging_layer)
+        .with(stdout_logging_layer);
 
     // Setup jaeger layer.
     if let Some(jaeger_addr) = jaeger_addr {
@@ -108,5 +110,22 @@ pub fn init_tracing(
         log_level
     );
 
+    // Redirect stderr to file.
+    redirect_stderr_to_file(log_dir);
+
     guards
+}
+
+// Redirect stderr to file.
+fn redirect_stderr_to_file(log_dir: &Path) {
+    let log_path = log_dir.join("stderr.log");
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .unwrap();
+
+    unsafe {
+        libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO);
+    }
 }
