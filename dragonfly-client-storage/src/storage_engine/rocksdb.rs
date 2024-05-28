@@ -21,7 +21,7 @@ use dragonfly_client_core::{
 };
 use rocksdb::{ReadOptions, WriteOptions};
 use std::{ops::Deref, path::Path};
-use tracing::info;
+use tracing::{info, warn};
 
 /// RocksdbStorageEngine is a storage engine based on rocksdb.
 pub struct RocksdbStorageEngine {
@@ -58,7 +58,7 @@ impl RocksdbStorageEngine {
     const DEFAULT_CACHE_SIZE: usize = 32 * 1024 * 1024;
 
     /// open opens a rocksdb storage engine with the given directory and column families.
-    pub fn open(dir: &Path, cf_names: &[&str]) -> Result<Self> {
+    pub fn open(dir: &Path, cf_names: &[&str], keep: bool) -> Result<Self> {
         // Initialize rocksdb options.
         let mut options = rocksdb::Options::default();
         options.create_if_missing(true);
@@ -79,8 +79,16 @@ impl RocksdbStorageEngine {
         block_options.set_bloom_filter(10.0, true);
         options.set_block_based_table_factory(&block_options);
 
-        // Open rocksdb.
         let dir = dir.join(Self::DEFAULT_DIR_NAME);
+
+        // If the storage is not kept, remove the db.
+        if !keep {
+            rocksdb::DB::destroy(&options, &dir).unwrap_or_else(|err| {
+                warn!("destroy {:?} failed: {}", dir, err);
+            });
+        }
+
+        // Open rocksdb.
         let db = rocksdb::DB::open_cf(&options, &dir, cf_names).or_err(ErrorType::StorageError)?;
         info!("metadata initialized directory: {:?}", dir);
 

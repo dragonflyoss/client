@@ -51,6 +51,14 @@ impl Content {
     // new returns a new content.
     pub async fn new(config: Arc<Config>, dir: &Path) -> Result<Content> {
         let dir = dir.join(DEFAULT_DIR_NAME);
+
+        // If the storage is not kept, remove the directory.
+        if !config.storage.keep {
+            fs::remove_dir_all(&dir).await.unwrap_or_else(|err| {
+                warn!("remove {:?} failed: {}", dir, err);
+            });
+        }
+
         fs::create_dir_all(&dir).await?;
         info!("content initialized directory: {:?}", dir);
 
