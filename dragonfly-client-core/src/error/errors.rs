@@ -159,10 +159,13 @@ impl<T, E> OrErr<T, E> for Result<T, E> {
     }
 }
 
-// HttpError is the error for http.
+// BackendError is the error for backend.
 #[derive(Debug, thiserror::Error)]
-#[error("http error {status_code}")]
-pub struct HTTPError {
+#[error("backend error {message}")]
+pub struct BackendError {
+    // message is the error message.
+    pub message: String,
+
     // status_code is the status code of the response.
     pub status_code: reqwest::StatusCode,
 

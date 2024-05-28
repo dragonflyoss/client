@@ -11,6 +11,7 @@ edition.workspace = true
 
 [dependencies]
 dragonfly-client-core.workspace = true
+dragonfly-api.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

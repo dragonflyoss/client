@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use dragonfly_api::common::v2::Range;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -53,17 +54,29 @@ pub struct HeadRequest {
 
 // HeadResponse is the head response for backend.
 pub struct HeadResponse {
+    // success is the success of the response.
+    pub success: bool,
+
+    // content_length is the content length of the response.
+    pub content_length: Option<u64>,
+
     // http_header is the headers of the response.
     pub http_header: Option<HeaderMap>,
 
     // http_status_code is the status code of the response.
     pub http_status_code: Option<reqwest::StatusCode>,
+
+    // error_message is the error message of the response.
+    pub error_message: Option<String>,
 }
 
 // GetRequest is the get request for backend.
 pub struct GetRequest {
     // url is the url of the request.
     pub url: String,
+
+    // range is the range of the request.
+    pub range: Option<Range>,
 
     // http_header is the headers of the request.
     pub http_header: Option<HeaderMap>,
@@ -80,6 +93,9 @@ pub struct GetResponse<R>
 where
     R: AsyncRead + Unpin,
 {
+    // success is the success of the response.
+    pub success: bool,
+
     // http_header is the headers of the response.
     pub http_header: Option<HeaderMap>,
 
@@ -88,6 +104,9 @@ where
 
     // body is the content of the response.
     pub reader: R,
+
+    // error_message is the error message of the response.
+    pub error_message: Option<String>,
 }
 
 // GetResponse implements the response functions.
