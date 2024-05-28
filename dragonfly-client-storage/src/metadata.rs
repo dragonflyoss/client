@@ -15,12 +15,14 @@
  */
 
 use chrono::{NaiveDateTime, Utc};
+use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::http::reqwest_headermap_to_hashmap;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::error;
 
@@ -525,8 +527,12 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
 impl Metadata<RocksdbStorageEngine> {
     /// new creates a new metadata instance.
-    pub fn new(dir: &Path) -> Result<Metadata<RocksdbStorageEngine>> {
-        let db = RocksdbStorageEngine::open(dir, &[Task::NAMESPACE, Piece::NAMESPACE])?;
+    pub fn new(config: Arc<Config>, dir: &Path) -> Result<Metadata<RocksdbStorageEngine>> {
+        let db = RocksdbStorageEngine::open(
+            dir,
+            &[Task::NAMESPACE, Piece::NAMESPACE],
+            config.storage.keep,
+        )?;
 
         Ok(Metadata { db })
     }
@@ -541,7 +547,7 @@ mod tests {
     #[test]
     fn should_create_metadata_db() {
         let dir = TempDir::new("metadata_db").unwrap();
-        let metadata = Metadata::new(dir.path()).unwrap();
+        let metadata = Metadata::new(Arc::new(Config::default()), dir.path()).unwrap();
         assert!(metadata.get_tasks().unwrap().is_empty());
         assert!(metadata.get_pieces("task").unwrap().is_empty());
     }
@@ -549,7 +555,7 @@ mod tests {
     #[test]
     fn test_task_lifecycle() {
         let dir = TempDir::new("metadata_db").unwrap();
-        let metadata = Metadata::new(dir.path()).unwrap();
+        let metadata = Metadata::new(Arc::new(Config::default()), dir.path()).unwrap();
 
         let task_id = "task1";
 
@@ -627,7 +633,7 @@ mod tests {
     #[test]
     fn test_piece_lifecycle() {
         let dir = TempDir::new("metadata_db").unwrap();
-        let metadata = Metadata::new(dir.path()).unwrap();
+        let metadata = Metadata::new(Arc::new(Config::default()), dir.path()).unwrap();
         let task_id = "task3";
 
         // Test download_piece_started.
