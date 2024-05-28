@@ -56,7 +56,7 @@ pub fn init_tracing(
 
     // Setup file layer.
     let rolling_appender = RollingFileAppender::builder()
-        .rotation(Rotation::HOURLY)
+        .rotation(Rotation::DAILY)
         .filename_prefix(name)
         .filename_suffix("log")
         .max_log_files(log_max_files)
