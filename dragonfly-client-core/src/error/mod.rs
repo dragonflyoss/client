@@ -21,7 +21,7 @@ pub use errors::ErrorType;
 pub use errors::ExternalError;
 
 pub use errors::OrErr;
-pub use errors::{DownloadFromRemotePeerFailed, HTTPError};
+pub use errors::{BackendError, DownloadFromRemotePeerFailed};
 
 // DFError is the error for dragonfly.
 #[derive(thiserror::Error, Debug)]
@@ -137,9 +137,9 @@ pub enum DFError {
     #[error(transparent)]
     TonicStatus(#[from] tonic::Status),
 
-    // Reqwest is the error for reqwest.
+    // BackendError is the error for backend.
     #[error(transparent)]
-    HTTP(HTTPError),
+    BackendError(BackendError),
 
     // ExternalError is the error for external error.
     #[error(transparent)]

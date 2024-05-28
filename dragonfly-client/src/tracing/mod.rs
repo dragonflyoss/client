@@ -30,6 +30,7 @@ pub fn init_tracing(
     log_level: Level,
     log_max_files: usize,
     jaeger_addr: Option<String>,
+    redirect_stderr: bool,
     verbose: bool,
 ) -> Vec<WorkerGuard> {
     let mut guards = vec![];
@@ -111,7 +112,9 @@ pub fn init_tracing(
     );
 
     // Redirect stderr to file.
-    redirect_stderr_to_file(log_dir);
+    if redirect_stderr {
+        redirect_stderr_to_file(log_dir);
+    }
 
     guards
 }

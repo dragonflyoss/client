@@ -17,7 +17,7 @@
 use chrono::{NaiveDateTime, Utc};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::http::reqwest_headermap_to_hashmap;
-use reqwest::header::{self, HeaderMap};
+use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -34,6 +34,9 @@ pub struct Task {
 
     // piece_length is the length of the piece.
     pub piece_length: u64,
+
+    // content_length is the length of the content.
+    pub content_length: Option<u64>,
 
     // header is the header of the response.
     pub response_header: HashMap<String, String>,
@@ -112,16 +115,7 @@ impl Task {
 
     // content_length returns the content length of the task.
     pub fn content_length(&self) -> Option<u64> {
-        match self.response_header.get(header::CONTENT_LENGTH.as_str()) {
-            Some(content_length) => match content_length.parse::<u64>() {
-                Ok(content_length) => Some(content_length),
-                Err(err) => {
-                    error!("parse content length error: {:?}", err);
-                    None
-                }
-            },
-            None => None,
-        }
+        self.content_length
     }
 }
 
@@ -225,6 +219,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         &self,
         id: &str,
         piece_length: u64,
+        content_length: Option<u64>,
         response_header: Option<HeaderMap>,
     ) -> Result<Task> {
         // Convert the response header to hashmap.
@@ -239,6 +234,11 @@ impl<E: StorageEngineOwned> Metadata<E> {
                 task.updated_at = Utc::now().naive_utc();
                 task.failed_at = None;
 
+                // Protect content length to be overwritten by None.
+                if content_length.is_some() {
+                    task.content_length = content_length;
+                }
+
                 // If the task has the response header, the response header
                 // will not be covered.
                 if task.response_header.is_empty() {
@@ -250,6 +250,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
             None => Task {
                 id: id.to_string(),
                 piece_length,
+                content_length,
                 response_header,
                 updated_at: Utc::now().naive_utc(),
                 created_at: Utc::now().naive_utc(),
@@ -553,13 +554,16 @@ mod tests {
         let task_id = "task1";
 
         // Test download_task_started.
-        metadata.download_task_started(task_id, 1024, None).unwrap();
-        let mut task = metadata
+        metadata
+            .download_task_started(task_id, 1024, Some(1024), None)
+            .unwrap();
+        let task = metadata
             .get_task(task_id)
             .unwrap()
             .expect("task should exist after download_task_started");
         assert_eq!(task.id, task_id);
         assert_eq!(task.piece_length, 1024);
+        assert_eq!(task.content_length, Some(1024));
         assert!(task.response_header.is_empty());
         assert_eq!(task.uploading_count, 0);
         assert_eq!(task.uploaded_count, 0);
@@ -608,7 +612,9 @@ mod tests {
         // Test get_tasks.
         let task_id = "task2";
 
-        metadata.download_task_started(task_id, 1024, None).unwrap();
+        metadata
+            .download_task_started(task_id, 1024, None, None)
+            .unwrap();
         let tasks = metadata.get_tasks().unwrap();
         assert_eq!(tasks.len(), 2, "should get 2 tasks in total");
 

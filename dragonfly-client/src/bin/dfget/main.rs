@@ -17,7 +17,7 @@
 use clap::Parser;
 use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::{download_task_response, DownloadTaskRequest};
-use dragonfly_api::errordetails::v2::Http;
+use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::tracing::init_tracing;
@@ -216,6 +216,7 @@ async fn main() -> anyhow::Result<()> {
         args.log_level,
         args.log_max_files,
         None,
+        false,
         args.verbose,
     );
 
@@ -224,14 +225,14 @@ async fn main() -> anyhow::Result<()> {
         match err {
             Error::TonicStatus(status) => {
                 let details = status.details();
-                if let Ok(http_err) = serde_json::from_slice::<Http>(details) {
+                if let Ok(backend_err) = serde_json::from_slice::<Backend>(details) {
                     eprintln!(
                         "{}{}{}Downloading failed, bad status code:{} {}",
                         color::Fg(color::Red),
                         style::Italic,
                         style::Bold,
                         style::Reset,
-                        http_err.status_code
+                        backend_err.status_code
                     );
                     eprintln!(
                         "{}{}{}****************************************{}",
@@ -247,7 +248,7 @@ async fn main() -> anyhow::Result<()> {
                         style::Bold,
                         style::Reset
                     );
-                    for (key, value) in http_err.header.iter() {
+                    for (key, value) in backend_err.header.iter() {
                         eprintln!("  [{}]: {}", key.as_str(), value.as_str());
                     }
                     eprintln!(
@@ -298,14 +299,14 @@ async fn main() -> anyhow::Result<()> {
                     );
                 }
             }
-            Error::HTTP(err) => {
+            Error::BackendError(err) => {
                 eprintln!(
-                    "{}{}{}Downloading failed, bad status code:{} {}",
+                    "{}{}{}Downloading failed, error message:{} {}",
                     color::Fg(color::Red),
                     style::Italic,
                     style::Bold,
                     style::Reset,
-                    err.status_code
+                    err.message
                 );
                 eprintln!(
                     "{}{}{}****************************************{}",

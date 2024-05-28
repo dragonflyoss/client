@@ -119,6 +119,7 @@ async fn main() -> Result<(), anyhow::Error> {
         args.log_level,
         args.log_max_files,
         config.tracing.addr.to_owned(),
+        true,
         args.verbose,
     );
 

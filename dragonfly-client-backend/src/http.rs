@@ -96,8 +96,11 @@ impl crate::Backend for HTTP {
         let status_code = response.status();
 
         Ok(crate::HeadResponse {
+            success: status_code.is_success(),
+            content_length: response.content_length(),
             http_header: Some(header),
             http_status_code: Some(status_code),
+            error_message: Some(status_code.to_string()),
         })
     }
 
@@ -126,9 +129,11 @@ impl crate::Backend for HTTP {
                 .map_err(|err| IOError::new(ErrorKind::Other, err)),
         ));
         Ok(crate::GetResponse {
+            success: status_code.is_success(),
             http_header: Some(header),
             http_status_code: Some(status_code),
             reader,
+            error_message: Some(status_code.to_string()),
         })
     }
 }
@@ -210,6 +215,7 @@ mod tests {
         let mut resp = http_backend
             .get(GetRequest {
                 url: server.url("/get"),
+                range: None,
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),
                 client_certs: None,

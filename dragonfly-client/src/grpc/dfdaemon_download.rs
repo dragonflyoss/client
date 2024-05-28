@@ -29,7 +29,7 @@ use dragonfly_api::dfdaemon::v2::{
     DeleteTaskRequest, DownloadTaskRequest, DownloadTaskResponse,
     StatTaskRequest as DfdaemonStatTaskRequest, UploadTaskRequest,
 };
-use dragonfly_api::errordetails::v2::Http;
+use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::{
     LeaveHostRequest as SchedulerLeaveHostRequest, StatTaskRequest as SchedulerStatTaskRequest,
 };
@@ -211,14 +211,15 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             .download_started(task_id.as_str(), download.clone())
             .await
         {
-            Err(ClientError::HTTP(err)) => {
-                error!("download started failed by HTTP error: {}", err);
+            Err(ClientError::BackendError(err)) => {
+                error!("download started failed by error: {}", err);
                 self.task
                     .download_failed(task_id.as_str())
                     .await
                     .unwrap_or_else(|err| error!("download task failed: {}", err));
 
-                match serde_json::to_vec::<Http>(&Http {
+                match serde_json::to_vec::<Backend>(&Backend {
+                    message: err.message.clone(),
                     header: reqwest_headermap_to_hashmap(&err.header),
                     status_code: err.status_code.as_u16() as i32,
                 }) {
@@ -230,7 +231,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         ));
                     }
                     Err(e) => {
-                        error!("serialize HTTP error: {}", e);
+                        error!("serialize error: {}", e);
                         return Err(Status::internal(e.to_string()));
                     }
                 }

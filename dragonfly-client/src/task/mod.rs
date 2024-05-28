@@ -20,7 +20,7 @@ use dragonfly_api::dfdaemon::{
     self,
     v2::{download_task_response, DownloadTaskResponse},
 };
-use dragonfly_api::errordetails::v2::Http;
+use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::{
     announce_peer_request, announce_peer_response, download_piece_back_to_source_failed_request,
     AnnouncePeerRequest, DownloadPeerBackToSourceFailedRequest,
@@ -34,7 +34,7 @@ use dragonfly_client_backend::{BackendFactory, HeadRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{
-    error::{DownloadFromRemotePeerFailed, HTTPError},
+    error::{BackendError, DownloadFromRemotePeerFailed},
     Error, Result as ClientResult,
 };
 use dragonfly_client_storage::{metadata, Storage};
@@ -112,7 +112,7 @@ impl Task {
     ) -> ClientResult<metadata::Task> {
         let task = self
             .storage
-            .download_task_started(id, download.piece_length, None)?;
+            .download_task_started(id, download.piece_length, None, None)?;
 
         // Handle the request header.
         let mut request_header =
@@ -121,7 +121,7 @@ impl Task {
                 Status::invalid_argument(e.to_string())
             })?;
 
-        if !task.response_header.is_empty() {
+        if task.content_length.is_some() {
             return Ok(task);
         }
 
@@ -142,25 +142,20 @@ impl Task {
             .await?;
 
         // Check if the status code is success.
-        if let Some(http_status_code) = response.http_status_code {
-            let http_header = response.http_header.ok_or(Error::InvalidParameter)?;
-
-            if !http_status_code.is_success() {
-                return Err(Error::HTTP(HTTPError {
-                    status_code: http_status_code,
-                    header: http_header,
-                }));
-            }
-
-            return self.storage.download_task_started(
-                id,
-                download.piece_length,
-                Some(http_header),
-            );
+        if !response.success {
+            return Err(Error::BackendError(BackendError {
+                message: response.error_message.unwrap_or_default(),
+                status_code: response.http_status_code.unwrap_or_default(),
+                header: response.http_header.unwrap_or_default(),
+            }));
         }
 
-        error!("backend returns invalid response");
-        Err(Error::InvalidParameter)
+        self.storage.download_task_started(
+            id,
+            download.piece_length,
+            response.content_length,
+            Some(response.http_header.ok_or(Error::InvalidParameter)?),
+        )
     }
 
     // download_finished updates the metadata of the task when the task downloads finished.
@@ -1157,7 +1152,7 @@ impl Task {
                     // Store the finished piece.
                     finished_pieces.push(metadata.clone());
                 }
-                Err(Error::HTTP(err)) => {
+                Err(Error::BackendError(err)) => {
                     // Send the download piece http failed request.
                     in_stream_tx.send_timeout(AnnouncePeerRequest {
                                     host_id: host_id.to_string(),
@@ -1166,8 +1161,9 @@ impl Task {
                                     request: Some(announce_peer_request::Request::DownloadPieceBackToSourceFailedRequest(
                                             DownloadPieceBackToSourceFailedRequest{
                                                 piece_number: None,
-                                                response: Some(download_piece_back_to_source_failed_request::Response::Http(
-                                                        Http{
+                                                response: Some(download_piece_back_to_source_failed_request::Response::Backend(
+                                                        Backend{
+                                                            message: err.message.clone(),
                                                             header: reqwest_headermap_to_hashmap(&err.header),
                                                             status_code: err.status_code.as_u16() as i32,
                                                         }
@@ -1179,7 +1175,7 @@ impl Task {
                                 .unwrap_or_else(|err| error!("send DownloadPieceBackToSourceFailedRequest error: {:?}", err));
 
                     join_set.abort_all();
-                    return Err(Error::HTTP(err));
+                    return Err(Error::BackendError(err));
                 }
                 Err(err) => {
                     // Send the download piece failed request.
