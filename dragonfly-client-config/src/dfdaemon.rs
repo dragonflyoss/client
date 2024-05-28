@@ -145,6 +145,12 @@ fn default_dynconfig_refresh_interval() -> Duration {
     Duration::from_secs(300)
 }
 
+// default_storage_keep is the default keep of the task's metadata and content when the dfdaemon restarts.
+#[inline]
+fn default_storage_keep() -> bool {
+    true
+}
+
 // default_storage_write_buffer_size is the default buffer size for writing piece to disk, default is 128KB.
 #[inline]
 fn default_storage_write_buffer_size() -> usize {
@@ -597,6 +603,10 @@ pub struct Storage {
     #[serde(default = "crate::default_storage_dir")]
     pub dir: PathBuf,
 
+    // keep indicates whether keep the task's metadata and content when the dfdaemon restarts.
+    #[serde(default = "default_storage_keep")]
+    pub keep: bool,
+
     // write_buffer_size is the buffer size for writing piece to disk, default is 4KB.
     #[serde(default = "default_storage_write_buffer_size")]
     pub write_buffer_size: usize,
@@ -611,6 +621,7 @@ impl Default for Storage {
     fn default() -> Self {
         Storage {
             dir: crate::default_storage_dir(),
+            keep: default_storage_keep(),
             write_buffer_size: default_storage_write_buffer_size(),
             read_buffer_size: default_storage_read_buffer_size(),
         }

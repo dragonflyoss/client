@@ -47,7 +47,7 @@ pub struct Storage {
 impl Storage {
     // new returns a new storage.
     pub async fn new(config: Arc<Config>, dir: &Path) -> Result<Self> {
-        let metadata = metadata::Metadata::new(dir)?;
+        let metadata = metadata::Metadata::new(config.clone(), dir)?;
         let content = content::Content::new(config.clone(), dir).await?;
         Ok(Storage {
             config,
