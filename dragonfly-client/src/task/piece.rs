@@ -23,7 +23,7 @@ use dragonfly_api::common::v2::{Peer, Range, TrafficType};
 use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
 use dragonfly_client_backend::{BackendFactory, GetRequest};
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::{error::HTTPError, Error, Result};
+use dragonfly_client_core::{error::BackendError, Error, Result};
 use dragonfly_client_storage::{metadata, Storage};
 use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};
@@ -406,6 +406,10 @@ impl Piece {
         let mut response = backend
             .get(GetRequest {
                 url: url.to_string(),
+                range: Some(Range {
+                    start: offset,
+                    length,
+                }),
                 http_header: Some(request_header),
                 timeout: self.config.download.piece_timeout,
                 client_certs: None,
@@ -414,67 +418,59 @@ impl Piece {
             .map_err(|err| {
                 // Record the failure of downloading piece,
                 // if the request is failed.
-                error!("http error: {}", err);
+                error!("backend get failed: {}", err);
                 if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
                     error!("set piece metadata failed: {}", err)
                 };
                 err
             })?;
 
-        // HTTP status code is not OK, handle the error.
-        if let Some(http_status_code) = response.http_status_code {
-            let http_header = response.http_header.ok_or_else(|| {
-                error!("http header is empty");
-                Error::InvalidParameter
-            })?;
-            if !http_status_code.is_success() {
-                // Record the failure of downloading piece,
-                // if the status code is not OK.
-                self.storage.download_piece_failed(task_id, number)?;
+        if !response.success {
+            // Record the failure of downloading piece,
+            // if the status code is not OK.
+            self.storage.download_piece_failed(task_id, number)?;
 
-                let mut buffer = String::new();
-                response.reader.read_to_string(&mut buffer).await?;
-                error!("http error {}: {}", http_status_code, buffer.as_str());
-                return Err(Error::HTTP(HTTPError {
-                    status_code: http_status_code,
-                    header: http_header,
-                }));
-            }
+            let mut buffer = String::new();
+            response.reader.read_to_string(&mut buffer).await?;
 
-            // Record the finish of downloading piece.
-            self.storage
-                .download_piece_from_source_finished(
-                    task_id,
-                    number,
-                    offset,
-                    length,
-                    &mut response.reader,
-                )
-                .await
-                .map_err(|err| {
-                    // Record the failure of downloading piece,
-                    // If storage fails to record piece.
-                    error!("download piece finished: {}", err);
-                    if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
-                        error!("set piece metadata failed: {}", err)
-                    };
-                    err
-                })?;
-
-            return self
-                .storage
-                .get_piece(task_id, number)?
-                .ok_or_else(|| {
-                    error!("piece not found");
-                    Error::PieceNotFound(number.to_string())
-                })
-                .map(|piece| {
-                    collect_download_piece_traffic_metrics(&TrafficType::BackToSource, length);
-                    piece
-                });
+            let error_message = response.error_message.unwrap_or_default();
+            error!("backend get failed: {} {}", error_message, buffer.as_str());
+            return Err(Error::BackendError(BackendError {
+                message: error_message,
+                status_code: response.http_status_code.unwrap_or_default(),
+                header: response.http_header.unwrap_or_default(),
+            }));
         }
 
-        error!("backend returns invalid response");
-        Err(Error::InvalidParameter)
+        // Record the finish of downloading piece.
+        self.storage
+            .download_piece_from_source_finished(
+                task_id,
+                number,
+                offset,
+                length,
+                &mut response.reader,
+            )
+            .await
+            .map_err(|err| {
+                // Record the failure of downloading piece,
+                // If storage fails to record piece.
+                error!("download piece finished: {}", err);
+                if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                    error!("set piece metadata failed: {}", err)
+                };
+                err
+            })?;
+
+        self.storage
+            .get_piece(task_id, number)?
+            .ok_or_else(|| {
+                error!("piece not found");
+                Error::PieceNotFound(number.to_string())
+            })
+            .map(|piece| {
+                collect_download_piece_traffic_metrics(&TrafficType::BackToSource, length);
+                piece
+            })
     }
 }

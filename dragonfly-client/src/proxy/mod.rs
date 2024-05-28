@@ -22,7 +22,7 @@ use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse,
 };
-use dragonfly_api::errordetails::v2::Http;
+use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_config::dfdaemon::{Config, Rule};
 use dragonfly_client_core::error::{ErrorType, ExternalError, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
@@ -491,14 +491,14 @@ async fn proxy_by_dfdaemon(
         Ok(response) => response,
         Err(err) => match err {
             ClientError::TonicStatus(err) => {
-                match serde_json::from_slice::<Http>(err.details()) {
-                    Ok(http) => {
-                        error!("download task failed by HTTP error: {:?}", http);
+                match serde_json::from_slice::<Backend>(err.details()) {
+                    Ok(backend) => {
+                        error!("download task failed: {:?}", backend);
                         return Ok(make_error_response(
-                            http::StatusCode::from_u16(http.status_code as u16)
+                            http::StatusCode::from_u16(backend.status_code as u16)
                                 .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
                             "download task failed",
-                            Some(hashmap_to_hyper_header_map(&http.header)?),
+                            Some(hashmap_to_hyper_header_map(&backend.header)?),
                         ));
                     }
                     Err(err) => {
