@@ -17,10 +17,74 @@
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use rcgen::{Certificate, CertificateParams, KeyPair};
-use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::vec::Vec;
 use std::{fs, io};
+
+// NoVerifier is a verifier that does not verify the server certificate.
+// It is used for testing and should not be used in production.
+#[derive(Debug)]
+pub struct NoVerifier(Arc<rustls::crypto::CryptoProvider>);
+
+// Implement the NoVerifier.
+impl NoVerifier {
+    // new creates a new NoVerifier.
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self(Arc::new(rustls::crypto::ring::default_provider())))
+    }
+}
+
+// Implement the ServerCertVerifier trait for NoVerifier.
+impl rustls::client::danger::ServerCertVerifier for NoVerifier {
+    // verify_server_cert verifies the server certificate.
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    // verify_tls12_signature verifies the TLS 1.2 signature.
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    // verify_tls13_signature verifies the TLS 1.3 signature.
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    // supported_verify_schemes returns the supported signature schemes.
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
 
 // Generate a CA certificate from PEM format files.
 // Generate CA by openssl with PEM format files:

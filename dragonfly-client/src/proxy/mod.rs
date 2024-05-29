@@ -33,7 +33,7 @@ use dragonfly_client_util::{
     },
     tls::{
         generate_ca_cert_from_pem, generate_certs_from_pem, generate_self_signed_certs_by_ca_cert,
-        generate_simple_self_signed_certs,
+        generate_simple_self_signed_certs, NoVerifier,
     },
 };
 use futures_util::TryStreamExt;
@@ -44,7 +44,6 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{Method, Request};
-use hyper_rustls::ConfigBuilderExt;
 use hyper_util::{
     client::legacy::Client,
     rt::{tokio::TokioIo, TokioExecutor},
@@ -392,6 +391,7 @@ async fn upgraded_tunnel(
                 upgraded_handler(
                     config.clone(),
                     task.clone(),
+                    host.clone(),
                     request,
                     registry_certs.clone(),
                 )
@@ -411,12 +411,17 @@ async fn upgraded_tunnel(
 pub async fn upgraded_handler(
     config: Arc<Config>,
     task: Arc<Task>,
-    request: Request<hyper::body::Incoming>,
+    host: String,
+    mut request: Request<hyper::body::Incoming>,
     registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     // Span record the uri and method.
     Span::current().record("uri", request.uri().to_string().as_str());
     Span::current().record("method", request.method().as_str());
+
+    *request.uri_mut() = format!("https://{}{}", host, request.uri())
+        .parse()
+        .or_err(ErrorType::ParseError)?;
 
     // If find the matching rule, proxy the request via the dfdaemon.
     let request_uri = request.uri();
@@ -713,7 +718,8 @@ async fn proxy_https(
         }
         // Default TLS client config with native roots.
         None => rustls::ClientConfig::builder()
-            .with_native_roots()?
+            .dangerous()
+            .with_custom_certificate_verifier(NoVerifier::new())
             .with_no_client_auth(),
     };
 
@@ -724,9 +730,7 @@ async fn proxy_https(
         .enable_http2()
         .build();
 
-    let client = Client::builder(TokioExecutor::new())
-        .http2_only(true)
-        .build::<_, hyper::body::Incoming>(https);
+    let client = Client::builder(TokioExecutor::new()).build::<_, hyper::body::Incoming>(https);
     let response = client.request(request).await.or_err(ErrorType::HTTPError)?;
     Ok(response.map(|b| {
         b.map_err(|e| {

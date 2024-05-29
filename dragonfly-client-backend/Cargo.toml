@@ -11,16 +11,17 @@ edition.workspace = true
 
 [dependencies]
 dragonfly-client-core.workspace = true
+dragonfly-client-util.workspace = true
 dragonfly-api.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+rustls.workspace = true
 rustls-pki-types.workspace = true
 tonic.workspace = true
 url.workspace = true
 tracing.workspace = true
 futures = "0.3.28"
-rustls = "0.21.6"
 libloading = "0.8.3"
 
 [dev-dependencies]
