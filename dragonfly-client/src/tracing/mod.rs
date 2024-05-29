@@ -15,12 +15,13 @@
  */
 
 use opentelemetry::sdk::propagation::TraceContextPropagator;
+use rolling_file::*;
+use std::fs;
 use std::fs::OpenOptions;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use tracing::{info, Level};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_log::LogTracer;
 use tracing_subscriber::{filter::LevelFilter, fmt::Layer, prelude::*, EnvFilter, Registry};
 
@@ -56,13 +57,13 @@ pub fn init_tracing(
     guards.push(stdout_guard);
 
     // Setup file layer.
-    let rolling_appender = RollingFileAppender::builder()
-        .rotation(Rotation::DAILY)
-        .filename_prefix(name)
-        .filename_suffix("log")
-        .max_log_files(log_max_files)
-        .build(log_dir)
-        .expect("failed to create rolling file appender");
+    fs::create_dir_all(log_dir).expect("failed to create log directory");
+    let rolling_appender = BasicRollingFileAppender::new(
+        log_dir.join(name).with_extension("log"),
+        RollingConditionBasic::new().hourly(),
+        log_max_files,
+    )
+    .expect("failed to create rolling file appender");
 
     let (rolling_writer, rolling_writer_guard) = tracing_appender::non_blocking(rolling_appender);
     let file_logging_layer = Layer::new()

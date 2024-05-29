@@ -959,7 +959,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "0.1.71"
+version = "0.1.72"
 dependencies = [
  "anyhow",
  "bytes",
@@ -995,6 +995,7 @@ dependencies = [
  "prost-wkt-types",
  "rcgen",
  "reqwest",
+ "rolling-file",
  "rustls 0.22.2",
  "rustls-pki-types",
  "serde",
@@ -1022,7 +1023,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "0.1.71"
+version = "0.1.72"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-core",
@@ -1041,7 +1042,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "0.1.71"
+version = "0.1.72"
 dependencies = [
  "dragonfly-client-core",
  "home",
@@ -1060,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "0.1.71"
+version = "0.1.72"
 dependencies = [
  "libloading",
  "reqwest",
@@ -1071,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "0.1.71"
+version = "0.1.72"
 dependencies = [
  "anyhow",
  "clap",
@@ -1087,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "0.1.71"
+version = "0.1.72"
 dependencies = [
  "base16ct",
  "blake3",
@@ -1111,7 +1112,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "0.1.71"
+version = "0.1.72"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-core",
@@ -1569,7 +1570,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "0.1.71"
+version = "0.1.72"
 dependencies = [
  "dragonfly-client-backend",
  "dragonfly-client-core",
@@ -3471,6 +3472,15 @@ checksum = "6bd13e55d6d7b8cd0ea569161127567cd587676c99f4472f779a0279aa60a7a7"
 dependencies = [
  "libc",
  "librocksdb-sys",
+]
+
+[[package]]
+name = "rolling-file"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8395b4f860856b740f20a296ea2cd4d823e81a2658cf05ef61be22916026a906"
+dependencies = [
+ "chrono",
 ]
 
 [[package]]
