@@ -57,7 +57,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value_t = 3,
+        default_value_t = 6,
         help = "Specify the max number of log files"
     )]
     log_max_files: usize,
