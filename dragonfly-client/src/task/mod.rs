@@ -418,7 +418,7 @@ impl Task {
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
         // Initialize stream channel.
-        let (in_stream_tx, in_stream_rx) = mpsc::channel(1024);
+        let (in_stream_tx, in_stream_rx) = mpsc::channel(4096);
 
         // Send the register peer request.
         in_stream_tx
@@ -444,10 +444,16 @@ impl Task {
 
         // Initialize the stream.
         let in_stream = ReceiverStream::new(in_stream_rx);
+        let request = Request::new(in_stream);
         let response = self
             .scheduler_client
-            .announce_peer(task.id.as_str(), Request::new(in_stream))
-            .await?;
+            .announce_peer(task.id.as_str(), peer_id, request)
+            .await
+            .map_err(|err| {
+                error!("announce peer failed: {:?}", err);
+                err
+            })?;
+        info!("announced peer has been connected");
 
         let out_stream = response
             .into_inner()
