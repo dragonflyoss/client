@@ -175,6 +175,7 @@ impl Proxy {
                     let server_ca_cert = self.server_ca_cert.clone();
                     tokio::task::spawn(async move {
                         if let Err(err) = http1::Builder::new()
+                            .keep_alive(true)
                             .preserve_header_case(true)
                             .title_case_headers(true)
                             .serve_connection(
@@ -184,7 +185,7 @@ impl Proxy {
                             .with_upgrades()
                             .await
                         {
-                            error!("failed to serve connection: {}", err);
+                            error!("failed to serve connection from {}: {}", remote_address, err);
                         }
                     });
                 }

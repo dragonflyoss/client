@@ -85,10 +85,11 @@ impl SchedulerClient {
     pub async fn announce_peer(
         &self,
         task_id: &str,
+        peer_id: &str,
         request: impl tonic::IntoStreamingRequest<Message = AnnouncePeerRequest>,
     ) -> Result<tonic::Response<tonic::codec::Streaming<AnnouncePeerResponse>>> {
         let response = self
-            .client(task_id.to_string())
+            .client(task_id, Some(peer_id))
             .await?
             .announce_peer(request)
             .await?;
@@ -99,11 +100,7 @@ impl SchedulerClient {
     #[instrument(skip(self))]
     pub async fn stat_peer(&self, task_id: &str, request: StatPeerRequest) -> Result<Peer> {
         let request = Self::make_request(request);
-        let response = self
-            .client(task_id.to_string())
-            .await?
-            .stat_peer(request)
-            .await?;
+        let response = self.client(task_id, None).await?.stat_peer(request).await?;
         Ok(response.into_inner())
     }
 
@@ -111,7 +108,7 @@ impl SchedulerClient {
     #[instrument(skip(self))]
     pub async fn leave_peer(&self, task_id: &str, request: LeavePeerRequest) -> Result<()> {
         let request = Self::make_request(request);
-        self.client(task_id.to_string())
+        self.client(task_id, None)
             .await?
             .leave_peer(request)
             .await?;
@@ -127,7 +124,7 @@ impl SchedulerClient {
     ) -> Result<ExchangePeerResponse> {
         let request = Self::make_request(request);
         let response = self
-            .client(task_id.to_string())
+            .client(task_id, None)
             .await?
             .exchange_peer(request)
             .await?;
@@ -138,11 +135,7 @@ impl SchedulerClient {
     #[instrument(skip(self))]
     pub async fn stat_task(&self, task_id: &str, request: StatTaskRequest) -> Result<Task> {
         let request = Self::make_request(request);
-        let response = self
-            .client(task_id.to_string())
-            .await?
-            .stat_task(request)
-            .await?;
+        let response = self.client(task_id, None).await?.stat_task(request).await?;
         Ok(response.into_inner())
     }
 
@@ -150,7 +143,7 @@ impl SchedulerClient {
     #[instrument(skip(self))]
     pub async fn leave_task(&self, task_id: &str, request: LeaveTaskRequest) -> Result<()> {
         let request = Self::make_request(request);
-        self.client(task_id.to_string())
+        self.client(task_id, None)
             .await?
             .leave_task(request)
             .await?;
@@ -162,7 +155,10 @@ impl SchedulerClient {
     pub async fn init_announce_host(&self, request: AnnounceHostRequest) -> Result<()> {
         let mut join_set = JoinSet::new();
         let available_scheduler_addrs = self.available_scheduler_addrs.read().await;
-        for available_scheduler_addr in available_scheduler_addrs.iter() {
+        let available_scheduler_addrs_clone = available_scheduler_addrs.clone();
+        drop(available_scheduler_addrs);
+
+        for available_scheduler_addr in available_scheduler_addrs_clone.iter() {
             let request = Self::make_request(request.clone());
             async fn announce_host(
                 addr: SocketAddr,
@@ -214,7 +210,10 @@ impl SchedulerClient {
         // Announce the host to the scheduler.
         let mut join_set = JoinSet::new();
         let available_scheduler_addrs = self.available_scheduler_addrs.read().await;
-        for available_scheduler_addr in available_scheduler_addrs.iter() {
+        let available_scheduler_addrs_clone = available_scheduler_addrs.clone();
+        drop(available_scheduler_addrs);
+
+        for available_scheduler_addr in available_scheduler_addrs_clone.iter() {
             let request = Self::make_request(request.clone());
             async fn announce_host(
                 addr: SocketAddr,
@@ -265,7 +264,10 @@ impl SchedulerClient {
         // Leave the host from the scheduler.
         let mut join_set = JoinSet::new();
         let available_scheduler_addrs = self.available_scheduler_addrs.read().await;
-        for available_scheduler_addr in available_scheduler_addrs.iter() {
+        let available_scheduler_addrs_clone = available_scheduler_addrs.clone();
+        drop(available_scheduler_addrs);
+
+        for available_scheduler_addr in available_scheduler_addrs_clone.iter() {
             let request = Self::make_request(request.clone());
             async fn leave_host(
                 addr: SocketAddr,
@@ -309,16 +311,21 @@ impl SchedulerClient {
 
     // client gets the grpc client of the scheduler.
     #[instrument(skip(self))]
-    async fn client(&self, key: String) -> Result<SchedulerGRPCClient<Channel>> {
+    async fn client(
+        &self,
+        task_id: &str,
+        peer_id: Option<&str>,
+    ) -> Result<SchedulerGRPCClient<Channel>> {
         // Update scheduler addresses of the client.
         self.update_available_scheduler_addrs().await?;
 
         // Get the scheduler address from the hashring.
-        let addr = self.hashring.read().await;
-        let addr = addr
-            .get(&key[0..5].to_string())
-            .ok_or_else(|| Error::HashRing(key.clone()))?;
-        info!("{} picked {:?}", key, addr);
+        let addrs = self.hashring.read().await;
+        let addr = *addrs
+            .get(&task_id[0..5].to_string())
+            .ok_or_else(|| Error::HashRing(task_id.to_string()))?;
+        drop(addrs);
+        info!("picked {:?}", addr);
 
         let channel = match Channel::from_shared(format!("http://{}", addr))
             .map_err(|_| Error::InvalidURI(addr.to_string()))?
@@ -347,38 +354,40 @@ impl SchedulerClient {
     async fn update_available_scheduler_addrs(&self) -> Result<()> {
         // Get the endpoints of available schedulers.
         let data = self.dynconfig.data.read().await;
+        let data_available_schedulers_clone = data.available_schedulers.clone();
+        drop(data);
 
         // Check if the available schedulers is empty.
-        if data.available_schedulers.is_empty() {
+        if data_available_schedulers_clone.is_empty() {
             return Err(Error::AvailableSchedulersNotFound);
         }
 
         // Get the available schedulers.
         let available_schedulers = self.available_schedulers.read().await;
+        let available_schedulers_clone = available_schedulers.clone();
+        drop(available_schedulers);
 
         // Check if the available schedulers is not changed.
-        if data.available_schedulers.len() == available_schedulers.len()
-            && data
-                .available_schedulers
+        if data_available_schedulers_clone.len() == available_schedulers_clone.len()
+            && data_available_schedulers_clone
                 .iter()
-                .zip(available_schedulers.iter())
+                .zip(available_schedulers_clone.iter())
                 .all(|(a, b)| a == b)
         {
             info!(
                 "available schedulers is not changed: {:?}",
-                data.available_schedulers
+                data_available_schedulers_clone
                     .iter()
                     .map(|s| s.ip.clone())
                     .collect::<Vec<String>>()
             );
             return Ok(());
         }
-        drop(available_schedulers);
 
         let mut new_available_schedulers = Vec::new();
         let mut new_available_scheduler_addrs = Vec::new();
         let mut new_hashring = HashRing::new();
-        for available_scheduler in data.available_schedulers.iter() {
+        for available_scheduler in data_available_schedulers_clone.iter() {
             let ip = match IpAddr::from_str(&available_scheduler.ip) {
                 Ok(ip) => ip,
                 Err(err) => {
@@ -403,20 +412,25 @@ impl SchedulerClient {
         // Update the available schedulers.
         let mut available_schedulers = self.available_schedulers.write().await;
         *available_schedulers = new_available_schedulers;
+        drop(available_schedulers);
 
         // Update the addresses of available schedulers.
         let mut available_scheduler_addrs = self.available_scheduler_addrs.write().await;
         *available_scheduler_addrs = new_available_scheduler_addrs;
+        drop(available_scheduler_addrs);
 
         // Update the hashring.
         let mut hashring = self.hashring.write().await;
         *hashring = new_hashring;
+        drop(hashring);
+
+        let available_scheduler_addrs = self.available_scheduler_addrs.read().await;
         info!(
             "refresh available scheduler addresses: {:?}",
             available_scheduler_addrs
                 .iter()
                 .map(|s| s.ip().to_string())
-                .collect::<Vec<String>>()
+                .collect::<Vec<String>>(),
         );
         Ok(())
     }
