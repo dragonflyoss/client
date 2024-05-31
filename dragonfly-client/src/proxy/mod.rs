@@ -15,6 +15,9 @@
  */
 
 use crate::grpc::dfdaemon_download::DfdaemonDownloadClient;
+use crate::metrics::{
+    collect_proxy_request_failure_metrics, collect_proxy_request_started_metrics,
+};
 use crate::shutdown;
 use crate::task::Task;
 use bytes::Bytes;
@@ -167,6 +170,7 @@ impl Proxy {
 
                     // Spawn a task to handle the connection.
                     let io = TokioIo::new(tcp);
+                    collect_proxy_request_started_metrics(remote_address.to_string().as_str());
                     info!("accepted connection from {}", remote_address);
 
                     let config = self.config.clone();
@@ -185,6 +189,7 @@ impl Proxy {
                             .with_upgrades()
                             .await
                         {
+                            collect_proxy_request_failure_metrics(remote_address.to_string().as_str());
                             error!("failed to serve connection from {}: {}", remote_address, err);
                         }
                     });
