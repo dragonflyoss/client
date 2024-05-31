@@ -275,7 +275,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             error!("missing content length in the response");
             return Err(Status::internal("missing content length in the response"));
         };
-
         info!("content length: {}", content_length);
 
         // Download's range priority is higher than the request header's range.
