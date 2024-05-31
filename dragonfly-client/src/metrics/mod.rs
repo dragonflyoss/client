@@ -455,6 +455,14 @@ impl Metrics {
         REGISTRY
             .register(Box::new(DOWNLOAD_TASK_DURATION.clone()))
             .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(PROXY_REQUSET_COUNT.clone()))
+            .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(PROXY_REQUSET_FAILURE_COUNT.clone()))
+            .expect("metric can be registered");
     }
 
     // metrics_handler handles the metrics request.
