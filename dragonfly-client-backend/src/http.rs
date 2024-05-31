@@ -18,11 +18,12 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
+use dragonfly_client_util::tls::NoVerifier;
 use futures::TryStreamExt;
 use rustls_pki_types::CertificateDer;
 use std::io::{Error as IOError, ErrorKind};
 use tokio_util::io::StreamReader;
-use tracing::error;
+use tracing::{error, info};
 
 // HTTP is the HTTP backend.
 pub struct HTTP;
@@ -39,31 +40,28 @@ impl HTTP {
         &self,
         client_certs: Option<Vec<CertificateDer<'static>>>,
     ) -> Result<reqwest::Client> {
-        match client_certs {
+        let client_config_builder = match client_certs.as_ref() {
             Some(client_certs) => {
-                // TLS client config using the custom CA store for lookups.
                 let mut root_cert_store = rustls::RootCertStore::empty();
-                root_cert_store.add_parsable_certificates(&client_certs);
-                let client_config = rustls::ClientConfig::builder()
-                    .with_safe_defaults()
-                    .with_root_certificates(root_cert_store)
-                    .with_no_client_auth();
+                root_cert_store.add_parsable_certificates(client_certs.to_owned());
 
-                let client = reqwest::Client::builder()
-                    .use_preconfigured_tls(client_config)
-                    .build()
-                    .or_err(ErrorType::HTTPError)?;
-                Ok(client)
+                // TLS client config using the custom CA store for lookups.
+                rustls::ClientConfig::builder()
+                    .with_root_certificates(root_cert_store)
+                    .with_no_client_auth()
             }
-            None => {
-                // Default TLS client config with native roots.
-                let client = reqwest::Client::builder()
-                    .use_native_tls()
-                    .build()
-                    .or_err(ErrorType::HTTPError)?;
-                Ok(client)
-            }
-        }
+            // Default TLS client config with native roots.
+            None => rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(NoVerifier::new())
+                .with_no_client_auth(),
+        };
+
+        let client = reqwest::Client::builder()
+            .use_preconfigured_tls(client_config_builder)
+            .build()
+            .or_err(ErrorType::HTTPError)?;
+        Ok(client)
     }
 }
 
@@ -72,6 +70,7 @@ impl HTTP {
 impl crate::Backend for HTTP {
     // head gets the header of the request.
     async fn head(&self, request: crate::HeadRequest) -> Result<crate::HeadResponse> {
+        info!("get request: {} {:?}", request.url, request.http_header);
         // The header of the request is required.
         let header = request.http_header.ok_or(Error::InvalidParameter)?;
 
@@ -94,7 +93,7 @@ impl crate::Backend for HTTP {
 
         let header = response.headers().clone();
         let status_code = response.status();
-
+        info!("head response: {:?} {:?}", status_code, header);
         Ok(crate::HeadResponse {
             success: status_code.is_success(),
             content_length: response.content_length(),
@@ -106,6 +105,7 @@ impl crate::Backend for HTTP {
 
     // get gets the content of the request.
     async fn get(&self, request: crate::GetRequest) -> Result<crate::GetResponse<crate::Body>> {
+        info!("get request: {} {:?}", request.url, request.http_header);
         // The header of the request is required.
         let header = request.http_header.ok_or(Error::InvalidParameter)?;
         let response = self
