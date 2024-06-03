@@ -1,0 +1,144 @@
+/*
+ *     Copyright 2024 The Dragonfly Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+use clap::{Parser, Subcommand};
+use dragonfly_client::tracing::init_tracing;
+use dragonfly_client_config::{dfcache, dfdaemon};
+use std::path::PathBuf;
+use tracing::Level;
+
+#[derive(Debug, Parser)]
+#[command(
+    name = dfcache::NAME,
+    author,
+    version,
+    about = "dfcache is a cache command line based on P2P technology in Dragonfly.",
+    long_about = "A cache command line based on P2P technology in Dragonfly that can import file and export file in P2P network, \
+    and it can copy multiple replicas during import. P2P cache is effectively used for fast read and write cache."
+)]
+struct Args {
+    #[arg(
+        short = 'e',
+        long = "endpoint",
+        default_value_os_t = dfdaemon::default_download_unix_socket_path(),
+        help = "Endpoint of dfdaemon's GRPC server"
+    )]
+    endpoint: PathBuf,
+
+    #[arg(
+        short = 'l',
+        long,
+        default_value = "info",
+        help = "Specify the logging level [trace, debug, info, warn, error]"
+    )]
+    log_level: Level,
+
+    #[arg(
+        long,
+        default_value_os_t = dfcache::default_dfcache_log_dir(),
+        help = "Specify the log directory"
+    )]
+    log_dir: PathBuf,
+
+    #[arg(
+        long,
+        default_value_t = 6,
+        help = "Specify the max number of log files"
+    )]
+    log_max_files: usize,
+
+    #[arg(
+        long = "verbose",
+        default_value_t = false,
+        help = "Specify whether to print log"
+    )]
+    verbose: bool,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+#[command()]
+pub enum Command {
+    #[command(
+        name = "import",
+        author,
+        version,
+        about = "Import a file into Dragonfly P2P network",
+        long_about = "Import a local file into Dragonfly P2P network and copy multiple replicas during import. If import successfully, it will return a task ID."
+    )]
+    Import(ImportCommand),
+
+    #[command(
+        name = "export",
+        author,
+        version,
+        about = "Export a file from Dragonfly P2P network",
+        long_about = "Export a file from Dragonfly P2P network by task ID. If export successfully, it will return the local file path."
+    )]
+    Export(ExportCommand),
+
+    #[command(
+        name = "stat",
+        author,
+        version,
+        about = "Stat a file in Dragonfly P2P network",
+        long_about = "Stat a file in Dragonfly P2P network by task ID. If stat successfully, it will return the file information."
+    )]
+    Stat(StatCommand),
+
+    #[command(
+        name = "rm",
+        author,
+        version,
+        about = "Remove a file from Dragonfly P2P network",
+        long_about = "Remove the P2P cache in Dragonfly P2P network by task ID."
+    )]
+    Remove(RemoveCommand),
+}
+
+// ImportCommand is the subcommand of import.
+#[derive(Debug, Clone, Parser)]
+pub struct ImportCommand {}
+
+// ExportCommand is the subcommand of export.
+#[derive(Debug, Clone, Parser)]
+pub struct ExportCommand {}
+
+// StatCommand is the subcommand of stat.
+#[derive(Debug, Clone, Parser)]
+pub struct StatCommand {}
+
+// RemoveCommand is the subcommand of remove.
+#[derive(Debug, Clone, Parser)]
+pub struct RemoveCommand {}
+
+fn main() {
+    // Parse command line arguments.
+    let args = Args::parse();
+
+    // Initialize tracing.
+    let _guards = init_tracing(
+        dfcache::NAME,
+        &args.log_dir,
+        args.log_level,
+        args.log_max_files,
+        None,
+        false,
+        args.verbose,
+    );
+}

@@ -23,6 +23,10 @@ path = "src/bin/dfget/main.rs"
 name = "dfstore"
 path = "src/bin/dfstore/main.rs"
 
+[[bin]]
+name = "dfcache"
+path = "src/bin/dfcache/main.rs"
+
 [dependencies]
 dragonfly-client-core.workspace = true
 dragonfly-client-config.workspace = true
