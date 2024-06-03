@@ -16,6 +16,7 @@
 
 use std::path::PathBuf;
 
+pub mod dfcache;
 pub mod dfdaemon;
 pub mod dfget;
 pub mod dfinit;
