@@ -39,6 +39,9 @@ pub type Body = Box<dyn AsyncRead + Send + Unpin>;
 
 // HeadRequest is the head request for backend.
 pub struct HeadRequest {
+    // task_id is the id of the task.
+    pub task_id: String,
+
     // url is the url of the request.
     pub url: String,
 
@@ -72,6 +75,9 @@ pub struct HeadResponse {
 
 // GetRequest is the get request for backend.
 pub struct GetRequest {
+    // piece_id is the id of the piece.
+    pub piece_id: String,
+
     // url is the url of the request.
     pub url: String,
 

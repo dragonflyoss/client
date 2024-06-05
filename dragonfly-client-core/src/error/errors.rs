@@ -22,7 +22,6 @@ use super::message::Message;
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ErrorType {
     StorageError,
-    HTTPError,
     ConfigError,
     SerializeError,
     ValidationError,
@@ -41,7 +40,6 @@ impl ErrorType {
     pub fn as_str(&self) -> &'static str {
         match self {
             ErrorType::StorageError => "StorageError",
-            ErrorType::HTTPError => "HTTPError",
             ErrorType::ConfigError => "ConfigError",
             ErrorType::ValidationError => "ValidationError",
             ErrorType::ParseError => "ParseError",

@@ -41,7 +41,7 @@ pub fn reqwest_headermap_to_hashmap(header: &HeaderMap<HeaderValue>) -> HashMap<
 pub fn hashmap_to_reqwest_headermap(
     header: &HashMap<String, String>,
 ) -> Result<HeaderMap<HeaderValue>> {
-    let header: HeaderMap = (header).try_into().or_err(ErrorType::HTTPError)?;
+    let header: HeaderMap = (header).try_into().or_err(ErrorType::ParseError)?;
     Ok(header)
 }
 
@@ -49,7 +49,7 @@ pub fn hashmap_to_reqwest_headermap(
 pub fn hashmap_to_hyper_header_map(
     header: &HashMap<String, String>,
 ) -> Result<hyper::header::HeaderMap> {
-    let header: hyper::header::HeaderMap = (header).try_into().or_err(ErrorType::HTTPError)?;
+    let header: hyper::header::HeaderMap = (header).try_into().or_err(ErrorType::ParseError)?;
     Ok(header)
 }
 
@@ -108,7 +108,7 @@ pub fn header_vec_to_hashmap(raw_header: Vec<String>) -> Result<HashMap<String, 
 pub fn get_range(header: &HeaderMap, content_length: u64) -> Result<Option<Range>> {
     match header.get(reqwest::header::RANGE) {
         Some(range) => {
-            let range = range.to_str().or_err(ErrorType::HTTPError)?;
+            let range = range.to_str().or_err(ErrorType::ParseError)?;
             Ok(Some(parse_range_header(range, content_length)?))
         }
         None => Ok(None),
@@ -120,10 +120,10 @@ pub fn get_range(header: &HeaderMap, content_length: u64) -> Result<Option<Range
 // "Range": "bytes=150-", "Range": "bytes=0-0,-1".
 pub fn parse_range_header(range_header_value: &str, content_length: u64) -> Result<Range> {
     let parsed_ranges =
-        http_range_header::parse_range_header(range_header_value).or_err(ErrorType::HTTPError)?;
+        http_range_header::parse_range_header(range_header_value).or_err(ErrorType::ParseError)?;
     let valid_ranges = parsed_ranges
         .validate(content_length)
-        .or_err(ErrorType::HTTPError)?;
+        .or_err(ErrorType::ParseError)?;
 
     // Not support multiple ranges.
     let valid_range = valid_ranges

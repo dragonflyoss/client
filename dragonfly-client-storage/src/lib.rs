@@ -23,6 +23,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
+use tracing::info;
 
 pub mod content;
 pub mod metadata;
@@ -298,8 +299,11 @@ impl Storage {
 
                     // If the piece is finished, return.
                     if piece.is_finished() {
+                        info!("wait for piece finished success {}", self.piece_id(task_id, number));
                         return Ok(piece);
                     }
+
+                    info!("wait for piece finished {}", self.piece_id(task_id, number));
                 }
                 _ = &mut piece_timeout => {
                     return Err(Error::WaitForPieceFinishedTimeout(self.piece_id(task_id, number)));

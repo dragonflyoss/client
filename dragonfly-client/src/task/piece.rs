@@ -405,6 +405,7 @@ impl Piece {
         let backend = self.backend_factory.build(url)?;
         let mut response = backend
             .get(GetRequest {
+                piece_id: self.storage.piece_id(task_id, number),
                 url: url.to_string(),
                 range: Some(Range {
                     start: offset,

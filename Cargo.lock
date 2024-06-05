@@ -1070,10 +1070,13 @@ dependencies = [
 name = "dragonfly-client-core"
 version = "0.1.75"
 dependencies = [
+ "hyper 1.2.0",
+ "hyper-util",
  "libloading",
  "reqwest",
  "thiserror",
  "tokio",
+ "tokio-stream",
  "tonic",
 ]
 
