@@ -206,7 +206,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                 .unwrap_or_else(|err| {
                                     error!("send finished pieces to stream: {}", err);
                                 });
-                            info!("send finished piece {}", piece.number);
+                            info!("send piece metadata {}-{}", task_id, piece.number);
 
                             // Add the finished piece number to the finished piece numbers.
                             finished_piece_numbers.push(piece.number);
