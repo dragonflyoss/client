@@ -280,6 +280,7 @@ impl Piece {
     // download_from_remote_peer downloads a single piece from a remote peer.
     pub async fn download_from_remote_peer(
         &self,
+        host_id: &str,
         task_id: &str,
         number: u32,
         length: u64,
@@ -311,6 +312,7 @@ impl Piece {
         let response = dfdaemon_upload_client
             .download_piece(
                 DownloadPieceRequest {
+                    host_id: host_id.to_string(),
                     task_id: task_id.to_string(),
                     piece_number: number,
                 },

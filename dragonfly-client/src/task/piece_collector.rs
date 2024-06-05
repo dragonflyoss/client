@@ -46,6 +46,9 @@ pub struct PieceCollector {
     // config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
+    // host_id is the id of the host.
+    host_id: String,
+
     // task_id is the id of the task.
     task_id: String,
 
@@ -63,6 +66,7 @@ impl PieceCollector {
     // new creates a new PieceCollector.
     pub fn new(
         config: Arc<Config>,
+        host_id: &str,
         task_id: &str,
         interested_pieces: Vec<metadata::Piece>,
         parents: Vec<Peer>,
@@ -79,6 +83,7 @@ impl PieceCollector {
         Self {
             config,
             task_id: task_id.to_string(),
+            host_id: host_id.to_string(),
             parents,
             interested_pieces,
             collected_pieces,
@@ -87,6 +92,7 @@ impl PieceCollector {
 
     // run runs the piece collector.
     pub async fn run(&self) -> Receiver<CollectedPiece> {
+        let host_id = self.host_id.clone();
         let task_id = self.task_id.clone();
         let parents = self.parents.clone();
         let interested_pieces = self.interested_pieces.clone();
@@ -96,6 +102,7 @@ impl PieceCollector {
         tokio::spawn(
             async move {
                 Self::collect_from_remote_peers(
+                    host_id,
                     task_id,
                     parents,
                     interested_pieces,
@@ -116,6 +123,7 @@ impl PieceCollector {
 
     // collect_from_remote_peers collects pieces from remote peers.
     async fn collect_from_remote_peers(
+        host_id: String,
         task_id: String,
         parents: Vec<Peer>,
         interested_pieces: Vec<metadata::Piece>,
@@ -126,7 +134,9 @@ impl PieceCollector {
         // Create a task to collect pieces from peers.
         let mut join_set = JoinSet::new();
         for parent in parents.iter() {
+            #[allow(clippy::too_many_arguments)]
             async fn sync_pieces(
+                host_id: String,
                 task_id: String,
                 parent: Peer,
                 parents: Vec<Peer>,
@@ -157,6 +167,7 @@ impl PieceCollector {
 
                 let response = dfdaemon_upload_client
                     .sync_pieces(SyncPiecesRequest {
+                        host_id: host_id.to_string(),
                         task_id: task_id.to_string(),
                         interested_piece_numbers: interested_pieces
                             .iter()
@@ -223,6 +234,7 @@ impl PieceCollector {
 
             join_set.spawn(
                 sync_pieces(
+                    host_id.clone(),
                     task_id.clone(),
                     parent.clone(),
                     parents.clone(),

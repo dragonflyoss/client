@@ -142,7 +142,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     type SyncPiecesStream = ReceiverStream<Result<SyncPiecesResponse, Status>>;
 
     // get_piece_numbers gets the piece numbers.
-    #[instrument(skip_all, fields(host_id, task_id))]
+    #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
     async fn sync_pieces(
         &self,
         request: Request<SyncPiecesRequest>,
@@ -153,11 +153,15 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Generate the host id.
         let host_id = self.task.id_generator.host_id();
 
+        // Get the remote host id from the request.
+        let remote_host_id = request.host_id;
+
         // Get the task id from tae request.
         let task_id = request.task_id;
 
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.clone());
+        Span::current().record("remote_host_id", remote_host_id.as_str());
         Span::current().record("task_id", task_id.clone());
 
         // Get the interested piece numbers from the request.
@@ -181,12 +185,18 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             Ok(Some(piece)) => piece,
                             Ok(None) => continue,
                             Err(err) => {
-                                error!("get piece metadata: {}", err);
+                                error!(
+                                    "send piece metadata {}-{}: {}",
+                                    task_id, interested_piece_number, err
+                                );
                                 out_stream_tx
                                     .send(Err(Status::internal(err.to_string())))
                                     .await
                                     .unwrap_or_else(|err| {
-                                        error!("send piece metadata to stream: {}", err);
+                                        error!(
+                                            "send piece metadata {}-{} to stream: {}",
+                                            task_id, interested_piece_number, err
+                                        );
                                     });
 
                                 drop(out_stream_tx);
@@ -204,7 +214,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                 }))
                                 .await
                                 .unwrap_or_else(|err| {
-                                    error!("send finished pieces to stream: {}", err);
+                                    error!(
+                                        "send finished piece {}-{} to stream: {}",
+                                        task_id, interested_piece_number, err
+                                    );
                                 });
                             info!("send piece metadata {}-{}", task_id, piece.number);
 
@@ -251,7 +264,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 
     // sync_pieces syncs the pieces.
-    #[instrument(skip_all, fields(host_id, task_id, piece_number))]
+    #[instrument(skip_all, fields(host_id, remote_host_id, task_id, piece_number))]
     async fn download_piece(
         &self,
         request: Request<DownloadPieceRequest>,
@@ -262,6 +275,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Generate the host id.
         let host_id = self.task.id_generator.host_id();
 
+        // Get the remote host id from the request.
+        let remote_host_id = request.host_id;
+
         // Get the task id from the request.
         let task_id = request.task_id;
 
@@ -270,6 +286,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
         // Span record the host id, task id and piece number.
         Span::current().record("host_id", host_id.as_str());
+        Span::current().record("remote_host_id", remote_host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("piece_number", piece_number);
 
@@ -279,16 +296,23 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             .piece
             .get(task_id.as_str(), piece_number)
             .map_err(|err| {
-                error!("get piece metadata from local storage: {}", err);
+                error!(
+                    "upload piece metadata {}-{} from local storage: {}",
+                    task_id, piece_number, err
+                );
                 Status::internal(err.to_string())
             })?
             .ok_or_else(|| {
-                error!("piece metadata not found");
+                error!(
+                    "upload piece metadata {}-{} not found",
+                    task_id, piece_number
+                );
                 Status::not_found("piece metadata not found")
             })?;
 
         // Collect upload piece started metrics.
         collect_upload_piece_started_metrics();
+        info!("start upload piece content {}-{}", task_id, piece_number);
 
         // Get the piece content from the local storage.
         let mut reader = self
@@ -306,7 +330,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 // Collect upload piece failure metrics.
                 collect_upload_piece_failure_metrics();
 
-                error!("read piece content from local storage: {}", err);
+                error!(
+                    "upload piece content {}-{} from local storage: {}",
+                    task_id, piece_number, err
+                );
                 Status::internal(err.to_string())
             })?;
 
@@ -316,12 +343,16 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             // Collect upload piece failure metrics.
             collect_upload_piece_failure_metrics();
 
-            error!("read piece content: {}", err);
+            error!(
+                "upload piece content {}-{} failed: {}",
+                task_id, piece_number, err
+            );
             Status::internal(err.to_string())
         })?;
 
         // Collect upload piece finished metrics.
         collect_upload_piece_finished_metrics();
+        info!("finished upload piece content {}-{}", task_id, piece_number);
 
         // Return the piece.
         Ok(Response::new(DownloadPieceResponse {
