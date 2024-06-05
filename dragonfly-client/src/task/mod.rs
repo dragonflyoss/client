@@ -333,7 +333,7 @@ impl Task {
         info!("download the pieces with scheduler");
 
         // Download the pieces with scheduler.
-        if let Err(err) = self
+        let finished_pieces = match self
             .download_partial_with_scheduler(
                 task.clone(),
                 host_id,
@@ -345,58 +345,119 @@ impl Task {
             )
             .await
         {
-            if download.disable_back_to_source {
-                error!(
-                    "download back-to-source is disabled, download with scheduler error: {:?}",
-                    err
-                );
-                download_progress_tx
-                    .send_timeout(
-                        Err(Status::internal(format!(
-                            "download back-to-source is disabled, download with scheduler error: {}",
-                            err
-                        ))),
-                        REQUEST_TIMEOUT,
+            Ok(finished_pieces) => finished_pieces,
+            Err(err) => {
+                error!("download with scheduler error: {:?}", err);
+
+                // If disable back-to-source is true, return an error directly.
+                if download.disable_back_to_source {
+                    error!(
+                        "download back-to-source is disabled, download with scheduler error: {:?}",
+                        err
+                    );
+                    download_progress_tx
+                        .send_timeout(
+                            Err(Status::internal("download back-to-source is disabled")),
+                            REQUEST_TIMEOUT,
+                        )
+                        .await
+                        .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+
+                    return Err(Error::Unknown("download failed".to_string()));
+                };
+
+                // Download the pieces from the source.
+                if let Err(err) = self
+                    .download_partial_from_source(
+                        task.clone(),
+                        host_id,
+                        peer_id,
+                        interested_pieces.clone(),
+                        download.clone(),
+                        download_progress_tx.clone(),
                     )
                     .await
-                    .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+                {
+                    error!("download from source error: {:?}", err);
+                    download_progress_tx
+                        .send_timeout(
+                            Err(Status::internal(format!(
+                                "download from source error: {}",
+                                err
+                            ))),
+                            REQUEST_TIMEOUT,
+                        )
+                        .await
+                        .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
 
-                return Err(err);
+                    return Err(err);
+                }
+
+                info!("all pieces are downloaded from source");
+                return Ok(());
             }
+        };
 
-            error!("download with scheduler error: {:?}", err);
-            // Download the pieces from the source.
-            if let Err(err) = self
-                .download_partial_from_source(
-                    task.clone(),
-                    host_id,
-                    peer_id,
-                    interested_pieces.clone(),
-                    download.clone(),
-                    download_progress_tx.clone(),
-                )
-                .await
-            {
-                error!("download from source error: {:?}", err);
-                download_progress_tx
-                    .send_timeout(
-                        Err(Status::internal(format!(
-                            "download from source error: {}",
-                            err
-                        ))),
-                        REQUEST_TIMEOUT,
-                    )
-                    .await
-                    .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+        // Remove the finished pieces from the pieces.
+        let interested_pieces = self
+            .piece
+            .remove_finished_from_interested(finished_pieces, interested_pieces);
+        info!(
+            "interested pieces after removing the finished piece: {:?}",
+            interested_pieces
+                .iter()
+                .map(|p| p.number)
+                .collect::<Vec<u32>>()
+        );
 
-                return Err(err);
-            }
-
-            info!("all pieces are downloaded from source");
+        // Check if all pieces are downloaded.
+        if interested_pieces.is_empty() {
+            info!("all pieces are downloaded from remote peer");
             return Ok(());
         };
 
-        info!("all pieces are downloaded with scheduler");
+        // If disable back-to-source is true, return an error directly.
+        if download.disable_back_to_source {
+            error!("download back-to-source is disabled");
+            download_progress_tx
+                .send_timeout(
+                    Err(Status::internal("download back-to-source is disabled")),
+                    REQUEST_TIMEOUT,
+                )
+                .await
+                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+
+            return Err(Error::Unknown("download failed".to_string()));
+        };
+
+        // Download the pieces from the source.
+        if let Err(err) = self
+            .download_partial_from_source(
+                task.clone(),
+                host_id,
+                peer_id,
+                interested_pieces.clone(),
+                download.clone(),
+                download_progress_tx.clone(),
+            )
+            .await
+        {
+            error!("download from source error: {:?}", err);
+            download_progress_tx
+                .send_timeout(
+                    Err(Status::internal(format!(
+                        "download from source error: {}",
+                        err
+                    ))),
+                    REQUEST_TIMEOUT,
+                )
+                .await
+                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+
+            return Err(err);
+        }
+
+        info!("all pieces are downloaded from source");
         Ok(())
     }
 
@@ -491,9 +552,7 @@ impl Task {
 
                 // Wait for the latest message to be sent.
                 sleep(Duration::from_millis(1)).await;
-                return Err(Error::MaxScheduleCountExceeded(
-                    self.config.scheduler.max_schedule_count,
-                ));
+                return Ok(finished_pieces);
             }
 
             let response = message?.response.ok_or(Error::UnexpectedResponse)?;
@@ -565,7 +624,7 @@ impl Task {
                     );
 
                     // Send the download peer started request.
-                    in_stream_tx
+                    match in_stream_tx
                         .send_timeout(
                             AnnouncePeerRequest {
                                 host_id: host_id.to_string(),
@@ -580,34 +639,58 @@ impl Task {
                             REQUEST_TIMEOUT,
                         )
                         .await
-                        .map_err(|err| {
+                    {
+                        Ok(_) => info!("sent DownloadPeerStartedRequest"),
+                        Err(err) => {
                             error!("send DownloadPeerStartedRequest failed: {:?}", err);
-                            err
-                        })?;
-                    info!("sent DownloadPeerStartedRequest");
+                            return Ok(finished_pieces);
+                        }
+                    };
+
+                    // Remove the finished pieces from the pieces.
+                    let remaining_interested_pieces = self.piece.remove_finished_from_interested(
+                        finished_pieces.clone(),
+                        interested_pieces.clone(),
+                    );
 
                     // Download the pieces from the remote peer.
-                    finished_pieces = self
+                    let partial_finished_pieces = match self
                         .download_partial_with_scheduler_from_remote_peer(
                             task.clone(),
                             host_id,
                             peer_id,
                             response.candidate_parents.clone(),
-                            interested_pieces.clone(),
+                            remaining_interested_pieces.clone(),
                             download_progress_tx.clone(),
                             in_stream_tx.clone(),
                         )
-                        .await?;
-                    info!(
-                        "schedule {} finished {} pieces from remote peer",
-                        schedule_count,
-                        finished_pieces.len()
+                        .await
+                    {
+                        Ok(partial_finished_pieces) => {
+                            info!(
+                                "schedule {} finished {} pieces from remote peer",
+                                schedule_count,
+                                partial_finished_pieces.len()
+                            );
+
+                            partial_finished_pieces
+                        }
+                        Err(err) => {
+                            error!("download from remote peer error: {:?}", err);
+                            return Ok(finished_pieces);
+                        }
+                    };
+
+                    // Merge the finished pieces.
+                    finished_pieces = self.piece.merge_finished_pieces(
+                        finished_pieces.clone(),
+                        partial_finished_pieces.clone(),
                     );
 
                     // Check if all pieces are downloaded.
                     if finished_pieces.len() == interested_pieces.len() {
                         // Send the download peer finished request.
-                        in_stream_tx
+                        match in_stream_tx
                             .send_timeout(
                                 AnnouncePeerRequest {
                                     host_id: host_id.to_string(),
@@ -625,11 +708,12 @@ impl Task {
                                 REQUEST_TIMEOUT,
                             )
                             .await
-                            .map_err(|err| {
+                        {
+                            Ok(_) => info!("sent DownloadPeerFinishedRequest"),
+                            Err(err) => {
                                 error!("send DownloadPeerFinishedRequest failed: {:?}", err);
-                                err
-                            })?;
-                        info!("sent DownloadPeerFinishedRequest");
+                            }
+                        }
 
                         // Wait for the latest message to be sent.
                         sleep(Duration::from_millis(1)).await;
@@ -637,7 +721,7 @@ impl Task {
                     }
 
                     // If not all pieces are downloaded, send the reschedule request.
-                    in_stream_tx
+                    match in_stream_tx
                         .send_timeout(
                             AnnouncePeerRequest {
                                 host_id: host_id.to_string(),
@@ -656,18 +740,20 @@ impl Task {
                             REQUEST_TIMEOUT,
                         )
                         .await
-                        .map_err(|err| {
+                    {
+                        Ok(_) => info!("sent RescheduleRequest"),
+                        Err(err) => {
                             error!("send RescheduleRequest failed: {:?}", err);
-                            err
-                        })?;
-                    info!("sent RescheduleRequest");
+                            return Ok(finished_pieces);
+                        }
+                    };
                 }
                 announce_peer_response::Response::NeedBackToSourceResponse(response) => {
                     // If the task need back to source, download the pieces from the source.
                     info!("need back to source response: {:?}", response);
 
                     // Send the download peer back-to-source request.
-                    in_stream_tx
+                    match in_stream_tx
                         .send_timeout(AnnouncePeerRequest {
                             host_id: host_id.to_string(),
                             task_id: task.id.clone(),
@@ -680,11 +766,13 @@ impl Task {
                                 ),
                             ),
                         }, REQUEST_TIMEOUT)
-                        .await.map_err(|err| {
+                    .await {
+                        Ok(_) => info!("sent DownloadPeerBackToSourceStartedRequest"),
+                        Err(err) => {
                             error!("send DownloadPeerBackToSourceStartedRequest failed: {:?}", err);
-                            err
-                        })?;
-                    info!("sent DownloadPeerBackToSourceStartedRequest");
+                            return Ok(finished_pieces);
+                        }
+                    };
 
                     // Remove the finished pieces from the pieces.
                     let remaining_interested_pieces = self.piece.remove_finished_from_interested(
@@ -693,7 +781,7 @@ impl Task {
                     );
 
                     // Download the pieces from the source.
-                    let finished_pieces = match self
+                    let partial_finished_pieces = match self
                         .download_partial_with_scheduler_from_source(
                             task.clone(),
                             host_id,
@@ -728,13 +816,19 @@ impl Task {
 
                             // Wait for the latest message to be sent.
                             sleep(Duration::from_millis(1)).await;
-                            return Err(err);
+                            return Ok(finished_pieces);
                         }
                     };
 
+                    // Merge the finished pieces.
+                    finished_pieces = self.piece.merge_finished_pieces(
+                        finished_pieces.clone(),
+                        partial_finished_pieces.clone(),
+                    );
+
                     if finished_pieces.len() == remaining_interested_pieces.len() {
                         // Send the download peer finished request.
-                        in_stream_tx
+                        match in_stream_tx
                             .send_timeout(
                                 AnnouncePeerRequest {
                                     host_id: host_id.to_string(),
@@ -751,18 +845,20 @@ impl Task {
                                 },
                                 REQUEST_TIMEOUT,
                             )
-                            .await.map_err(|err| {
+                            .await
+                        {
+                            Ok(_) => info!("sent DownloadPeerBackToSourceFinishedRequest"),
+                            Err(err) => {
                                 error!("send DownloadPeerBackToSourceFinishedRequest failed: {:?}", err);
-                                err
-                            })?;
-                        info!("sent DownloadPeerBackToSourceFinishedRequest");
+                            }
+                        }
 
                         // Wait for the latest message to be sent.
                         sleep(Duration::from_millis(1)).await;
                         return Ok(finished_pieces);
                     }
 
-                    in_stream_tx
+                    match in_stream_tx
                         .send_timeout(AnnouncePeerRequest {
                             host_id: host_id.to_string(),
                             task_id: task.id,
@@ -775,23 +871,23 @@ impl Task {
                                 ),
                             ),
                         }, REQUEST_TIMEOUT)
-                        .await.map_err(|err| {
+                    .await {
+                        Ok(_) => info!("sent DownloadPeerBackToSourceFailedRequest"),
+                        Err(err) => {
                             error!("send DownloadPeerBackToSourceFailedRequest failed: {:?}", err);
-                            err
-                        })?;
-                    info!("sent DownloadPeerBackToSourceFailedRequest");
+                        }
+                    }
 
                     // Wait for the latest message to be sent.
                     sleep(Duration::from_millis(1)).await;
-                    return Err(Error::Unknown(
-                        "not all pieces are downloaded from source".to_string(),
-                    ));
+                    return Ok(finished_pieces);
                 }
             }
         }
 
         // If the stream is finished abnormally, return an error.
-        Err(Error::Unknown("stream is finished abnormally".to_string()))
+        error!("stream is finished abnormally");
+        Ok(finished_pieces)
     }
 
     // download_partial_with_scheduler_from_remote_peer downloads a partial task with scheduler from a remote peer.
