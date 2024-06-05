@@ -27,6 +27,7 @@ use dragonfly_client_core::{error::BackendError, Error, Result};
 use dragonfly_client_storage::{metadata, Storage};
 use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -227,6 +228,26 @@ impl Piece {
             })
             .cloned()
             .collect::<Vec<metadata::Piece>>()
+    }
+
+    // merge_finished_pieces merges the finished pieces and has finished pieces.
+    pub fn merge_finished_pieces(
+        &self,
+        finished_pieces: Vec<metadata::Piece>,
+        old_finished_pieces: Vec<metadata::Piece>,
+    ) -> Vec<metadata::Piece> {
+        let mut pieces: HashMap<u32, metadata::Piece> = HashMap::new();
+        for finished_piece in finished_pieces.into_iter() {
+            pieces.insert(finished_piece.number, finished_piece);
+        }
+
+        for old_finished_piece in old_finished_pieces.into_iter() {
+            pieces
+                .entry(old_finished_piece.number)
+                .or_insert(old_finished_piece);
+        }
+
+        pieces.into_values().collect()
     }
 
     // upload_from_local_peer_into_async_read uploads a single piece from a local peer.
