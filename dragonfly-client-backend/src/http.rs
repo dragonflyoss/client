@@ -14,10 +14,7 @@
  * limitations under the License.
  */
 
-use dragonfly_client_core::{
-    error::{ErrorType, OrErr},
-    Error, Result,
-};
+use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::tls::NoVerifier;
 use futures::TryStreamExt;
 use rustls_pki_types::CertificateDer;
@@ -59,8 +56,7 @@ impl HTTP {
 
         let client = reqwest::Client::builder()
             .use_preconfigured_tls(client_config_builder)
-            .build()
-            .or_err(ErrorType::HTTPError)?;
+            .build()?;
         Ok(client)
     }
 }
@@ -70,7 +66,10 @@ impl HTTP {
 impl crate::Backend for HTTP {
     // head gets the header of the request.
     async fn head(&self, request: crate::HeadRequest) -> Result<crate::HeadResponse> {
-        info!("get request: {} {:?}", request.url, request.http_header);
+        info!(
+            "get request {} {}: {:?}",
+            request.task_id, request.url, request.http_header
+        );
         // The header of the request is required.
         let header = request.http_header.ok_or(Error::InvalidParameter)?;
 
@@ -85,15 +84,20 @@ impl crate::Backend for HTTP {
             .timeout(request.timeout)
             .send()
             .await
-            .or_err(ErrorType::HTTPError)
             .map_err(|err| {
-                error!("head request failed: {}", err);
+                error!(
+                    "head request failed {} {}: {}",
+                    request.task_id, request.url, err
+                );
                 err
             })?;
 
         let header = response.headers().clone();
         let status_code = response.status();
-        info!("head response: {:?} {:?}", status_code, header);
+        info!(
+            "head response {} {}: {:?} {:?}",
+            request.task_id, request.url, status_code, header
+        );
         Ok(crate::HeadResponse {
             success: status_code.is_success(),
             content_length: response.content_length(),
@@ -105,7 +109,10 @@ impl crate::Backend for HTTP {
 
     // get gets the content of the request.
     async fn get(&self, request: crate::GetRequest) -> Result<crate::GetResponse<crate::Body>> {
-        info!("get request: {} {:?}", request.url, request.http_header);
+        info!(
+            "get request {} {}: {:?}",
+            request.piece_id, request.url, request.http_header
+        );
         // The header of the request is required.
         let header = request.http_header.ok_or(Error::InvalidParameter)?;
         let response = self
@@ -115,9 +122,11 @@ impl crate::Backend for HTTP {
             .timeout(request.timeout)
             .send()
             .await
-            .or_err(ErrorType::HTTPError)
             .map_err(|err| {
-                error!("get request failed: {}", err);
+                error!(
+                    "get request failed {} {}: {}",
+                    request.piece_id, request.url, err
+                );
                 err
             })?;
 
@@ -167,6 +176,7 @@ mod tests {
         let http_backend = HTTP::new();
         let resp = http_backend
             .head(HeadRequest {
+                task_id: "test".to_string(),
                 url: server.url("/head"),
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),
@@ -191,6 +201,7 @@ mod tests {
         let http_backend = HTTP::new();
         let resp = http_backend
             .head(HeadRequest {
+                task_id: "test".to_string(),
                 url: server.url("/head"),
                 http_header: None,
                 timeout: std::time::Duration::from_secs(5),
@@ -214,6 +225,7 @@ mod tests {
         let http_backend = HTTP::new();
         let mut resp = http_backend
             .get(GetRequest {
+                piece_id: "test".to_string(),
                 url: server.url("/get"),
                 range: None,
                 http_header: Some(HeaderMap::new()),
