@@ -809,6 +809,7 @@ impl Task {
         // Initialize the piece collector.
         let piece_collector = piece_collector::PieceCollector::new(
             self.config.clone(),
+            host_id,
             task.id.as_str(),
             interested_pieces.clone(),
             parents.clone(),
@@ -843,7 +844,13 @@ impl Task {
                 );
 
                 let metadata = piece_manager
-                    .download_from_remote_peer(task_id.as_str(), number, length, parent.clone())
+                    .download_from_remote_peer(
+                        host_id.as_str(),
+                        task_id.as_str(),
+                        number,
+                        length,
+                        parent.clone(),
+                    )
                     .await
                     .map_err(|err| {
                         error!(

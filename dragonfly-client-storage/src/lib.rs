@@ -289,21 +289,26 @@ impl Storage {
         tokio::pin!(piece_timeout);
 
         // Initialize the interval of piece.
+        let mut wait_for_piece_count = 0;
         let mut interval = tokio::time::interval(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL);
         loop {
             tokio::select! {
                 _ = interval.tick() => {
+
                     let piece = self
                         .get_piece(task_id, number)?
                         .ok_or_else(|| Error::PieceNotFound(self.piece_id(task_id, number)))?;
 
                     // If the piece is finished, return.
                     if piece.is_finished() {
-                        info!("wait for piece finished success {}", self.piece_id(task_id, number));
+                        info!("wait piece finished success {}", self.piece_id(task_id, number));
                         return Ok(piece);
                     }
 
-                    info!("wait for piece finished {}", self.piece_id(task_id, number));
+                    if wait_for_piece_count > 0 {
+                        info!("wait piece finished {}", self.piece_id(task_id, number));
+                    }
+                    wait_for_piece_count += 1;
                 }
                 _ = &mut piece_timeout => {
                     return Err(Error::WaitForPieceFinishedTimeout(self.piece_id(task_id, number)));
