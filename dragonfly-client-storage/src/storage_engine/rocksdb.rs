@@ -66,17 +66,11 @@ impl RocksdbStorageEngine {
         options.optimize_level_style_compaction(Self::DEFAULT_MEMTABLE_MEMORY_BUDGET);
         options.increase_parallelism(num_cpus::get() as i32);
         options.set_max_open_files(Self::DEFAULT_MAX_OPEN_FILES);
-        // Set prefix extractor to reduce the memory usage of bloom filter.
-        options.set_prefix_extractor(rocksdb::SliceTransform::create_fixed_prefix(64));
-        options.set_memtable_prefix_bloom_ratio(0.2);
 
         // Initialize rocksdb block based table options.
         let mut block_options = rocksdb::BlockBasedOptions::default();
         block_options.set_block_cache(&rocksdb::Cache::new_lru_cache(Self::DEFAULT_CACHE_SIZE));
         block_options.set_block_size(Self::DEFAULT_BLOCK_SIZE);
-        block_options.set_cache_index_and_filter_blocks(true);
-        block_options.set_pin_l0_filter_and_index_blocks_in_cache(true);
-        block_options.set_bloom_filter(10.0, true);
         options.set_block_based_table_factory(&block_options);
 
         let dir = dir.join(Self::DEFAULT_DIR_NAME);
@@ -101,9 +95,7 @@ impl Operations for RocksdbStorageEngine {
     // get gets the object by key.
     fn get<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>> {
         let cf = cf_handle::<O>(self)?;
-        let mut options = ReadOptions::default();
-        options.set_total_order_seek(true);
-
+        let options = ReadOptions::default();
         let value = self
             .get_cf_opt(cf, key, &options)
             .or_err(ErrorType::StorageError)?;
