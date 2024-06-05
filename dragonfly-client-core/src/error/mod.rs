@@ -137,9 +137,25 @@ pub enum DFError {
     #[error(transparent)]
     TonicStatus(#[from] tonic::Status),
 
+    // TonicStreamElapsed is the error for tonic stream elapsed.
+    #[error(transparent)]
+    TokioStreamElapsed(#[from] tokio_stream::Elapsed),
+
+    // ReqwestError is the error for reqwest.
+    #[error(transparent)]
+    ReqwesError(#[from] reqwest::Error),
+
+    // HyperError is the error for hyper.
+    #[error(transparent)]
+    HyperError(#[from] hyper::Error),
+
     // BackendError is the error for backend.
     #[error(transparent)]
     BackendError(BackendError),
+
+    // HyperUtilClientLegacyError is the error for hyper util client legacy.
+    #[error(transparent)]
+    HyperUtilClientLegacyError(#[from] hyper_util::client::legacy::Error),
 
     // ExternalError is the error for external error.
     #[error(transparent)]

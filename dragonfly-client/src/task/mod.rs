@@ -134,6 +134,7 @@ impl Task {
         let backend = self.backend_factory.build(download.url.as_str())?;
         let response = backend
             .head(HeadRequest {
+                task_id: id.to_string(),
                 url: download.url,
                 http_header: Some(request_header),
                 timeout: self.config.download.piece_timeout,
@@ -460,7 +461,7 @@ impl Task {
             .timeout(self.config.scheduler.schedule_timeout);
         tokio::pin!(out_stream);
 
-        while let Some(message) = out_stream.try_next().await.or_err(ErrorType::HTTPError)? {
+        while let Some(message) = out_stream.try_next().await? {
             // Check if the schedule count is exceeded.
             schedule_count += 1;
             if schedule_count >= self.config.scheduler.max_schedule_count {
@@ -1017,7 +1018,7 @@ impl Task {
         // Convert the header.
         let request_header: HeaderMap = (&download.request_header)
             .try_into()
-            .or_err(ErrorType::HTTPError)?;
+            .or_err(ErrorType::ParseError)?;
 
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
@@ -1308,7 +1309,7 @@ impl Task {
         // Convert the header.
         let request_header: HeaderMap = (&download.request_header)
             .try_into()
-            .or_err(ErrorType::HTTPError)?;
+            .or_err(ErrorType::ParseError)?;
 
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();

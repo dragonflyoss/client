@@ -27,7 +27,7 @@ use dragonfly_api::dfdaemon::v2::{
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_config::dfdaemon::{Config, Rule};
-use dragonfly_client_core::error::{ErrorType, ExternalError, OrErr};
+use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_util::{
     http::{
@@ -684,8 +684,7 @@ async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Res
         .preserve_header_case(true)
         .title_case_headers(true)
         .handshake(io)
-        .await
-        .or_err(ErrorType::HTTPError)?;
+        .await?;
 
     tokio::task::spawn(async move {
         if let Err(err) = conn.await {
@@ -693,17 +692,8 @@ async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Res
         }
     });
 
-    let response = client
-        .send_request(request)
-        .await
-        .or_err(ErrorType::HTTPError)?;
-    //Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
-    Ok(response.map(|b| {
-        b.map_err(|e| {
-            ClientError::from(ExternalError::new(ErrorType::HTTPError).with_cause(Box::new(e)))
-        })
-        .boxed()
-    }))
+    let response = client.send_request(request).await?;
+    Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }
 
 // proxy_https proxies the HTTPS request directly to the remote server.
@@ -737,13 +727,8 @@ async fn proxy_https(
         .build();
 
     let client = Client::builder(TokioExecutor::new()).build::<_, hyper::body::Incoming>(https);
-    let response = client.request(request).await.or_err(ErrorType::HTTPError)?;
-    Ok(response.map(|b| {
-        b.map_err(|e| {
-            ClientError::from(ExternalError::new(ErrorType::HTTPError).with_cause(Box::new(e)))
-        })
-        .boxed()
-    }))
+    let response = client.request(request).await?;
+    Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }
 
 // make_registry_mirror_request makes a registry mirror request by the request.
