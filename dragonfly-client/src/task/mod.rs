@@ -342,118 +342,123 @@ impl Task {
                 content_length,
                 download.clone(),
                 download_progress_tx.clone(),
-                ).await {
-                Ok(finished_pieces) => finished_pieces,
-                Err(err) => {
-                    error!("download with scheduler error: {:?}", err);
+            )
+            .await
+        {
+            Ok(finished_pieces) => finished_pieces,
+            Err(err) => {
+                error!("download with scheduler error: {:?}", err);
 
-                    // If disable back-to-source is true, return an error directly.
-                    if download.disable_back_to_source {
-                        error!("download back-to-source is disabled");
-                        download_progress_tx
-                            .send_timeout(
-                                Err(Status::internal("download back-to-source is disabled")),
-                                REQUEST_TIMEOUT,
-                            )
-                            .await
-                            .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
-                        return Err(Error::Unknown("download failed".to_string()));
-                    };
-
-                    // Download the pieces from the source.
-                    if let Err(err) = self
-                        .download_partial_from_source(
-                            task.clone(),
-                            host_id,
-                            peer_id,
-                            interested_pieces.clone(),
-                            download.clone(),
-                            download_progress_tx.clone(),
+                // If disable back-to-source is true, return an error directly.
+                if download.disable_back_to_source {
+                    error!(
+                        "download back-to-source is disabled, download with scheduler error: {:?}",
+                        err
+                    );
+                    download_progress_tx
+                        .send_timeout(
+                            Err(Status::internal("download back-to-source is disabled")),
+                            REQUEST_TIMEOUT,
                         )
                         .await
-                    {
-                        error!("download from source error: {:?}", err);
-                        download_progress_tx
-                            .send_timeout(
-                                Err(Status::internal(format!(
-                                    "download from source error: {}",
-                                    err
-                                ))),
-                                REQUEST_TIMEOUT,
-                            )
-                            .await
-                            .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+                        .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
 
-                        return Err(err);
-                    }
+                    return Err(Error::Unknown("download failed".to_string()));
+                };
 
-                    info!("all pieces are downloaded from source");
-                    return Ok(());
-                }
-            };
-
-            // Remove the finished pieces from the pieces.
-            let interested_pieces = self
-                .piece
-                .remove_finished_from_interested(finished_pieces, interested_pieces);
-            info!(
-                "interested pieces after removing the finished piece: {:?}",
-                interested_pieces
-                    .iter()
-                    .map(|p| p.number)
-                    .collect::<Vec<u32>>()
-            );
-
-            // Check if all pieces are downloaded.
-            if interested_pieces.is_empty() {
-                info!("all pieces are downloaded from remote peer");
-                return Ok(());
-            };
-
-            // If disable back-to-source is true, return an error directly.
-            if download.disable_back_to_source {
-                error!("download back-to-source is disabled");
-                download_progress_tx
-                    .send_timeout(
-                        Err(Status::internal("download back-to-source is disabled")),
-                        REQUEST_TIMEOUT,
+                // Download the pieces from the source.
+                if let Err(err) = self
+                    .download_partial_from_source(
+                        task.clone(),
+                        host_id,
+                        peer_id,
+                        interested_pieces.clone(),
+                        download.clone(),
+                        download_progress_tx.clone(),
                     )
                     .await
-                    .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+                {
+                    error!("download from source error: {:?}", err);
+                    download_progress_tx
+                        .send_timeout(
+                            Err(Status::internal(format!(
+                                "download from source error: {}",
+                                err
+                            ))),
+                            REQUEST_TIMEOUT,
+                        )
+                        .await
+                        .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
 
-                return Err(Error::Unknown("download failed".to_string()));
-            };
+                    return Err(err);
+                }
 
-            // Download the pieces from the source.
-            if let Err(err) = self
-                .download_partial_from_source(
-                    task.clone(),
-                    host_id,
-                    peer_id,
-                    interested_pieces.clone(),
-                    download.clone(),
-                    download_progress_tx.clone(),
+                info!("all pieces are downloaded from source");
+                return Ok(());
+            }
+        };
+
+        // Remove the finished pieces from the pieces.
+        let interested_pieces = self
+            .piece
+            .remove_finished_from_interested(finished_pieces, interested_pieces);
+        info!(
+            "interested pieces after removing the finished piece: {:?}",
+            interested_pieces
+                .iter()
+                .map(|p| p.number)
+                .collect::<Vec<u32>>()
+        );
+
+        // Check if all pieces are downloaded.
+        if interested_pieces.is_empty() {
+            info!("all pieces are downloaded from remote peer");
+            return Ok(());
+        };
+
+        // If disable back-to-source is true, return an error directly.
+        if download.disable_back_to_source {
+            error!("download back-to-source is disabled");
+            download_progress_tx
+                .send_timeout(
+                    Err(Status::internal("download back-to-source is disabled")),
+                    REQUEST_TIMEOUT,
                 )
                 .await
-            {
-                error!("download from source error: {:?}", err);
-                download_progress_tx
-                    .send_timeout(
-                        Err(Status::internal(format!(
-                            "download from source error: {}",
-                            err
-                        ))),
-                        REQUEST_TIMEOUT,
-                    )
-                    .await
-                    .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
 
-                return Err(err);
-            }
+            return Err(Error::Unknown("download failed".to_string()));
+        };
 
-            info!("all pieces are downloaded from source");
-            return Ok(());
+        // Download the pieces from the source.
+        if let Err(err) = self
+            .download_partial_from_source(
+                task.clone(),
+                host_id,
+                peer_id,
+                interested_pieces.clone(),
+                download.clone(),
+                download_progress_tx.clone(),
+            )
+            .await
+        {
+            error!("download from source error: {:?}", err);
+            download_progress_tx
+                .send_timeout(
+                    Err(Status::internal(format!(
+                        "download from source error: {}",
+                        err
+                    ))),
+                    REQUEST_TIMEOUT,
+                )
+                .await
+                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+
+            return Err(err);
+        }
+
+        info!("all pieces are downloaded from source");
+        Ok(())
     }
 
     // download_partial_with_scheduler downloads a partial task with scheduler.
@@ -840,7 +845,7 @@ impl Task {
                                 },
                                 REQUEST_TIMEOUT,
                             )
-                            .await 
+                            .await
                         {
                             Ok(_) => info!("sent DownloadPeerBackToSourceFinishedRequest"),
                             Err(err) => {
@@ -873,7 +878,6 @@ impl Task {
                         }
                     }
 
-
                     // Wait for the latest message to be sent.
                     sleep(Duration::from_millis(1)).await;
                     return Ok(finished_pieces);
@@ -883,7 +887,7 @@ impl Task {
 
         // If the stream is finished abnormally, return an error.
         error!("stream is finished abnormally");
-        return Ok(finished_pieces);
+        Ok(finished_pieces)
     }
 
     // download_partial_with_scheduler_from_remote_peer downloads a partial task with scheduler from a remote peer.
