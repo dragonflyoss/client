@@ -412,7 +412,7 @@ impl Task {
 
         // Check if all pieces are downloaded.
         if interested_pieces.is_empty() {
-            info!("all pieces are downloaded from remote peer");
+            info!("all pieces are downloaded with scheduler");
             return Ok(());
         };
 
