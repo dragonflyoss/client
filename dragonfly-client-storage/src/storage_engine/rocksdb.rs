@@ -95,7 +95,9 @@ impl Operations for RocksdbStorageEngine {
     // get gets the object by key.
     fn get<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>> {
         let cf = cf_handle::<O>(self)?;
-        let options = ReadOptions::default();
+        let mut options = ReadOptions::default();
+        options.fill_cache(false);
+
         let value = self
             .get_cf_opt(cf, key, &options)
             .or_err(ErrorType::StorageError)?;
