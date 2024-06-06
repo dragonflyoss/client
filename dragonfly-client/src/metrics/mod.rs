@@ -106,14 +106,14 @@ lazy_static! {
     pub static ref PROXY_REQUSET_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("proxy_request_total", "Counter of the number of the proxy request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["remote_address"]
+            &[]
         ).expect("metric can be created");
 
     // PROXY_REQUSET_FAILURE_COUNT is used to count the failed number of proxy request.
     pub static ref PROXY_REQUSET_FAILURE_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("proxy_request_failure_total", "Counter of the number of failed of the proxy request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["remote_address"]
+            &[]
         ).expect("metric can be created");
 }
 
@@ -331,17 +331,13 @@ pub fn collect_upload_piece_failure_metrics() {
 }
 
 // collect_proxy_request_started_metrics collects the proxy request started metrics.
-pub fn collect_proxy_request_started_metrics(remote_address: &str) {
-    PROXY_REQUSET_COUNT
-        .with_label_values(&[remote_address])
-        .inc();
+pub fn collect_proxy_request_started_metrics() {
+    PROXY_REQUSET_COUNT.with_label_values(&[]).inc();
 }
 
 // collect_proxy_request_failure_metrics collects the proxy request failure metrics.
-pub fn collect_proxy_request_failure_metrics(remote_address: &str) {
-    PROXY_REQUSET_FAILURE_COUNT
-        .with_label_values(&[remote_address])
-        .inc();
+pub fn collect_proxy_request_failure_metrics() {
+    PROXY_REQUSET_FAILURE_COUNT.with_label_values(&[]).inc();
 }
 
 // Metrics is the metrics server.

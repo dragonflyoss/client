@@ -169,7 +169,7 @@ impl Proxy {
 
                     // Spawn a task to handle the connection.
                     let io = TokioIo::new(tcp);
-                    collect_proxy_request_started_metrics(remote_address.to_string().as_str());
+                    collect_proxy_request_started_metrics();
                     info!("accepted connection from {}", remote_address);
 
                     let config = self.config.clone();
@@ -188,7 +188,7 @@ impl Proxy {
                             .with_upgrades()
                             .await
                         {
-                            collect_proxy_request_failure_metrics(remote_address.to_string().as_str());
+                            collect_proxy_request_failure_metrics();
                             error!("failed to serve connection from {}: {}", remote_address, err);
                         }
                     });
