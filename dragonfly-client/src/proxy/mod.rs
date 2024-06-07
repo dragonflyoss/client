@@ -169,7 +169,6 @@ impl Proxy {
 
                     // Spawn a task to handle the connection.
                     let io = TokioIo::new(tcp);
-                    collect_proxy_request_started_metrics();
                     info!("accepted connection from {}", remote_address);
 
                     let config = self.config.clone();
@@ -212,6 +211,10 @@ pub async fn handler(
     registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
+    // Record the proxy request started metrics. The metrics will be recorded
+    // when the request is kept alive.
+    collect_proxy_request_started_metrics();
+
     // If host is not set, it is the mirror request.
     if request.uri().host().is_none() {
         // Handle CONNECT request.
