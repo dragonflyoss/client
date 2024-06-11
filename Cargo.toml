@@ -73,7 +73,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 clap = { version = "4.5.6", features = ["derive"] }
 anyhow = "1.0.86"
 toml_edit = "0.22.8"
-toml = "0.8.13"
+toml = "0.8.14"
 
 [profile.release]
 debug = true
