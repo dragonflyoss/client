@@ -72,7 +72,7 @@ chrono = { version = "0.4.35", features = ["serde"] }
 openssl = { version = "0.10", features = ["vendored"] }
 clap = { version = "4.5.6", features = ["derive"] }
 anyhow = "1.0.86"
-toml_edit = "0.22.8"
+toml_edit = "0.22.14"
 toml = "0.8.13"
 
 [profile.release]
