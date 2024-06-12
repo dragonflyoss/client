@@ -316,6 +316,10 @@ impl Piece {
         // Create a dfdaemon client.
         let host = parent.host.clone().ok_or_else(|| {
             error!("peer host is empty");
+            if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                error!("set piece metadata failed: {}", err)
+            };
+
             Error::InvalidPeer(parent.id.clone())
         })?;
         let dfdaemon_upload_client =
@@ -326,6 +330,10 @@ impl Piece {
                         "create dfdaemon upload client from {}:{} failed: {}",
                         host.ip, host.port, err
                     );
+                    if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                        error!("set piece metadata failed: {}", err)
+                    };
+
                     err
                 })?;
 
@@ -345,6 +353,7 @@ impl Piece {
                 if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
                     error!("set piece metadata failed: {}", err)
                 };
+
                 err
             })?;
 
@@ -353,6 +362,7 @@ impl Piece {
             if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
                 error!("set piece metadata failed: {}", err)
             };
+
             Error::InvalidParameter
         })?;
 
@@ -362,6 +372,7 @@ impl Piece {
             if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
                 error!("set piece metadata failed: {}", err)
             };
+
             Error::InvalidParameter
         })?;
 
@@ -383,6 +394,7 @@ impl Piece {
                 if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
                     error!("set piece metadata failed: {}", err)
                 };
+
                 err
             })?;
 
@@ -425,7 +437,15 @@ impl Piece {
         );
 
         // Download the piece from the source.
-        let backend = self.backend_factory.build(url)?;
+        let backend = self.backend_factory.build(url).map_err(|err| {
+            error!("build backend failed: {}", err);
+            if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                error!("set piece metadata failed: {}", err)
+            };
+
+            err
+        })?;
+
         let mut response = backend
             .get(GetRequest {
                 piece_id: self.storage.piece_id(task_id, number),
@@ -446,6 +466,7 @@ impl Piece {
                 if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
                     error!("set piece metadata failed: {}", err)
                 };
+
                 err
             })?;
 
@@ -483,6 +504,7 @@ impl Piece {
                 if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
                     error!("set piece metadata failed: {}", err)
                 };
+
                 err
             })?;
 
