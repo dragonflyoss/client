@@ -965,7 +965,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "0.1.78"
+version = "0.1.79"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1029,7 +1029,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "0.1.78"
+version = "0.1.79"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-core",
@@ -1049,7 +1049,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "0.1.78"
+version = "0.1.79"
 dependencies = [
  "dragonfly-client-core",
  "home",
@@ -1068,7 +1068,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "0.1.78"
+version = "0.1.79"
 dependencies = [
  "hyper 1.2.0",
  "hyper-util",
@@ -1082,7 +1082,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "0.1.78"
+version = "0.1.79"
 dependencies = [
  "anyhow",
  "clap",
@@ -1098,7 +1098,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "0.1.78"
+version = "0.1.79"
 dependencies = [
  "base16ct",
  "blake3",
@@ -1122,7 +1122,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "0.1.78"
+version = "0.1.79"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-core",
@@ -1581,7 +1581,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "0.1.78"
+version = "0.1.79"
 dependencies = [
  "dragonfly-client-backend",
  "dragonfly-client-core",
@@ -4482,6 +4482,7 @@ version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ad0f048c97dbd9faa9b7df56362b8ebcaa52adb06b498c050d2f4e32f90a7a8b"
 dependencies = [
+ "chrono",
  "matchers",
  "nu-ansi-term",
  "once_cell",
@@ -4489,6 +4490,7 @@ dependencies = [
  "sharded-slab",
  "smallvec",
  "thread_local",
+ "time",
  "tracing",
  "tracing-core",
  "tracing-log 0.2.0",

@@ -23,7 +23,12 @@ use std::path::{Path, PathBuf};
 use tracing::{info, Level};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_log::LogTracer;
-use tracing_subscriber::{filter::LevelFilter, fmt::Layer, prelude::*, EnvFilter, Registry};
+use tracing_subscriber::{
+    filter::LevelFilter,
+    fmt::{time::ChronoLocal, Layer},
+    prelude::*,
+    EnvFilter, Registry,
+};
 
 pub fn init_tracing(
     name: &str,
@@ -52,6 +57,7 @@ pub fn init_tracing(
         .with_target(false)
         .with_thread_names(false)
         .with_thread_ids(false)
+        .with_timer(ChronoLocal::rfc_3339())
         .pretty()
         .with_filter(stdout_filter);
     guards.push(stdout_guard);
@@ -74,6 +80,7 @@ pub fn init_tracing(
         .with_target(false)
         .with_thread_names(false)
         .with_thread_ids(false)
+        .with_timer(ChronoLocal::rfc_3339())
         .compact();
     guards.push(rolling_writer_guard);
 
