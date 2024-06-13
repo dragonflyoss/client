@@ -81,7 +81,7 @@ impl SchedulerClient {
     }
 
     // announce_peer announces the peer to the scheduler.
-    #[instrument(skip(self, request))]
+    #[instrument(skip_all)]
     pub async fn announce_peer(
         &self,
         task_id: &str,
