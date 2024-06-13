@@ -640,6 +640,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
         // If prefetch flag is true, prefetch the full task.
         if download.prefetch {
+            info!("try to prefetch task");
             match task_manager.prefetch_task_started(task_id.as_str()).await {
                 Ok(_) => {
                     info!("prefetch task started");
@@ -675,7 +676,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     );
                 }
                 // If the task is already prefetched, ignore the error.
-                Err(ClientError::InvalidState(_)) => {}
+                Err(ClientError::InvalidState(_)) => info!("task is already prefetched"),
                 Err(err) => {
                     error!("prefetch task started: {}", err);
                 }
