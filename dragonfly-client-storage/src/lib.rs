@@ -23,7 +23,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
-use tracing::info;
+use tracing::{error, info};
 
 pub mod content;
 pub mod metadata;
@@ -210,6 +210,9 @@ impl Storage {
         number: u32,
         range: Option<Range>,
     ) -> Result<impl AsyncRead> {
+        // Wait for the piece to be finished.
+        self.wait_for_piece_finished(task_id, number).await?;
+
         // Start uploading the task.
         self.metadata.upload_task_started(task_id)?;
 
@@ -217,16 +220,6 @@ impl Storage {
         if let Err(err) = self.metadata.upload_piece_started(task_id, number) {
             // Failed uploading the task.
             self.metadata.upload_task_failed(task_id)?;
-            return Err(err);
-        }
-
-        // Wait for the piece to be finished.
-        if let Err(err) = self.wait_for_piece_finished(task_id, number).await {
-            // Failed uploading the task.
-            self.metadata.upload_task_failed(task_id)?;
-
-            // Failed uploading the piece.
-            self.metadata.upload_piece_failed(task_id, number)?;
             return Err(err);
         }
 
@@ -294,7 +287,6 @@ impl Storage {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-
                     let piece = self
                         .get_piece(task_id, number)?
                         .ok_or_else(|| Error::PieceNotFound(self.piece_id(task_id, number)))?;
@@ -311,6 +303,7 @@ impl Storage {
                     wait_for_piece_count += 1;
                 }
                 _ = &mut piece_timeout => {
+                    self.metadata.wait_for_piece_finished_failed(task_id, number).unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
                     return Err(Error::WaitForPieceFinishedTimeout(self.piece_id(task_id, number)));
                 }
             }
