@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::error;
+use tracing::{error, info};
 
 use crate::storage_engine::{rocksdb::RocksdbStorageEngine, DatabaseObject, StorageEngineOwned};
 
@@ -391,6 +391,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
     /// delete_task deletes the task metadata.
     pub fn delete_task(&self, task_id: &str) -> Result<()> {
+        info!("delete task metadata {}", task_id);
         self.db.delete::<Task>(task_id.as_bytes())
     }
 
@@ -441,8 +442,12 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
     /// download_piece_failed updates the metadata of the piece when the piece downloads failed.
     pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
-        self.db
-            .delete::<Piece>(self.piece_id(task_id, number).as_bytes())
+        self.delete_piece(task_id, number)
+    }
+
+    // wait_for_piece_finished_failed waits for the piece to be finished or failed.
+    pub fn wait_for_piece_finished_failed(&self, task_id: &str, number: u32) -> Result<()> {
+        self.delete_piece(task_id, number)
     }
 
     /// upload_piece_started updates the metadata of the piece when piece uploads started.
@@ -506,6 +511,13 @@ impl<E: StorageEngineOwned> Metadata<E> {
     pub fn get_pieces(&self, task_id: &str) -> Result<Vec<Piece>> {
         let iter = self.db.prefix_iter::<Piece>(task_id.as_bytes())?;
         iter.map(|ele| ele.map(|(_, piece)| piece)).collect()
+    }
+
+    /// delete_piece deletes the piece metadata.
+    pub fn delete_piece(&self, task_id: &str, number: u32) -> Result<()> {
+        info!("delete piece metadata {}", self.piece_id(task_id, number));
+        self.db
+            .delete::<Piece>(self.piece_id(task_id, number).as_bytes())
     }
 
     /// delete_pieces deletes the piece metadatas.
