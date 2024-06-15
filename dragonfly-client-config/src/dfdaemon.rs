@@ -148,7 +148,7 @@ fn default_dynconfig_refresh_interval() -> Duration {
 // default_storage_keep is the default keep of the task's metadata and content when the dfdaemon restarts.
 #[inline]
 fn default_storage_keep() -> bool {
-    true
+    false
 }
 
 // default_storage_write_buffer_size is the default buffer size for writing piece to disk, default is 128KB.
