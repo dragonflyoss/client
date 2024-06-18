@@ -1124,6 +1124,7 @@ dependencies = [
 name = "dragonfly-client-util"
 version = "0.1.81"
 dependencies = [
+ "blake3",
  "dragonfly-api",
  "dragonfly-client-core",
  "hex",
