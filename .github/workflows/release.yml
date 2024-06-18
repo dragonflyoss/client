@@ -87,6 +87,15 @@ jobs:
           tar -czf "$dirname.tar.gz" "$dirname"
           echo "DFSTORE_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
 
+      - name: Build archive dfcache
+        shell: bash
+        run: |
+          binary_name="dfcache"
+          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
+          tar -czf "$dirname.tar.gz" "$dirname"
+          echo "DFCACHE_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+
       - name: Build archive dfinit
         shell: bash
         run: |
@@ -94,7 +103,7 @@ jobs:
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
           mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
           tar -czf "$dirname.tar.gz" "$dirname"
-          echo "DFSTORE_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+          echo "DFINIT_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -105,6 +114,8 @@ jobs:
             ${{ env.DFGET_ASSET }}
             ${{ env.DFDAEMON_ASSET }}
             ${{ env.DFSTORE_ASSET }}
+            ${{ env.DFCACHE_ASSET }}
+            ${{ env.DFINIT_ASSET }}
 
   publish-crates:
     runs-on: ubuntu-latest
