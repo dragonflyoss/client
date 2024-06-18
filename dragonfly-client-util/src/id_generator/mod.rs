@@ -19,6 +19,7 @@ use dragonfly_client_core::{
     Result,
 };
 use sha2::{Digest, Sha256};
+use std::path::PathBuf;
 use url::Url;
 use uuid::Uuid;
 
@@ -101,6 +102,38 @@ impl IDGenerator {
         Ok(hex::encode(hasher.finalize()))
     }
 
+    // cache_task_id generates the cache task id.
+    pub fn cache_task_id(
+        &self,
+        path: &PathBuf,
+        tag: Option<&str>,
+        application: Option<&str>,
+        piece_length: u64,
+    ) -> Result<String> {
+        // Initialize the hasher.
+        let mut hasher = blake3::Hasher::new();
+
+        // Calculate the hash of the file.
+        let mut f = std::fs::File::open(path)?;
+        std::io::copy(&mut f, &mut hasher)?;
+
+        // Add the tag to generate the cache task id.
+        if let Some(tag) = tag {
+            hasher.update(tag.as_bytes());
+        }
+
+        // Add the application to generate the cache task id.
+        if let Some(application) = application {
+            hasher.update(application.as_bytes());
+        }
+
+        // Add the piece length to generate the cache task id.
+        hasher.update(piece_length.to_string().as_bytes());
+
+        // Generate the cache task id.
+        Ok(hasher.finalize().to_hex().to_string())
+    }
+
     // peer_id generates the peer id.
     pub fn peer_id(&self) -> String {
         if self.is_seed_peer {
@@ -114,5 +147,27 @@ impl IDGenerator {
         }
 
         format!("{}-{}-{}", self.ip, self.hostname, Uuid::new_v4())
+    }
+
+    // cache_peer_id generates the cache peer id.
+    pub fn cache_peer_id(&self, persistent: bool) -> String {
+        if persistent {
+            return format!(
+                "{}-{}-{}-{}-{}",
+                self.ip,
+                self.hostname,
+                Uuid::new_v4(),
+                "cache",
+                "persistent"
+            );
+        }
+
+        format!(
+            "{}-{}-{}-{}",
+            self.ip,
+            self.hostname,
+            Uuid::new_v4(),
+            "cache"
+        )
     }
 }
