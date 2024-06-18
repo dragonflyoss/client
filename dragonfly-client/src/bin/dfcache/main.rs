@@ -20,6 +20,11 @@ use dragonfly_client_config::{dfcache, dfdaemon};
 use std::path::PathBuf;
 use tracing::Level;
 
+pub mod export;
+pub mod import;
+pub mod remove;
+pub mod stat;
+
 #[derive(Debug, Parser)]
 #[command(
     name = dfcache::NAME,
@@ -81,7 +86,7 @@ pub enum Command {
         about = "Import a file into Dragonfly P2P network",
         long_about = "Import a local file into Dragonfly P2P network and copy multiple replicas during import. If import successfully, it will return a task ID."
     )]
-    Import(ImportCommand),
+    Import(import::ImportCommand),
 
     #[command(
         name = "export",
@@ -90,7 +95,7 @@ pub enum Command {
         about = "Export a file from Dragonfly P2P network",
         long_about = "Export a file from Dragonfly P2P network by task ID. If export successfully, it will return the local file path."
     )]
-    Export(ExportCommand),
+    Export(export::ExportCommand),
 
     #[command(
         name = "stat",
@@ -99,7 +104,7 @@ pub enum Command {
         about = "Stat a file in Dragonfly P2P network",
         long_about = "Stat a file in Dragonfly P2P network by task ID. If stat successfully, it will return the file information."
     )]
-    Stat(StatCommand),
+    Stat(stat::StatCommand),
 
     #[command(
         name = "rm",
@@ -108,24 +113,20 @@ pub enum Command {
         about = "Remove a file from Dragonfly P2P network",
         long_about = "Remove the P2P cache in Dragonfly P2P network by task ID."
     )]
-    Remove(RemoveCommand),
+    Remove(remove::RemoveCommand),
 }
 
-// ImportCommand is the subcommand of import.
-#[derive(Debug, Clone, Parser)]
-pub struct ImportCommand {}
-
-// ExportCommand is the subcommand of export.
-#[derive(Debug, Clone, Parser)]
-pub struct ExportCommand {}
-
-// StatCommand is the subcommand of stat.
-#[derive(Debug, Clone, Parser)]
-pub struct StatCommand {}
-
-// RemoveCommand is the subcommand of remove.
-#[derive(Debug, Clone, Parser)]
-pub struct RemoveCommand {}
+impl Command {
+    #[allow(unused)]
+    pub async fn execute(self) -> Result<(), anyhow::Error> {
+        match self {
+            Self::Import(cmd) => cmd.execute().await,
+            Self::Export(cmd) => cmd.execute().await,
+            Self::Stat(cmd) => cmd.execute().await,
+            Self::Remove(cmd) => cmd.execute().await,
+        }
+    }
+}
 
 fn main() {
     // Parse command line arguments.

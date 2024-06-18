@@ -14,19 +14,19 @@
  * limitations under the License.
  */
 
-use std::path::PathBuf;
+use clap::Parser;
 
-// NAME is the name of dfcache.
-pub const NAME: &str = "dfcache";
-
-// default_dfcache_log_dir is the default log directory for dfcache.
-#[inline]
-pub fn default_dfcache_log_dir() -> PathBuf {
-    crate::default_log_dir().join(NAME)
+// StatCommand is the subcommand of stat.
+#[derive(Debug, Clone, Parser)]
+pub struct StatCommand {
+    #[arg(help = "Specify the cache task ID to stat")]
+    id: String,
 }
 
-// default_persistent_replica_count is the default replica count of the persistent cache task.
-#[inline]
-pub fn default_dfcache_persistent_replica_count() -> u64 {
-    2
+// Implement the execute for StatCommand.
+impl StatCommand {
+    pub async fn execute(&self) -> Result<(), anyhow::Error> {
+        println!("StatCommand is executed!");
+        Ok(())
+    }
 }
