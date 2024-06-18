@@ -25,3 +25,4 @@ sha2.workspace = true
 uuid.workspace = true
 hex.workspace = true
 openssl.workspace = true
+blake3.workspace = true
