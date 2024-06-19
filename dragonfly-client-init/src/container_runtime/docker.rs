@@ -39,7 +39,7 @@ impl Docker {
         }
     }
 
-    // TODO Implement the run method for Docker.
+    // TODO: Implement the run method for Docker.
     //
     // run runs the docker runtime to initialize
     // runtime environment for the dfdaemon.

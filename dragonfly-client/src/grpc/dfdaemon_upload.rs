@@ -21,12 +21,13 @@ use crate::metrics::{
 };
 use crate::shutdown;
 use crate::task;
-use dragonfly_api::common::v2::Piece;
+use dragonfly_api::common::v2::{CacheTask, Piece};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient,
     dfdaemon_upload_server::{DfdaemonUpload, DfdaemonUploadServer as DfdaemonUploadGRPCServer},
+    DeleteCacheTaskRequest, DownloadCacheTaskRequest, DownloadCacheTaskResponse,
     DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest, DownloadTaskResponse,
-    SyncPiecesRequest, SyncPiecesResponse,
+    StatCacheTaskRequest, SyncPiecesRequest, SyncPiecesResponse,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_config::dfdaemon::Config;
@@ -138,238 +139,6 @@ pub struct DfdaemonUploadServerHandler {
 // DfdaemonUploadServerHandler implements the dfdaemon upload grpc service.
 #[tonic::async_trait]
 impl DfdaemonUpload for DfdaemonUploadServerHandler {
-    // SyncPiecesStream is the stream of the sync pieces response.
-    type SyncPiecesStream = ReceiverStream<Result<SyncPiecesResponse, Status>>;
-
-    // get_piece_numbers gets the piece numbers.
-    #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
-    async fn sync_pieces(
-        &self,
-        request: Request<SyncPiecesRequest>,
-    ) -> Result<Response<Self::SyncPiecesStream>, Status> {
-        // Clone the request.
-        let request = request.into_inner();
-
-        // Generate the host id.
-        let host_id = self.task.id_generator.host_id();
-
-        // Get the remote host id from the request.
-        let remote_host_id = request.host_id;
-
-        // Get the task id from tae request.
-        let task_id = request.task_id;
-
-        // Span record the host id and task id.
-        Span::current().record("host_id", host_id.clone());
-        Span::current().record("remote_host_id", remote_host_id.as_str());
-        Span::current().record("task_id", task_id.clone());
-
-        // Get the interested piece numbers from the request.
-        let mut interested_piece_numbers = request.interested_piece_numbers.clone();
-
-        // Clone the task.
-        let task_manager = self.task.clone();
-
-        // Initialize stream channel.
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(1024);
-        tokio::spawn(
-            async move {
-                loop {
-                    let mut has_started_piece = false;
-                    let mut finished_piece_numbers = Vec::new();
-                    for interested_piece_number in interested_piece_numbers.iter() {
-                        let piece = match task_manager
-                            .piece
-                            .get(task_id.as_str(), *interested_piece_number)
-                        {
-                            Ok(Some(piece)) => piece,
-                            Ok(None) => continue,
-                            Err(err) => {
-                                error!(
-                                    "send piece metadata {}-{}: {}",
-                                    task_id, interested_piece_number, err
-                                );
-                                out_stream_tx
-                                    .send(Err(Status::internal(err.to_string())))
-                                    .await
-                                    .unwrap_or_else(|err| {
-                                        error!(
-                                            "send piece metadata {}-{} to stream: {}",
-                                            task_id, interested_piece_number, err
-                                        );
-                                    });
-
-                                drop(out_stream_tx);
-                                return;
-                            }
-                        };
-
-                        // Send the piece metadata to the stream.
-                        if piece.is_finished() {
-                            out_stream_tx
-                                .send(Ok(SyncPiecesResponse {
-                                    number: piece.number,
-                                    offset: piece.offset,
-                                    length: piece.length,
-                                }))
-                                .await
-                                .unwrap_or_else(|err| {
-                                    error!(
-                                        "send finished piece {}-{} to stream: {}",
-                                        task_id, interested_piece_number, err
-                                    );
-                                });
-                            info!("send piece metadata {}-{}", task_id, piece.number);
-
-                            // Add the finished piece number to the finished piece numbers.
-                            finished_piece_numbers.push(piece.number);
-                            continue;
-                        }
-
-                        // Check whether the piece is started.
-                        if piece.is_started() {
-                            has_started_piece = true;
-                        }
-                    }
-
-                    // Remove the finished piece numbers from the interested piece numbers.
-                    interested_piece_numbers
-                        .retain(|number| !finished_piece_numbers.contains(number));
-
-                    // If all the interested pieces are finished, return.
-                    if interested_piece_numbers.is_empty() {
-                        info!("all the interested pieces are finished");
-                        drop(out_stream_tx);
-                        return;
-                    }
-
-                    // If there is no started piece, return.
-                    if !has_started_piece {
-                        info!("there is no started piece");
-                        drop(out_stream_tx);
-                        return;
-                    }
-
-                    // Wait for the piece to be finished.
-                    tokio::time::sleep(
-                        dragonfly_client_storage::DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL,
-                    )
-                    .await;
-                }
-            }
-            .in_current_span(),
-        );
-
-        Ok(Response::new(ReceiverStream::new(out_stream_rx)))
-    }
-
-    // sync_pieces syncs the pieces.
-    #[instrument(skip_all, fields(host_id, remote_host_id, task_id, piece_number))]
-    async fn download_piece(
-        &self,
-        request: Request<DownloadPieceRequest>,
-    ) -> Result<Response<DownloadPieceResponse>, Status> {
-        // Clone the request.
-        let request = request.into_inner();
-
-        // Generate the host id.
-        let host_id = self.task.id_generator.host_id();
-
-        // Get the remote host id from the request.
-        let remote_host_id = request.host_id;
-
-        // Get the task id from the request.
-        let task_id = request.task_id;
-
-        // Get the interested piece number from the request.
-        let piece_number = request.piece_number;
-
-        // Span record the host id, task id and piece number.
-        Span::current().record("host_id", host_id.as_str());
-        Span::current().record("remote_host_id", remote_host_id.as_str());
-        Span::current().record("task_id", task_id.as_str());
-        Span::current().record("piece_number", piece_number);
-
-        // Get the piece metadata from the local storage.
-        let piece = self
-            .task
-            .piece
-            .get(task_id.as_str(), piece_number)
-            .map_err(|err| {
-                error!(
-                    "upload piece metadata {}-{} from local storage: {}",
-                    task_id, piece_number, err
-                );
-                Status::internal(err.to_string())
-            })?
-            .ok_or_else(|| {
-                error!(
-                    "upload piece metadata {}-{} not found",
-                    task_id, piece_number
-                );
-                Status::not_found("piece metadata not found")
-            })?;
-
-        // Collect upload piece started metrics.
-        collect_upload_piece_started_metrics();
-        info!("start upload piece content {}-{}", task_id, piece_number);
-
-        // Get the piece content from the local storage.
-        let mut reader = self
-            .task
-            .piece
-            .upload_from_local_peer_into_async_read(
-                task_id.as_str(),
-                piece_number,
-                piece.length,
-                None,
-                false,
-            )
-            .await
-            .map_err(|err| {
-                // Collect upload piece failure metrics.
-                collect_upload_piece_failure_metrics();
-
-                error!(
-                    "upload piece content {}-{} from local storage: {}",
-                    task_id, piece_number, err
-                );
-                Status::internal(err.to_string())
-            })?;
-
-        // Read the content of the piece.
-        let mut content = Vec::new();
-        reader.read_to_end(&mut content).await.map_err(|err| {
-            // Collect upload piece failure metrics.
-            collect_upload_piece_failure_metrics();
-
-            error!(
-                "upload piece content {}-{} failed: {}",
-                task_id, piece_number, err
-            );
-            Status::internal(err.to_string())
-        })?;
-
-        // Collect upload piece finished metrics.
-        collect_upload_piece_finished_metrics();
-        info!("finished upload piece content {}-{}", task_id, piece_number);
-
-        // Return the piece.
-        Ok(Response::new(DownloadPieceResponse {
-            piece: Some(Piece {
-                number: piece.number,
-                parent_id: piece.parent_id,
-                offset: piece.offset,
-                length: piece.length,
-                digest: piece.digest,
-                content: Some(content),
-                traffic_type: None,
-                cost: None,
-                created_at: None,
-            }),
-        }))
-    }
-
     // DownloadTaskStream is the stream of the download task response.
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
@@ -685,6 +454,269 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
+
+    // SyncPiecesStream is the stream of the sync pieces response.
+    type SyncPiecesStream = ReceiverStream<Result<SyncPiecesResponse, Status>>;
+
+    // sync_pieces provides the piece metadata for remote peer.
+    #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
+    async fn sync_pieces(
+        &self,
+        request: Request<SyncPiecesRequest>,
+    ) -> Result<Response<Self::SyncPiecesStream>, Status> {
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the remote host id from the request.
+        let remote_host_id = request.host_id;
+
+        // Get the task id from tae request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.clone());
+        Span::current().record("remote_host_id", remote_host_id.as_str());
+        Span::current().record("task_id", task_id.clone());
+
+        // Get the interested piece numbers from the request.
+        let mut interested_piece_numbers = request.interested_piece_numbers.clone();
+
+        // Clone the task.
+        let task_manager = self.task.clone();
+
+        // Initialize stream channel.
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(1024);
+        tokio::spawn(
+            async move {
+                loop {
+                    let mut has_started_piece = false;
+                    let mut finished_piece_numbers = Vec::new();
+                    for interested_piece_number in interested_piece_numbers.iter() {
+                        let piece = match task_manager
+                            .piece
+                            .get(task_id.as_str(), *interested_piece_number)
+                        {
+                            Ok(Some(piece)) => piece,
+                            Ok(None) => continue,
+                            Err(err) => {
+                                error!(
+                                    "send piece metadata {}-{}: {}",
+                                    task_id, interested_piece_number, err
+                                );
+                                out_stream_tx
+                                    .send(Err(Status::internal(err.to_string())))
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        error!(
+                                            "send piece metadata {}-{} to stream: {}",
+                                            task_id, interested_piece_number, err
+                                        );
+                                    });
+
+                                drop(out_stream_tx);
+                                return;
+                            }
+                        };
+
+                        // Send the piece metadata to the stream.
+                        if piece.is_finished() {
+                            out_stream_tx
+                                .send(Ok(SyncPiecesResponse {
+                                    number: piece.number,
+                                    offset: piece.offset,
+                                    length: piece.length,
+                                }))
+                                .await
+                                .unwrap_or_else(|err| {
+                                    error!(
+                                        "send finished piece {}-{} to stream: {}",
+                                        task_id, interested_piece_number, err
+                                    );
+                                });
+                            info!("send piece metadata {}-{}", task_id, piece.number);
+
+                            // Add the finished piece number to the finished piece numbers.
+                            finished_piece_numbers.push(piece.number);
+                            continue;
+                        }
+
+                        // Check whether the piece is started.
+                        if piece.is_started() {
+                            has_started_piece = true;
+                        }
+                    }
+
+                    // Remove the finished piece numbers from the interested piece numbers.
+                    interested_piece_numbers
+                        .retain(|number| !finished_piece_numbers.contains(number));
+
+                    // If all the interested pieces are finished, return.
+                    if interested_piece_numbers.is_empty() {
+                        info!("all the interested pieces are finished");
+                        drop(out_stream_tx);
+                        return;
+                    }
+
+                    // If there is no started piece, return.
+                    if !has_started_piece {
+                        info!("there is no started piece");
+                        drop(out_stream_tx);
+                        return;
+                    }
+
+                    // Wait for the piece to be finished.
+                    tokio::time::sleep(
+                        dragonfly_client_storage::DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL,
+                    )
+                    .await;
+                }
+            }
+            .in_current_span(),
+        );
+
+        Ok(Response::new(ReceiverStream::new(out_stream_rx)))
+    }
+
+    // download_piece provides the piece content for remote peer.
+    #[instrument(skip_all, fields(host_id, remote_host_id, task_id, piece_number))]
+    async fn download_piece(
+        &self,
+        request: Request<DownloadPieceRequest>,
+    ) -> Result<Response<DownloadPieceResponse>, Status> {
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the remote host id from the request.
+        let remote_host_id = request.host_id;
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Get the interested piece number from the request.
+        let piece_number = request.piece_number;
+
+        // Span record the host id, task id and piece number.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("remote_host_id", remote_host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record("piece_number", piece_number);
+
+        // Get the piece metadata from the local storage.
+        let piece = self
+            .task
+            .piece
+            .get(task_id.as_str(), piece_number)
+            .map_err(|err| {
+                error!(
+                    "upload piece metadata {}-{} from local storage: {}",
+                    task_id, piece_number, err
+                );
+                Status::internal(err.to_string())
+            })?
+            .ok_or_else(|| {
+                error!(
+                    "upload piece metadata {}-{} not found",
+                    task_id, piece_number
+                );
+                Status::not_found("piece metadata not found")
+            })?;
+
+        // Collect upload piece started metrics.
+        collect_upload_piece_started_metrics();
+        info!("start upload piece content {}-{}", task_id, piece_number);
+
+        // Get the piece content from the local storage.
+        let mut reader = self
+            .task
+            .piece
+            .upload_from_local_peer_into_async_read(
+                task_id.as_str(),
+                piece_number,
+                piece.length,
+                None,
+                false,
+            )
+            .await
+            .map_err(|err| {
+                // Collect upload piece failure metrics.
+                collect_upload_piece_failure_metrics();
+
+                error!(
+                    "upload piece content {}-{} from local storage: {}",
+                    task_id, piece_number, err
+                );
+                Status::internal(err.to_string())
+            })?;
+
+        // Read the content of the piece.
+        let mut content = Vec::new();
+        reader.read_to_end(&mut content).await.map_err(|err| {
+            // Collect upload piece failure metrics.
+            collect_upload_piece_failure_metrics();
+
+            error!(
+                "upload piece content {}-{} failed: {}",
+                task_id, piece_number, err
+            );
+            Status::internal(err.to_string())
+        })?;
+
+        // Collect upload piece finished metrics.
+        collect_upload_piece_finished_metrics();
+        info!("finished upload piece content {}-{}", task_id, piece_number);
+
+        // Return the piece.
+        Ok(Response::new(DownloadPieceResponse {
+            piece: Some(Piece {
+                number: piece.number,
+                parent_id: piece.parent_id,
+                offset: piece.offset,
+                length: piece.length,
+                digest: piece.digest,
+                content: Some(content),
+                traffic_type: None,
+                cost: None,
+                created_at: None,
+            }),
+        }))
+    }
+
+    // DownloadCacheTaskStream is the stream of the download cache task response.
+    type DownloadCacheTaskStream = ReceiverStream<Result<DownloadCacheTaskResponse, Status>>;
+
+    // TODO: Implement this.
+    // download_cache_task downloads the task.
+    #[instrument(skip_all, fields(host_id, task_id, peer_id))]
+    async fn download_cache_task(
+        &self,
+        _request: Request<DownloadCacheTaskRequest>,
+    ) -> Result<Response<Self::DownloadCacheTaskStream>, Status> {
+        unimplemented!()
+    }
+
+    // TODO: Implement this.
+    // stat_cache_task stats the cache task.
+    async fn stat_cache_task(
+        &self,
+        _request: Request<StatCacheTaskRequest>,
+    ) -> Result<Response<CacheTask>, Status> {
+        unimplemented!()
+    }
+
+    // TODO: Implement this.
+    // delete_cache_task deletes the cache task.
+    async fn delete_cache_task(
+        &self,
+        _request: Request<DeleteCacheTaskRequest>,
+    ) -> Result<Response<()>, Status> {
+        unimplemented!()
+    }
 }
 
 // DfdaemonUploadClient is a wrapper of DfdaemonUploadGRPCClient.
@@ -711,32 +743,7 @@ impl DfdaemonUploadClient {
         Ok(Self { client })
     }
 
-    // get_piece_numbers gets the piece numbers.
-    #[instrument(skip_all)]
-    pub async fn sync_pieces(
-        &self,
-        request: SyncPiecesRequest,
-    ) -> ClientResult<tonic::Response<tonic::codec::Streaming<SyncPiecesResponse>>> {
-        let request = Self::make_request(request);
-        let response = self.client.clone().sync_pieces(request).await?;
-        Ok(response)
-    }
-
-    // sync_pieces syncs the pieces.
-    #[instrument(skip_all)]
-    pub async fn download_piece(
-        &self,
-        request: DownloadPieceRequest,
-        timeout: Duration,
-    ) -> ClientResult<DownloadPieceResponse> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(timeout);
-
-        let response = self.client.clone().download_piece(request).await?;
-        Ok(response.into_inner())
-    }
-
-    // trigger_download_task triggers the download task.
+    // download_task downloads the task.
     #[instrument(skip_all)]
     pub async fn download_task(
         &self,
@@ -760,6 +767,83 @@ impl DfdaemonUploadClient {
 
         let response = self.client.clone().download_task(request).await?;
         Ok(response)
+    }
+
+    // sync_pieces provides the piece metadata for remote peer.
+    #[instrument(skip_all)]
+    pub async fn sync_pieces(
+        &self,
+        request: SyncPiecesRequest,
+    ) -> ClientResult<tonic::Response<tonic::codec::Streaming<SyncPiecesResponse>>> {
+        let request = Self::make_request(request);
+        let response = self.client.clone().sync_pieces(request).await?;
+        Ok(response)
+    }
+
+    // download_piece provides the piece content for remote peer.
+    #[instrument(skip_all)]
+    pub async fn download_piece(
+        &self,
+        request: DownloadPieceRequest,
+        timeout: Duration,
+    ) -> ClientResult<DownloadPieceResponse> {
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(timeout);
+
+        let response = self.client.clone().download_piece(request).await?;
+        Ok(response.into_inner())
+    }
+
+    //  download_cache_task downloads the cache task.
+    #[instrument(skip_all)]
+    pub async fn download_cache_task(
+        &self,
+        request: DownloadCacheTaskRequest,
+    ) -> ClientResult<tonic::Response<tonic::codec::Streaming<DownloadCacheTaskResponse>>> {
+        // Clone the request.
+        let request_clone = request.clone();
+
+        // Initialize the request.
+        let mut request = tonic::Request::new(request);
+
+        // Set the timeout to the request.
+        if let Some(timeout) = request_clone.timeout {
+            request.set_timeout(
+                Duration::try_from(timeout)
+                    .map_err(|_| tonic::Status::invalid_argument("invalid timeout"))?,
+            );
+        }
+
+        let response = self.client.clone().download_cache_task(request).await?;
+        Ok(response)
+    }
+
+    // stat_cache_task stats the cache task.
+    #[instrument(skip_all)]
+    pub async fn stat_cache_task(
+        &self,
+        request: StatCacheTaskRequest,
+        timeout: Duration,
+    ) -> ClientResult<CacheTask> {
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(timeout);
+
+        let response = self.client.clone().stat_cache_task(request).await?;
+        Ok(response.into_inner())
+    }
+
+    // delete_cache_task deletes the cache task.
+    #[instrument(skip_all)]
+    pub async fn delete_cache_task(
+        &self,
+        request: DeleteCacheTaskRequest,
+        timeout: Duration,
+    ) -> ClientResult<()> {
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(timeout);
+
+        let _response = self.client.clone().delete_cache_task(request).await?;
+        Ok(())
     }
 
     // make_request creates a new request with timeout.

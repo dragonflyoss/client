@@ -28,7 +28,7 @@ use dragonfly_api::scheduler::v2::{
     DownloadPeerFailedRequest, DownloadPeerFinishedRequest, DownloadPeerStartedRequest,
     DownloadPieceBackToSourceFailedRequest, DownloadPieceBackToSourceFinishedRequest,
     DownloadPieceFailedRequest, DownloadPieceFinishedRequest, RegisterPeerRequest,
-    RescheduleRequest,
+    ReschedulePeerRequest,
 };
 use dragonfly_client_backend::{BackendFactory, HeadRequest};
 use dragonfly_client_config::dfdaemon::Config;
@@ -727,23 +727,25 @@ impl Task {
                                 host_id: host_id.to_string(),
                                 task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
-                                request: Some(announce_peer_request::Request::RescheduleRequest(
-                                    RescheduleRequest {
-                                        candidate_parents: response.candidate_parents,
-                                        description: Some(
-                                            "not all pieces are downloaded from remote peer"
-                                                .to_string(),
-                                        ),
-                                    },
-                                )),
+                                request: Some(
+                                    announce_peer_request::Request::ReschedulePeerRequest(
+                                        ReschedulePeerRequest {
+                                            candidate_parents: response.candidate_parents,
+                                            description: Some(
+                                                "not all pieces are downloaded from remote peer"
+                                                    .to_string(),
+                                            ),
+                                        },
+                                    ),
+                                ),
                             },
                             REQUEST_TIMEOUT,
                         )
                         .await
                     {
-                        Ok(_) => info!("sent RescheduleRequest"),
+                        Ok(_) => info!("sent ReschedulePeerRequest"),
                         Err(err) => {
-                            error!("send RescheduleRequest failed: {:?}", err);
+                            error!("send ReschedulePeerRequest failed: {:?}", err);
                             return Ok(finished_pieces);
                         }
                     };

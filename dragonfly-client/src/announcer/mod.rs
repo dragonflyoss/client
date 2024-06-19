@@ -18,7 +18,7 @@ use crate::grpc::{manager::ManagerClient, scheduler::SchedulerClient};
 use crate::shutdown;
 use dragonfly_api::common::v2::{Build, Cpu, Host, Memory, Network};
 use dragonfly_api::manager::v2::{DeleteSeedPeerRequest, SourceType, UpdateSeedPeerRequest};
-use dragonfly_api::scheduler::v2::{AnnounceHostRequest, LeaveHostRequest};
+use dragonfly_api::scheduler::v2::{AnnounceHostRequest, DeleteHostRequest};
 use dragonfly_client_config::{
     dfdaemon::{Config, HostType},
     CARGO_PKG_RUSTC_VERSION, CARGO_PKG_VERSION, GIT_HASH,
@@ -175,10 +175,10 @@ impl SchedulerAnnouncer {
                 }
                 _ = shutdown.recv() => {
                     // Announce to scheduler shutting down with signals.
-                    if let Err(err) = self.scheduler_client.leave_host(LeaveHostRequest{
-                        id: self.host_id.clone(),
+                    if let Err(err) = self.scheduler_client.delete_host(DeleteHostRequest{
+                        host_id: self.host_id.clone(),
                     }).await {
-                        error!("leave host from scheduler failed: {}", err);
+                        error!("delete host from scheduler failed: {}", err);
                     }
 
                     info!("announce to scheduler shutting down");
@@ -211,7 +211,7 @@ impl SchedulerAnnouncer {
             percent: sys.global_cpu_info().cpu_usage() as f64,
             process_percent: process.cpu_usage() as f64,
 
-            // TODO Get the cpu times.
+            // TODO: Get the cpu times.
             times: None,
         };
 
@@ -222,17 +222,17 @@ impl SchedulerAnnouncer {
             used: sys.used_memory(),
             used_percent: (sys.used_memory() / sys.total_memory()) as f64,
 
-            // TODO Get the process used memory.
+            // TODO: Get the process used memory.
             process_used_percent: 0 as f64,
             free: sys.free_memory(),
         };
 
         // Get the network information.
         let network = Network {
-            // TODO Get the count of the tcp connection.
+            // TODO: Get the count of the tcp connection.
             tcp_connection_count: 0,
 
-            // TODO Get the count of the upload tcp connection.
+            // TODO: Get the count of the upload tcp connection.
             upload_tcp_connection_count: 0,
             idc: self.config.host.idc.clone(),
             location: self.config.host.location.clone(),
@@ -264,11 +264,11 @@ impl SchedulerAnnouncer {
             memory: Some(memory),
             network: Some(network),
 
-            // TODO Get the disk information.
+            // TODO: Get the disk information.
             disk: None,
             build: Some(build),
 
-            // TODO Get scheduler cluster id from dynconfig.
+            // TODO: Get scheduler cluster id from dynconfig.
             scheduler_cluster_id: 0,
         };
 

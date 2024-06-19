@@ -16,7 +16,7 @@
 
 use crate::grpc::scheduler::SchedulerClient;
 use crate::shutdown;
-use dragonfly_api::scheduler::v2::LeaveTaskRequest;
+use dragonfly_api::scheduler::v2::DeleteTaskRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
 use dragonfly_client_storage::{metadata, Storage};
@@ -113,8 +113,8 @@ impl GC {
                     });
                 info!("evict task {}", task.id);
 
-                self.leave_task_from_scheduler(task.clone()).await;
-                info!("leave task {} from scheduler", task.id);
+                self.delete_task_from_scheduler(task.clone()).await;
+                info!("delete task {} from scheduler", task.id);
             }
         }
 
@@ -185,27 +185,27 @@ impl GC {
             evicted_space += task_space;
             info!("evict task {} size {}", task.id, task_space);
 
-            self.leave_task_from_scheduler(task.clone()).await;
-            info!("leave task {} from scheduler", task.id);
+            self.delete_task_from_scheduler(task.clone()).await;
+            info!("delete task {} from scheduler", task.id);
         }
 
         info!("evict total size {}", evicted_space);
         Ok(())
     }
 
-    // leave_task_from_scheduler leaves the task from the scheduler.
-    async fn leave_task_from_scheduler(&self, task: metadata::Task) {
+    // delete_task_from_scheduler deletes the task from the scheduler.
+    async fn delete_task_from_scheduler(&self, task: metadata::Task) {
         self.scheduler_client
-            .leave_task(
+            .delete_task(
                 task.id.as_str(),
-                LeaveTaskRequest {
+                DeleteTaskRequest {
                     host_id: self.host_id.clone(),
                     task_id: task.id.clone(),
                 },
             )
             .await
             .unwrap_or_else(|err| {
-                error!("failed to leave peer {}: {}", task.id, err);
+                error!("failed to delete peer {}: {}", task.id, err);
             });
     }
 }
