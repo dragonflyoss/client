@@ -20,8 +20,8 @@ use dragonfly_api::common::v2::{Peer, Task};
 use dragonfly_api::manager::v2::Scheduler;
 use dragonfly_api::scheduler::v2::{
     scheduler_client::SchedulerClient as SchedulerGRPCClient, AnnounceHostRequest,
-    AnnouncePeerRequest, AnnouncePeerResponse, ExchangePeerRequest, ExchangePeerResponse,
-    LeaveHostRequest, LeavePeerRequest, LeaveTaskRequest, StatPeerRequest, StatTaskRequest,
+    AnnouncePeerRequest, AnnouncePeerResponse, DeleteHostRequest, DeletePeerRequest,
+    DeleteTaskRequest, StatPeerRequest, StatTaskRequest,
 };
 use dragonfly_client_core::error::{ErrorType, ExternalError, OrErr};
 use dragonfly_client_core::{Error, Result};
@@ -104,31 +104,15 @@ impl SchedulerClient {
         Ok(response.into_inner())
     }
 
-    // leave_peer tells the scheduler that the peer is leaving.
+    // delete_peer tells the scheduler that the peer is deleting.
     #[instrument(skip(self))]
-    pub async fn leave_peer(&self, task_id: &str, request: LeavePeerRequest) -> Result<()> {
+    pub async fn delete_peer(&self, task_id: &str, request: DeletePeerRequest) -> Result<()> {
         let request = Self::make_request(request);
         self.client(task_id, None)
             .await?
-            .leave_peer(request)
+            .delete_peer(request)
             .await?;
         Ok(())
-    }
-
-    // exchange_peer exchanges the peer with the scheduler.
-    #[instrument(skip(self))]
-    pub async fn exchange_peer(
-        &self,
-        task_id: &str,
-        request: ExchangePeerRequest,
-    ) -> Result<ExchangePeerResponse> {
-        let request = Self::make_request(request);
-        let response = self
-            .client(task_id, None)
-            .await?
-            .exchange_peer(request)
-            .await?;
-        Ok(response.into_inner())
     }
 
     // stat_task gets the status of the task.
@@ -139,13 +123,13 @@ impl SchedulerClient {
         Ok(response.into_inner())
     }
 
-    // leave_task tells the scheduler that the task is leaving.
+    // delete_task tells the scheduler that the task is deleting.
     #[instrument(skip(self))]
-    pub async fn leave_task(&self, task_id: &str, request: LeaveTaskRequest) -> Result<()> {
+    pub async fn delete_task(&self, task_id: &str, request: DeleteTaskRequest) -> Result<()> {
         let request = Self::make_request(request);
         self.client(task_id, None)
             .await?
-            .leave_task(request)
+            .delete_task(request)
             .await?;
         Ok(())
     }
@@ -255,13 +239,13 @@ impl SchedulerClient {
         Ok(())
     }
 
-    // leave_host tells the scheduler that the host is leaving.
+    // delete_host tells the scheduler that the host is deleting.
     #[instrument(skip(self))]
-    pub async fn leave_host(&self, request: LeaveHostRequest) -> Result<()> {
+    pub async fn delete_host(&self, request: DeleteHostRequest) -> Result<()> {
         // Update scheduler addresses of the client.
         self.update_available_scheduler_addrs().await?;
 
-        // Leave the host from the scheduler.
+        // Delete the host from the scheduler.
         let mut join_set = JoinSet::new();
         let available_scheduler_addrs = self.available_scheduler_addrs.read().await;
         let available_scheduler_addrs_clone = available_scheduler_addrs.clone();
@@ -269,11 +253,11 @@ impl SchedulerClient {
 
         for available_scheduler_addr in available_scheduler_addrs_clone.iter() {
             let request = Self::make_request(request.clone());
-            async fn leave_host(
+            async fn delete_host(
                 addr: SocketAddr,
-                request: tonic::Request<LeaveHostRequest>,
+                request: tonic::Request<DeleteHostRequest>,
             ) -> Result<()> {
-                info!("leave host from {}", addr);
+                info!("delete host from {}", addr);
 
                 // Connect to the scheduler.
                 let channel = Channel::from_shared(format!("http://{}", addr))
@@ -288,11 +272,11 @@ impl SchedulerClient {
                     .or_err(ErrorType::ConnectError)?;
 
                 let mut client = SchedulerGRPCClient::new(channel);
-                client.leave_host(request).await?;
+                client.delete_host(request).await?;
                 Ok(())
             }
 
-            join_set.spawn(leave_host(*available_scheduler_addr, request).in_current_span());
+            join_set.spawn(delete_host(*available_scheduler_addr, request).in_current_span());
         }
 
         while let Some(message) = join_set
@@ -302,7 +286,7 @@ impl SchedulerClient {
             .or_err(ErrorType::AsyncRuntimeError)?
         {
             if let Err(err) = message {
-                error!("failed to leave host: {}", err);
+                error!("failed to delete host: {}", err);
             }
         }
 

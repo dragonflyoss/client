@@ -116,6 +116,7 @@ pub enum Command {
     Remove(remove::RemoveCommand),
 }
 
+// Implement the execute for Command.
 impl Command {
     #[allow(unused)]
     pub async fn execute(self) -> Result<(), anyhow::Error> {

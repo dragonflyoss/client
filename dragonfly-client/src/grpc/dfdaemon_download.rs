@@ -20,18 +20,19 @@ use crate::metrics::{
 };
 use crate::shutdown;
 use crate::task;
-use dragonfly_api::common::v2::Task;
+use dragonfly_api::common::v2::{CacheTask, Task};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_download_client::DfdaemonDownloadClient as DfdaemonDownloadGRPCClient,
     dfdaemon_download_server::{
         DfdaemonDownload, DfdaemonDownloadServer as DfdaemonDownloadGRPCServer,
     },
-    DeleteTaskRequest, DownloadTaskRequest, DownloadTaskResponse,
-    StatTaskRequest as DfdaemonStatTaskRequest, UploadTaskRequest,
+    DeleteCacheTaskRequest, DeleteTaskRequest, DownloadCacheTaskRequest, DownloadCacheTaskResponse,
+    DownloadTaskRequest, DownloadTaskResponse, StatCacheTaskRequest,
+    StatTaskRequest as DfdaemonStatTaskRequest, UploadCacheTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::{
-    LeaveHostRequest as SchedulerLeaveHostRequest, StatTaskRequest as SchedulerStatTaskRequest,
+    DeleteHostRequest as SchedulerDeleteHostRequest, StatTaskRequest as SchedulerStatTaskRequest,
 };
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -468,16 +469,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    // upload_task tells the dfdaemon to upload the task.
-    #[instrument(skip_all)]
-    async fn upload_task(
-        &self,
-        request: Request<UploadTaskRequest>,
-    ) -> Result<Response<()>, Status> {
-        println!("upload_task: {:?}", request);
-        Err(Status::unimplemented("not implemented"))
-    }
-
     // stat_task gets the status of the task.
     #[instrument(skip_all, fields(host_id, task_id))]
     async fn stat_task(
@@ -504,7 +495,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             .stat_task(
                 task_id.as_str(),
                 SchedulerStatTaskRequest {
-                    id: task_id.clone(),
+                    task_id: task_id.clone(),
                 },
             )
             .await
@@ -526,21 +517,61 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Err(Status::unimplemented("not implemented"))
     }
 
-    // leave_host calls the scheduler to leave the host.
+    // delete_host calls the scheduler to delete the host.
     #[instrument(skip_all)]
-    async fn leave_host(&self, _: Request<()>) -> Result<Response<()>, Status> {
+    async fn delete_host(&self, _: Request<()>) -> Result<Response<()>, Status> {
         self.task
             .scheduler_client
-            .leave_host(SchedulerLeaveHostRequest {
-                id: self.task.id_generator.host_id(),
+            .delete_host(SchedulerDeleteHostRequest {
+                host_id: self.task.id_generator.host_id(),
             })
             .await
             .map_err(|e| {
-                error!("leave host: {}", e);
+                error!("delete host: {}", e);
                 Status::internal(e.to_string())
             })?;
 
         Ok(Response::new(()))
+    }
+
+    // DownloadCacheTaskStream is the stream of the download cache task response.
+    type DownloadCacheTaskStream = ReceiverStream<Result<DownloadCacheTaskResponse, Status>>;
+
+    // TODO: Implement this.
+    // download_cache_task downloads the task.
+    #[instrument(skip_all, fields(host_id, task_id, peer_id))]
+    async fn download_cache_task(
+        &self,
+        _request: Request<DownloadCacheTaskRequest>,
+    ) -> Result<Response<Self::DownloadCacheTaskStream>, Status> {
+        unimplemented!()
+    }
+
+    // TODO: Implement this.
+    // upload_cache_task uploads the cache task.
+    async fn upload_cache_task(
+        &self,
+        _request: Request<UploadCacheTaskRequest>,
+    ) -> Result<Response<CacheTask>, Status> {
+        unimplemented!()
+    }
+
+    // TODO: Implement this.
+    // stat_cache_task stats the cache task.
+    async fn stat_cache_task(
+        &self,
+        _request: Request<StatCacheTaskRequest>,
+    ) -> Result<Response<CacheTask>, Status> {
+        unimplemented!()
+    }
+
+    // TODO: Implement this.
+    // delete_cache_task deletes the cache task.
+    async fn delete_cache_task(
+        &self,
+        _request: Request<DeleteCacheTaskRequest>,
+    ) -> Result<Response<()>, Status> {
+        unimplemented!()
     }
 }
 
@@ -597,14 +628,6 @@ impl DfdaemonDownloadClient {
         Ok(response)
     }
 
-    // upload_task tells the dfdaemon to upload the task.
-    #[instrument(skip_all)]
-    pub async fn upload_task(&self, request: UploadTaskRequest) -> ClientResult<()> {
-        let request = Self::make_request(request);
-        self.client.clone().upload_task(request).await?;
-        Ok(())
-    }
-
     // stat_task gets the status of the task.
     #[instrument(skip_all)]
     pub async fn stat_task(&self, request: DfdaemonStatTaskRequest) -> ClientResult<Task> {
@@ -618,6 +641,72 @@ impl DfdaemonDownloadClient {
     pub async fn delete_task(&self, request: DeleteTaskRequest) -> ClientResult<()> {
         let request = Self::make_request(request);
         self.client.clone().delete_task(request).await?;
+        Ok(())
+    }
+
+    //  download_cache_task downloads the cache task.
+    #[instrument(skip_all)]
+    pub async fn download_cache_task(
+        &self,
+        request: DownloadCacheTaskRequest,
+    ) -> ClientResult<tonic::Response<tonic::codec::Streaming<DownloadCacheTaskResponse>>> {
+        // Clone the request.
+        let request_clone = request.clone();
+
+        // Initialize the request.
+        let mut request = tonic::Request::new(request);
+
+        // Set the timeout to the request.
+        if let Some(timeout) = request_clone.timeout {
+            request.set_timeout(
+                Duration::try_from(timeout)
+                    .map_err(|_| tonic::Status::invalid_argument("invalid timeout"))?,
+            );
+        }
+
+        let response = self.client.clone().download_cache_task(request).await?;
+        Ok(response)
+    }
+
+    // upload_cache_task uploads the cache task.
+    #[instrument(skip_all)]
+    pub async fn upload_cache_task(
+        &self,
+        request: UploadCacheTaskRequest,
+        timeout: Duration,
+    ) -> ClientResult<CacheTask> {
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(timeout);
+
+        let response = self.client.clone().upload_cache_task(request).await?;
+        Ok(response.into_inner())
+    }
+
+    // stat_cache_task stats the cache task.
+    #[instrument(skip_all)]
+    pub async fn stat_cache_task(
+        &self,
+        request: StatCacheTaskRequest,
+        timeout: Duration,
+    ) -> ClientResult<CacheTask> {
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(timeout);
+
+        let response = self.client.clone().stat_cache_task(request).await?;
+        Ok(response.into_inner())
+    }
+
+    // delete_cache_task deletes the cache task.
+    #[instrument(skip_all)]
+    pub async fn delete_cache_task(
+        &self,
+        request: DeleteCacheTaskRequest,
+        timeout: Duration,
+    ) -> ClientResult<()> {
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(timeout);
+
+        let _response = self.client.clone().delete_cache_task(request).await?;
         Ok(())
     }
 
