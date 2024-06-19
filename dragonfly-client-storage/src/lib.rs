@@ -131,6 +131,63 @@ impl Storage {
         Ok(())
     }
 
+    // create_persistent_cache_task creates a new persistent cache task.
+    pub fn create_persistent_cache_task(
+        &self,
+        id: &str,
+        piece_length: u64,
+        content_length: u64,
+        digest: &str,
+    ) -> Result<metadata::CacheTask> {
+        self.metadata
+            .create_persistent_cache_task(id, piece_length, content_length, digest)
+    }
+
+    // download_cache_task_started updates the metadata of the cache task when the cache task downloads started.
+    pub fn download_cache_task_started(
+        &self,
+        id: &str,
+        persistent: bool,
+        piece_length: u64,
+        content_length: u64,
+    ) -> Result<metadata::CacheTask> {
+        self.metadata
+            .download_cache_task_started(id, persistent, piece_length, content_length)
+    }
+
+    // download_cache_task_finished updates the metadata of the cache task when the cache task downloads finished.
+    pub fn download_cache_task_finished(&self, id: &str) -> Result<metadata::CacheTask> {
+        self.metadata.download_cache_task_finished(id)
+    }
+
+    // download_cache_task_failed updates the metadata of the cache task when the cache task downloads failed.
+    pub async fn download_cache_task_failed(&self, id: &str) -> Result<metadata::CacheTask> {
+        self.metadata.download_cache_task_failed(id)
+    }
+
+    // upload_cache_task_finished updates the metadata of the cahce task when cache task uploads finished.
+    pub fn upload_cache_task_finished(&self, id: &str) -> Result<metadata::CacheTask> {
+        self.metadata.upload_cache_task_finished(id)
+    }
+
+    // get_cache_task returns the cache task metadata.
+    pub fn get_cache_task(&self, id: &str) -> Result<Option<metadata::CacheTask>> {
+        self.metadata.get_cache_task(id)
+    }
+
+    // get_tasks returns the task metadatas.
+    pub fn get_cache_tasks(&self) -> Result<Vec<metadata::CacheTask>> {
+        self.metadata.get_cache_tasks()
+    }
+
+    // delete_cache_task deletes the cache task metadatas, cache task content and piece metadatas.
+    pub async fn delete_cache_task(&self, id: &str) -> Result<()> {
+        self.metadata.delete_cache_task(id)?;
+        self.metadata.delete_pieces(id)?;
+        self.content.delete_task(id).await?;
+        Ok(())
+    }
+
     // download_piece_started updates the metadata of the piece and writes
     // the data of piece to file when the piece downloads started.
     pub async fn download_piece_started(

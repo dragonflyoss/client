@@ -121,6 +121,94 @@ impl Task {
     }
 }
 
+// CacheTask is the metadata of the cache task.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CacheTask {
+    // id is the task id.
+    pub id: String,
+
+    // persistent represents whether the cache task is persistent.
+    // If the cache task is persistent, the cache peer will
+    // not be deleted when dfdamon runs garbage collection.
+    pub persistent: bool,
+
+    // digests is the digests of the cache task.
+    pub digest: String,
+
+    // piece_length is the length of the piece.
+    pub piece_length: u64,
+
+    // content_length is the length of the content.
+    pub content_length: u64,
+
+    // uploading_count is the count of the task being uploaded by other peers.
+    pub uploading_count: u64,
+
+    // uploaded_count is the count of the task has been uploaded by other peers.
+    pub uploaded_count: u64,
+
+    // updated_at is the time when the task metadata is updated. If the task is downloaded
+    // by other peers, it will also update updated_at.
+    pub updated_at: NaiveDateTime,
+
+    // created_at is the time when the task metadata is created.
+    pub created_at: NaiveDateTime,
+
+    // failed_at is the time when the task downloads failed.
+    pub failed_at: Option<NaiveDateTime>,
+
+    // finished_at is the time when the task downloads finished.
+    pub finished_at: Option<NaiveDateTime>,
+}
+
+// CacheTask implements the task database object.
+impl DatabaseObject for CacheTask {
+    // NAMESPACE is the namespace of [CacheTask] objects.
+    const NAMESPACE: &'static str = "cache_task";
+}
+
+// CacheTask implements the cache task metadata.
+impl CacheTask {
+    // is_started returns whether the cache task downloads started.
+    pub fn is_started(&self) -> bool {
+        self.finished_at.is_none()
+    }
+
+    // is_downloading returns whether the cache task is downloading.
+    pub fn is_uploading(&self) -> bool {
+        self.uploading_count > 0
+    }
+
+    // is_failed returns whether the cache task downloads failed.
+    pub fn is_failed(&self) -> bool {
+        self.failed_at.is_some()
+    }
+
+    // is_finished returns whether the cache task downloads finished.
+    pub fn is_finished(&self) -> bool {
+        self.finished_at.is_some()
+    }
+
+    // is_empty returns whether the cache task is empty.
+    pub fn is_empty(&self) -> bool {
+        if self.content_length == 0 {
+            return true;
+        }
+
+        false
+    }
+
+    // is_persistent returns whether the cache task is persistent.
+    pub fn is_persistent(&self) -> bool {
+        self.persistent
+    }
+
+    // content_length returns the content length of the cache task.
+    pub fn content_length(&self) -> u64 {
+        self.content_length
+    }
+}
+
 // Piece is the metadata of the piece.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Piece {
@@ -206,17 +294,17 @@ impl Piece {
     }
 }
 
-/// Metadata manages the metadata of [Task] and [Piece].
+// Metadata manages the metadata of [Task] and [Piece].
 pub struct Metadata<E = RocksdbStorageEngine>
 where
     E: StorageEngineOwned,
 {
-    /// db is the underlying storage engine instance.
+    // db is the underlying storage engine instance.
     db: E,
 }
 
 impl<E: StorageEngineOwned> Metadata<E> {
-    /// download_task_started updates the metadata of the task when the task downloads started.
+    // download_task_started updates the metadata of the task when the task downloads started.
     pub fn download_task_started(
         &self,
         id: &str,
@@ -264,7 +352,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    /// download_task_finished updates the metadata of the task when the task downloads finished.
+    // download_task_finished updates the metadata of the task when the task downloads finished.
     pub fn download_task_finished(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -332,7 +420,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    /// upload_task_started updates the metadata of the task when task uploads started.
+    // upload_task_started updates the metadata of the task when task uploads started.
     pub fn upload_task_started(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -347,7 +435,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    /// upload_task_finished updates the metadata of the task when task uploads finished.
+    // upload_task_finished updates the metadata of the task when task uploads finished.
     pub fn upload_task_finished(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -363,7 +451,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    /// upload_task_failed updates the metadata of the task when the task uploads failed.
+    // upload_task_failed updates the metadata of the task when the task uploads failed.
     pub fn upload_task_failed(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -378,24 +466,182 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    /// get_task gets the task metadata.
+    // get_task gets the task metadata.
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         self.db.get(id.as_bytes())
     }
 
-    /// get_tasks gets the task metadatas.
+    // get_tasks gets the task metadatas.
     pub fn get_tasks(&self) -> Result<Vec<Task>> {
         let iter = self.db.iter::<Task>()?;
         iter.map(|ele| ele.map(|(_, task)| task)).collect()
     }
 
-    /// delete_task deletes the task metadata.
-    pub fn delete_task(&self, task_id: &str) -> Result<()> {
-        info!("delete task metadata {}", task_id);
-        self.db.delete::<Task>(task_id.as_bytes())
+    // delete_task deletes the task metadata.
+    pub fn delete_task(&self, id: &str) -> Result<()> {
+        info!("delete task metadata {}", id);
+        self.db.delete::<Task>(id.as_bytes())
     }
 
-    /// download_piece_started updates the metadata of the piece when the piece downloads started.
+    // create_persistent_cache_task creates a new persistent cache task.
+    // If the cache task imports the content to the dfdaemon finished,
+    // the dfdaemon will create a persistent cache task metadata.
+    pub fn create_persistent_cache_task(
+        &self,
+        id: &str,
+        piece_length: u64,
+        content_length: u64,
+        digest: &str,
+    ) -> Result<CacheTask> {
+        let cache_task = CacheTask {
+            id: id.to_string(),
+            persistent: true,
+            piece_length,
+            content_length,
+            digest: digest.to_string(),
+            updated_at: Utc::now().naive_utc(),
+            created_at: Utc::now().naive_utc(),
+            finished_at: Some(Utc::now().naive_utc()),
+            ..Default::default()
+        };
+
+        self.db.put(id.as_bytes(), &cache_task)?;
+        Ok(cache_task)
+    }
+
+    // download_cache_task_started updates the metadata of the cache task when
+    // the cache task downloads started. If the cache task downloaded by scheduler
+    // to create persistent cache task, the persistent should be set to true.
+    pub fn download_cache_task_started(
+        &self,
+        id: &str,
+        persistent: bool,
+        piece_length: u64,
+        content_length: u64,
+    ) -> Result<CacheTask> {
+        let cache_task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut cache_task) => {
+                // If the task exists, update the task metadata.
+                cache_task.updated_at = Utc::now().naive_utc();
+                cache_task.failed_at = None;
+                cache_task
+            }
+            None => CacheTask {
+                id: id.to_string(),
+                persistent,
+                piece_length,
+                content_length,
+                updated_at: Utc::now().naive_utc(),
+                created_at: Utc::now().naive_utc(),
+                ..Default::default()
+            },
+        };
+
+        self.db.put(id.as_bytes(), &cache_task)?;
+        Ok(cache_task)
+    }
+
+    // download_cache_task_finished updates the metadata of the cache task when the cache task downloads finished.
+    pub fn download_cache_task_finished(&self, id: &str) -> Result<CacheTask> {
+        let cache_task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut cache_task) => {
+                cache_task.updated_at = Utc::now().naive_utc();
+                cache_task.failed_at = None;
+
+                // If the cache task is created by user, the finished_at has been set.
+                if cache_task.finished_at.is_none() {
+                    cache_task.finished_at = Some(Utc::now().naive_utc());
+                }
+
+                cache_task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &cache_task)?;
+        Ok(cache_task)
+    }
+
+    // download_cache_task_failed updates the metadata of the cache task when the cache task downloads failed.
+    pub fn download_cache_task_failed(&self, id: &str) -> Result<CacheTask> {
+        let cache_task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut cache_task) => {
+                cache_task.updated_at = Utc::now().naive_utc();
+                cache_task.failed_at = Some(Utc::now().naive_utc());
+                cache_task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &cache_task)?;
+        Ok(cache_task)
+    }
+
+    // upload_cache_task_started updates the metadata of the cache task when cache task uploads started.
+    pub fn upload_cache_task_started(&self, id: &str) -> Result<CacheTask> {
+        let cache_task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut cache_task) => {
+                cache_task.uploading_count += 1;
+                cache_task.updated_at = Utc::now().naive_utc();
+                cache_task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &cache_task)?;
+        Ok(cache_task)
+    }
+
+    // upload_cache_task_finished updates the metadata of the cache task when cache task uploads finished.
+    pub fn upload_cache_task_finished(&self, id: &str) -> Result<CacheTask> {
+        let cache_task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut cache_task) => {
+                cache_task.uploading_count -= 1;
+                cache_task.uploaded_count += 1;
+                cache_task.updated_at = Utc::now().naive_utc();
+                cache_task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &cache_task)?;
+        Ok(cache_task)
+    }
+
+    // upload_cache_task_failed updates the metadata of the cache task when the cache task uploads failed.
+    pub fn upload_cache_task_failed(&self, id: &str) -> Result<CacheTask> {
+        let cache_task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut cache_task) => {
+                cache_task.uploading_count -= 1;
+                cache_task.updated_at = Utc::now().naive_utc();
+                cache_task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &cache_task)?;
+        Ok(cache_task)
+    }
+
+    // get_cache_task gets the cache task metadata.
+    pub fn get_cache_task(&self, id: &str) -> Result<Option<CacheTask>> {
+        self.db.get(id.as_bytes())
+    }
+
+    // get_cache_tasks gets the cache task metadatas.
+    pub fn get_cache_tasks(&self) -> Result<Vec<CacheTask>> {
+        let iter = self.db.iter::<CacheTask>()?;
+        iter.map(|ele| ele.map(|(_, cache_task)| cache_task))
+            .collect()
+    }
+
+    // delete_cache_task deletes the cache task metadata.
+    pub fn delete_cache_task(&self, id: &str) -> Result<()> {
+        info!("delete cache task metadata {}", id);
+        self.db.delete::<CacheTask>(id.as_bytes())
+    }
+
+    // download_piece_started updates the metadata of the piece when the piece downloads started.
     pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Construct the piece metadata.
         let piece = Piece {
@@ -411,7 +657,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(piece)
     }
 
-    /// download_piece_finished updates the metadata of the piece when the piece downloads finished.
+    // download_piece_finished updates the metadata of the piece when the piece downloads finished.
     pub fn download_piece_finished(
         &self,
         task_id: &str,
@@ -440,7 +686,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(piece)
     }
 
-    /// download_piece_failed updates the metadata of the piece when the piece downloads failed.
+    // download_piece_failed updates the metadata of the piece when the piece downloads failed.
     pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
         self.delete_piece(task_id, number)
     }
@@ -450,7 +696,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         self.delete_piece(task_id, number)
     }
 
-    /// upload_piece_started updates the metadata of the piece when piece uploads started.
+    // upload_piece_started updates the metadata of the piece when piece uploads started.
     pub fn upload_piece_started(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Get the piece id.
         let id = self.piece_id(task_id, number);
@@ -467,7 +713,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(piece)
     }
 
-    /// upload_piece_finished updates the metadata of the piece when piece uploads finished.
+    // upload_piece_finished updates the metadata of the piece when piece uploads finished.
     pub fn upload_piece_finished(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Get the piece id.
         let id = self.piece_id(task_id, number);
@@ -485,7 +731,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(piece)
     }
 
-    /// upload_piece_failed updates the metadata of the piece when the piece uploads failed.
+    // upload_piece_failed updates the metadata of the piece when the piece uploads failed.
     pub fn upload_piece_failed(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Get the piece id.
         let id = self.piece_id(task_id, number);
@@ -502,25 +748,25 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(piece)
     }
 
-    /// get_piece gets the piece metadata.
+    // get_piece gets the piece metadata.
     pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<Piece>> {
         self.db.get(self.piece_id(task_id, number).as_bytes())
     }
 
-    /// get_pieces gets the piece metadatas.
+    // get_pieces gets the piece metadatas.
     pub fn get_pieces(&self, task_id: &str) -> Result<Vec<Piece>> {
         let iter = self.db.prefix_iter::<Piece>(task_id.as_bytes())?;
         iter.map(|ele| ele.map(|(_, piece)| piece)).collect()
     }
 
-    /// delete_piece deletes the piece metadata.
+    // delete_piece deletes the piece metadata.
     pub fn delete_piece(&self, task_id: &str, number: u32) -> Result<()> {
         info!("delete piece metadata {}", self.piece_id(task_id, number));
         self.db
             .delete::<Piece>(self.piece_id(task_id, number).as_bytes())
     }
 
-    /// delete_pieces deletes the piece metadatas.
+    // delete_pieces deletes the piece metadatas.
     pub fn delete_pieces(&self, task_id: &str) -> Result<()> {
         let iter = self.db.prefix_iter::<Piece>(task_id.as_bytes())?;
         for ele in iter {
@@ -531,14 +777,14 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(())
     }
 
-    /// piece_id returns the piece id.
+    // piece_id returns the piece id.
     pub fn piece_id(&self, task_id: &str, number: u32) -> String {
         format!("{}-{}", task_id, number)
     }
 }
 
 impl Metadata<RocksdbStorageEngine> {
-    /// new creates a new metadata instance.
+    // new creates a new metadata instance.
     pub fn new(config: Arc<Config>, dir: &Path) -> Result<Metadata<RocksdbStorageEngine>> {
         let db = RocksdbStorageEngine::open(
             dir,
