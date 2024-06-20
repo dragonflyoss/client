@@ -48,7 +48,9 @@ impl HealthClient {
                 err
             })
             .or_err(ErrorType::ConnectError)?;
-        let client = HealthGRPCClient::new(channel);
+        let client = HealthGRPCClient::new(channel)
+            .max_decoding_message_size(usize::MAX)
+            .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
     }
 
@@ -67,7 +69,9 @@ impl HealthClient {
                 err
             })
             .or_err(ErrorType::ConnectError)?;
-        let client = HealthGRPCClient::new(channel).max_decoding_message_size(usize::MAX);
+        let client = HealthGRPCClient::new(channel)
+            .max_decoding_message_size(usize::MAX)
+            .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
     }
 
