@@ -41,7 +41,9 @@ impl CertificateClient {
             .connect()
             .await
             .or_err(ErrorType::ConnectError)?;
-        let client = CertificateGRPCClient::new(channel);
+        let client = CertificateGRPCClient::new(channel)
+            .max_decoding_message_size(usize::MAX)
+            .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
     }
 

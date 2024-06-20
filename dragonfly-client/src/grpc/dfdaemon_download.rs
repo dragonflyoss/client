@@ -84,7 +84,8 @@ impl DfdaemonDownloadServer {
             socket_path: socket_path.clone(),
             task: task.clone(),
         })
-        .max_decoding_message_size(usize::MAX);
+        .max_decoding_message_size(usize::MAX)
+        .max_encoding_message_size(usize::MAX);
 
         Self {
             socket_path,
@@ -598,7 +599,9 @@ impl DfdaemonDownloadClient {
                 err
             })
             .or_err(ErrorType::ConnectError)?;
-        let client = DfdaemonDownloadGRPCClient::new(channel).max_decoding_message_size(usize::MAX);
+        let client = DfdaemonDownloadGRPCClient::new(channel)
+            .max_decoding_message_size(usize::MAX)
+            .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
     }
 
