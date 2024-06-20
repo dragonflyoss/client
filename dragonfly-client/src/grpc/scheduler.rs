@@ -168,7 +168,9 @@ impl SchedulerClient {
                     })
                     .or_err(ErrorType::ConnectError)?;
 
-                let mut client = SchedulerGRPCClient::new(channel);
+                let mut client = SchedulerGRPCClient::new(channel)
+                    .max_decoding_message_size(usize::MAX)
+                    .max_encoding_message_size(usize::MAX);
                 client.announce_host(request).await?;
                 Ok(())
             }
@@ -218,7 +220,9 @@ impl SchedulerClient {
                     })
                     .or_err(ErrorType::ConnectError)?;
 
-                let mut client = SchedulerGRPCClient::new(channel);
+                let mut client = SchedulerGRPCClient::new(channel)
+                    .max_decoding_message_size(usize::MAX)
+                    .max_encoding_message_size(usize::MAX);
                 client.announce_host(request).await?;
                 Ok(())
             }
@@ -273,7 +277,9 @@ impl SchedulerClient {
                     })
                     .or_err(ErrorType::ConnectError)?;
 
-                let mut client = SchedulerGRPCClient::new(channel);
+                let mut client = SchedulerGRPCClient::new(channel)
+                    .max_decoding_message_size(usize::MAX)
+                    .max_encoding_message_size(usize::MAX);
                 client.delete_host(request).await?;
                 Ok(())
             }
@@ -426,7 +432,9 @@ impl SchedulerClient {
             }
         };
 
-        Ok(SchedulerGRPCClient::new(channel))
+        Ok(SchedulerGRPCClient::new(channel)
+            .max_decoding_message_size(usize::MAX)
+            .max_encoding_message_size(usize::MAX))
     }
 
     // update_available_scheduler_addrs updates the addresses of available schedulers.

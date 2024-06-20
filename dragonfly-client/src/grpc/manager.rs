@@ -79,7 +79,9 @@ impl ManagerClient {
                 err
             })
             .or_err(ErrorType::ConnectError)?;
-        let client = ManagerGRPCClient::new(channel);
+        let client = ManagerGRPCClient::new(channel)
+            .max_decoding_message_size(usize::MAX)
+            .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
     }
 
