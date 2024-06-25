@@ -45,7 +45,7 @@ hyper-util = { version = "0.1.2", features = [
 hyper-rustls = { version = "0.26", features = ["http1", "http2", "logging"] }
 http-range-header = "0.4.1"
 tracing = "0.1"
-url = "2.5.1"
+url = "2.5.2"
 rustls = "0.22.4"
 rustls-pki-types = "1.7.0"
 rustls-pemfile = "2.1.1"
