@@ -68,4 +68,5 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
+          verbose: true
           fail_ci_if_error: true
