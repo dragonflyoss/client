@@ -36,8 +36,19 @@ pub struct Data {
     // available_schedulers is the available schedulers of the dfdaemon.
     pub available_schedulers: Vec<Scheduler>,
 
+    unavailable_schedulers: Arc<Mutex<HashMap<SocketAddr, Instant>>>,
+
     // available_scheduler_cluster_id is the id of the available scheduler cluster of the dfdaemon.
     pub available_scheduler_cluster_id: Option<u64>,
+
+    // cooldown_duration is the scheduler's cooldown time (in seconds)
+    pub cooldown_duration_secs: u64,
+
+    // Maximum retry attempts
+    pub max_attempts: u32,
+
+    // Refresh threshold
+    pub refresh_threshold: u32,
 }
 
 // Dynconfig supports dynamic configuration of the client.

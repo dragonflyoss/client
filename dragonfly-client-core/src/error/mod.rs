@@ -70,6 +70,10 @@ pub enum DFError {
     #[error{"available schedulers not found"}]
     AvailableSchedulersNotFound,
 
+    // SchedulerUnavailable is the error when the scheduler is unavailable.
+    #[error("scheduler unavailable")]
+    SchedulerUnavailable,
+
     // DownloadFromRemotePeerFailed is the error when the download from remote peer is failed.
     #[error(transparent)]
     DownloadFromRemotePeerFailed(DownloadFromRemotePeerFailed),
