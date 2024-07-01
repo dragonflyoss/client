@@ -16,6 +16,7 @@
 
 // use crate::dynconfig::Dynconfig;
 use crate::dynconfig::Dynconfig;
+use crate::grpc::health::HealthClient;
 use dragonfly_api::common::v2::{CachePeer, CacheTask, Peer, Task};
 use dragonfly_api::manager::v2::Scheduler;
 use dragonfly_api::scheduler::v2::{
@@ -35,6 +36,8 @@ use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tonic::transport::Channel;
 use tracing::{error, info, instrument, Instrument};
+
+use tonic_health::pb::health_check_response::ServingStatus;
 
 // VNode is the virtual node of the hashring.
 #[derive(Debug, Copy, Clone, Hash, PartialEq)]
@@ -65,6 +68,18 @@ pub struct SchedulerClient {
 
     // hashring is the hashring of the scheduler.
     hashring: Arc<RwLock<HashRing<VNode>>>,
+
+    // new add
+    unavailable_schedulers: Arc<RwLock<HashMap<SocketAddr, Instant>>>,
+
+    // new add: cooldown_duration is the scheduler's cooldown time (in seconds)
+    cooldown_duration_secs: u64,
+
+    // new add: Maximum retry attempts
+    max_attempts: u32,
+
+    // new add: Refresh threshold
+    refresh_threshold: u32,
 }
 
 // SchedulerClient implements the grpc client of the scheduler.
@@ -76,6 +91,10 @@ impl SchedulerClient {
             available_schedulers: Arc::new(RwLock::new(Vec::new())),
             available_scheduler_addrs: Arc::new(RwLock::new(Vec::new())),
             hashring: Arc::new(RwLock::new(HashRing::new())),
+            unavailable_schedulers: Arc::new(RwLock::new(HashMap::new())),
+            cooldown_duration_secs,
+            max_attempts,
+            refresh_threshold,
         };
 
         client.refresh_available_scheduler_addrs().await?;
@@ -435,6 +454,156 @@ impl SchedulerClient {
         Ok(SchedulerGRPCClient::new(channel)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX))
+    }
+
+    #[instrument(skip(self))]
+    async fn new_client(
+        &self,
+        task_id: &str,
+        peer_id: Option<&str>,
+    ) -> Result<SchedulerGRPCClient<Channel>> {
+        // Update scheduler addresses of the client.
+        self.update_available_scheduler_addrs().await?;
+
+        // First try to get the address from the task_id
+        let addrs = self.hashring.read().await;
+        if let Some(&addr) = *addrs.get(&task_id[0..5].to_string()) {
+            drop(addrs);
+            info!("first picked {:?} according to task_id", addr);
+
+            match self.try_client(&addr).await {
+                Ok(channel) => {
+                    let mut unavailable_schedulers = self.unavailable_schedulers.lock().await;
+                    if unavailable_schedulers.contains_key(&scheduler_addr) {
+                        unavailable_schedulers.remove(&scheduler_addr);
+                    }
+                    return Ok(SchedulerGRPCClient::new(channel)
+                        .max_decoding_message_size(usize::MAX)
+                        .max_encoding_message_size(usize::MAX));
+                }
+                Err(err) => {
+                    error!("connect to {} failed: {}", addr.to_string(), err);
+
+                    let mut unavailable_schedulers = self.unavailable_schedulers.lock().await;
+                    if !unavailable_schedulers.contains_key(&addr) {
+                        unavailable_schedulers.insert(addr, std::time::Instant::now());
+                    }
+                }
+            }
+        } else {
+            drop(addrs);
+        }
+
+        let hashring = self.hashring.read().await;
+        let scheduler_keys: Vec<&VNode> = hashring.nodes().collect();
+        drop(hashring);
+
+        // Minimize lock holding time to reduce conflicts
+        // let config_data = self.dynconfig.data.read().await;
+        let cooldown_duration = Duration::from_secs(self.cooldown_duration_secs);
+        let max_attempts = self.max_attempts;
+        let refresh_threshold = self.refresh_threshold;
+
+        // Initialize retry attempts
+        let mut attempts = 0;
+
+        // Use finer-grained locks in the loop
+        for scheduler_key in scheduler_keys.iter().cycle().take(scheduler_keys.len()) {
+            let scheduler_addr = scheduler_key.addr;
+
+            {
+                let unavailable_schedulers = self.unavailable_schedulers.lock().await;
+                if let Some(&instant) = unavailable_schedulers.get(&scheduler_addr) {
+                    if instant.elapsed() < cooldown_duration {
+                        continue;
+                    }
+                }
+            }
+
+            match self.try_client(&scheduler_addr).await {
+                Ok(channel) => {
+                    let mut unavailable_schedulers = self.unavailable_schedulers.lock().await;
+                    if unavailable_schedulers.contains_key(&scheduler_addr) {
+                        unavailable_schedulers.remove(&scheduler_addr);
+                    }
+                    return Ok(SchedulerGRPCClient::new(channel)
+                        .max_decoding_message_size(usize::MAX)
+                        .max_encoding_message_size(usize::MAX));
+                }
+                Err(err) => {
+                    error!("Scheduler {} is not available: {}", scheduler_addr, err);
+
+                    let mut unavailable_schedulers = self.unavailable_schedulers.lock().await;
+                    if !unavailable_schedulers.contains_key(&scheduler_addr) {
+                        unavailable_schedulers.insert(scheduler_addr, std::time::Instant::now());
+                    }
+
+                    // Increment retry attempts
+                    attempts += 1;
+
+                    // Refresh scheduler addresses when reaching the refresh threshold
+                    if attempts >= refresh_threshold {
+                        self.refresh_available_scheduler_addrs().await?;
+                    }
+
+                    // Return error when reaching the maximum retry attempts
+                    if attempts >= max_attempts {
+                        return Err(ExternalError::new(ErrorType::ConnectError)
+                            .with_cause(Box::new(err))
+                            .into());
+                    }
+                }
+            }
+        }
+
+        Err(ExternalError::new(ErrorType::ConnectError)
+            .with_cause(Box::new(err))
+            .into())
+    }
+
+    async fn try_client(
+        &self,
+        scheduler_addr: &SocketAddr,
+    ) -> Result<SchedulerGRPCClient<Channel>> {
+        info!("try to connect {:?}", scheduler_addr);
+
+        let health_client = match HealthClient::new(scheduler_addr.as_str()).await {
+            Ok(client) => client,
+            Err(err) => {
+                warn!("create {} health client failed: {}", scheduler_addr, err);
+            }
+        };
+
+        match health_client.check().await {
+            Ok(resp) => {
+                if resp.status != ServingStatus::Serving as i32 {
+                    error!("scheduler {} is not serving", scheduler_addr);
+                    return Err(Error::SchedulerUnavailable);
+                }
+            }
+            Err(err) => {
+                error!("check scheduler health failed: {}", err);
+                return Err(Error::ConnectError);
+            }
+        }
+
+        let channel = match Channel::from_shared(format!("http://{}", scheduler_addr))
+            .map_err(|_| Error::InvalidURI(scheduler_addr.to_string()))?
+            .connect_timeout(super::CONNECT_TIMEOUT)
+            .connect()
+            .await
+        {
+            Ok(channel) => channel,
+            Err(err) => {
+                error!("connect to {} failed: {}", scheduler_addr.to_string(), err);
+
+                return Err(ExternalError::new(ErrorType::ConnectError)
+                    .with_cause(Box::new(err))
+                    .into());
+            }
+        };
+
+        Ok(channel)
     }
 
     // update_available_scheduler_addrs updates the addresses of available schedulers.
