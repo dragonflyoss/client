@@ -23,6 +23,7 @@ use dragonfly_client_config::{
     dfdaemon::{Config, HostType},
     CARGO_PKG_RUSTC_VERSION, CARGO_PKG_VERSION, GIT_HASH,
 };
+use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::Result;
 use std::env;
 use std::sync::Arc;
@@ -272,6 +273,12 @@ impl SchedulerAnnouncer {
             scheduler_cluster_id: 0,
         };
 
-        Ok(AnnounceHostRequest { host: Some(host) })
+        Ok(AnnounceHostRequest {
+            host: Some(host),
+            interval: Some(
+                prost_wkt_types::Duration::try_from(self.config.scheduler.announce_interval)
+                    .or_err(ErrorType::ParseError)?,
+            ),
+        })
     }
 }
