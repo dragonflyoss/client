@@ -98,6 +98,13 @@ pub enum DFError {
     #[error{"scheduler client not found"}]
     SchedulerClientNotFound,
 
+    // Exceeded maximum number of attempts error
+    #[error("exceeded maximum number of attempts")]
+    ExceededMaxAttempts,
+
+    #[error("current scheduler is not serving")]
+    SchedulerisNotServing,
+
     // UnexpectedResponse is the error when the response is unexpected.
     #[error{"unexpected response"}]
     UnexpectedResponse,
