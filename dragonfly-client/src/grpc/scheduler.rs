@@ -17,12 +17,14 @@
 // use crate::dynconfig::Dynconfig;
 use crate::dynconfig::Dynconfig;
 use crate::grpc::health::HealthClient;
-use dragonfly_api::common::v2::{Peer, Task};
+use dragonfly_api::common::v2::{CachePeer, CacheTask, Peer, Task};
 use dragonfly_api::manager::v2::Scheduler;
 use dragonfly_api::scheduler::v2::{
-    scheduler_client::SchedulerClient as SchedulerGRPCClient, AnnounceHostRequest,
-    AnnouncePeerRequest, AnnouncePeerResponse, DeleteHostRequest, DeletePeerRequest,
-    DeleteTaskRequest, StatPeerRequest, StatTaskRequest,
+    scheduler_client::SchedulerClient as SchedulerGRPCClient, AnnounceCachePeerRequest,
+    AnnounceCachePeerResponse, AnnounceHostRequest, AnnouncePeerRequest, AnnouncePeerResponse,
+    DeleteCachePeerRequest, DeleteCacheTaskRequest, DeleteHostRequest, DeletePeerRequest,
+    DeleteTaskRequest, StatCachePeerRequest, StatCacheTaskRequest, StatPeerRequest,
+    StatTaskRequest, UploadCacheTaskRequest,
 };
 use dragonfly_client_core::error::{ErrorType, ExternalError, OrErr};
 use dragonfly_client_core::{Error, Result};
