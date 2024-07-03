@@ -38,7 +38,7 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tonic::transport::Channel;
-use tracing::{error, info, instrument, warn, Instrument};
+use tracing::{error, info, instrument, Instrument};
 
 use tonic_health::pb::health_check_response::ServingStatus;
 
@@ -73,15 +73,19 @@ pub struct SchedulerClient {
     hashring: Arc<RwLock<HashRing<VNode>>>,
 
     // new add
+    #[allow(dead_code)]
     unavailable_schedulers: Arc<RwLock<HashMap<SocketAddr, Instant>>>,
 
     // new add: cooldown_duration is the scheduler's cooldown time (in seconds)
+    #[allow(dead_code)]
     cooldown_duration_secs: u64,
 
     // new add: Maximum retry attempts
+    #[allow(dead_code)]
     max_attempts: u32,
 
     // new add: Refresh threshold
+    #[allow(dead_code)]
     refresh_threshold: u32,
 }
 
@@ -499,9 +503,9 @@ impl SchedulerClient {
                 error!("connect to {} failed: {}", addr.to_string(), err);
 
                 let mut unavailable_schedulers = self.unavailable_schedulers.write().await;
-                if !unavailable_schedulers.contains_key(&addr.addr) {
-                    unavailable_schedulers.insert(addr.addr, std::time::Instant::now());
-                }
+                unavailable_schedulers
+                    .entry(addr.addr)
+                    .or_insert_with(std::time::Instant::now);
             }
         }
 
@@ -540,9 +544,9 @@ impl SchedulerClient {
                     error!("Scheduler {} is not available: {}", scheduler_addr, err);
 
                     let mut unavailable_schedulers = self.unavailable_schedulers.write().await;
-                    if !unavailable_schedulers.contains_key(&scheduler_addr) {
-                        unavailable_schedulers.insert(scheduler_addr, std::time::Instant::now());
-                    }
+                    unavailable_schedulers
+                        .entry(scheduler_addr)
+                        .or_insert_with(std::time::Instant::now);
 
                     // Increment retry attempts
                     attempts += 1;
