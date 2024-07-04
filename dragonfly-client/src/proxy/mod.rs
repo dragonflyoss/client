@@ -18,8 +18,8 @@ use crate::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use crate::metrics::{
     collect_proxy_request_failure_metrics, collect_proxy_request_started_metrics,
 };
+use crate::resource::task::Task;
 use crate::shutdown;
-use crate::task::Task;
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::{

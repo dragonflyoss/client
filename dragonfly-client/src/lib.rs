@@ -21,7 +21,7 @@ pub mod grpc;
 pub mod health;
 pub mod metrics;
 pub mod proxy;
+pub mod resource;
 pub mod shutdown;
 pub mod stats;
-pub mod task;
 pub mod tracing;

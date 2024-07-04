@@ -1546,4 +1546,41 @@ impl Task {
             "not all pieces are downloaded from source".to_string(),
         ))
     }
+
+    // Delete a task and reclaim local storage.
+    pub async fn delete_task(&self, task_id: &str) -> ClientResult<()> {
+        let task_result = self.storage.get_task(task_id).map_err(|err| {
+            error!("get task {} from local storage error: {:?}", task_id, err);
+            Status::internal(err.to_string())
+        })?;
+
+        match task_result {
+            Some(task) => {
+                // Check current task is valid to be deleted.
+                if !task.is_finished() && task.is_uploading() {
+                    return Err(Error::InvalidState(
+                        "current task is not finished or uploading".to_string(),
+                    ));
+                }
+
+                self.storage
+                    .delete_task(task.id.as_str())
+                    .await
+                    .map_err(|err| {
+                        error!(
+                            "delete task {} from local storage error: {:?}",
+                            task.id, err
+                        );
+                        Status::internal(err.to_string())
+                    })?;
+                info!("delete task {} from local storage", task.id);
+
+                Ok(())
+            }
+            None => {
+                error!("delete_task task {} not found", task_id);
+                Err(Error::TaskNotFound(task_id.to_owned()))
+            }
+        }
+    }
 }

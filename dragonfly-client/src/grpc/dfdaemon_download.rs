@@ -18,8 +18,8 @@ use crate::metrics::{
     collect_download_task_failure_metrics, collect_download_task_finished_metrics,
     collect_download_task_started_metrics,
 };
+use crate::resource::task;
 use crate::shutdown;
-use crate::task;
 use dragonfly_api::common::v2::{CacheTask, Task};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_download_client::DfdaemonDownloadClient as DfdaemonDownloadGRPCClient,
@@ -514,8 +514,29 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         &self,
         request: Request<DeleteTaskRequest>,
     ) -> Result<Response<()>, Status> {
-        println!("delete_task: {:?}", request);
-        Err(Status::unimplemented("not implemented"))
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+
+        // Delete the task from the scheduler.
+        self.task
+            .delete_task(task_id.as_str())
+            .await
+            .map_err(|err| {
+                error!("delete task: {}", err);
+                Status::invalid_argument(err.to_string())
+            })?;
+
+        Ok(Response::new(()))
     }
 
     // delete_host calls the scheduler to delete the host.

@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-mod piece;
-mod piece_collector;
-mod task;
-
-pub use task::Task;
+pub mod piece;
+pub mod piece_collector;
+pub mod task;
