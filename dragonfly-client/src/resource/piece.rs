@@ -33,15 +33,6 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{error, info};
 
-// CollectPiece represents a piece to collect.
-pub struct CollectPiece {
-    // number is the piece number.
-    pub number: u32,
-
-    // parent is the parent peer.
-    pub parent: Peer,
-}
-
 // Piece represents a piece manager.
 pub struct Piece {
     // config is the configuration of the dfdaemon.

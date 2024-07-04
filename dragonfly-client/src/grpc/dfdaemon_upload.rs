@@ -19,8 +19,8 @@ use crate::metrics::{
     collect_download_task_started_metrics, collect_upload_piece_failure_metrics,
     collect_upload_piece_finished_metrics, collect_upload_piece_started_metrics,
 };
+use crate::resource::task;
 use crate::shutdown;
-use crate::task;
 use dragonfly_api::common::v2::{CacheTask, Piece};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient,

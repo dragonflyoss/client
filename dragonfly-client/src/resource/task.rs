@@ -1,5 +1,5 @@
 /*
- *     Copyright 2023 The Dragonfly Authors
+ *     Copyright 2024 The Dragonfly Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -57,9 +57,6 @@ use tonic::Request;
 use tonic::Status;
 use tracing::{error, info, Instrument};
 
-pub mod piece;
-pub mod piece_collector;
-
 // Task represents a task manager.
 pub struct Task {
     // config is the configuration of the dfdaemon.
@@ -78,7 +75,7 @@ pub struct Task {
     pub backend_factory: Arc<BackendFactory>,
 
     // piece is the piece manager.
-    pub piece: Arc<piece::Piece>,
+    pub piece: Arc<super::piece::Piece>,
 }
 
 // Task implements the task manager.
@@ -91,7 +88,8 @@ impl Task {
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
     ) -> Self {
-        let piece = piece::Piece::new(config.clone(), storage.clone(), backend_factory.clone());
+        let piece =
+            super::piece::Piece::new(config.clone(), storage.clone(), backend_factory.clone());
         let piece = Arc::new(piece);
 
         Self {
@@ -905,7 +903,7 @@ impl Task {
         in_stream_tx: Sender<AnnouncePeerRequest>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Initialize the piece collector.
-        let piece_collector = piece_collector::PieceCollector::new(
+        let piece_collector = super::piece_collector::PieceCollector::new(
             self.config.clone(),
             host_id,
             task.id.as_str(),
@@ -929,7 +927,7 @@ impl Task {
                 number: u32,
                 length: u64,
                 parent: Peer,
-                piece_manager: Arc<piece::Piece>,
+                piece_manager: Arc<super::piece::Piece>,
                 storage: Arc<Storage>,
                 _permit: OwnedSemaphorePermit,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
@@ -1143,7 +1141,7 @@ impl Task {
                 offset: u64,
                 length: u64,
                 request_header: HeaderMap,
-                piece_manager: Arc<piece::Piece>,
+                piece_manager: Arc<super::piece::Piece>,
                 storage: Arc<Storage>,
                 _permit: OwnedSemaphorePermit,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
@@ -1434,7 +1432,7 @@ impl Task {
                 offset: u64,
                 length: u64,
                 request_header: HeaderMap,
-                piece_manager: Arc<piece::Piece>,
+                piece_manager: Arc<super::piece::Piece>,
                 storage: Arc<Storage>,
                 _permit: OwnedSemaphorePermit,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
@@ -1549,7 +1547,7 @@ impl Task {
         ))
     }
 
-    // Delete a task and reclaim local storage
+    // Delete a task and reclaim local storage.
     pub async fn delete_task(&self, task_id: &str) -> ClientResult<()> {
         let task_result = self.storage.get_task(task_id).map_err(|err| {
             error!("get task {} from local storage error: {:?}", task_id, err);
@@ -1558,7 +1556,7 @@ impl Task {
 
         match task_result {
             Some(task) => {
-                // Check current task is valid to be deleted
+                // Check current task is valid to be deleted.
                 if !task.is_finished() && task.is_uploading() {
                     return Err(Error::InvalidState(
                         "current task is not finished or uploading".to_string(),
