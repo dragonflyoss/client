@@ -587,8 +587,9 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
         // Calculate the file hash by the blake3 algorithm.
         let digest = calculate_file_hash(Algorithm::Blake3, path).map_err(|err| {
-            error!("calculate file hash: {}", err);
-            Status::internal(err.to_string())
+            let error_message = format!("calculate file {} hash: {}", request.path.as_str(), err);
+            error!(error_message);
+            Status::with_details(Code::Internal, err.to_string(), error_message.into())
         })?;
         info!("calculate file digest: {}", digest);
 
