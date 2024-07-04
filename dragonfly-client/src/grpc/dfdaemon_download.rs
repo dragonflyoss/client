@@ -18,8 +18,8 @@ use crate::metrics::{
     collect_download_task_failure_metrics, collect_download_task_finished_metrics,
     collect_download_task_started_metrics,
 };
+use crate::resource::task;
 use crate::shutdown;
-use crate::task;
 use dragonfly_api::common::v2::{CacheTask, Task};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_download_client::DfdaemonDownloadClient as DfdaemonDownloadGRPCClient,
