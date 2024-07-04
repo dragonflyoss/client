@@ -102,9 +102,13 @@ pub enum DFError {
     #[error{"unexpected response"}]
     UnexpectedResponse,
 
-    // PieceDigestMismatch is the error when the piece digest is mismatch.
-    #[error{"piece digest mismatch"}]
-    PieceDigestMismatch,
+    // DigestMismatch is the error when the digest is mismatch.
+    #[error{"digest mismatch expected: {0}, actual: {1}"}]
+    DigestMismatch(String, String),
+
+    // ContentLengthMismatch is the error when the content length is mismatch.
+    #[error("content length mismatch expected: {0}, actual: {1}")]
+    ContentLengthMismatch(u64, u64),
 
     // MaxScheduleCountExceeded is the error when the max schedule count is exceeded.
     #[error("max schedule count {0} exceeded")]

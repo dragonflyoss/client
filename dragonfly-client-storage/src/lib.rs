@@ -132,15 +132,28 @@ impl Storage {
     }
 
     // create_persistent_cache_task creates a new persistent cache task.
-    pub fn create_persistent_cache_task(
+    pub async fn create_persistent_cache_task(
         &self,
         id: &str,
+        path: &Path,
         piece_length: u64,
-        content_length: u64,
-        digest: &str,
+        expected_digest: &str,
     ) -> Result<metadata::CacheTask> {
-        self.metadata
-            .create_persistent_cache_task(id, piece_length, content_length, digest)
+        let response = self.content.write_cache_task(id, path).await?;
+        let digest = Digest::new(Algorithm::Blake3, response.hash);
+        if expected_digest != digest.to_string() {
+            return Err(Error::DigestMismatch(
+                expected_digest.to_string(),
+                digest.to_string(),
+            ));
+        }
+
+        self.metadata.create_persistent_cache_task(
+            id,
+            piece_length,
+            response.length,
+            digest.to_string().as_str(),
+        )
     }
 
     // download_cache_task_started updates the metadata of the cache task when the cache task downloads started.
@@ -183,8 +196,7 @@ impl Storage {
     // delete_cache_task deletes the cache task metadatas, cache task content and piece metadatas.
     pub async fn delete_cache_task(&self, id: &str) -> Result<()> {
         self.metadata.delete_cache_task(id)?;
-        self.metadata.delete_pieces(id)?;
-        self.content.delete_task(id).await?;
+        self.content.delete_cache_task(id).await?;
         Ok(())
     }
 
@@ -241,7 +253,10 @@ impl Storage {
 
         // Check the digest of the piece.
         if expected_digest != digest.to_string() {
-            return Err(Error::PieceDigestMismatch);
+            return Err(Error::DigestMismatch(
+                expected_digest.to_string(),
+                digest.to_string(),
+            ));
         }
 
         self.metadata.download_piece_finished(
