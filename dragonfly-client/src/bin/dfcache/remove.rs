@@ -15,6 +15,8 @@
  */
 
 use clap::Parser;
+use dragonfly_client_core::Result;
+use std::path::Path;
 
 // RemoveCommand is the subcommand of remove.
 #[derive(Debug, Clone, Parser)]
@@ -25,7 +27,7 @@ pub struct RemoveCommand {
 
 // Implement the execute for RemoveCommand.
 impl RemoveCommand {
-    pub async fn execute(&self) -> Result<(), anyhow::Error> {
+    pub async fn execute(&self, _endpoint: &Path) -> Result<()> {
         println!("RemoveCommand is executed!");
         Ok(())
     }

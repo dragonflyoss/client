@@ -25,7 +25,7 @@ use dragonfly_client::grpc::{
 use dragonfly_client::health::Health;
 use dragonfly_client::metrics::Metrics;
 use dragonfly_client::proxy::Proxy;
-use dragonfly_client::resource::task::Task;
+use dragonfly_client::resource::{cache_task::CacheTask, task::Task};
 use dragonfly_client::shutdown;
 use dragonfly_client::stats::Stats;
 use dragonfly_client::tracing::init_tracing;
@@ -193,6 +193,14 @@ async fn main() -> Result<(), anyhow::Error> {
     );
     let task = Arc::new(task);
 
+    // Initialize cache task manager.
+    let cache_task = CacheTask::new(
+        config.clone(),
+        id_generator.clone(),
+        storage.clone(),
+        scheduler_client.clone(),
+    );
+
     // Initialize health server.
     let health = Health::new(
         SocketAddr::new(config.health.server.ip.unwrap(), config.health.server.port),
@@ -260,6 +268,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut dfdaemon_download_grpc = DfdaemonDownloadServer::new(
         config.download.server.socket_path.clone(),
         task.clone(),
+        cache_task,
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );

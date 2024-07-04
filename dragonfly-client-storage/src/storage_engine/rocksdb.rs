@@ -59,6 +59,7 @@ impl RocksdbStorageEngine {
 
     /// open opens a rocksdb storage engine with the given directory and column families.
     pub fn open(dir: &Path, cf_names: &[&str], keep: bool) -> Result<Self> {
+        info!("initializing metadata directory: {:?} {:?}", dir, cf_names);
         // Initialize rocksdb options.
         let mut options = rocksdb::Options::default();
         options.create_if_missing(true);

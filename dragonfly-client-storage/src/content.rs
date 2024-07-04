@@ -46,6 +46,15 @@ pub struct WritePieceResponse {
     pub hash: String,
 }
 
+// WriteCacheTaskResponse is the response of writing a cache task.
+pub struct WriteCacheTaskResponse {
+    // length is the length of the cache task.
+    pub length: u64,
+
+    // hash is the hash of the cache task.
+    pub hash: String,
+}
+
 // Content implements the content storage.
 impl Content {
     // new returns a new content.
@@ -100,8 +109,7 @@ impl Content {
             return Ok(());
         }
 
-        // If the hard link fails,
-        // copy the task content to the destination.
+        // If the hard link fails, copy the task content to the destination.
         fs::remove_file(to).await.unwrap_or_else(|err| {
             info!("remove {:?} failed: {}", to, err);
         });
@@ -191,7 +199,6 @@ impl Content {
     // delete_task deletes the task content.
     pub async fn delete_task(&self, task_id: &str) -> Result<()> {
         let task_path = self.dir.join(task_id);
-
         fs::remove_file(task_path.as_path()).await.map_err(|err| {
             error!("remove {:?} failed: {}", task_path, err);
             err
@@ -290,5 +297,64 @@ impl Content {
             length,
             hash: base16ct::lower::encode_string(hash.as_bytes()),
         })
+    }
+
+    // copy_cache_task copies the cache task content to the destination.
+    pub async fn write_cache_task(
+        &self,
+        task_id: &str,
+        from: &Path,
+    ) -> Result<WriteCacheTaskResponse> {
+        // Open the file to copy the content.
+        let from_f = File::open(from).await?;
+
+        // Use a buffer to read the content.
+        let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, from_f);
+
+        // Blake3 is used to calculate the hash of the content.
+        let mut hasher = blake3::Hasher::new();
+
+        // InspectReader is used to calculate the hash of the content.
+        let mut tee = InspectReader::new(reader, |bytes| {
+            hasher.update(bytes);
+        });
+
+        let task_path = self.dir.join(task_id);
+        let mut to_f = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(task_path.as_path())
+            .await
+            .map_err(|err| {
+                error!("open {:?} failed: {}", task_path, err);
+                err
+            })?;
+
+        // Copy the content to the file.
+        let length = io::copy(&mut tee, &mut to_f).await.map_err(|err| {
+            error!("copy {:?} failed: {}", task_path, err);
+            err
+        })?;
+
+        // Calculate the hash of the content.
+        let hash = hasher.finalize();
+
+        Ok(WriteCacheTaskResponse {
+            length,
+            hash: base16ct::lower::encode_string(hash.as_bytes()),
+        })
+    }
+
+    // delete_task deletes the cache task content.
+    pub async fn delete_cache_task(&self, cache_task_id: &str) -> Result<()> {
+        let cache_task_path = self.dir.join(cache_task_id);
+        fs::remove_file(cache_task_path.as_path())
+            .await
+            .map_err(|err| {
+                error!("remove {:?} failed: {}", cache_task_path, err);
+                err
+            })?;
+        Ok(())
     }
 }

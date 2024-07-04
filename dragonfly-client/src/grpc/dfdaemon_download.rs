@@ -18,7 +18,7 @@ use crate::metrics::{
     collect_download_task_failure_metrics, collect_download_task_finished_metrics,
     collect_download_task_started_metrics,
 };
-use crate::resource::task;
+use crate::resource::{cache_task, task};
 use crate::shutdown;
 use dragonfly_api::common::v2::{CacheTask, Task};
 use dragonfly_api::dfdaemon::v2::{
@@ -38,8 +38,9 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error as ClientError, Result as ClientResult,
 };
-use dragonfly_client_util::http::{
-    get_range, hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap,
+use dragonfly_client_util::{
+    digest::{calculate_file_hash, Algorithm},
+    http::{get_range, hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap},
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -76,6 +77,7 @@ impl DfdaemonDownloadServer {
     pub fn new(
         socket_path: PathBuf,
         task: Arc<task::Task>,
+        cache_task: cache_task::CacheTask,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -83,6 +85,7 @@ impl DfdaemonDownloadServer {
         let service = DfdaemonDownloadGRPCServer::new(DfdaemonDownloadServerHandler {
             socket_path: socket_path.clone(),
             task: task.clone(),
+            cache_task,
         })
         .max_decoding_message_size(usize::MAX)
         .max_encoding_message_size(usize::MAX);
@@ -150,6 +153,9 @@ pub struct DfdaemonDownloadServerHandler {
 
     // task is the task manager.
     task: Arc<task::Task>,
+
+    // cache_task is the cache task manager.
+    cache_task: cache_task::CacheTask,
 }
 
 // DfdaemonDownloadServerHandler implements the dfdaemon download grpc service.
@@ -569,13 +575,82 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         unimplemented!()
     }
 
-    // TODO: Implement this.
     // upload_cache_task uploads the cache task.
+    #[instrument(skip_all, fields(host_id, task_id, peer_id))]
     async fn upload_cache_task(
         &self,
-        _request: Request<UploadCacheTaskRequest>,
+        request: Request<UploadCacheTaskRequest>,
     ) -> Result<Response<CacheTask>, Status> {
-        unimplemented!()
+        // Clone the request.
+        let request = request.into_inner();
+        let path = Path::new(request.path.as_str());
+
+        // Calculate the file hash by the blake3 algorithm.
+        let digest = calculate_file_hash(Algorithm::Blake3, path).map_err(|err| {
+            error!("calculate file hash: {}", err);
+            Status::internal(err.to_string())
+        })?;
+        info!("calculate file digest: {}", digest);
+
+        // Generate the task id.
+        let task_id = self
+            .task
+            .id_generator
+            .cache_task_id(
+                &path.to_path_buf(),
+                request.tag.as_deref(),
+                request.application.as_deref(),
+                request.piece_length,
+            )
+            .map_err(|err| {
+                error!("generate task id: {}", err);
+                Status::invalid_argument(err.to_string())
+            })?;
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Generate the peer id.
+        let peer_id = self.task.id_generator.peer_id();
+
+        // Span record the host id, task id and peer id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record("peer_id", peer_id.as_str());
+
+        // Create the persistent cache task to local storage.
+        let task = self
+            .cache_task
+            .create_persistent_cache_task(
+                task_id.as_str(),
+                path,
+                request.piece_length,
+                digest.to_string().as_str(),
+            )
+            .await
+            .map_err(|err| {
+                error!("create persistent cache task: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        Ok(Response::new(CacheTask {
+            id: task.id,
+            persistent_replica_count: request.persistent_replica_count,
+            // TODO: Return from scheduler.
+            replica_count: 0,
+            digest: digest.to_string(),
+            tag: request.tag,
+            application: request.application,
+            piece_length: request.piece_length,
+            content_length: task.content_length,
+            // TODO: Return from scheduler.
+            piece_count: 0,
+            // TODO: Return from scheduler.
+            state: "".to_string(),
+            ttl: request.ttl,
+            created_at: Some(prost_wkt_types::Timestamp::from(task.created_at)),
+            updated_at: Some(prost_wkt_types::Timestamp::from(task.updated_at)),
+        }))
     }
 
     // TODO: Implement this.
@@ -697,10 +772,20 @@ impl DfdaemonDownloadClient {
     pub async fn upload_cache_task(
         &self,
         request: UploadCacheTaskRequest,
-        timeout: Duration,
     ) -> ClientResult<CacheTask> {
+        // Clone the request.
+        let request_clone = request.clone();
+
+        // Initialize the request.
         let mut request = tonic::Request::new(request);
-        request.set_timeout(timeout);
+
+        // Set the timeout to the request.
+        if let Some(timeout) = request_clone.timeout {
+            request.set_timeout(
+                Duration::try_from(timeout)
+                    .map_err(|_| tonic::Status::invalid_argument("invalid timeout"))?,
+            );
+        }
 
         let response = self.client.clone().upload_cache_task(request).await?;
         Ok(response.into_inner())

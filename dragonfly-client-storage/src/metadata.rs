@@ -161,7 +161,7 @@ pub struct CacheTask {
     pub finished_at: Option<NaiveDateTime>,
 }
 
-// CacheTask implements the task database object.
+// CacheTask implements the cache task database object.
 impl DatabaseObject for CacheTask {
     // NAMESPACE is the namespace of [CacheTask] objects.
     const NAMESPACE: &'static str = "cache_task";
@@ -294,7 +294,7 @@ impl Piece {
     }
 }
 
-// Metadata manages the metadata of [Task] and [Piece].
+// Metadata manages the metadata of [Task], [Piece] and [CacheTask].
 pub struct Metadata<E = RocksdbStorageEngine>
 where
     E: StorageEngineOwned,
@@ -493,7 +493,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         content_length: u64,
         digest: &str,
     ) -> Result<CacheTask> {
-        let cache_task = CacheTask {
+        let task = CacheTask {
             id: id.to_string(),
             persistent: true,
             piece_length,
@@ -505,8 +505,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
             ..Default::default()
         };
 
-        self.db.put(id.as_bytes(), &cache_task)?;
-        Ok(cache_task)
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
     }
 
     // download_cache_task_started updates the metadata of the cache task when
@@ -519,12 +519,12 @@ impl<E: StorageEngineOwned> Metadata<E> {
         piece_length: u64,
         content_length: u64,
     ) -> Result<CacheTask> {
-        let cache_task = match self.db.get::<CacheTask>(id.as_bytes())? {
-            Some(mut cache_task) => {
+        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut task) => {
                 // If the task exists, update the task metadata.
-                cache_task.updated_at = Utc::now().naive_utc();
-                cache_task.failed_at = None;
-                cache_task
+                task.updated_at = Utc::now().naive_utc();
+                task.failed_at = None;
+                task
             }
             None => CacheTask {
                 id: id.to_string(),
@@ -537,90 +537,90 @@ impl<E: StorageEngineOwned> Metadata<E> {
             },
         };
 
-        self.db.put(id.as_bytes(), &cache_task)?;
-        Ok(cache_task)
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
     }
 
     // download_cache_task_finished updates the metadata of the cache task when the cache task downloads finished.
     pub fn download_cache_task_finished(&self, id: &str) -> Result<CacheTask> {
-        let cache_task = match self.db.get::<CacheTask>(id.as_bytes())? {
-            Some(mut cache_task) => {
-                cache_task.updated_at = Utc::now().naive_utc();
-                cache_task.failed_at = None;
+        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.updated_at = Utc::now().naive_utc();
+                task.failed_at = None;
 
                 // If the cache task is created by user, the finished_at has been set.
-                if cache_task.finished_at.is_none() {
-                    cache_task.finished_at = Some(Utc::now().naive_utc());
+                if task.finished_at.is_none() {
+                    task.finished_at = Some(Utc::now().naive_utc());
                 }
 
-                cache_task
+                task
             }
             None => return Err(Error::TaskNotFound(id.to_string())),
         };
 
-        self.db.put(id.as_bytes(), &cache_task)?;
-        Ok(cache_task)
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
     }
 
     // download_cache_task_failed updates the metadata of the cache task when the cache task downloads failed.
     pub fn download_cache_task_failed(&self, id: &str) -> Result<CacheTask> {
-        let cache_task = match self.db.get::<CacheTask>(id.as_bytes())? {
-            Some(mut cache_task) => {
-                cache_task.updated_at = Utc::now().naive_utc();
-                cache_task.failed_at = Some(Utc::now().naive_utc());
-                cache_task
+        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.updated_at = Utc::now().naive_utc();
+                task.failed_at = Some(Utc::now().naive_utc());
+                task
             }
             None => return Err(Error::TaskNotFound(id.to_string())),
         };
 
-        self.db.put(id.as_bytes(), &cache_task)?;
-        Ok(cache_task)
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
     }
 
     // upload_cache_task_started updates the metadata of the cache task when cache task uploads started.
     pub fn upload_cache_task_started(&self, id: &str) -> Result<CacheTask> {
-        let cache_task = match self.db.get::<CacheTask>(id.as_bytes())? {
-            Some(mut cache_task) => {
-                cache_task.uploading_count += 1;
-                cache_task.updated_at = Utc::now().naive_utc();
-                cache_task
+        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.uploading_count += 1;
+                task.updated_at = Utc::now().naive_utc();
+                task
             }
             None => return Err(Error::TaskNotFound(id.to_string())),
         };
 
-        self.db.put(id.as_bytes(), &cache_task)?;
-        Ok(cache_task)
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
     }
 
     // upload_cache_task_finished updates the metadata of the cache task when cache task uploads finished.
     pub fn upload_cache_task_finished(&self, id: &str) -> Result<CacheTask> {
-        let cache_task = match self.db.get::<CacheTask>(id.as_bytes())? {
-            Some(mut cache_task) => {
-                cache_task.uploading_count -= 1;
-                cache_task.uploaded_count += 1;
-                cache_task.updated_at = Utc::now().naive_utc();
-                cache_task
+        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.uploading_count -= 1;
+                task.uploaded_count += 1;
+                task.updated_at = Utc::now().naive_utc();
+                task
             }
             None => return Err(Error::TaskNotFound(id.to_string())),
         };
 
-        self.db.put(id.as_bytes(), &cache_task)?;
-        Ok(cache_task)
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
     }
 
     // upload_cache_task_failed updates the metadata of the cache task when the cache task uploads failed.
     pub fn upload_cache_task_failed(&self, id: &str) -> Result<CacheTask> {
-        let cache_task = match self.db.get::<CacheTask>(id.as_bytes())? {
-            Some(mut cache_task) => {
-                cache_task.uploading_count -= 1;
-                cache_task.updated_at = Utc::now().naive_utc();
-                cache_task
+        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.uploading_count -= 1;
+                task.updated_at = Utc::now().naive_utc();
+                task
             }
             None => return Err(Error::TaskNotFound(id.to_string())),
         };
 
-        self.db.put(id.as_bytes(), &cache_task)?;
-        Ok(cache_task)
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
     }
 
     // get_cache_task gets the cache task metadata.
@@ -631,8 +631,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     // get_cache_tasks gets the cache task metadatas.
     pub fn get_cache_tasks(&self) -> Result<Vec<CacheTask>> {
         let iter = self.db.iter::<CacheTask>()?;
-        iter.map(|ele| ele.map(|(_, cache_task)| cache_task))
-            .collect()
+        iter.map(|ele| ele.map(|(_, task)| task)).collect()
     }
 
     // delete_cache_task deletes the cache task metadata.
@@ -783,12 +782,13 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 }
 
+// Metadata implements the metadata of the storage engine.
 impl Metadata<RocksdbStorageEngine> {
     // new creates a new metadata instance.
     pub fn new(config: Arc<Config>, dir: &Path) -> Result<Metadata<RocksdbStorageEngine>> {
         let db = RocksdbStorageEngine::open(
             dir,
-            &[Task::NAMESPACE, Piece::NAMESPACE],
+            &[Task::NAMESPACE, Piece::NAMESPACE, CacheTask::NAMESPACE],
             config.storage.keep,
         )?;
 

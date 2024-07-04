@@ -16,7 +16,8 @@
 
 use clap::Parser;
 use dragonfly_client_config::default_piece_length;
-use std::path::PathBuf;
+use dragonfly_client_core::Result;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 // ExportCommand is the subcommand of export.
@@ -64,7 +65,7 @@ pub struct ExportCommand {
 
 // Implement the execute for ExportCommand.
 impl ExportCommand {
-    pub async fn execute(&self) -> Result<(), anyhow::Error> {
+    pub async fn execute(&self, _endpoint: &Path) -> Result<()> {
         println!("ExportCommand is executed!");
         Ok(())
     }

@@ -17,7 +17,8 @@
 use clap::{Parser, Subcommand};
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_config::{dfcache, dfdaemon};
-use std::path::PathBuf;
+use dragonfly_client_core::Result;
+use std::path::{Path, PathBuf};
 use tracing::Level;
 
 pub mod export;
@@ -77,7 +78,7 @@ struct Args {
 }
 
 #[derive(Debug, Clone, Subcommand)]
-#[command()]
+#[command(args_conflicts_with_subcommands = true)]
 pub enum Command {
     #[command(
         name = "import",
@@ -119,17 +120,18 @@ pub enum Command {
 // Implement the execute for Command.
 impl Command {
     #[allow(unused)]
-    pub async fn execute(self) -> Result<(), anyhow::Error> {
+    pub async fn execute(self, endpoint: &Path) -> Result<()> {
         match self {
-            Self::Import(cmd) => cmd.execute().await,
-            Self::Export(cmd) => cmd.execute().await,
-            Self::Stat(cmd) => cmd.execute().await,
-            Self::Remove(cmd) => cmd.execute().await,
+            Self::Import(cmd) => cmd.execute(endpoint).await,
+            Self::Export(cmd) => cmd.execute(endpoint).await,
+            Self::Stat(cmd) => cmd.execute(endpoint).await,
+            Self::Remove(cmd) => cmd.execute(endpoint).await,
         }
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     // Parse command line arguments.
     let args = Args::parse();
 
@@ -143,4 +145,8 @@ fn main() {
         false,
         args.verbose,
     );
+
+    // Execute the command.
+    args.command.execute(&args.endpoint).await?;
+    Ok(())
 }

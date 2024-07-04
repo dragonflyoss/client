@@ -15,6 +15,8 @@
  */
 
 use clap::Parser;
+use dragonfly_client_core::Result;
+use std::path::Path;
 
 // StatCommand is the subcommand of stat.
 #[derive(Debug, Clone, Parser)]
@@ -25,7 +27,7 @@ pub struct StatCommand {
 
 // Implement the execute for StatCommand.
 impl StatCommand {
-    pub async fn execute(&self) -> Result<(), anyhow::Error> {
+    pub async fn execute(&self, _endpoint: &Path) -> Result<()> {
         println!("StatCommand is executed!");
         Ok(())
     }
