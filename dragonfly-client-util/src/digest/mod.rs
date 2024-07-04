@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 
+use dragonfly_client_core::Result as ClientResult;
+use sha2::Digest as Sha2Digest;
 use std::fmt;
+use std::path::Path;
 use std::str::FromStr;
 
 // SEPARATOR is the separator of digest.
@@ -114,5 +117,31 @@ impl FromStr for Digest {
         };
 
         Ok(Digest::new(algorithm, parts[1].to_string()))
+    }
+}
+
+// calculate_file_hash calculates the hash of a file.
+pub fn calculate_file_hash(algorithm: Algorithm, path: &Path) -> ClientResult<Digest> {
+    let f = std::fs::File::open(path)?;
+    let mut reader = std::io::BufReader::new(f);
+    match algorithm {
+        Algorithm::Blake3 => {
+            let mut hasher = blake3::Hasher::new();
+            std::io::copy(&mut reader, &mut hasher)?;
+            Ok(Digest::new(
+                algorithm,
+                base16ct::lower::encode_string(hasher.finalize().as_bytes()),
+            ))
+        }
+        Algorithm::Sha256 => {
+            let mut hasher = sha2::Sha256::new();
+            std::io::copy(&mut reader, &mut hasher)?;
+            Ok(Digest::new(algorithm, hex::encode(hasher.finalize())))
+        }
+        Algorithm::Sha512 => {
+            let mut hasher = sha2::Sha512::new();
+            std::io::copy(&mut reader, &mut hasher)?;
+            Ok(Digest::new(algorithm, hex::encode(hasher.finalize())))
+        }
     }
 }

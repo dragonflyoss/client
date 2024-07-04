@@ -15,11 +15,19 @@
  */
 
 use clap::Parser;
+use dragonfly_api::dfdaemon::v2::UploadCacheTaskRequest;
+use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
+use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client_config::{
     default_piece_length, dfcache::default_dfcache_persistent_replica_count,
 };
-use std::path::PathBuf;
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Result,
+};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tracing::error;
 
 // ImportCommand is the subcommand of import.
 #[derive(Debug, Clone, Parser)]
@@ -36,17 +44,17 @@ pub struct ImportCommand {
 
     #[arg(
         long = "application",
-        default_value = "",
+        required = false,
         help = "Caller application which is used for statistics and access control"
     )]
-    application: String,
+    application: Option<String>,
 
     #[arg(
         long = "tag",
-        default_value = "",
+        required = false,
         help = "Different tags for the same file will be divided into different cache tasks"
     )]
-    tag: String,
+    tag: Option<String>,
 
     #[arg(
         long = "piece-length",
@@ -74,8 +82,50 @@ pub struct ImportCommand {
 
 // Implement the execute for ImportCommand.
 impl ImportCommand {
-    pub async fn execute(&self) -> Result<(), anyhow::Error> {
-        println!("ImportCommand is executed!");
+    pub async fn execute(&self, endpoint: &Path) -> Result<()> {
+        self.run(endpoint).await?;
         Ok(())
+    }
+
+    async fn run(&self, endpoint: &Path) -> Result<()> {
+        let dfdaemon_download_client = self
+            .get_dfdaemon_download_client(endpoint.to_path_buf())
+            .await
+            .map_err(|err| {
+                error!("initialize dfdaemon download client failed: {}", err);
+                err
+            })?;
+
+        dfdaemon_download_client
+            .upload_cache_task(UploadCacheTaskRequest {
+                path: self.path.clone().into_os_string().into_string().unwrap(),
+                persistent_replica_count: self.persistent_replica_count,
+                tag: self.tag.clone(),
+                application: self.application.clone(),
+                piece_length: self.piece_length,
+                ttl: Some(
+                    prost_wkt_types::Duration::try_from(self.ttl).or_err(ErrorType::ParseError)?,
+                ),
+                timeout: Some(
+                    prost_wkt_types::Duration::try_from(self.timeout)
+                        .or_err(ErrorType::ParseError)?,
+                ),
+            })
+            .await?;
+        Ok(())
+    }
+
+    // get_and_check_dfdaemon_download_client gets a dfdaemon download client and checks its health.
+    async fn get_dfdaemon_download_client(
+        &self,
+        endpoint: PathBuf,
+    ) -> Result<DfdaemonDownloadClient> {
+        // Check dfdaemon's health.
+        let health_client = HealthClient::new_unix(endpoint.clone()).await?;
+        health_client.check_dfdaemon_download().await?;
+
+        // Get dfdaemon download client.
+        let dfdaemon_download_client = DfdaemonDownloadClient::new_unix(endpoint).await?;
+        Ok(dfdaemon_download_client)
     }
 }
