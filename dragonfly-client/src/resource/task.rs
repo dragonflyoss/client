@@ -88,8 +88,12 @@ impl Task {
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
     ) -> Self {
-        let piece =
-            super::piece::Piece::new(config.clone(), storage.clone(), backend_factory.clone());
+        let piece = super::piece::Piece::new(
+            config.clone(),
+            id_generator.clone(),
+            storage.clone(),
+            backend_factory.clone(),
+        );
         let piece = Arc::new(piece);
 
         Self {
@@ -1349,7 +1353,8 @@ impl Task {
             };
 
             // Fake the download from the local peer.
-            self.piece.download_from_local_peer(piece.length);
+            self.piece
+                .download_from_local_peer(task.id.as_str(), piece.length);
             info!(
                 "finished piece {} from local peer",
                 self.storage.piece_id(task.id.as_str(), piece.number)
