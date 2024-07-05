@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use dragonfly_api::common::v2::TaskType;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Result,
@@ -22,6 +23,15 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use url::Url;
 use uuid::Uuid;
+
+// SEED_PEER_KEY is the key of the seed peer.
+const SEED_PEER_KEY: &str = "seed";
+
+// CACHE_KEY is the key of the cache.
+const CACHE_KEY: &str = "cache";
+
+// PERSISTENT_CACHE_KEY is the key of the persistent cache.
+const PERSISTENT_CACHE_KEY: &str = "persistent";
 
 // IDGenerator is used to generate the id for the resources.
 #[derive(Debug)]
@@ -142,7 +152,7 @@ impl IDGenerator {
                 self.ip,
                 self.hostname,
                 Uuid::new_v4(),
-                "seed",
+                SEED_PEER_KEY,
             );
         }
 
@@ -157,8 +167,8 @@ impl IDGenerator {
                 self.ip,
                 self.hostname,
                 Uuid::new_v4(),
-                "cache",
-                "persistent"
+                CACHE_KEY,
+                PERSISTENT_CACHE_KEY,
             );
         }
 
@@ -167,7 +177,16 @@ impl IDGenerator {
             self.ip,
             self.hostname,
             Uuid::new_v4(),
-            "cache"
+            CACHE_KEY,
         )
+    }
+
+    // task_type generates the task type by the task id.
+    pub fn task_type(&self, id: &str) -> TaskType {
+        if id.contains(CACHE_KEY) {
+            return TaskType::Dfcache;
+        }
+
+        TaskType::Dfdaemon
     }
 }

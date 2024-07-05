@@ -16,11 +16,12 @@
 
 use crate::metrics::{
     collect_download_task_failure_metrics, collect_download_task_finished_metrics,
-    collect_download_task_started_metrics,
+    collect_download_task_started_metrics, collect_upload_task_failure_metrics,
+    collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
 };
 use crate::resource::{cache_task, task};
 use crate::shutdown;
-use dragonfly_api::common::v2::{CacheTask, Task};
+use dragonfly_api::common::v2::{CacheTask, Task, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_download_client::DfdaemonDownloadClient as DfdaemonDownloadGRPCClient,
     dfdaemon_download_server::{
@@ -251,7 +252,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             Ok(task) => {
                 // Collect download task started metrics.
                 collect_download_task_started_metrics(
-                    download.r#type.to_string().as_str(),
+                    download.r#type,
                     download.tag.clone().unwrap_or_default().as_str(),
                     download.application.clone().unwrap_or_default().as_str(),
                     download.priority.to_string().as_str(),
@@ -274,7 +275,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
             // Collect download task failure metrics.
             collect_download_task_failure_metrics(
-                download.r#type.to_string().as_str(),
+                download.r#type,
                 download.tag.clone().unwrap_or_default().as_str(),
                 download.application.clone().unwrap_or_default().as_str(),
                 download.priority.to_string().as_str(),
@@ -301,7 +302,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
                     // Collect download task failure metrics.
                     collect_download_task_failure_metrics(
-                        download.r#type.to_string().as_str(),
+                        download.r#type,
                         download.tag.clone().unwrap_or_default().as_str(),
                         download.application.clone().unwrap_or_default().as_str(),
                         download.priority.to_string().as_str(),
@@ -323,7 +324,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
                     // Collect download task failure metrics.
                     collect_download_task_failure_metrics(
-                        download.r#type.to_string().as_str(),
+                        download.r#type,
                         download.tag.clone().unwrap_or_default().as_str(),
                         download.application.clone().unwrap_or_default().as_str(),
                         download.priority.to_string().as_str(),
@@ -355,7 +356,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                     Ok(_) => {
                         // Collect download task finished metrics.
                         collect_download_task_finished_metrics(
-                            download_clone.r#type.to_string().as_str(),
+                            download_clone.r#type,
                             download_clone.tag.clone().unwrap_or_default().as_str(),
                             download_clone
                                 .application
@@ -409,7 +410,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
                         // Collect download task failure metrics.
                         collect_download_task_failure_metrics(
-                            download_clone.r#type.to_string().as_str(),
+                            download_clone.r#type,
                             download_clone.tag.clone().unwrap_or_default().as_str(),
                             download_clone
                                 .application
@@ -581,6 +582,9 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         &self,
         request: Request<UploadCacheTaskRequest>,
     ) -> Result<Response<CacheTask>, Status> {
+        // Record the start time.
+        let start_time = Instant::now();
+
         // Clone the request.
         let request = request.into_inner();
         let path = Path::new(request.path.as_str());
@@ -619,8 +623,15 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
 
+        // Collect upload task started metrics.
+        collect_upload_task_started_metrics(
+            TaskType::Dfcache as i32,
+            request.tag.clone().unwrap_or_default().as_str(),
+            request.application.clone().unwrap_or_default().as_str(),
+        );
+
         // Create the persistent cache task to local storage.
-        let task = self
+        let task = match self
             .cache_task
             .create_persistent_cache_task(
                 task_id.as_str(),
@@ -629,10 +640,31 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 digest.to_string().as_str(),
             )
             .await
-            .map_err(|err| {
+        {
+            Ok(task) => {
+                // Collect upload task finished metrics.
+                collect_upload_task_finished_metrics(
+                    TaskType::Dfcache as i32,
+                    request.tag.clone().unwrap_or_default().as_str(),
+                    request.application.clone().unwrap_or_default().as_str(),
+                    task.content_length,
+                    start_time.elapsed(),
+                );
+
+                task
+            }
+            Err(err) => {
+                // Collect upload task failure metrics.
+                collect_upload_task_failure_metrics(
+                    TaskType::Dfcache as i32,
+                    request.tag.clone().unwrap_or_default().as_str(),
+                    request.application.clone().unwrap_or_default().as_str(),
+                );
+
                 error!("create persistent cache task: {}", err);
-                Status::internal(err.to_string())
-            })?;
+                return Err(Status::internal(err.to_string()));
+            }
+        };
 
         Ok(Response::new(CacheTask {
             id: task.id,

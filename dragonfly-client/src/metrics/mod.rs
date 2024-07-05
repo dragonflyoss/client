@@ -39,6 +39,34 @@ lazy_static! {
             &["git_version", "git_commit", "platform", "build_time"]
         ).expect("metric can be created");
 
+    // UPLOAD_TASK_COUNT is used to count the number of upload tasks.
+    pub static ref UPLOAD_TASK_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("upload_task_total", "Counter of the number of the upload task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type",  "tag", "app"]
+        ).expect("metric can be created");
+
+    // UPLOAD_TASK_FAILURE_COUNT is used to count the failed number of upload tasks.
+    pub static ref UPLOAD_TASK_FAILURE_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("upload_task_failure_total", "Counter of the number of failed of the upload task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type",  "tag", "app"]
+        ).expect("metric can be created");
+
+    // CONCURRENT_UPLOAD_TASK_GAUGE is used to gauge the number of concurrent upload tasks.
+    pub static ref CONCURRENT_UPLOAD_TASK_GAUGE: IntGaugeVec =
+        IntGaugeVec::new(
+            Opts::new("concurrent_upload_task_total", "Gauge of the number of concurrent of the upload task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type",  "tag", "app"]
+        ).expect("metric can be created");
+
+    // UPLOAD_TASK_DURATION is used to record the upload task duration.
+    pub static ref UPLOAD_TASK_DURATION: HistogramVec =
+        HistogramVec::new(
+            HistogramOpts::new("upload_task_duration_milliseconds", "Histogram of the upload task duration.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME).buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
+            &["task_type", "task_size_level"]
+        ).expect("metric can be created");
+
     // DOWNLOAD_TASK_COUNT is used to count the number of download tasks.
     pub static ref DOWNLOAD_TASK_COUNT: IntCounterVec =
         IntCounterVec::new(
@@ -85,21 +113,21 @@ lazy_static! {
     pub static ref DOWNLOAD_TRAFFIC: IntCounterVec =
         IntCounterVec::new(
             Opts::new("download_traffic", "Counter of the number of the download traffic.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
+            &["type", "task_type"]
         ).expect("metric can be created");
 
     // UPLOAD_TRAFFIC is used to count the upload traffic.
     pub static ref UPLOAD_TRAFFIC: IntCounterVec =
         IntCounterVec::new(
             Opts::new("upload_traffic", "Counter of the number of the upload traffic.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
+            &["task_type"]
         ).expect("metric can be created");
 
     // DOWNLOAD_TASK_DURATION is used to record the download task duration.
     pub static ref DOWNLOAD_TASK_DURATION: HistogramVec =
         HistogramVec::new(
             HistogramOpts::new("download_task_duration_milliseconds", "Histogram of the download task duration.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME).buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
-            &["task_size_level"]
+            &["task_type", "task_size_level"]
         ).expect("metric can be created");
 
     // PROXY_REQUSET_COUNT is used to count the number of proxy requset.
@@ -243,20 +271,64 @@ impl TaskSize {
     }
 }
 
+// collect_upload_task_started_metrics collects the upload task started metrics.
+pub fn collect_upload_task_started_metrics(typ: i32, tag: &str, app: &str) {
+    UPLOAD_TASK_COUNT
+        .with_label_values(&[typ.to_string().as_str(), tag, app])
+        .inc();
+
+    CONCURRENT_UPLOAD_TASK_GAUGE
+        .with_label_values(&[typ.to_string().as_str(), tag, app])
+        .inc();
+}
+
+// collect_upload_task_finished_metrics collects the upload task finished metrics.
+pub fn collect_upload_task_finished_metrics(
+    typ: i32,
+    tag: &str,
+    app: &str,
+    content_length: u64,
+    cost: Duration,
+) {
+    UPLOAD_TASK_DURATION
+        .with_label_values(&[
+            typ.to_string().as_str(),
+            TaskSize::calculate_size_level(content_length)
+                .to_string()
+                .as_str(),
+        ])
+        .observe(cost.as_millis() as f64);
+
+    CONCURRENT_UPLOAD_TASK_GAUGE
+        .with_label_values(&[typ.to_string().as_str(), tag, app])
+        .dec();
+}
+
+// collect_upload_task_failure_metrics collects the upload task failure metrics.
+pub fn collect_upload_task_failure_metrics(typ: i32, tag: &str, app: &str) {
+    UPLOAD_TASK_FAILURE_COUNT
+        .with_label_values(&[typ.to_string().as_str(), tag, app])
+        .inc();
+
+    CONCURRENT_UPLOAD_TASK_GAUGE
+        .with_label_values(&[typ.to_string().as_str(), tag, app])
+        .dec();
+}
+
 // collect_download_task_started_metrics collects the download task started metrics.
-pub fn collect_download_task_started_metrics(typ: &str, tag: &str, app: &str, priority: &str) {
+pub fn collect_download_task_started_metrics(typ: i32, tag: &str, app: &str, priority: &str) {
     DOWNLOAD_TASK_COUNT
-        .with_label_values(&[typ, tag, app, priority])
+        .with_label_values(&[typ.to_string().as_str(), tag, app, priority])
         .inc();
 
     CONCURRENT_DOWNLOAD_TASK_GAUGE
-        .with_label_values(&[typ, tag, app, priority])
+        .with_label_values(&[typ.to_string().as_str(), tag, app, priority])
         .inc();
 }
 
 // collect_download_task_finished_metrics collects the download task finished metrics.
 pub fn collect_download_task_finished_metrics(
-    typ: &str,
+    typ: i32,
     tag: &str,
     app: &str,
     priority: &str,
@@ -270,43 +342,46 @@ pub fn collect_download_task_finished_metrics(
     };
 
     DOWNLOAD_TASK_DURATION
-        .with_label_values(&[TaskSize::calculate_size_level(size).to_string().as_str()])
+        .with_label_values(&[
+            typ.to_string().as_str(),
+            TaskSize::calculate_size_level(size).to_string().as_str(),
+        ])
         .observe(cost.as_millis() as f64);
 
     CONCURRENT_DOWNLOAD_TASK_GAUGE
-        .with_label_values(&[typ, tag, app, priority])
+        .with_label_values(&[typ.to_string().as_str(), tag, app, priority])
         .dec();
 }
 
 // collect_download_task_failure_metrics collects the download task failure metrics.
-pub fn collect_download_task_failure_metrics(typ: &str, tag: &str, app: &str, priority: &str) {
+pub fn collect_download_task_failure_metrics(typ: i32, tag: &str, app: &str, priority: &str) {
     DOWNLOAD_TASK_FAILURE_COUNT
-        .with_label_values(&[typ, tag, app, priority])
+        .with_label_values(&[typ.to_string().as_str(), tag, app, priority])
         .inc();
 
     CONCURRENT_DOWNLOAD_TASK_GAUGE
-        .with_label_values(&[typ, tag, app, priority])
+        .with_label_values(&[typ.to_string().as_str(), tag, app, priority])
         .dec();
 }
 
 // collect_prefetch_task_started_metrics collects the prefetch task started metrics.
-pub fn collect_prefetch_task_started_metrics(typ: &str, tag: &str, app: &str, priority: &str) {
+pub fn collect_prefetch_task_started_metrics(typ: i32, tag: &str, app: &str, priority: &str) {
     PREFETCH_TASK_COUNT
-        .with_label_values(&[typ, tag, app, priority])
+        .with_label_values(&[typ.to_string().as_str(), tag, app, priority])
         .inc();
 }
 
 // collect_prefetch_task_failure_metrics collects the prefetch task failure metrics.
-pub fn collect_prefetch_task_failure_metrics(typ: &str, tag: &str, app: &str, priority: &str) {
+pub fn collect_prefetch_task_failure_metrics(typ: i32, tag: &str, app: &str, priority: &str) {
     PREFETCH_TASK_FAILURE_COUNT
-        .with_label_values(&[typ, tag, app, priority])
+        .with_label_values(&[typ.to_string().as_str(), tag, app, priority])
         .inc();
 }
 
 // collect_download_piece_traffic_metrics collects the download piece traffic metrics.
-pub fn collect_download_piece_traffic_metrics(typ: &TrafficType, length: u64) {
+pub fn collect_download_piece_traffic_metrics(typ: &TrafficType, task_type: i32, length: u64) {
     DOWNLOAD_TRAFFIC
-        .with_label_values(&[typ.as_str_name()])
+        .with_label_values(&[typ.as_str_name(), task_type.to_string().as_str()])
         .inc_by(length);
 }
 
@@ -321,8 +396,10 @@ pub fn collect_upload_piece_finished_metrics() {
 }
 
 // collect_upload_piece_traffic_metrics collects the upload piece traffic metrics.
-pub fn collect_upload_piece_traffic_metrics(length: u64) {
-    UPLOAD_TRAFFIC.with_label_values(&[]).inc_by(length);
+pub fn collect_upload_piece_traffic_metrics(task_type: i32, length: u64) {
+    UPLOAD_TRAFFIC
+        .with_label_values(&[task_type.to_string().as_str()])
+        .inc_by(length);
 }
 
 // collect_upload_piece_failure_metrics collects the upload piece failure metrics.

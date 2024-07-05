@@ -64,7 +64,7 @@ pub async fn prefetch_task(
         .remove(reqwest::header::RANGE.as_str());
 
     // Get the fields from the download task.
-    let task_type = download.r#type.to_string();
+    let task_type = download.r#type;
     let tag = download.tag.clone();
     let application = download.application.clone();
     let priority = download.priority;
@@ -80,7 +80,7 @@ pub async fn prefetch_task(
 
     // Collect the prefetch task started metrics.
     collect_prefetch_task_started_metrics(
-        task_type.as_str(),
+        task_type,
         tag.clone().unwrap_or_default().as_str(),
         application.clone().unwrap_or_default().as_str(),
         priority.to_string().as_str(),
@@ -100,7 +100,7 @@ pub async fn prefetch_task(
                     Err(err) => {
                         // Collect the prefetch task failure metrics.
                         collect_prefetch_task_failure_metrics(
-                            task_type.as_str(),
+                            task_type,
                             tag.clone().unwrap_or_default().as_str(),
                             application.clone().unwrap_or_default().as_str(),
                             priority.to_string().as_str(),

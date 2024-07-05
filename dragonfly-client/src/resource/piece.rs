@@ -25,6 +25,7 @@ use dragonfly_client_backend::{BackendFactory, GetRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{error::BackendError, Error, Result};
 use dragonfly_client_storage::{metadata, Storage};
+use dragonfly_client_util::id_generator::IDGenerator;
 use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
@@ -37,6 +38,9 @@ use tracing::{error, info};
 pub struct Piece {
     // config is the configuration of the dfdaemon.
     config: Arc<Config>,
+
+    // id_generator is the id generator.
+    id_generator: Arc<IDGenerator>,
 
     // manager_client is the grpc client of the manager.
     storage: Arc<Storage>,
@@ -56,11 +60,13 @@ impl Piece {
     // new returns a new Piece.
     pub fn new(
         config: Arc<Config>,
+        id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
         backend_factory: Arc<BackendFactory>,
     ) -> Self {
         Self {
             config: config.clone(),
+            id_generator,
             storage,
             backend_factory,
             download_rate_limiter: Arc::new(
@@ -260,7 +266,10 @@ impl Piece {
             .upload_piece(task_id, number, range)
             .await
             .map(|reader| {
-                collect_upload_piece_traffic_metrics(length);
+                collect_upload_piece_traffic_metrics(
+                    self.id_generator.task_type(task_id) as i32,
+                    length,
+                );
                 reader
             })
     }
@@ -285,8 +294,12 @@ impl Piece {
 
     // download_from_local_peer downloads a single piece from a local peer. Fake the download piece
     // from the local peer, just collect the metrics.
-    pub fn download_from_local_peer(&self, length: u64) {
-        collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
+    pub fn download_from_local_peer(&self, task_id: &str, length: u64) {
+        collect_download_piece_traffic_metrics(
+            &TrafficType::LocalPeer,
+            self.id_generator.task_type(task_id) as i32,
+            length,
+        );
     }
 
     // download_from_remote_peer downloads a single piece from a remote peer.
@@ -396,7 +409,11 @@ impl Piece {
                 Error::PieceNotFound(number.to_string())
             })
             .map(|piece| {
-                collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
+                collect_download_piece_traffic_metrics(
+                    &TrafficType::RemotePeer,
+                    self.id_generator.task_type(task_id) as i32,
+                    length,
+                );
                 piece
             })
     }
@@ -506,7 +523,11 @@ impl Piece {
                 Error::PieceNotFound(number.to_string())
             })
             .map(|piece| {
-                collect_download_piece_traffic_metrics(&TrafficType::BackToSource, length);
+                collect_download_piece_traffic_metrics(
+                    &TrafficType::BackToSource,
+                    self.id_generator.task_type(task_id) as i32,
+                    length,
+                );
                 piece
             })
     }
