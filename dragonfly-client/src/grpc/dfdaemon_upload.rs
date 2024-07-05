@@ -230,7 +230,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             Ok(task) => {
                 // Collect download task started metrics.
                 collect_download_task_started_metrics(
-                    download.r#type.to_string().as_str(),
+                    download.r#type,
                     download.tag.clone().unwrap_or_default().as_str(),
                     download.application.clone().unwrap_or_default().as_str(),
                     download.priority.to_string().as_str(),
@@ -253,7 +253,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
             // Collect download task failure metrics.
             collect_download_task_failure_metrics(
-                download.r#type.to_string().as_str(),
+                download.r#type,
                 download.tag.clone().unwrap_or_default().as_str(),
                 download.application.clone().unwrap_or_default().as_str(),
                 download.priority.to_string().as_str(),
@@ -281,7 +281,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                     // Collect download task failure metrics.
                     collect_download_task_failure_metrics(
-                        download.r#type.to_string().as_str(),
+                        download.r#type,
                         download.tag.clone().unwrap_or_default().as_str(),
                         download.application.clone().unwrap_or_default().as_str(),
                         download.priority.to_string().as_str(),
@@ -303,7 +303,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                     // Collect download task failure metrics.
                     collect_download_task_failure_metrics(
-                        download.r#type.to_string().as_str(),
+                        download.r#type,
                         download.tag.clone().unwrap_or_default().as_str(),
                         download.application.clone().unwrap_or_default().as_str(),
                         download.priority.to_string().as_str(),
@@ -335,7 +335,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     Ok(_) => {
                         // Collect download task finished metrics.
                         collect_download_task_finished_metrics(
-                            download_clone.r#type.to_string().as_str(),
+                            download_clone.r#type,
                             download_clone.tag.clone().unwrap_or_default().as_str(),
                             download_clone
                                 .application
@@ -389,7 +389,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                         // Collect download task failure metrics.
                         collect_download_task_failure_metrics(
-                            download_clone.r#type.to_string().as_str(),
+                            download_clone.r#type,
                             download_clone.tag.clone().unwrap_or_default().as_str(),
                             download_clone
                                 .application
