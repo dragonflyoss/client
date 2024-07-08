@@ -124,11 +124,18 @@ impl Storage {
     }
 
     // delete_task deletes the task metadatas, task content and piece metadatas.
-    pub async fn delete_task(&self, id: &str) -> Result<()> {
-        self.metadata.delete_task(id)?;
-        self.metadata.delete_pieces(id)?;
-        self.content.delete_task(id).await?;
-        Ok(())
+    pub async fn delete_task(&self, id: &str) {
+        self.metadata
+            .delete_task(id)
+            .unwrap_or_else(|err| error!("delete task metadata failed: {}", err));
+
+        self.metadata.delete_pieces(id).unwrap_or_else(|err| {
+            error!("delete piece metadatas failed: {}", err);
+        });
+
+        self.content.delete_task(id).await.unwrap_or_else(|err| {
+            error!("delete task content failed: {}", err);
+        });
     }
 
     // create_persistent_cache_task creates a new persistent cache task.
@@ -194,10 +201,17 @@ impl Storage {
     }
 
     // delete_cache_task deletes the cache task metadatas, cache task content and piece metadatas.
-    pub async fn delete_cache_task(&self, id: &str) -> Result<()> {
-        self.metadata.delete_cache_task(id)?;
-        self.content.delete_cache_task(id).await?;
-        Ok(())
+    pub async fn delete_cache_task(&self, id: &str) {
+        self.metadata.delete_cache_task(id).unwrap_or_else(|err| {
+            error!("delete cache task metadata failed: {}", err);
+        });
+
+        self.content
+            .delete_cache_task(id)
+            .await
+            .unwrap_or_else(|err| {
+                error!("delete cache task content failed: {}", err);
+            });
     }
 
     // download_piece_started updates the metadata of the piece and writes
