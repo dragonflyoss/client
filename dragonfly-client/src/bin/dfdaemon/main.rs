@@ -200,6 +200,7 @@ async fn main() -> Result<(), anyhow::Error> {
         storage.clone(),
         scheduler_client.clone(),
     );
+    let cache_task = Arc::new(cache_task);
 
     // Initialize health server.
     let health = Health::new(
@@ -260,6 +261,7 @@ async fn main() -> Result<(), anyhow::Error> {
         config.clone(),
         SocketAddr::new(config.upload.server.ip.unwrap(), config.upload.server.port),
         task.clone(),
+        cache_task.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
@@ -268,7 +270,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut dfdaemon_download_grpc = DfdaemonDownloadServer::new(
         config.download.server.socket_path.clone(),
         task.clone(),
-        cache_task,
+        cache_task.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );

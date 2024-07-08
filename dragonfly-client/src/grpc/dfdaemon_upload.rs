@@ -15,13 +15,15 @@
  */
 
 use crate::metrics::{
+    collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
     collect_download_task_failure_metrics, collect_download_task_finished_metrics,
-    collect_download_task_started_metrics, collect_upload_piece_failure_metrics,
+    collect_download_task_started_metrics, collect_stat_task_failure_metrics,
+    collect_stat_task_started_metrics, collect_upload_piece_failure_metrics,
     collect_upload_piece_finished_metrics, collect_upload_piece_started_metrics,
 };
-use crate::resource::task;
+use crate::resource::{cache_task, task};
 use crate::shutdown;
-use dragonfly_api::common::v2::{CacheTask, Piece};
+use dragonfly_api::common::v2::{CacheTask, Piece, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient,
     dfdaemon_upload_server::{DfdaemonUpload, DfdaemonUploadServer as DfdaemonUploadGRPCServer},
@@ -73,6 +75,7 @@ impl DfdaemonUploadServer {
         config: Arc<Config>,
         addr: SocketAddr,
         task: Arc<task::Task>,
+        cache_task: Arc<cache_task::CacheTask>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -80,6 +83,7 @@ impl DfdaemonUploadServer {
         let service = DfdaemonUploadGRPCServer::new(DfdaemonUploadServerHandler {
             socket_path: config.download.server.socket_path.clone(),
             task,
+            cache_task,
         })
         .max_decoding_message_size(usize::MAX)
         .max_encoding_message_size(usize::MAX);
@@ -135,6 +139,9 @@ pub struct DfdaemonUploadServerHandler {
 
     // task is the task manager.
     task: Arc<task::Task>,
+
+    // cache_task is the cache task manager.
+    cache_task: Arc<cache_task::CacheTask>,
 }
 
 // DfdaemonUploadServerHandler implements the dfdaemon upload grpc service.
@@ -701,17 +708,45 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         unimplemented!()
     }
 
-    // TODO: Implement this.
     // stat_cache_task stats the cache task.
+    #[instrument(skip_all, fields(host_id, task_id))]
     async fn stat_cache_task(
         &self,
-        _request: Request<StatCacheTaskRequest>,
+        request: Request<StatCacheTaskRequest>,
     ) -> Result<Response<CacheTask>, Status> {
-        unimplemented!()
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+
+        // Collect the stat cache task started metrics.
+        collect_stat_task_started_metrics(TaskType::Dfcache as i32);
+
+        let task = self
+            .cache_task
+            .stat(task_id.as_str(), host_id.as_str())
+            .await
+            .map_err(|err| {
+                // Collect the stat cache task failure metrics.
+                collect_stat_task_failure_metrics(TaskType::Dfcache as i32);
+
+                error!("stat cache task: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        Ok(Response::new(task))
     }
 
-    // TODO: Implement this.
     // delete_cache_task deletes the cache task.
+    #[instrument(skip_all, fields(host_id, task_id))]
     async fn delete_cache_task(
         &self,
         request: Request<DeleteCacheTaskRequest>,
@@ -729,13 +764,18 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
 
-        // Delete the task from the scheduler.
-        self.task
-            .delete_task(task_id.as_str())
+        // Collect the delete cache task started metrics.
+        collect_delete_task_started_metrics(TaskType::Dfcache as i32);
+
+        self.cache_task
+            .delete(task_id.as_str(), host_id.as_str())
             .await
             .map_err(|err| {
+                // Collect the delete cache task failure metrics.
+                collect_delete_task_failure_metrics(TaskType::Dfcache as i32);
+
                 error!("delete cache task: {}", err);
-                Status::invalid_argument(err.to_string())
+                Status::internal(err.to_string())
             })?;
 
         Ok(Response::new(()))

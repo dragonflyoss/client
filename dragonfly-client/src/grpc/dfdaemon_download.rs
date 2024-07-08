@@ -15,8 +15,11 @@
  */
 
 use crate::metrics::{
+    collect_delete_host_failure_metrics, collect_delete_host_started_metrics,
+    collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
     collect_download_task_failure_metrics, collect_download_task_finished_metrics,
-    collect_download_task_started_metrics, collect_upload_task_failure_metrics,
+    collect_download_task_started_metrics, collect_stat_task_failure_metrics,
+    collect_stat_task_started_metrics, collect_upload_task_failure_metrics,
     collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
 };
 use crate::resource::{cache_task, task};
@@ -32,9 +35,7 @@ use dragonfly_api::dfdaemon::v2::{
     StatTaskRequest as DfdaemonStatTaskRequest, UploadCacheTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
-use dragonfly_api::scheduler::v2::{
-    DeleteHostRequest as SchedulerDeleteHostRequest, StatTaskRequest as SchedulerStatTaskRequest,
-};
+use dragonfly_api::scheduler::v2::DeleteHostRequest as SchedulerDeleteHostRequest;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error as ClientError, Result as ClientResult,
@@ -78,14 +79,14 @@ impl DfdaemonDownloadServer {
     pub fn new(
         socket_path: PathBuf,
         task: Arc<task::Task>,
-        cache_task: cache_task::CacheTask,
+        cache_task: Arc<cache_task::CacheTask>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
         // Initialize the grpc service.
         let service = DfdaemonDownloadGRPCServer::new(DfdaemonDownloadServerHandler {
             socket_path: socket_path.clone(),
-            task: task.clone(),
+            task,
             cache_task,
         })
         .max_decoding_message_size(usize::MAX)
@@ -156,7 +157,7 @@ pub struct DfdaemonDownloadServerHandler {
     task: Arc<task::Task>,
 
     // cache_task is the cache task manager.
-    cache_task: cache_task::CacheTask,
+    cache_task: Arc<cache_task::CacheTask>,
 }
 
 // DfdaemonDownloadServerHandler implements the dfdaemon download grpc service.
@@ -496,27 +497,27 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
 
+        // Collect the stat task metrics.
+        collect_stat_task_started_metrics(TaskType::Dfdaemon as i32);
+
         // Get the task from the scheduler.
         let task = self
             .task
-            .scheduler_client
-            .stat_task(
-                task_id.as_str(),
-                SchedulerStatTaskRequest {
-                    task_id: task_id.clone(),
-                },
-            )
+            .stat(task_id.as_str(), host_id.as_str())
             .await
-            .map_err(|e| {
-                error!("stat task: {}", e);
-                Status::internal(e.to_string())
+            .map_err(|err| {
+                // Collect the stat task failure metrics.
+                collect_stat_task_failure_metrics(TaskType::Dfdaemon as i32);
+
+                error!("stat task: {}", err);
+                Status::internal(err.to_string())
             })?;
 
         Ok(Response::new(task))
     }
 
     // delete_task calls the dfdaemon to delete the task.
-    #[instrument(skip_all)]
+    #[instrument(skip_all, fields(host_id, task_id))]
     async fn delete_task(
         &self,
         request: Request<DeleteTaskRequest>,
@@ -534,28 +535,41 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
 
+        // Collect the delete task started metrics.
+        collect_delete_task_started_metrics(TaskType::Dfdaemon as i32);
+
         // Delete the task from the scheduler.
-        self.task
-            .delete_task(task_id.as_str())
-            .await
-            .map_err(|err| {
-                error!("delete task: {}", err);
-                Status::invalid_argument(err.to_string())
-            })?;
+        self.task.delete(task_id.as_str()).await.map_err(|err| {
+            // Collect the delete task failure metrics.
+            collect_delete_task_failure_metrics(TaskType::Dfdaemon as i32);
+
+            error!("delete task: {}", err);
+            Status::internal(err.to_string())
+        })?;
 
         Ok(Response::new(()))
     }
 
     // delete_host calls the scheduler to delete the host.
-    #[instrument(skip_all)]
+    #[instrument(skip_all, fields(host_id))]
     async fn delete_host(&self, _: Request<()>) -> Result<Response<()>, Status> {
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Span record the host id.
+        Span::current().record("host_id", host_id.as_str());
+
+        // Collect the delete host started metrics.
+        collect_delete_host_started_metrics();
+
         self.task
             .scheduler_client
-            .delete_host(SchedulerDeleteHostRequest {
-                host_id: self.task.id_generator.host_id(),
-            })
+            .delete_host(SchedulerDeleteHostRequest { host_id })
             .await
             .map_err(|e| {
+                // Collect the delete host failure metrics.
+                collect_delete_host_failure_metrics();
+
                 error!("delete host: {}", e);
                 Status::internal(e.to_string())
             })?;
@@ -671,22 +685,77 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(task))
     }
 
-    // TODO: Implement this.
     // stat_cache_task stats the cache task.
+    #[instrument(skip_all, fields(host_id, task_id))]
     async fn stat_cache_task(
         &self,
-        _request: Request<StatCacheTaskRequest>,
+        request: Request<StatCacheTaskRequest>,
     ) -> Result<Response<CacheTask>, Status> {
-        unimplemented!()
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+
+        // Collect the stat cache task started metrics.
+        collect_stat_task_started_metrics(TaskType::Dfcache as i32);
+
+        let task = self
+            .cache_task
+            .stat(task_id.as_str(), host_id.as_str())
+            .await
+            .map_err(|err| {
+                // Collect the stat cache task failure metrics.
+                collect_stat_task_failure_metrics(TaskType::Dfcache as i32);
+
+                error!("stat cache task: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        Ok(Response::new(task))
     }
 
-    // TODO: Implement this.
     // delete_cache_task deletes the cache task.
+    #[instrument(skip_all, fields(host_id, task_id))]
     async fn delete_cache_task(
         &self,
-        _request: Request<DeleteCacheTaskRequest>,
+        request: Request<DeleteCacheTaskRequest>,
     ) -> Result<Response<()>, Status> {
-        unimplemented!()
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+
+        // Collect the delete cache task started metrics.
+        collect_delete_task_started_metrics(TaskType::Dfcache as i32);
+
+        self.cache_task
+            .delete(task_id.as_str(), host_id.as_str())
+            .await
+            .map_err(|err| {
+                // Collect the delete cache task failure metrics.
+                collect_delete_task_failure_metrics(TaskType::Dfcache as i32);
+
+                error!("delete cache task: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        Ok(Response::new(()))
     }
 }
 
