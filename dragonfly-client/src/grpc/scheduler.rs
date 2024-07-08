@@ -78,7 +78,7 @@ pub struct SchedulerClient {
 
     // new add: cooldown_duration is the scheduler's cooldown time (in seconds)
     #[allow(dead_code)]
-    cooldown_duration_secs: u64,
+    cooldown_duration: u64,
 
     // new add: Maximum retry attempts
     #[allow(dead_code)]
@@ -99,7 +99,7 @@ impl SchedulerClient {
             available_scheduler_addrs: Arc::new(RwLock::new(Vec::new())),
             hashring: Arc::new(RwLock::new(HashRing::new())),
             unavailable_schedulers: Arc::new(RwLock::new(HashMap::new())),
-            cooldown_duration_secs: 60,
+            cooldown_duration: 60,
             max_attempts: 5,
             refresh_threshold: 10,
         };
@@ -511,7 +511,7 @@ impl SchedulerClient {
 
         // Minimize lock holding time to reduce conflicts
         // let config_data = self.dynconfig.data.read().await;
-        let cooldown_duration = Duration::from_secs(self.cooldown_duration_secs);
+        let cooldown_duration = Duration::from_secs(self.cooldown_duration);
         let max_attempts = self.max_attempts;
         let refresh_threshold = self.refresh_threshold;
 
@@ -569,11 +569,11 @@ impl SchedulerClient {
 
     async fn try_client(&self, scheduler_addr: &SocketAddr) -> Result<Channel> {
         info!("try to connect {:?}", scheduler_addr);
-        let real_addr = format!("http://{}", scheduler_addr);
-        let health_client = match HealthClient::new(&real_addr).await {
+        let addr = format!("http://{}", scheduler_addr);
+        let health_client = match HealthClient::new(&addr).await {
             Ok(client) => client,
             Err(err) => {
-                error!("create {} health client failed: {}", real_addr, err);
+                error!("create {} health client failed: {}", addr, err);
                 error!("check scheduler health failed: {}", err);
                 return Err(ExternalError::new(ErrorType::ConnectError)
                     .with_cause(Box::new(err))
