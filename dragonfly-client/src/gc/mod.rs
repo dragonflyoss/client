@@ -105,12 +105,7 @@ impl GC {
                     continue;
                 }
 
-                self.storage
-                    .delete_task(&task.id)
-                    .await
-                    .unwrap_or_else(|err| {
-                        info!("failed to evict task {}: {}", task.id, err);
-                    });
+                self.storage.delete_task(&task.id).await;
                 info!("evict task {}", task.id);
 
                 self.delete_task_from_scheduler(task.clone()).await;
@@ -176,10 +171,7 @@ impl GC {
             };
 
             // Evict the task.
-            if let Err(err) = self.storage.delete_task(&task.id).await {
-                info!("failed to evict task {}: {}", task.id, err);
-                continue;
-            }
+            self.storage.delete_task(&task.id).await;
 
             // Update the evicted space.
             evicted_space += task_space;

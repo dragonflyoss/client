@@ -635,9 +635,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             .cache_task
             .create_persistent_cache_task(
                 task_id.as_str(),
+                host_id.as_str(),
+                peer_id.as_str(),
                 path,
-                request.piece_length,
                 digest.to_string().as_str(),
+                request.clone(),
             )
             .await
         {
@@ -666,24 +668,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             }
         };
 
-        Ok(Response::new(CacheTask {
-            id: task.id,
-            persistent_replica_count: request.persistent_replica_count,
-            // TODO: Return from scheduler.
-            replica_count: 0,
-            digest: digest.to_string(),
-            tag: request.tag,
-            application: request.application,
-            piece_length: request.piece_length,
-            content_length: task.content_length,
-            // TODO: Return from scheduler.
-            piece_count: 0,
-            // TODO: Return from scheduler.
-            state: "".to_string(),
-            ttl: request.ttl,
-            created_at: Some(prost_wkt_types::Timestamp::from(task.created_at)),
-            updated_at: Some(prost_wkt_types::Timestamp::from(task.updated_at)),
-        }))
+        Ok(Response::new(task))
     }
 
     // TODO: Implement this.
