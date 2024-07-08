@@ -205,13 +205,13 @@ struct Args {
 
     #[arg(
         long,
-        help = "Specify the access key ID of the Object Storage Services"
+        help = "Specify the access key ID of the Object Storage Services. It should be provided with `access_key_secret` at the same time."
     )]
     access_key_id: Option<String>,
 
     #[arg(
         long,
-        help = "Specify the access key secret of the Object Storage Services"
+        help = "Specify the access key secret of the Object Storage Services. It should be provided with `access_key_id` at the same time."
     )]
     access_key_secret: Option<String>,
 }
@@ -382,6 +382,8 @@ async fn run(args: Args) -> Result<()> {
 
     let mut object_storage = None;
 
+    // Only when the `access_key_id` and `access_key_secret` are provided at the same time,
+    // they will be pass to the `DownloadTaskRequest`.
     if let (Some(access_key_id), Some(access_key_secret)) =
         (args.access_key_id, args.access_key_secret)
     {

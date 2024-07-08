@@ -55,7 +55,7 @@ pub struct HeadRequest {
     // client_certs is the client certificates for the request.
     pub client_certs: Option<Vec<CertificateDer<'static>>>,
 
-    // recursive is to define whether to traverse the directory recersively
+    // recursive is to define whether to traverse the directory recersively.
     pub recursive: bool,
 
     // object_storage is the object storage related information.
@@ -79,7 +79,7 @@ pub struct HeadResponse {
     // error_message is the error message of the response.
     pub error_message: Option<String>,
 
-    // entries the the entries of directory
+    // entries is the entries of directory.
     pub entries: Option<Vec<DirEntry>>,
 }
 
@@ -229,6 +229,10 @@ impl BackendFactory {
         self.backends
             .insert("https".to_string(), Box::new(http::HTTP::new()));
         info!("load [https] builtin backend ");
+
+        self.backends
+            .insert("oss".to_string(), Box::new(oss::OSS::new()));
+        info!("load [oss] builtin backend ");
     }
 
     // load_plugin_backends loads the plugin backends.
