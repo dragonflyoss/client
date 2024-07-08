@@ -188,13 +188,10 @@ impl GC {
     // delete_task_from_scheduler deletes the task from the scheduler.
     async fn delete_task_from_scheduler(&self, task: metadata::Task) {
         self.scheduler_client
-            .delete_task(
-                task.id.as_str(),
-                DeleteTaskRequest {
-                    host_id: self.host_id.clone(),
-                    task_id: task.id.clone(),
-                },
-            )
+            .delete_task(DeleteTaskRequest {
+                host_id: self.host_id.clone(),
+                task_id: task.id.clone(),
+            })
             .await
             .unwrap_or_else(|err| {
                 error!("failed to delete peer {}: {}", task.id, err);

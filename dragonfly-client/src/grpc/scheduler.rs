@@ -101,17 +101,23 @@ impl SchedulerClient {
 
     // stat_peer gets the status of the peer.
     #[instrument(skip(self))]
-    pub async fn stat_peer(&self, task_id: &str, request: StatPeerRequest) -> Result<Peer> {
+    pub async fn stat_peer(&self, request: StatPeerRequest) -> Result<Peer> {
+        let task_id = request.task_id.clone();
         let request = Self::make_request(request);
-        let response = self.client(task_id, None).await?.stat_peer(request).await?;
+        let response = self
+            .client(task_id.as_str(), None)
+            .await?
+            .stat_peer(request)
+            .await?;
         Ok(response.into_inner())
     }
 
     // delete_peer tells the scheduler that the peer is deleting.
     #[instrument(skip(self))]
-    pub async fn delete_peer(&self, task_id: &str, request: DeletePeerRequest) -> Result<()> {
+    pub async fn delete_peer(&self, request: DeletePeerRequest) -> Result<()> {
+        let task_id = request.task_id.clone();
         let request = Self::make_request(request);
-        self.client(task_id, None)
+        self.client(task_id.as_str(), None)
             .await?
             .delete_peer(request)
             .await?;
@@ -120,17 +126,23 @@ impl SchedulerClient {
 
     // stat_task gets the status of the task.
     #[instrument(skip(self))]
-    pub async fn stat_task(&self, task_id: &str, request: StatTaskRequest) -> Result<Task> {
+    pub async fn stat_task(&self, request: StatTaskRequest) -> Result<Task> {
+        let task_id = request.task_id.clone();
         let request = Self::make_request(request);
-        let response = self.client(task_id, None).await?.stat_task(request).await?;
+        let response = self
+            .client(task_id.as_str(), None)
+            .await?
+            .stat_task(request)
+            .await?;
         Ok(response.into_inner())
     }
 
     // delete_task tells the scheduler that the task is deleting.
     #[instrument(skip(self))]
-    pub async fn delete_task(&self, task_id: &str, request: DeleteTaskRequest) -> Result<()> {
+    pub async fn delete_task(&self, request: DeleteTaskRequest) -> Result<()> {
+        let task_id = request.task_id.clone();
         let request = Self::make_request(request);
-        self.client(task_id, None)
+        self.client(task_id.as_str(), None)
             .await?
             .delete_task(request)
             .await?;
@@ -320,14 +332,11 @@ impl SchedulerClient {
 
     // stat_cache_peer gets the status of the cache peer.
     #[instrument(skip(self))]
-    pub async fn stat_cache_peer(
-        &self,
-        task_id: &str,
-        request: StatCachePeerRequest,
-    ) -> Result<CachePeer> {
+    pub async fn stat_cache_peer(&self, request: StatCachePeerRequest) -> Result<CachePeer> {
+        let task_id = request.task_id.clone();
         let request = Self::make_request(request);
         let response = self
-            .client(task_id, None)
+            .client(task_id.as_str(), None)
             .await?
             .stat_cache_peer(request)
             .await?;
@@ -336,13 +345,10 @@ impl SchedulerClient {
 
     // delete_cache_peer tells the scheduler that the cache peer is deleting.
     #[instrument(skip(self))]
-    pub async fn delete_cache_peer(
-        &self,
-        task_id: &str,
-        request: DeleteCachePeerRequest,
-    ) -> Result<()> {
+    pub async fn delete_cache_peer(&self, request: DeleteCachePeerRequest) -> Result<()> {
+        let task_id = request.task_id.clone();
         let request = Self::make_request(request);
-        self.client(task_id, None)
+        self.client(task_id.as_str(), None)
             .await?
             .delete_cache_peer(request)
             .await?;
@@ -353,11 +359,11 @@ impl SchedulerClient {
     #[instrument(skip(self))]
     pub async fn upload_cache_task_started(
         &self,
-        task_id: &str,
         request: UploadCacheTaskStartedRequest,
     ) -> Result<()> {
+        let task_id = request.task_id.clone();
         let request = Self::make_request(request);
-        self.client(task_id, None)
+        self.client(task_id.as_str(), None)
             .await?
             .upload_cache_task_started(request)
             .await?;
@@ -367,12 +373,12 @@ impl SchedulerClient {
     // upload_cache_task_finished uploads the metadata of the cache task finished.
     pub async fn upload_cache_task_finished(
         &self,
-        task_id: &str,
         request: UploadCacheTaskFinishedRequest,
     ) -> Result<CacheTask> {
+        let task_id = request.task_id.clone();
         let request = Self::make_request(request);
         let response = self
-            .client(task_id, None)
+            .client(task_id.as_str(), None)
             .await?
             .upload_cache_task_finished(request)
             .await?;
@@ -382,11 +388,11 @@ impl SchedulerClient {
     // upload_cache_task_failed uploads the metadata of the cache task failed.
     pub async fn upload_cache_task_failed(
         &self,
-        task_id: &str,
         request: UploadCacheTaskFailedRequest,
     ) -> Result<()> {
+        let task_id = request.task_id.clone();
         let request = Self::make_request(request);
-        self.client(task_id, None)
+        self.client(task_id.as_str(), None)
             .await?
             .upload_cache_task_failed(request)
             .await?;
@@ -395,14 +401,11 @@ impl SchedulerClient {
 
     // stat_cache_task gets the status of the cache task.
     #[instrument(skip(self))]
-    pub async fn stat_cache_task(
-        &self,
-        task_id: &str,
-        request: StatCacheTaskRequest,
-    ) -> Result<CacheTask> {
+    pub async fn stat_cache_task(&self, request: StatCacheTaskRequest) -> Result<CacheTask> {
+        let task_id = request.task_id.clone();
         let request = Self::make_request(request);
         let response = self
-            .client(task_id, None)
+            .client(task_id.as_str(), None)
             .await?
             .stat_cache_task(request)
             .await?;
@@ -411,13 +414,10 @@ impl SchedulerClient {
 
     // delete_cache_task tells the scheduler that the cache task is deleting.
     #[instrument(skip(self))]
-    pub async fn delete_cache_task(
-        &self,
-        task_id: &str,
-        request: DeleteCacheTaskRequest,
-    ) -> Result<()> {
+    pub async fn delete_cache_task(&self, request: DeleteCacheTaskRequest) -> Result<()> {
+        let task_id = request.task_id.clone();
         let request = Self::make_request(request);
-        self.client(task_id, None)
+        self.client(task_id.as_str(), None)
             .await?
             .delete_cache_task(request)
             .await?;
