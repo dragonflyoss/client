@@ -104,6 +104,7 @@ impl crate::Backend for HTTP {
             http_header: Some(header),
             http_status_code: Some(status_code),
             error_message: Some(status_code.to_string()),
+            entries: None,
         })
     }
 
@@ -182,6 +183,7 @@ mod tests {
                 timeout: std::time::Duration::from_secs(5),
                 client_certs: None,
                 object_storage: None,
+                recursive: false,
             })
             .await
             .unwrap();
@@ -208,6 +210,7 @@ mod tests {
                 timeout: std::time::Duration::from_secs(5),
                 client_certs: None,
                 object_storage: None,
+                recursive: false,
             })
             .await;
 

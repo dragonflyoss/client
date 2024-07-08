@@ -144,6 +144,7 @@ impl Task {
                 timeout: self.config.download.piece_timeout,
                 client_certs: None,
                 object_storage: download.object_storage,
+                recursive: false,
             })
             .await?;
 
