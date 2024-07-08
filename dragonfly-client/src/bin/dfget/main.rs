@@ -392,6 +392,7 @@ async fn run(args: Args) -> Result<()> {
                 disable_back_to_source: args.disable_back_to_source,
                 certificate_chain: Vec::new(),
                 prefetch: false,
+                object_storage: None,
             }),
         })
         .await

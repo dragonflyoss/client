@@ -1568,16 +1568,7 @@ impl Task {
                     ));
                 }
 
-                self.storage
-                    .delete_task(task.id.as_str())
-                    .await
-                    .map_err(|err| {
-                        error!(
-                            "delete task {} from local storage error: {:?}",
-                            task.id, err
-                        );
-                        Status::internal(err.to_string())
-                    })?;
+                self.storage.delete_task(task.id.as_str()).await;
                 info!("delete task {} from local storage", task.id);
 
                 Ok(())

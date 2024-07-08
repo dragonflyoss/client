@@ -23,7 +23,8 @@ use dragonfly_api::scheduler::v2::{
     AnnounceCachePeerResponse, AnnounceHostRequest, AnnouncePeerRequest, AnnouncePeerResponse,
     DeleteCachePeerRequest, DeleteCacheTaskRequest, DeleteHostRequest, DeletePeerRequest,
     DeleteTaskRequest, StatCachePeerRequest, StatCacheTaskRequest, StatPeerRequest,
-    StatTaskRequest, UploadCacheTaskRequest,
+    StatTaskRequest, UploadCacheTaskFailedRequest, UploadCacheTaskFinishedRequest,
+    UploadCacheTaskStartedRequest,
 };
 use dragonfly_client_core::error::{ErrorType, ExternalError, OrErr};
 use dragonfly_client_core::{Error, Result};
@@ -348,20 +349,48 @@ impl SchedulerClient {
         Ok(())
     }
 
-    // upload_cache_task uploads the metadata of the cache task.
+    // upload_cache_task_started uploads the metadata of the cache task started.
     #[instrument(skip(self))]
-    pub async fn upload_cache_task(
+    pub async fn upload_cache_task_started(
         &self,
         task_id: &str,
-        request: UploadCacheTaskRequest,
+        request: UploadCacheTaskStartedRequest,
+    ) -> Result<()> {
+        let request = Self::make_request(request);
+        self.client(task_id, None)
+            .await?
+            .upload_cache_task_started(request)
+            .await?;
+        Ok(())
+    }
+
+    // upload_cache_task_finished uploads the metadata of the cache task finished.
+    pub async fn upload_cache_task_finished(
+        &self,
+        task_id: &str,
+        request: UploadCacheTaskFinishedRequest,
     ) -> Result<CacheTask> {
         let request = Self::make_request(request);
         let response = self
             .client(task_id, None)
             .await?
-            .upload_cache_task(request)
+            .upload_cache_task_finished(request)
             .await?;
         Ok(response.into_inner())
+    }
+
+    // upload_cache_task_failed uploads the metadata of the cache task failed.
+    pub async fn upload_cache_task_failed(
+        &self,
+        task_id: &str,
+        request: UploadCacheTaskFailedRequest,
+    ) -> Result<()> {
+        let request = Self::make_request(request);
+        self.client(task_id, None)
+            .await?
+            .upload_cache_task_failed(request)
+            .await?;
+        Ok(())
     }
 
     // stat_cache_task gets the status of the cache task.

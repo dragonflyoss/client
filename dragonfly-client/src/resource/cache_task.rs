@@ -15,13 +15,18 @@
  */
 
 use crate::grpc::scheduler::SchedulerClient;
+use dragonfly_api::common::v2::CacheTask as CommonCacheTask;
+use dragonfly_api::dfdaemon::v2::UploadCacheTaskRequest;
+use dragonfly_api::scheduler::v2::{
+    UploadCacheTaskFailedRequest, UploadCacheTaskFinishedRequest, UploadCacheTaskStartedRequest,
+};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result as ClientResult;
-use dragonfly_client_storage::metadata;
 use dragonfly_client_storage::Storage;
 use dragonfly_client_util::id_generator::IDGenerator;
 use std::path::Path;
 use std::sync::Arc;
+use tracing::error;
 
 // CacheTask represents a cache task manager.
 pub struct CacheTask {
@@ -55,17 +60,114 @@ impl CacheTask {
         }
     }
 
-    // TODO: Implement this.
     // create_persistent_cache_task creates a persistent cache task from local.
     pub async fn create_persistent_cache_task(
         &self,
-        id: &str,
+        task_id: &str,
+        host_id: &str,
+        peer_id: &str,
         path: &Path,
-        piece_length: u64,
         digest: &str,
-    ) -> ClientResult<metadata::CacheTask> {
-        self.storage
-            .create_persistent_cache_task(id, path, piece_length, digest)
+        request: UploadCacheTaskRequest,
+    ) -> ClientResult<CommonCacheTask> {
+        // Notify the scheduler that the cache task is started.
+        self.scheduler_client
+            .upload_cache_task_started(
+                task_id,
+                UploadCacheTaskStartedRequest {
+                    host_id: host_id.to_string(),
+                    task_id: task_id.to_string(),
+                    peer_id: peer_id.to_string(),
+                    persistent_replica_count: request.persistent_replica_count,
+                    tag: request.tag.clone(),
+                    application: request.application.clone(),
+                    piece_length: request.piece_length,
+                    ttl: request.ttl.clone(),
+                    timeout: request.timeout,
+                },
+            )
             .await
+            .map_err(|err| {
+                error!("upload cache task started failed: {}", err);
+                err
+            })?;
+
+        // Create the persistent cache task.
+        match self
+            .storage
+            .create_persistent_cache_task(task_id, path, request.piece_length, digest)
+            .await
+        {
+            Ok(metadata) => {
+                let response = match self
+                    .scheduler_client
+                    .upload_cache_task_finished(task_id, UploadCacheTaskFinishedRequest {})
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(err) => {
+                        // Delete the cache task.
+                        self.storage.delete_cache_task(task_id).await;
+
+                        // Notify the scheduler that the cache task is failed.
+                        self.scheduler_client
+                            .upload_cache_task_failed(
+                                task_id,
+                                UploadCacheTaskFailedRequest {
+                                    description: Some(err.to_string()),
+                                },
+                            )
+                            .await
+                            .map_err(|err| {
+                                error!("upload cache task failed failed: {}", err);
+                                err
+                            })?;
+
+                        return Err(err);
+                    }
+                };
+
+                Ok(CommonCacheTask {
+                    id: task_id.to_string(),
+                    persistent_replica_count: request.persistent_replica_count,
+                    replica_count: response.replica_count,
+                    digest: digest.to_string(),
+                    tag: request.tag,
+                    application: request.application,
+                    piece_length: request.piece_length,
+                    content_length: metadata.content_length,
+                    piece_count: response.piece_count,
+                    state: response.state,
+                    ttl: request.ttl,
+                    created_at: response.created_at,
+                    updated_at: response.updated_at,
+                })
+            }
+            Err(err) => {
+                // Delete the cache task.
+                self.storage.delete_cache_task(task_id).await;
+
+                // Notify the scheduler that the cache task is failed.
+                self.scheduler_client
+                    .upload_cache_task_failed(
+                        task_id,
+                        UploadCacheTaskFailedRequest {
+                            description: Some(err.to_string()),
+                        },
+                    )
+                    .await
+                    .map_err(|err| {
+                        error!("upload cache task failed failed: {}", err);
+                        err
+                    })?;
+
+                Err(err)
+            }
+        }
+    }
+
+    // delete_cache_task deletes a cache task.
+    pub async fn delete_cache_task(&self, task_id: &str) {
+        self.storage.delete_cache_task(task_id).await
     }
 }

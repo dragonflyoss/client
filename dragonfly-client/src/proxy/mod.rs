@@ -808,6 +808,7 @@ fn make_download_task_request(
             // prefetch is enabled in the configuration.
             prefetch: config.proxy.prefetch
                 && reqwest_request_header.contains_key(reqwest::header::RANGE),
+            object_storage: None,
         }),
     })
 }
