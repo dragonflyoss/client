@@ -90,4 +90,4 @@ termion = "4.0.2"
 tikv-jemallocator = { version = "0.5.4", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-jemalloc_pprof = "0.2.0"
+jemalloc_pprof = "0.4.1"
