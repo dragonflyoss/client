@@ -181,6 +181,7 @@ mod tests {
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),
                 client_certs: None,
+                object_storage: None,
             })
             .await
             .unwrap();
@@ -206,6 +207,7 @@ mod tests {
                 http_header: None,
                 timeout: std::time::Duration::from_secs(5),
                 client_certs: None,
+                object_storage: None,
             })
             .await;
 
@@ -231,6 +233,7 @@ mod tests {
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),
                 client_certs: None,
+                object_storage: None,
             })
             .await
             .unwrap();

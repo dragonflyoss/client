@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use dragonfly_api::common::v2::Range;
+use dragonfly_api::common::v2::{ObjectStorage, Range};
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -53,6 +53,9 @@ pub struct HeadRequest {
 
     // client_certs is the client certificates for the request.
     pub client_certs: Option<Vec<CertificateDer<'static>>>,
+
+    // the object storage related information.
+    pub object_storage: Option<ObjectStorage>,
 }
 
 // HeadResponse is the head response for backend.
@@ -92,6 +95,9 @@ pub struct GetRequest {
 
     // client_certs is the client certificates for the request.
     pub client_certs: Option<Vec<CertificateDer<'static>>>,
+
+    // the object storage related information.
+    pub object_storage: Option<ObjectStorage>,
 }
 
 // GetResponse is the get response for backend.

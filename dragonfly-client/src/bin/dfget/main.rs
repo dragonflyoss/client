@@ -15,7 +15,7 @@
  */
 
 use clap::Parser;
-use dragonfly_api::common::v2::{Download, TaskType};
+use dragonfly_api::common::v2::{Download, ObjectStorage, TaskType};
 use dragonfly_api::dfdaemon::v2::{download_task_response, DownloadTaskRequest};
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
@@ -202,6 +202,18 @@ struct Args {
         help = "Specify the dfdaemon's max number of log files"
     )]
     dfdaemon_log_max_files: usize,
+
+    #[arg(
+        long,
+        help = "Specify the access key ID of the Object Storage Services"
+    )]
+    access_key_id: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the access key secret of the Object Storage Services"
+    )]
+    access_key_secret: Option<String>,
 }
 
 #[tokio::main]
@@ -368,6 +380,17 @@ async fn run(args: Args) -> Result<()> {
         err
     })?;
 
+    let mut object_storage = None;
+
+    if let (Some(access_key_id), Some(access_key_secret)) =
+        (args.access_key_id, args.access_key_secret)
+    {
+        object_storage = Some(ObjectStorage {
+            access_key_id,
+            access_key_secret,
+        });
+    }
+
     // Create dfdaemon client.
     let response = dfdaemon_download_client
         .download_task(DownloadTaskRequest {
@@ -392,7 +415,7 @@ async fn run(args: Args) -> Result<()> {
                 disable_back_to_source: args.disable_back_to_source,
                 certificate_chain: Vec::new(),
                 prefetch: false,
-                object_storage: None,
+                object_storage,
             }),
         })
         .await
