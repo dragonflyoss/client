@@ -15,7 +15,7 @@
  */
 
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
-use dragonfly_api::common::v2::{Download, Peer, Piece, Range, TrafficType};
+use dragonfly_api::common::v2::{Download, Peer, Piece, Range, Task as CommonTask, TrafficType};
 use dragonfly_api::dfdaemon::{
     self,
     v2::{download_task_response, DownloadTaskResponse},
@@ -28,7 +28,7 @@ use dragonfly_api::scheduler::v2::{
     DownloadPeerFailedRequest, DownloadPeerFinishedRequest, DownloadPeerStartedRequest,
     DownloadPieceBackToSourceFailedRequest, DownloadPieceBackToSourceFinishedRequest,
     DownloadPieceFailedRequest, DownloadPieceFinishedRequest, RegisterPeerRequest,
-    ReschedulePeerRequest,
+    ReschedulePeerRequest, StatTaskRequest,
 };
 use dragonfly_client_backend::{BackendFactory, HeadRequest};
 use dragonfly_client_config::dfdaemon::Config;
@@ -118,9 +118,9 @@ impl Task {
 
         // Handle the request header.
         let mut request_header =
-            hashmap_to_reqwest_headermap(&download.request_header).map_err(|e| {
-                error!("convert header: {}", e);
-                Status::invalid_argument(e.to_string())
+            hashmap_to_reqwest_headermap(&download.request_header).map_err(|err| {
+                error!("convert header: {}", err);
+                err
             })?;
 
         if task.content_length.is_some() {
@@ -1552,11 +1552,28 @@ impl Task {
         ))
     }
 
+    // stat_task returns the task metadata.
+    pub async fn stat(&self, task_id: &str, host_id: &str) -> ClientResult<CommonTask> {
+        let task = self
+            .scheduler_client
+            .stat_task(StatTaskRequest {
+                host_id: host_id.to_string(),
+                task_id: task_id.to_string(),
+            })
+            .await
+            .map_err(|err| {
+                error!("stat task failed: {}", err);
+                err
+            })?;
+
+        Ok(task)
+    }
+
     // Delete a task and reclaim local storage.
-    pub async fn delete_task(&self, task_id: &str) -> ClientResult<()> {
+    pub async fn delete(&self, task_id: &str) -> ClientResult<()> {
         let task_result = self.storage.get_task(task_id).map_err(|err| {
             error!("get task {} from local storage error: {:?}", task_id, err);
-            Status::internal(err.to_string())
+            err
         })?;
 
         match task_result {

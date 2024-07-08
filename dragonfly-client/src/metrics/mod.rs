@@ -43,21 +43,21 @@ lazy_static! {
     pub static ref UPLOAD_TASK_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("upload_task_total", "Counter of the number of the upload task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type",  "tag", "app"]
+            &["type", "tag", "app"]
         ).expect("metric can be created");
 
     // UPLOAD_TASK_FAILURE_COUNT is used to count the failed number of upload tasks.
     pub static ref UPLOAD_TASK_FAILURE_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("upload_task_failure_total", "Counter of the number of failed of the upload task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type",  "tag", "app"]
+            &["type", "tag", "app"]
         ).expect("metric can be created");
 
     // CONCURRENT_UPLOAD_TASK_GAUGE is used to gauge the number of concurrent upload tasks.
     pub static ref CONCURRENT_UPLOAD_TASK_GAUGE: IntGaugeVec =
         IntGaugeVec::new(
             Opts::new("concurrent_upload_task_total", "Gauge of the number of concurrent of the upload task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type",  "tag", "app"]
+            &["type", "tag", "app"]
         ).expect("metric can be created");
 
     // UPLOAD_TASK_DURATION is used to record the upload task duration.
@@ -71,35 +71,35 @@ lazy_static! {
     pub static ref DOWNLOAD_TASK_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("download_task_total", "Counter of the number of the download task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type",  "tag", "app", "priority"]
+            &["type", "tag", "app", "priority"]
         ).expect("metric can be created");
 
     // DOWNLOAD_TASK_FAILURE_COUNT is used to count the failed number of download tasks.
     pub static ref DOWNLOAD_TASK_FAILURE_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("download_task_failure_total", "Counter of the number of failed of the download task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type",  "tag", "app", "priority"]
+            &["type", "tag", "app", "priority"]
         ).expect("metric can be created");
 
     // PREFETCH_TASK_COUNT is used to count the number of prefetch tasks.
     pub static ref PREFETCH_TASK_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("prefetch_task_total", "Counter of the number of the prefetch task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type",  "tag", "app", "priority"]
+            &["type", "tag", "app", "priority"]
         ).expect("metric can be created");
 
     // PREFETCH_TASK_FAILURE_COUNT is used to count the failed number of prefetch tasks.
     pub static ref PREFETCH_TASK_FAILURE_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("prefetch_task_failure_total", "Counter of the number of failed of the prefetch task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type",  "tag", "app", "priority"]
+            &["type", "tag", "app", "priority"]
         ).expect("metric can be created");
 
     // CONCURRENT_DOWNLOAD_TASK_GAUGE is used to gauge the number of concurrent download tasks.
     pub static ref CONCURRENT_DOWNLOAD_TASK_GAUGE: IntGaugeVec =
         IntGaugeVec::new(
             Opts::new("concurrent_download_task_total", "Gauge of the number of concurrent of the download task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type",  "tag", "app", "priority"]
+            &["type", "tag", "app", "priority"]
         ).expect("metric can be created");
 
     // CONCURRENT_UPLOAD_PIECE_GAUGE is used to gauge the number of concurrent upload pieces.
@@ -141,6 +141,48 @@ lazy_static! {
     pub static ref PROXY_REQUSET_FAILURE_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("proxy_request_failure_total", "Counter of the number of failed of the proxy request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &[]
+        ).expect("metric can be created");
+
+    // STAT_TASK_COUNT is used to count the number of stat tasks.
+    pub static ref STAT_TASK_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("stat_task_total", "Counter of the number of the stat task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type"]
+        ).expect("metric can be created");
+
+    // STAT_TASK_FAILURE_COUNT is used to count the failed number of stat tasks.
+    pub static ref STAT_TASK_FAILURE_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("stat_task_failure_total", "Counter of the number of failed of the stat task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type"]
+        ).expect("metric can be created");
+
+    // DELETE_TASK_COUNT is used to count the number of delete tasks.
+    pub static ref DELETE_TASK_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("delete_task_total", "Counter of the number of the delete task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type"]
+        ).expect("metric can be created");
+
+    // DELETE_TASK_FAILURE_COUNT is used to count the failed number of delete tasks.
+    pub static ref DELETE_TASK_FAILURE_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("delete_task_failure_total", "Counter of the number of failed of the delete task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type"]
+        ).expect("metric can be created");
+
+    // DELETE_HOST_COUNT is used to count the number of delete host.
+    pub static ref DELETE_HOST_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("delete_host_total", "Counter of the number of the delete host.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &[]
+        ).expect("metric can be created");
+
+    // DELETE_HOST_FAILURE_COUNT is used to count the failed number of delete host.
+    pub static ref DELETE_HOST_FAILURE_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("delete_host_failure_total", "Counter of the number of failed of the delete host.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
             &[]
         ).expect("metric can be created");
 }
@@ -417,6 +459,44 @@ pub fn collect_proxy_request_failure_metrics() {
     PROXY_REQUSET_FAILURE_COUNT.with_label_values(&[]).inc();
 }
 
+// collect_stat_task_started_metrics collects the stat task started metrics.
+pub fn collect_stat_task_started_metrics(typ: i32) {
+    STAT_TASK_COUNT
+        .with_label_values(&[typ.to_string().as_str()])
+        .inc();
+}
+
+// collect_stat_task_failure_metrics collects the stat task failure metrics.
+pub fn collect_stat_task_failure_metrics(typ: i32) {
+    STAT_TASK_FAILURE_COUNT
+        .with_label_values(&[typ.to_string().as_str()])
+        .inc();
+}
+
+// collect_delete_task_started_metrics collects the delete task started metrics.
+pub fn collect_delete_task_started_metrics(typ: i32) {
+    DELETE_TASK_COUNT
+        .with_label_values(&[typ.to_string().as_str()])
+        .inc();
+}
+
+// collect_delete_task_failure_metrics collects the delete task failure metrics.
+pub fn collect_delete_task_failure_metrics(typ: i32) {
+    DELETE_TASK_FAILURE_COUNT
+        .with_label_values(&[typ.to_string().as_str()])
+        .inc();
+}
+
+// collect_delete_host_started_metrics collects the delete host started metrics.
+pub fn collect_delete_host_started_metrics() {
+    DELETE_HOST_COUNT.with_label_values(&[]).inc();
+}
+
+// collect_delete_host_failure_metrics collects the delete host failure metrics.
+pub fn collect_delete_host_failure_metrics() {
+    DELETE_HOST_FAILURE_COUNT.with_label_values(&[]).inc();
+}
+
 // Metrics is the metrics server.
 #[derive(Debug)]
 pub struct Metrics {
@@ -535,6 +615,30 @@ impl Metrics {
 
         REGISTRY
             .register(Box::new(PROXY_REQUSET_FAILURE_COUNT.clone()))
+            .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(STAT_TASK_COUNT.clone()))
+            .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(STAT_TASK_FAILURE_COUNT.clone()))
+            .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(DELETE_TASK_COUNT.clone()))
+            .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(DELETE_TASK_FAILURE_COUNT.clone()))
+            .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(DELETE_HOST_COUNT.clone()))
+            .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(DELETE_HOST_FAILURE_COUNT.clone()))
             .expect("metric can be registered");
     }
 
