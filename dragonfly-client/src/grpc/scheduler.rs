@@ -73,21 +73,18 @@ pub struct SchedulerClient {
     // hashring is the hashring of the scheduler.
     hashring: Arc<RwLock<HashRing<VNode>>>,
 
-    // new add
-    #[allow(dead_code)]
+    // unavailable_schedulers is a map of unavailable schedulers and the time they were marked as unavailable.
     unavailable_schedulers: Arc<RwLock<HashMap<SocketAddr, Instant>>>,
 
-    // new add: cooldown_duration is the scheduler's cooldown time (in seconds)
-    #[allow(dead_code)]
+    // cooldown_duration is the scheduler's cooldown time (in seconds).
     cooldown_duration: u64,
 
-    // new add: Maximum retry attempts
-    #[allow(dead_code)]
+    // max_attempts is the maximum number of attempts allowed.
     max_attempts: u32,
 
-    // new add: Refresh threshold
-    #[allow(dead_code)]
+    // refresh_threshold is the threshold for refreshing the scheduler list.
     refresh_threshold: u32,
+
 }
 
 // SchedulerClient implements the grpc client of the scheduler.
@@ -450,7 +447,6 @@ impl SchedulerClient {
         Ok(())
     }
 
-    // client gets the grpc client of the scheduler.
     #[instrument(skip(self))]
     async fn client(
         &self,
@@ -460,57 +456,13 @@ impl SchedulerClient {
         // Update scheduler addresses of the client.
         self.update_available_scheduler_addrs().await?;
 
-        // Get the scheduler address from the hashring.
+        // First try to get the address from the task_id.
         let addrs = self.hashring.read().await;
         let addr = *addrs
             .get(&task_id[0..5].to_string())
             .ok_or_else(|| Error::HashRing(task_id.to_string()))?;
         drop(addrs);
         info!("picked {:?}", addr);
-
-        let channel = match Channel::from_shared(format!("http://{}", addr))
-            .map_err(|_| Error::InvalidURI(addr.to_string()))?
-            .connect_timeout(super::CONNECT_TIMEOUT)
-            .connect()
-            .await
-        {
-            Ok(channel) => channel,
-            Err(err) => {
-                error!("connect to {} failed: {}", addr.to_string(), err);
-                if let Err(err) = self.refresh_available_scheduler_addrs().await {
-                    error!("failed to refresh scheduler client: {}", err);
-                };
-
-                return Err(ExternalError::new(ErrorType::ConnectError)
-                    .with_cause(Box::new(err))
-                    .into());
-            }
-        };
-
-        Ok(SchedulerGRPCClient::new(channel)
-            .max_decoding_message_size(usize::MAX)
-            .max_encoding_message_size(usize::MAX))
-    }
-
-    #[instrument(skip(self))]
-    async fn new_client(
-        &self,
-        task_id: &str,
-        peer_id: Option<&str>,
-    ) -> Result<SchedulerGRPCClient<Channel>> {
-        // Update scheduler addresses of the client.
-        self.update_available_scheduler_addrs().await?;
-
-        // First try to get the address from the task_id
-        let addrs = self.hashring.read().await;
-        let addr = *addrs
-            .get(&task_id[0..5].to_string())
-            .ok_or_else(|| Error::HashRing(task_id.to_string()))?;
-        drop(addrs);
-        info!(
-            "first try to picked {:?} the address from the task_id",
-            addr
-        );
 
         match Channel::from_shared(format!("http://{}", addr))
             .map_err(|_| Error::InvalidURI(addr.to_string()))?
@@ -520,9 +472,7 @@ impl SchedulerClient {
         {
             Ok(channel) => {
                 let mut unavailable_schedulers = self.unavailable_schedulers.write().await;
-                if unavailable_schedulers.contains_key(&addr.addr) {
-                    unavailable_schedulers.remove(&addr.addr);
-                }
+                unavailable_schedulers.remove(&addr.addr);
                 return Ok(SchedulerGRPCClient::new(channel)
                     .max_decoding_message_size(usize::MAX)
                     .max_encoding_message_size(usize::MAX));
@@ -530,7 +480,6 @@ impl SchedulerClient {
 
             Err(err) => {
                 error!("connect to {} failed: {}", addr.to_string(), err);
-
                 let mut unavailable_schedulers = self.unavailable_schedulers.write().await;
                 unavailable_schedulers
                     .entry(addr.addr)
@@ -538,19 +487,16 @@ impl SchedulerClient {
             }
         }
 
-        // Minimize lock holding time to reduce conflicts
-        // let config_data = self.dynconfig.data.read().await;
         let cooldown_duration = Duration::from_secs(self.cooldown_duration);
         let max_attempts = self.max_attempts;
         let refresh_threshold = self.refresh_threshold;
 
-        // Initialize retry attempts
         let mut attempts = 0;
 
-        // Use finer-grained locks in the loop
+        // Traverse through available scheduler collections.
         let hashring = self.hashring.read().await;
-        for node in hashring.clone().into_iter() {
-            let scheduler_addr = node.addr;
+        for vnode in hashring.clone().into_iter() {
+            let scheduler_addr = vnode.addr;
 
             let unavailable_schedulers = self.unavailable_schedulers.write().await;
             if let Some(&instant) = unavailable_schedulers.get(&scheduler_addr) {
@@ -559,12 +505,10 @@ impl SchedulerClient {
                 }
             }
 
-            match self.try_client(&scheduler_addr).await {
+            match self.check_scheduler(&scheduler_addr).await {
                 Ok(channel) => {
                     let mut unavailable_schedulers = self.unavailable_schedulers.write().await;
-                    if unavailable_schedulers.contains_key(&scheduler_addr) {
-                        unavailable_schedulers.remove(&scheduler_addr);
-                    }
+                    unavailable_schedulers.remove(&scheduler_addr);
                     return Ok(SchedulerGRPCClient::new(channel)
                         .max_decoding_message_size(usize::MAX)
                         .max_encoding_message_size(usize::MAX));
@@ -573,19 +517,16 @@ impl SchedulerClient {
                     error!("Scheduler {} is not available: {}", scheduler_addr, err);
 
                     let mut unavailable_schedulers = self.unavailable_schedulers.write().await;
-                    unavailable_schedulers
-                        .entry(scheduler_addr)
-                        .or_insert_with(std::time::Instant::now);
+                    unavailable_schedulers.entry(scheduler_addr).or_insert_with(std::time::Instant::now);
 
-                    // Increment retry attempts
                     attempts += 1;
 
-                    // Refresh scheduler addresses when reaching the refresh threshold
                     if attempts >= refresh_threshold {
-                        self.refresh_available_scheduler_addrs().await?;
+                        if let Err(err) = self.refresh_available_scheduler_addrs().await {
+                            error!("failed to refresh scheduler client: {}", err);
+                        };
                     }
 
-                    // Return error when reaching the maximum retry attempts
                     if attempts >= max_attempts {
                         return Err(Error::ExceededMaxAttempts);
                     }
@@ -596,14 +537,13 @@ impl SchedulerClient {
         return Err(Error::AvailableSchedulersNotFound);
     }
 
-    async fn try_client(&self, scheduler_addr: &SocketAddr) -> Result<Channel> {
-        info!("try to connect {:?}", scheduler_addr);
+    // Check the health of the scheduler.
+    async fn check_scheduler(&self, scheduler_addr: &SocketAddr) -> Result<Channel> {
         let addr = format!("http://{}", scheduler_addr);
         let health_client = match HealthClient::new(&addr).await {
             Ok(client) => client,
             Err(err) => {
                 error!("create {} health client failed: {}", addr, err);
-                error!("check scheduler health failed: {}", err);
                 return Err(ExternalError::new(ErrorType::ConnectError)
                     .with_cause(Box::new(err))
                     .into());
@@ -612,36 +552,29 @@ impl SchedulerClient {
 
         match health_client.check().await {
             Ok(resp) => {
-                if resp.status != ServingStatus::Serving as i32 {
-                    error!("scheduler {} is not serving", scheduler_addr);
-                    return Err(Error::SchedulerisNotServing);
+                if resp.status == ServingStatus::Serving as i32 {
+                    return Channel::from_shared(format!("http://{}", scheduler_addr))
+                        .map_err(|_| Error::InvalidURI(scheduler_addr.to_string()))?
+                        .connect_timeout(super::CONNECT_TIMEOUT)
+                        .connect()
+                        .await
+                        .map_err(|err| {
+                            error!("connect to {} failed: {}", scheduler_addr.to_string(), err);
+                            ExternalError::new(ErrorType::ConnectError)
+                                .with_cause(Box::new(err))
+                                .into()
+                        });
                 }
+
+                Err(Error::SchedulerNotServing)
             }
             Err(err) => {
                 error!("check scheduler health failed: {}", err);
-                return Err(ExternalError::new(ErrorType::ConnectError)
+                Err(ExternalError::new(ErrorType::ConnectError)
                     .with_cause(Box::new(err))
-                    .into());
+                    .into())
             }
         }
-
-        let channel = match Channel::from_shared(format!("http://{}", scheduler_addr))
-            .map_err(|_| Error::InvalidURI(scheduler_addr.to_string()))?
-            .connect_timeout(super::CONNECT_TIMEOUT)
-            .connect()
-            .await
-        {
-            Ok(channel) => channel,
-            Err(err) => {
-                error!("connect to {} failed: {}", scheduler_addr.to_string(), err);
-
-                return Err(ExternalError::new(ErrorType::ConnectError)
-                    .with_cause(Box::new(err))
-                    .into());
-            }
-        };
-
-        Ok(channel)
     }
 
     // update_available_scheduler_addrs updates the addresses of available schedulers.
