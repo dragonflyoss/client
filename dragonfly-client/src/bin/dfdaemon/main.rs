@@ -340,6 +340,10 @@ async fn main() -> Result<(), anyhow::Error> {
     // of scheduler_client, so scheduler_client can be released normally.
     drop(task);
 
+    // Drop cache task to release scheduler_client. when drop the cache task, it will release the Arc reference
+    // of scheduler_client, so scheduler_client can be released normally.
+    drop(cache_task);
+
     // Drop scheduler_client to release dynconfig. when drop the scheduler_client, it will release the
     // Arc reference of dynconfig, so dynconfig can be released normally.
     drop(scheduler_client);
