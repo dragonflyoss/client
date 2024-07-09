@@ -1000,7 +1000,7 @@ dependencies = [
  "http 1.1.0",
  "http-body-util",
  "humantime",
- "hyper 1.2.0",
+ "hyper 1.4.0",
  "hyper-rustls",
  "hyper-util",
  "indicatif",
@@ -1085,7 +1085,7 @@ dependencies = [
 name = "dragonfly-client-core"
 version = "0.1.82"
 dependencies = [
- "hyper 1.2.0",
+ "hyper 1.4.0",
  "hyper-util",
  "libloading",
  "reqwest",
@@ -1145,7 +1145,7 @@ dependencies = [
  "dragonfly-client-core",
  "hex",
  "http-range-header",
- "hyper 1.2.0",
+ "hyper 1.4.0",
  "openssl",
  "rcgen",
  "reqwest",
@@ -1817,9 +1817,9 @@ dependencies = [
 
 [[package]]
 name = "hyper"
-version = "1.2.0"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "186548d73ac615b32a73aafe38fb4f56c0d340e110e5a200bcadbaf2e199263a"
+checksum = "c4fe55fb7a772d59a5ff1dfbff4fe0258d19b89fec4b233e75d35d5d2316badc"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -1844,7 +1844,7 @@ checksum = "a0bea761b46ae2b24eb4aef630d8d1c398157b6fc29e6350ecf090a0b70c952c"
 dependencies = [
  "futures-util",
  "http 1.1.0",
- "hyper 1.2.0",
+ "hyper 1.4.0",
  "hyper-util",
  "log",
  "rustls",
@@ -1875,7 +1875,7 @@ checksum = "70206fc6890eaca9fde8a0bf71caa2ddfc9fe045ac9e5c70df101a7dbde866e0"
 dependencies = [
  "bytes",
  "http-body-util",
- "hyper 1.2.0",
+ "hyper 1.4.0",
  "hyper-util",
  "native-tls",
  "tokio",
@@ -1894,7 +1894,7 @@ dependencies = [
  "futures-util",
  "http 1.1.0",
  "http-body 1.0.0",
- "hyper 1.2.0",
+ "hyper 1.4.0",
  "pin-project-lite",
  "socket2 0.5.5",
  "tokio",
@@ -3436,7 +3436,7 @@ dependencies = [
  "http 1.1.0",
  "http-body 1.0.0",
  "http-body-util",
- "hyper 1.2.0",
+ "hyper 1.4.0",
  "hyper-rustls",
  "hyper-tls",
  "hyper-util",
