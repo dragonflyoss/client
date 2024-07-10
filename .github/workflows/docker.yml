@@ -45,6 +45,12 @@ jobs:
         run: |
           echo "git_revision=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
+      - name: Sanitize Branch Name
+        id: sanitize_branch
+        run: |
+          SANITIZED_BRANCH_NAME=$(echo ${{ steps.get_version.outputs.VERSION }} | tr '/' '-' | tr ':' '-')
+          echo "SANITIZED_BRANCH_NAME=${SANITIZED_BRANCH_NAME}" >> $GITHUB_ENV
+
       - name: PrepareReg Names
         run: |
            echo IMAGE_REPOSITORY=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]') >> $GITHUB_ENV
@@ -90,7 +96,7 @@ jobs:
             GITVERSION=git-${{ steps.vars.outputs.git_revision }}
             VERSION=${{ steps.get_version.outputs.VERSION }}
           tags: |
-            dragonflyoss/client:${{ steps.get_version.outputs.VERSION }}
+            dragonflyoss/client:${{ env.SANITIZED_BRANCH_NAME }}
             ghcr.io/${{ env.IMAGE_REPOSITORY }}:${{ steps.get_version.outputs.VERSION }}
           push: true
           cache-from: type=local,src=/tmp/.buildx-cache
