@@ -84,7 +84,6 @@ pub struct SchedulerClient {
 
     // refresh_threshold is the threshold for refreshing the scheduler list.
     refresh_threshold: u32,
-
 }
 
 // SchedulerClient implements the grpc client of the scheduler.
@@ -517,7 +516,9 @@ impl SchedulerClient {
                     error!("Scheduler {} is not available: {}", scheduler_addr, err);
 
                     let mut unavailable_schedulers = self.unavailable_schedulers.write().await;
-                    unavailable_schedulers.entry(scheduler_addr).or_insert_with(std::time::Instant::now);
+                    unavailable_schedulers
+                        .entry(scheduler_addr)
+                        .or_insert_with(std::time::Instant::now);
 
                     attempts += 1;
 
