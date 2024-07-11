@@ -589,7 +589,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 
     // download_piece provides the piece content for remote peer.
-    #[instrument(skip_all, fields(host_id, remote_host_id, task_id, piece_number))]
+    #[instrument(skip_all, fields(host_id, remote_host_id, task_id, piece_id))]
     async fn download_piece(
         &self,
         request: Request<DownloadPieceRequest>,
@@ -613,7 +613,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("remote_host_id", remote_host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
-        Span::current().record("piece_number", piece_number);
+        Span::current().record("piece_id", format!("{}-{}", task_id, piece_number).as_str());
 
         // Get the piece metadata from the local storage.
         let piece = self
@@ -621,23 +621,17 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             .piece
             .get(task_id.as_str(), piece_number)
             .map_err(|err| {
-                error!(
-                    "upload piece metadata {}-{} from local storage: {}",
-                    task_id, piece_number, err
-                );
+                error!("upload piece metadata from local storage: {}", err);
                 Status::internal(err.to_string())
             })?
             .ok_or_else(|| {
-                error!(
-                    "upload piece metadata {}-{} not found",
-                    task_id, piece_number
-                );
+                error!("upload piece metadata not found");
                 Status::not_found("piece metadata not found")
             })?;
 
         // Collect upload piece started metrics.
         collect_upload_piece_started_metrics();
-        info!("start upload piece content {}-{}", task_id, piece_number);
+        info!("start upload piece content");
 
         // Get the piece content from the local storage.
         let mut reader = self
@@ -655,10 +649,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 // Collect upload piece failure metrics.
                 collect_upload_piece_failure_metrics();
 
-                error!(
-                    "upload piece content {}-{} from local storage: {}",
-                    task_id, piece_number, err
-                );
+                error!("upload piece content from local storage: {}", err);
                 Status::internal(err.to_string())
             })?;
 
@@ -668,16 +659,13 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             // Collect upload piece failure metrics.
             collect_upload_piece_failure_metrics();
 
-            error!(
-                "upload piece content {}-{} failed: {}",
-                task_id, piece_number, err
-            );
+            error!("upload piece content failed: {}", err);
             Status::internal(err.to_string())
         })?;
 
         // Collect upload piece finished metrics.
         collect_upload_piece_finished_metrics();
-        info!("finished upload piece content {}-{}", task_id, piece_number);
+        info!("finished upload piece content");
 
         // Return the piece.
         Ok(Response::new(DownloadPieceResponse {

@@ -67,7 +67,7 @@ impl crate::Backend for HTTP {
     // head gets the header of the request.
     async fn head(&self, request: crate::HeadRequest) -> Result<crate::HeadResponse> {
         info!(
-            "get request {} {}: {:?}",
+            "head request {} {}: {:?}",
             request.task_id, request.url, request.http_header
         );
         // The header of the request is required.

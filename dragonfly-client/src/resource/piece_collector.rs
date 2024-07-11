@@ -27,7 +27,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
-use tracing::{error, info, Instrument};
+use tracing::{error, info, instrument, Instrument};
 
 // CollectedPiece is the piece collected from a peer.
 pub struct CollectedPiece {
@@ -122,6 +122,7 @@ impl PieceCollector {
     }
 
     // collect_from_remote_peers collects pieces from remote peers.
+    #[instrument(skip_all)]
     async fn collect_from_remote_peers(
         host_id: String,
         task_id: String,
@@ -192,8 +193,8 @@ impl PieceCollector {
                         peers.insert(parent.id.clone());
                     });
                     info!(
-                        "received piece metadata {} from parent {}",
-                        message.number, parent.id
+                        "received piece {}-{} metadata from parent {}",
+                        task_id, message.number, parent.id
                     );
 
                     match collected_pieces.get(&message.number) {

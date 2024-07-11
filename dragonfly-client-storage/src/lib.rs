@@ -379,12 +379,12 @@ impl Storage {
 
                     // If the piece is finished, return.
                     if piece.is_finished() {
-                        info!("wait piece finished success {}", self.piece_id(task_id, number));
+                        info!("wait piece finished success");
                         return Ok(piece);
                     }
 
                     if wait_for_piece_count > 0 {
-                        info!("wait piece finished {}", self.piece_id(task_id, number));
+                        info!("wait piece finished");
                     }
                     wait_for_piece_count += 1;
                 }
