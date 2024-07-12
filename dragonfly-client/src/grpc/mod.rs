@@ -38,10 +38,13 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 // CONCURRENCY_LIMIT_PER_CONNECTION is the limit of concurrency for each connection.
-pub const CONCURRENCY_LIMIT_PER_CONNECTION: usize = 1048;
+pub const CONCURRENCY_LIMIT_PER_CONNECTION: usize = 4096;
 
 // TCP_KEEPALIVE is the keepalive duration for TCP connection.
 pub const TCP_KEEPALIVE: Duration = Duration::from_secs(60);
+
+// MAX_FRAME_SIZE is the max frame size for GRPC, default is 12MB.
+pub const MAX_FRAME_SIZE: u32 = 12 * 1024 * 1024;
 
 // prefetch_task prefetches the task if prefetch flag is true.
 pub async fn prefetch_task(
