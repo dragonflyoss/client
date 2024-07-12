@@ -71,14 +71,7 @@ impl PieceCollector {
         interested_pieces: Vec<metadata::Piece>,
         parents: Vec<Peer>,
     ) -> Self {
-        // Initialize collected_pieces.
-        let collected_pieces = Arc::new(DashMap::new());
-        interested_pieces
-            .clone()
-            .into_iter()
-            .for_each(|interested_piece| {
-                collected_pieces.insert(interested_piece.number, DashSet::new());
-            });
+        let collected_pieces = Arc::new(DashMap::with_capacity(interested_pieces.len()));
 
         Self {
             config,
@@ -189,9 +182,10 @@ impl PieceCollector {
                     out_stream.try_next().await.or_err(ErrorType::StreamError)?
                 {
                     let message = message?;
-                    collected_pieces.entry(message.number).and_modify(|peers| {
-                        peers.insert(parent.id.clone());
-                    });
+                    collected_pieces
+                        .entry(message.number)
+                        .or_insert_with(DashSet::new)
+                        .insert(parent.id.clone());
                     info!(
                         "received piece {}-{} metadata from parent {}",
                         task_id, message.number, parent.id
