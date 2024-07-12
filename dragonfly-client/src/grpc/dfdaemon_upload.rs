@@ -119,6 +119,8 @@ impl DfdaemonUploadServer {
         // Start upload grpc server.
         info!("upload server listening on {}", self.addr);
         Server::builder()
+            .concurrency_limit_per_connection(super::CONCURRENCY_LIMIT_PER_CONNECTION)
+            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .add_service(reflection.clone())
             .add_service(health_service)
             .add_service(self.service.clone())

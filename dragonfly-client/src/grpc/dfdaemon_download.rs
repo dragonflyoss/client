@@ -131,6 +131,8 @@ impl DfdaemonDownloadServer {
         let uds = UnixListener::bind(&self.socket_path).unwrap();
         let uds_stream = UnixListenerStream::new(uds);
         Server::builder()
+            .concurrency_limit_per_connection(super::CONCURRENCY_LIMIT_PER_CONNECTION)
+            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .add_service(reflection.clone())
             .add_service(health_service)
             .add_service(self.service.clone())
