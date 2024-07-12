@@ -310,7 +310,7 @@ async fn main() -> Result<(), anyhow::Error> {
             info!("proxy server exited");
         },
 
-        _ = tokio::spawn(async move { manager_announcer.run().await }) => {
+        _ = tokio::spawn(async move { manager_announcer.run().await.unwrap_or_else(|err| error!("announcer manager failed: {}", err))}) => {
             info!("announcer manager exited");
         },
 
