@@ -19,7 +19,7 @@ use crate::metrics::{
     collect_download_piece_traffic_metrics, collect_upload_piece_traffic_metrics,
 };
 use chrono::Utc;
-use dragonfly_api::common::v2::{Peer, Range, TrafficType};
+use dragonfly_api::common::v2::{ObjectStorage, Peer, Range, TrafficType};
 use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
 use dragonfly_client_backend::{BackendFactory, GetRequest};
 use dragonfly_client_config::dfdaemon::Config;
@@ -32,7 +32,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt};
+<<<<<<< HEAD:dragonfly-client/src/resource/piece.rs
 use tracing::{error, info};
+=======
+use tracing::{error, info, instrument, Span};
+>>>>>>> main:dragonfly-client/src/task/piece.rs
 
 // Piece represents a piece manager.
 pub struct Piece {
@@ -88,16 +92,19 @@ impl Piece {
     }
 
     // get gets a piece from the local storage.
+    #[instrument(skip_all)]
     pub fn get(&self, task_id: &str, number: u32) -> Result<Option<metadata::Piece>> {
         self.storage.get_piece(task_id, number)
     }
 
     // get_all gets all pieces from the local storage.
+    #[instrument(skip_all)]
     pub fn get_all(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
         self.storage.get_pieces(task_id)
     }
 
     // calculate_interested calculates the interested pieces by content_length and range.
+    #[instrument(skip_all)]
     pub fn calculate_interested(
         &self,
         piece_length: u64,
@@ -211,6 +218,7 @@ impl Piece {
     }
 
     // remove_finished_from_interested removes the finished pieces from interested pieces.
+    #[instrument(skip_all)]
     pub fn remove_finished_from_interested(
         &self,
         finished_pieces: Vec<metadata::Piece>,
@@ -228,6 +236,7 @@ impl Piece {
     }
 
     // merge_finished_pieces merges the finished pieces and has finished pieces.
+    #[instrument(skip_all)]
     pub fn merge_finished_pieces(
         &self,
         finished_pieces: Vec<metadata::Piece>,
@@ -248,6 +257,7 @@ impl Piece {
     }
 
     // upload_from_local_peer_into_async_read uploads a single piece from a local peer.
+    #[instrument(skip_all, fields(piece_id))]
     pub async fn upload_from_local_peer_into_async_read(
         &self,
         task_id: &str,
@@ -256,6 +266,9 @@ impl Piece {
         range: Option<Range>,
         disable_rate_limit: bool,
     ) -> Result<impl AsyncRead> {
+        // Span record the piece_id.
+        Span::current().record("piece_id", self.storage.piece_id(task_id, number));
+
         // Acquire the upload rate limiter.
         if !disable_rate_limit {
             self.upload_rate_limiter.acquire(length as usize).await;
@@ -275,6 +288,7 @@ impl Piece {
     }
 
     // download_from_local_peer_into_async_read downloads a single piece from a local peer.
+    #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_local_peer_into_async_read(
         &self,
         task_id: &str,
@@ -283,6 +297,9 @@ impl Piece {
         range: Option<Range>,
         disable_rate_limit: bool,
     ) -> Result<impl AsyncRead> {
+        // Span record the piece_id.
+        Span::current().record("piece_id", self.storage.piece_id(task_id, number));
+
         // Acquire the download rate limiter.
         if !disable_rate_limit {
             self.download_rate_limiter.acquire(length as usize).await;
@@ -294,6 +311,10 @@ impl Piece {
 
     // download_from_local_peer downloads a single piece from a local peer. Fake the download piece
     // from the local peer, just collect the metrics.
+<<<<<<< HEAD:dragonfly-client/src/resource/piece.rs
+=======
+    #[instrument(skip_all)]
+>>>>>>> main:dragonfly-client/src/task/piece.rs
     pub fn download_from_local_peer(&self, task_id: &str, length: u64) {
         collect_download_piece_traffic_metrics(
             &TrafficType::LocalPeer,
@@ -303,6 +324,7 @@ impl Piece {
     }
 
     // download_from_remote_peer downloads a single piece from a remote peer.
+    #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_remote_peer(
         &self,
         host_id: &str,
@@ -311,6 +333,9 @@ impl Piece {
         length: u64,
         parent: Peer,
     ) -> Result<metadata::Piece> {
+        // Span record the piece_id.
+        Span::current().record("piece_id", self.storage.piece_id(task_id, number));
+
         // Acquire the download rate limiter.
         self.download_rate_limiter.acquire(length as usize).await;
 
@@ -420,6 +445,7 @@ impl Piece {
 
     // download_from_source downloads a single piece from the source.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_source(
         &self,
         task_id: &str,
@@ -428,7 +454,11 @@ impl Piece {
         offset: u64,
         length: u64,
         request_header: HeaderMap,
+        object_storage: Option<ObjectStorage>,
     ) -> Result<metadata::Piece> {
+        // Span record the piece_id.
+        Span::current().record("piece_id", self.storage.piece_id(task_id, number));
+
         // Acquire the download rate limiter.
         self.download_rate_limiter.acquire(length as usize).await;
 
@@ -465,6 +495,7 @@ impl Piece {
                 http_header: Some(request_header),
                 timeout: self.config.download.piece_timeout,
                 client_certs: None,
+                object_storage,
             })
             .await
             .map_err(|err| {
@@ -481,13 +512,17 @@ impl Piece {
         if !response.success {
             // Record the failure of downloading piece,
             // if the status code is not OK.
-            self.storage.download_piece_failed(task_id, number)?;
-
             let mut buffer = String::new();
-            response.reader.read_to_string(&mut buffer).await?;
+            response
+                .reader
+                .read_to_string(&mut buffer)
+                .await
+                .unwrap_or_default();
 
             let error_message = response.error_message.unwrap_or_default();
             error!("backend get failed: {} {}", error_message, buffer.as_str());
+
+            self.storage.download_piece_failed(task_id, number)?;
             return Err(Error::BackendError(BackendError {
                 message: error_message,
                 status_code: response.http_status_code.unwrap_or_default(),

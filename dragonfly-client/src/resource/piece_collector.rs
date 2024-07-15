@@ -15,7 +15,7 @@
  */
 
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use dragonfly_api::common::v2::Peer;
 use dragonfly_api::dfdaemon::v2::SyncPiecesRequest;
 use dragonfly_client_config::dfdaemon::Config;
@@ -27,7 +27,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
-use tracing::{error, info, Instrument};
+use tracing::{error, info, instrument, Instrument};
 
 // CollectedPiece is the piece collected from a peer.
 pub struct CollectedPiece {
@@ -59,7 +59,7 @@ pub struct PieceCollector {
     interested_pieces: Vec<metadata::Piece>,
 
     // collected_pieces is the pieces collected from peers.
-    collected_pieces: Arc<DashMap<u32, DashSet<String>>>,
+    collected_pieces: Arc<DashMap<u32, String>>,
 }
 
 impl PieceCollector {
@@ -71,13 +71,12 @@ impl PieceCollector {
         interested_pieces: Vec<metadata::Piece>,
         parents: Vec<Peer>,
     ) -> Self {
-        // Initialize collected_pieces.
         let collected_pieces = Arc::new(DashMap::new());
         interested_pieces
             .clone()
             .into_iter()
             .for_each(|interested_piece| {
-                collected_pieces.insert(interested_piece.number, DashSet::new());
+                collected_pieces.insert(interested_piece.number, "".to_string());
             });
 
         Self {
@@ -122,12 +121,13 @@ impl PieceCollector {
     }
 
     // collect_from_remote_peers collects pieces from remote peers.
+    #[instrument(skip_all)]
     async fn collect_from_remote_peers(
         host_id: String,
         task_id: String,
         parents: Vec<Peer>,
         interested_pieces: Vec<metadata::Piece>,
-        collected_pieces: Arc<DashMap<u32, DashSet<String>>>,
+        collected_pieces: Arc<DashMap<u32, String>>,
         collected_piece_tx: Sender<CollectedPiece>,
         collected_piece_timeout: Duration,
     ) -> Result<()> {
@@ -141,7 +141,7 @@ impl PieceCollector {
                 parent: Peer,
                 parents: Vec<Peer>,
                 interested_pieces: Vec<metadata::Piece>,
-                collected_pieces: Arc<DashMap<u32, DashSet<String>>>,
+                collected_pieces: Arc<DashMap<u32, String>>,
                 collected_piece_tx: Sender<CollectedPiece>,
                 collected_piece_timeout: Duration,
             ) -> Result<Peer> {
@@ -188,42 +188,40 @@ impl PieceCollector {
                     out_stream.try_next().await.or_err(ErrorType::StreamError)?
                 {
                     let message = message?;
-                    collected_pieces.entry(message.number).and_modify(|peers| {
-                        peers.insert(parent.id.clone());
-                    });
+                    let mut parent_id =
+                        match collected_pieces.try_get_mut(&message.number).try_unwrap() {
+                            Some(parent_id) => parent_id,
+                            None => continue,
+                        };
+                    parent_id.push_str(&parent.id);
+
                     info!(
-                        "received piece metadata {} from parent {}",
-                        message.number, parent.id
+                        "received piece {}-{} metadata from parent {}",
+                        task_id, message.number, parent.id
                     );
 
-                    match collected_pieces.get(&message.number) {
-                        Some(parent_ids) => {
-                            if let Some(parent_id) = parent_ids.iter().next() {
-                                let number = message.number;
-                                let length = message.length;
-                                let parent = parents
-                                    .iter()
-                                    .find(|parent| parent.id == parent_id.as_str())
-                                    .ok_or_else(|| {
-                                        error!("parent {} not found", parent_id.as_str());
-                                        Error::InvalidPeer(parent_id.clone())
-                                    })?;
+                    let parent = parents
+                        .iter()
+                        .find(|parent| parent.id == parent_id.as_str())
+                        .ok_or_else(|| {
+                            error!("parent {} not found", parent_id.as_str());
+                            Error::InvalidPeer(parent_id.clone())
+                        })?;
 
-                                collected_piece_tx
-                                    .send(CollectedPiece {
-                                        number,
-                                        length,
-                                        parent: parent.clone(),
-                                    })
-                                    .await
-                                    .map_err(|err| {
-                                        error!("send CollectedPiece failed: {}", err);
-                                        err
-                                    })?;
-                            }
-                        }
-                        None => continue,
-                    };
+                    collected_piece_tx
+                        .send(CollectedPiece {
+                            number: message.number,
+                            length: message.length,
+                            parent: parent.clone(),
+                        })
+                        .await
+                        .map_err(|err| {
+                            error!("send CollectedPiece failed: {}", err);
+                            err
+                        })?;
+
+                    // Release the lock of the piece with parent_id.
+                    drop(parent_id);
 
                     // Remove the piece from collected_pieces.
                     collected_pieces.remove(&message.number);

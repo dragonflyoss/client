@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - scheduler_switch
     tags:
       - v*
 

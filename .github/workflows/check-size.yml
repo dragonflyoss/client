@@ -2,9 +2,9 @@ name: Check Size
 
 on:
   push:
-    branches: [main, release-*, scheduler_switch]
+    branches: [main, release-*]
   pull_request:
-    branches: [main, release-*, scheduler_switch]
+    branches: [main, release-*]
 
 jobs:
   check_size:

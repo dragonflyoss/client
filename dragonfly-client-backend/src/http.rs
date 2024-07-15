@@ -67,7 +67,7 @@ impl crate::Backend for HTTP {
     // head gets the header of the request.
     async fn head(&self, request: crate::HeadRequest) -> Result<crate::HeadResponse> {
         info!(
-            "get request {} {}: {:?}",
+            "head request {} {}: {:?}",
             request.task_id, request.url, request.http_header
         );
         // The header of the request is required.
@@ -104,6 +104,7 @@ impl crate::Backend for HTTP {
             http_header: Some(header),
             http_status_code: Some(status_code),
             error_message: Some(status_code.to_string()),
+            entries: None,
         })
     }
 
@@ -181,6 +182,8 @@ mod tests {
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),
                 client_certs: None,
+                object_storage: None,
+                recursive: false,
             })
             .await
             .unwrap();
@@ -206,6 +209,8 @@ mod tests {
                 http_header: None,
                 timeout: std::time::Duration::from_secs(5),
                 client_certs: None,
+                object_storage: None,
+                recursive: false,
             })
             .await;
 
@@ -231,6 +236,7 @@ mod tests {
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),
                 client_certs: None,
+                object_storage: None,
             })
             .await
             .unwrap();

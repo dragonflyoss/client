@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, release-*, scheduler_switch]
+    branches: [main, release-*]
     paths-ignore: ['**.md', '**.png', '**.jpg', '**.svg', '**/docs/**']
   pull_request:
     branches: [main, release-*]
