@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use dragonfly_api::common::v2::Range;
+use dragonfly_api::common::v2::{ObjectStorage, Range};
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -30,6 +30,7 @@ use tracing::{error, info, warn};
 use url::Url;
 
 pub mod http;
+pub mod oss;
 
 // NAME is the name of the package.
 pub const NAME: &str = "backend";
@@ -53,6 +54,12 @@ pub struct HeadRequest {
 
     // client_certs is the client certificates for the request.
     pub client_certs: Option<Vec<CertificateDer<'static>>>,
+
+    // recursive is to define whether to traverse the directory recersively.
+    pub recursive: bool,
+
+    // object_storage is the object storage related information.
+    pub object_storage: Option<ObjectStorage>,
 }
 
 // HeadResponse is the head response for backend.
@@ -71,6 +78,9 @@ pub struct HeadResponse {
 
     // error_message is the error message of the response.
     pub error_message: Option<String>,
+
+    // entries is the entries of directory.
+    pub entries: Option<Vec<DirEntry>>,
 }
 
 // GetRequest is the get request for backend.
@@ -92,6 +102,9 @@ pub struct GetRequest {
 
     // client_certs is the client certificates for the request.
     pub client_certs: Option<Vec<CertificateDer<'static>>>,
+
+    // the object storage related information.
+    pub object_storage: Option<ObjectStorage>,
 }
 
 // GetResponse is the get response for backend.
@@ -127,6 +140,15 @@ where
             .await?;
         Ok(buffer)
     }
+}
+
+/// The File Entry of a directory, including some relevant file metadata.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DirEntry {
+    pub url: String,
+    pub content_length: usize,
+    pub is_dir: bool,
+    pub version: Option<String>,
 }
 
 // Backend is the interface of the backend.
@@ -207,6 +229,10 @@ impl BackendFactory {
         self.backends
             .insert("https".to_string(), Box::new(http::HTTP::new()));
         info!("load [https] builtin backend ");
+
+        self.backends
+            .insert("oss".to_string(), Box::new(oss::OSS::new()));
+        info!("load [oss] builtin backend ");
     }
 
     // load_plugin_backends loads the plugin backends.
