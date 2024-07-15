@@ -23,6 +23,7 @@ url.workspace = true
 tracing.workspace = true
 futures = "0.3.28"
 libloading = "0.8.4"
+opendal = { version = "0.47.3", features = ["services-oss"]}
 
 [dev-dependencies]
 httpmock = "0.7.0"

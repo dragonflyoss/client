@@ -15,7 +15,9 @@
  */
 
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
-use dragonfly_api::common::v2::{Download, Peer, Piece, Range, Task as CommonTask, TrafficType};
+use dragonfly_api::common::v2::{
+    Download, ObjectStorage, Peer, Piece, Range, Task as CommonTask, TrafficType,
+};
 use dragonfly_api::dfdaemon::{
     self,
     v2::{download_task_response, DownloadTaskResponse},
@@ -141,6 +143,8 @@ impl Task {
                 http_header: Some(request_header),
                 timeout: self.config.download.piece_timeout,
                 client_certs: None,
+                object_storage: download.object_storage,
+                recursive: false,
             })
             .await?;
 
@@ -1150,6 +1154,7 @@ impl Task {
                 _permit: OwnedSemaphorePermit,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnouncePeerRequest>,
+                object_storage: Option<ObjectStorage>,
             ) -> ClientResult<metadata::Piece> {
                 info!(
                     "start to download piece {} from source",
@@ -1164,6 +1169,7 @@ impl Task {
                         offset,
                         length,
                         request_header,
+                        object_storage,
                     )
                     .await?;
 
@@ -1249,6 +1255,7 @@ impl Task {
                     permit,
                     download_progress_tx.clone(),
                     in_stream_tx.clone(),
+                    download.object_storage.clone(),
                 )
                 .in_current_span(),
             );
@@ -1441,6 +1448,7 @@ impl Task {
                 storage: Arc<Storage>,
                 _permit: OwnedSemaphorePermit,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
+                object_storage: Option<ObjectStorage>,
             ) -> ClientResult<metadata::Piece> {
                 info!(
                     "start to download piece {} from source",
@@ -1455,6 +1463,7 @@ impl Task {
                         offset,
                         length,
                         request_header,
+                        object_storage,
                     )
                     .await?;
 
@@ -1517,6 +1526,7 @@ impl Task {
                     self.storage.clone(),
                     permit,
                     download_progress_tx.clone(),
+                    download.object_storage.clone(),
                 )
                 .in_current_span(),
             );

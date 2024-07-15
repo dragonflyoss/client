@@ -19,7 +19,7 @@ use crate::metrics::{
     collect_download_piece_traffic_metrics, collect_upload_piece_traffic_metrics,
 };
 use chrono::Utc;
-use dragonfly_api::common::v2::{Peer, Range, TrafficType};
+use dragonfly_api::common::v2::{ObjectStorage, Peer, Range, TrafficType};
 use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
 use dragonfly_client_backend::{BackendFactory, GetRequest};
 use dragonfly_client_config::dfdaemon::Config;
@@ -447,6 +447,7 @@ impl Piece {
         offset: u64,
         length: u64,
         request_header: HeaderMap,
+        object_storage: Option<ObjectStorage>,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", self.storage.piece_id(task_id, number));
@@ -487,6 +488,7 @@ impl Piece {
                 http_header: Some(request_header),
                 timeout: self.config.download.piece_timeout,
                 client_certs: None,
+                object_storage,
             })
             .await
             .map_err(|err| {
