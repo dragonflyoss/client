@@ -2116,9 +2116,9 @@ checksum = "b1a46d1a171d865aa5f83f92695765caa047a9b4cbae2cbf37dbd613a793fd4c"
 
 [[package]]
 name = "jemalloc_pprof"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27e92eac9f0249a801a215bc5a9edb16486e7615f6b2a334b93bb3b1423a04c8"
+checksum = "96368c0fc161a0a1a20b3952b6fd31ee342fffc87ed9e48ac1ed49fb25686655"
 dependencies = [
  "anyhow",
  "libc",
