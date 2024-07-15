@@ -165,10 +165,10 @@ pub struct BackendError {
     pub message: String,
 
     // status_code is the status code of the response.
-    pub status_code: reqwest::StatusCode,
+    pub status_code: Option<reqwest::StatusCode>,
 
     // header is the headers of the response.
-    pub header: reqwest::header::HeaderMap,
+    pub header: Option<reqwest::header::HeaderMap>,
 }
 
 // DownloadFromRemotePeerFailed is the error when the download from remote peer is failed.

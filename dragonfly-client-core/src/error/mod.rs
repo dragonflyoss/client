@@ -149,6 +149,10 @@ pub enum DFError {
     #[error(transparent)]
     ReqwesError(#[from] reqwest::Error),
 
+    // OpenDALError is the error for opendal.
+    #[error(transparent)]
+    OpenDALError(#[from] opendal::Error),
+
     // HyperError is the error for hyper.
     #[error(transparent)]
     HyperError(#[from] hyper::Error),

@@ -984,9 +984,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.0.131"
+version = "2.0.134"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c59d6412ad6dce41b7768b5967e47c20331d9d6bdc4f82c2d2bcfc4667581559"
+checksum = "c197dbebb5cc6f8f18383839093b96e24c6fdffb40402a7b2feb30775b8c7068"
 dependencies = [
  "prost 0.11.9",
  "prost-types 0.12.6",
@@ -1109,6 +1109,7 @@ dependencies = [
  "hyper 1.4.0",
  "hyper-util",
  "libloading",
+ "opendal",
  "reqwest",
  "thiserror",
  "tokio",

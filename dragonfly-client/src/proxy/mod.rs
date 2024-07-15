@@ -509,8 +509,10 @@ async fn proxy_by_dfdaemon(
                     Ok(backend) => {
                         error!("download task failed: {:?}", backend);
                         return Ok(make_error_response(
-                            http::StatusCode::from_u16(backend.status_code as u16)
-                                .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
+                            http::StatusCode::from_u16(
+                                backend.status_code.unwrap_or_default() as u16
+                            )
+                            .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
                             "download task failed",
                             Some(hashmap_to_hyper_header_map(&backend.header)?),
                         ));

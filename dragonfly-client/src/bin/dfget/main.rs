@@ -139,6 +139,18 @@ struct Args {
     disable_back_to_source: bool,
 
     #[arg(
+        long,
+        help = "Specify the access key ID for the object storage service"
+    )]
+    access_key_id: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the access key secret for the object storage service"
+    )]
+    access_key_secret: Option<String>,
+
+    #[arg(
         short = 'l',
         long,
         default_value = "info",
@@ -202,18 +214,6 @@ struct Args {
         help = "Specify the dfdaemon's max number of log files"
     )]
     dfdaemon_log_max_files: usize,
-
-    #[arg(
-        long,
-        help = "Specify the access key ID of the Object Storage Services. It should be provided with `access_key_secret` at the same time."
-    )]
-    access_key_id: Option<String>,
-
-    #[arg(
-        long,
-        help = "Specify the access key secret of the Object Storage Services. It should be provided with `access_key_id` at the same time."
-    )]
-    access_key_secret: Option<String>,
 }
 
 #[tokio::main]
@@ -239,13 +239,13 @@ async fn main() -> anyhow::Result<()> {
                 let details = status.details();
                 if let Ok(backend_err) = serde_json::from_slice::<Backend>(details) {
                     eprintln!(
-                        "{}{}{}Downloading failed, bad status code:{} {}",
+                        "{}{}{}Downloading Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
                         style::Bold,
-                        style::Reset,
-                        backend_err.status_code
+                        style::Reset
                     );
+
                     eprintln!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
@@ -253,16 +253,40 @@ async fn main() -> anyhow::Result<()> {
                         style::Bold,
                         style::Reset
                     );
+
+                    if let Some(status_code) = backend_err.status_code {
+                        eprintln!(
+                            "{}{}{}Bad status code:{} {}",
+                            color::Fg(color::Red),
+                            style::Italic,
+                            style::Bold,
+                            style::Reset,
+                            status_code
+                        );
+                    }
+
                     eprintln!(
-                        "{}{}{}Header:{}",
+                        "{}{}{}Message:{} {}",
                         color::Fg(color::Cyan),
                         style::Italic,
                         style::Bold,
-                        style::Reset
+                        style::Reset,
+                        backend_err.message
                     );
-                    for (key, value) in backend_err.header.iter() {
-                        eprintln!("  [{}]: {}", key.as_str(), value.as_str());
+
+                    if !backend_err.header.is_empty() {
+                        eprintln!(
+                            "{}{}{}Header:{}",
+                            color::Fg(color::Cyan),
+                            style::Italic,
+                            style::Bold,
+                            style::Reset
+                        );
+                        for (key, value) in backend_err.header.iter() {
+                            eprintln!("  [{}]: {}", key.as_str(), value.as_str());
+                        }
                     }
+
                     eprintln!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
@@ -272,13 +296,13 @@ async fn main() -> anyhow::Result<()> {
                     );
                 } else {
                     eprintln!(
-                        "{}{}{}Downloading failed, bad code:{} {}",
+                        "{}{}{}Downloading Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
                         style::Bold,
-                        style::Reset,
-                        status.code()
+                        style::Reset
                     );
+
                     eprintln!(
                         "{}{}{}*********************************{}",
                         color::Fg(color::Black),
@@ -286,6 +310,16 @@ async fn main() -> anyhow::Result<()> {
                         style::Bold,
                         style::Reset
                     );
+
+                    eprintln!(
+                        "{}{}{}Bad code:{} {}",
+                        color::Fg(color::Red),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset,
+                        status.code()
+                    );
+
                     eprintln!(
                         "{}{}{}Message:{} {}",
                         color::Fg(color::Cyan),
@@ -294,14 +328,18 @@ async fn main() -> anyhow::Result<()> {
                         style::Reset,
                         status.message()
                     );
-                    eprintln!(
-                        "{}{}{}Details:{} {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        std::str::from_utf8(status.details()).unwrap()
-                    );
+
+                    if !status.details().is_empty() {
+                        eprintln!(
+                            "{}{}{}Details:{} {}",
+                            color::Fg(color::Cyan),
+                            style::Italic,
+                            style::Bold,
+                            style::Reset,
+                            std::str::from_utf8(status.details()).unwrap()
+                        );
+                    }
+
                     eprintln!(
                         "{}{}{}*********************************{}",
                         color::Fg(color::Black),
@@ -313,13 +351,13 @@ async fn main() -> anyhow::Result<()> {
             }
             Error::BackendError(err) => {
                 eprintln!(
-                    "{}{}{}Downloading failed, error message:{} {}",
+                    "{}{}{}Downloading Failed!{}",
                     color::Fg(color::Red),
                     style::Italic,
                     style::Bold,
-                    style::Reset,
-                    err.message
+                    style::Reset
                 );
+
                 eprintln!(
                     "{}{}{}****************************************{}",
                     color::Fg(color::Black),
@@ -327,16 +365,29 @@ async fn main() -> anyhow::Result<()> {
                     style::Bold,
                     style::Reset
                 );
+
                 eprintln!(
-                    "{}{}{}Header:{}",
-                    color::Fg(color::Cyan),
+                    "{}{}{}Message:{} {}",
+                    color::Fg(color::Red),
                     style::Italic,
                     style::Bold,
-                    style::Reset
+                    style::Reset,
+                    err.message
                 );
-                for (key, value) in err.header.iter() {
-                    eprintln!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
+
+                if err.header.is_some() {
+                    eprintln!(
+                        "{}{}{}Header:{}",
+                        color::Fg(color::Cyan),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset
+                    );
+                    for (key, value) in err.header.unwrap_or_default().iter() {
+                        eprintln!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
+                    }
                 }
+
                 eprintln!(
                     "{}{}{}****************************************{}",
                     color::Fg(color::Black),
@@ -347,12 +398,36 @@ async fn main() -> anyhow::Result<()> {
             }
             err => {
                 eprintln!(
-                    "{}{}{}Downloading failed, error message:{} {}",
+                    "{}{}{}Downloading Failed!{}",
+                    color::Fg(color::Red),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
+
+                eprintln!(
+                    "{}{}{}****************************************{}",
+                    color::Fg(color::Black),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
+
+                eprintln!(
+                    "{}{}{}Message:{} {}",
                     color::Fg(color::Red),
                     style::Italic,
                     style::Bold,
                     style::Reset,
                     err
+                );
+
+                eprintln!(
+                    "{}{}{}****************************************{}",
+                    color::Fg(color::Black),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
                 );
             }
         }
@@ -380,16 +455,16 @@ async fn run(args: Args) -> Result<()> {
         err
     })?;
 
-    let mut object_storage = None;
-
     // Only when the `access_key_id` and `access_key_secret` are provided at the same time,
     // they will be pass to the `DownloadTaskRequest`.
+    let mut object_storage = None;
     if let (Some(access_key_id), Some(access_key_secret)) =
         (args.access_key_id, args.access_key_secret)
     {
         object_storage = Some(ObjectStorage {
             access_key_id,
             access_key_secret,
+            session_token: None,
         });
     }
 

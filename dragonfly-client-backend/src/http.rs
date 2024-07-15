@@ -29,7 +29,7 @@ pub struct HTTP;
 impl HTTP {
     // new returns a new HTTP.
     pub fn new() -> HTTP {
-        Self {}
+        Self
     }
 
     // client returns a new reqwest client.
@@ -70,6 +70,7 @@ impl crate::Backend for HTTP {
             "head request {} {}: {:?}",
             request.task_id, request.url, request.http_header
         );
+
         // The header of the request is required.
         let header = request.http_header.ok_or(Error::InvalidParameter)?;
 
@@ -98,6 +99,7 @@ impl crate::Backend for HTTP {
             "head response {} {}: {:?} {:?}",
             request.task_id, request.url, status_code, header
         );
+
         Ok(crate::HeadResponse {
             success: status_code.is_success(),
             content_length: response.content_length(),
@@ -114,6 +116,7 @@ impl crate::Backend for HTTP {
             "get request {} {}: {:?}",
             request.piece_id, request.url, request.http_header
         );
+
         // The header of the request is required.
         let header = request.http_header.ok_or(Error::InvalidParameter)?;
         let response = self
@@ -138,6 +141,7 @@ impl crate::Backend for HTTP {
                 .bytes_stream()
                 .map_err(|err| IOError::new(ErrorKind::Other, err)),
         ));
+
         Ok(crate::GetResponse {
             success: status_code.is_success(),
             http_header: Some(header),
@@ -183,7 +187,6 @@ mod tests {
                 timeout: std::time::Duration::from_secs(5),
                 client_certs: None,
                 object_storage: None,
-                recursive: false,
             })
             .await
             .unwrap();
@@ -210,7 +213,6 @@ mod tests {
                 timeout: std::time::Duration::from_secs(5),
                 client_certs: None,
                 object_storage: None,
-                recursive: false,
             })
             .await;
 
