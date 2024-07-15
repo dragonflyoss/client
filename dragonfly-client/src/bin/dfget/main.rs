@@ -150,10 +150,7 @@ struct Args {
     )]
     access_key_secret: Option<String>,
 
-    #[arg(
-        long, 
-        help = "Specify the session token for AWS S3"
-    )]
+    #[arg(long, help = "Specify the session token for AWS S3")]
     session_token: Option<String>,
 
     #[arg(

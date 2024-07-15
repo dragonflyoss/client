@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use dragonfly_client_core::*;
 use error::BackendError;
-use opendal::{raw::HttpClient, Metakey, Operator};
 use opendal::layers::LoggingLayer;
+use opendal::{raw::HttpClient, Metakey, Operator};
 use tokio_util::io::StreamReader;
 use tracing::info;
 use url::Url;
@@ -73,15 +73,11 @@ impl TryFrom<Url> for ParsedURL {
             .ok_or_else(|| Error::InvalidURI(url.to_string()))?
             .to_string();
 
-        Ok(Self { 
-            url, 
-            bucket, 
-            key 
-        })
+        Ok(Self { url, bucket, key })
     }
 }
 
-// S3 is a struct that implements the backend trait. 
+// S3 is a struct that implements the backend trait.
 #[derive(Default)]
 pub struct S3;
 
@@ -103,7 +99,7 @@ impl S3 {
         let Some(ObjectStorage {
             access_key_id,
             access_key_secret,
-            session_token, 
+            session_token,
         }) = object_storage
         else {
             error!("need access_key_id and access_key_secret");
@@ -135,7 +131,7 @@ impl S3 {
             .map_err(|err| {
                 Error::BackendError(BackendError {
                     message: err.to_string(),
-                    status_code: None, 
+                    status_code: None,
                     header: None,
                 })
             })?
@@ -273,22 +269,11 @@ impl crate::Backend for S3 {
                 })
             })?;
 
-            let stream = match request.range {
-                Some(range) => operator_reader
-                    .into_bytes_stream(range.start..range.start + range.length)
-                    .await
-                    .map_err(|err| {
-                        error!(
-                            "get request failed {} {}: {}",
-                            request.piece_id, request.url, err
-                        );
-                        Error::BackendError(BackendError {
-                            message: err.to_string(),
-                            status_code: None,
-                            header: None,
-                        })
-                    })?,
-                None => operator_reader.into_bytes_stream(..).await.map_err(|err| {
+        let stream = match request.range {
+            Some(range) => operator_reader
+                .into_bytes_stream(range.start..range.start + range.length)
+                .await
+                .map_err(|err| {
                     error!(
                         "get request failed {} {}: {}",
                         request.piece_id, request.url, err
@@ -299,7 +284,18 @@ impl crate::Backend for S3 {
                         header: None,
                     })
                 })?,
-            };
+            None => operator_reader.into_bytes_stream(..).await.map_err(|err| {
+                error!(
+                    "get request failed {} {}: {}",
+                    request.piece_id, request.url, err
+                );
+                Error::BackendError(BackendError {
+                    message: err.to_string(),
+                    status_code: None,
+                    header: None,
+                })
+            })?,
+        };
 
         Ok(crate::GetResponse {
             success: true,
@@ -319,8 +315,8 @@ mod tests {
     #[test]
     fn test_valid_s3_url() {
         let url = Url::parse("s3://my-bucket/path/to/object.txt").unwrap();
-        let config = Config::try_from(url).unwrap();
-        assert_eq!(config.bucket, "my-bucket");
-        assert_eq!(config.path, "path/to/object.txt");
+        let parsed_url = ParsedURL::try_from(url).unwrap();
+        assert_eq!(parsed_url.bucket, "my-bucket");
+        assert_eq!(parsed_url.key, "path/to/object.txt");
     }
 }
