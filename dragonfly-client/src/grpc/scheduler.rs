@@ -497,14 +497,13 @@ impl SchedulerClient {
         let hashring = self.hashring.read().await;
         for vnode in hashring.clone().into_iter() {
             let scheduler_addr = vnode.addr;
-
             let unavailable_schedulers = self.unavailable_schedulers.write().await;
             if let Some(&instant) = unavailable_schedulers.get(&scheduler_addr) {
                 if instant.elapsed() < cooldown_duration {
                     continue;
                 }
             }
-
+            
             match self.check_scheduler(&scheduler_addr).await {
                 Ok(channel) => {
                     let mut unavailable_schedulers = self.unavailable_schedulers.write().await;
