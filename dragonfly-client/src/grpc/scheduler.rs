@@ -39,8 +39,8 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tonic::transport::Channel;
-use tracing::{error, info, instrument, Instrument};
 use tonic_health::pb::health_check_response::ServingStatus;
+use tracing::{error, info, instrument, Instrument};
 
 // VNode is the virtual node of the hashring.
 #[derive(Debug, Copy, Clone, Hash, PartialEq)]
@@ -94,6 +94,7 @@ impl SchedulerClient {
             available_schedulers: Arc::new(RwLock::new(Vec::new())),
             available_scheduler_addrs: Arc::new(RwLock::new(Vec::new())),
             hashring: Arc::new(RwLock::new(HashRing::new())),
+            unavailable_schedulers: Arc::new(RwLock::new(HashMap::new())),
             cooldown_duration: 60,
             max_attempts: 5,
             refresh_threshold: 10,
@@ -537,7 +538,6 @@ impl SchedulerClient {
 
         return Err(Error::AvailableSchedulersNotFound);
     }
-
 
     // Check the health of the scheduler.
     async fn check_scheduler(&self, scheduler_addr: &SocketAddr) -> Result<Channel> {
