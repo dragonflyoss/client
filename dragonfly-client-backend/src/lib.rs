@@ -55,9 +55,6 @@ pub struct HeadRequest {
     // client_certs is the client certificates for the request.
     pub client_certs: Option<Vec<CertificateDer<'static>>>,
 
-    // recursive is to define whether to traverse the directory recersively.
-    pub recursive: bool,
-
     // object_storage is the object storage related information.
     pub object_storage: Option<ObjectStorage>,
 }
@@ -76,11 +73,12 @@ pub struct HeadResponse {
     // http_status_code is the status code of the response.
     pub http_status_code: Option<reqwest::StatusCode>,
 
+    // If path is a directory, entries will be returned. Otherwise, entries will be None.
+    // Entries is the information of the entries in the directory.
+    pub entries: Option<Vec<DirEntry>>,
+
     // error_message is the error message of the response.
     pub error_message: Option<String>,
-
-    // entries is the entries of directory.
-    pub entries: Option<Vec<DirEntry>>,
 }
 
 // GetRequest is the get request for backend.
@@ -145,10 +143,14 @@ where
 /// The File Entry of a directory, including some relevant file metadata.
 #[derive(Debug, PartialEq, Eq)]
 pub struct DirEntry {
+    // url is the url of the entry.
     pub url: String,
+
+    // content_length is the content length of the entry.
     pub content_length: usize,
+
+    // is_dir is the flag of the entry is a directory.
     pub is_dir: bool,
-    pub version: Option<String>,
 }
 
 // Backend is the interface of the backend.
