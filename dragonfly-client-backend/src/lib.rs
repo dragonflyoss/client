@@ -31,6 +31,7 @@ use url::Url;
 
 pub mod http;
 pub mod oss;
+pub mod s3;
 
 // NAME is the name of the package.
 pub const NAME: &str = "backend";
@@ -233,6 +234,10 @@ impl BackendFactory {
         info!("load [https] builtin backend ");
 
         self.backends
+            .insert("s3".to_string(), Box::new(s3::S3::new()));
+        info!("load [s3] builtin backend");
+
+        self.backends
             .insert("oss".to_string(), Box::new(oss::OSS::new()));
         info!("load [oss] builtin backend ");
     }
@@ -284,6 +289,14 @@ mod tests {
         let backend_factory =
             BackendFactory::new(Some(Path::new("/var/lib/dragonfly/plugins/backend/"))).unwrap();
         let backend = backend_factory.build("http://example.com");
+        assert!(backend.is_ok());
+    }
+
+    #[test]
+    fn should_return_s3_backend() {
+        let backend_factory =
+            BackendFactory::new(Some(Path::new("/var/lib/dragonfly/plugins/backend/"))).unwrap();
+        let backend = backend_factory.build("s3://example.com");
         assert!(backend.is_ok());
     }
 }
