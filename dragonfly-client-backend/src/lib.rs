@@ -30,8 +30,7 @@ use tracing::{error, info, warn};
 use url::Url;
 
 pub mod http;
-pub mod oss;
-pub mod s3;
+pub mod object_storage;
 
 // NAME is the name of the package.
 pub const NAME: &str = "backend";
@@ -233,13 +232,53 @@ impl BackendFactory {
             .insert("https".to_string(), Box::new(http::HTTP::new()));
         info!("load [https] builtin backend ");
 
-        self.backends
-            .insert("s3".to_string(), Box::new(s3::S3::new()));
+        self.backends.insert(
+            "s3".to_string(),
+            Box::new(object_storage::ObjectStorage::new(
+                object_storage::Scheme::S3,
+            )),
+        );
         info!("load [s3] builtin backend");
 
-        self.backends
-            .insert("oss".to_string(), Box::new(oss::OSS::new()));
+        self.backends.insert(
+            "gcs".to_string(),
+            Box::new(object_storage::ObjectStorage::new(
+                object_storage::Scheme::GCS,
+            )),
+        );
+        info!("load [gcs] builtin backend");
+
+        self.backends.insert(
+            "abs".to_string(),
+            Box::new(object_storage::ObjectStorage::new(
+                object_storage::Scheme::ABS,
+            )),
+        );
+        info!("load [abs] builtin backend");
+
+        self.backends.insert(
+            "oss".to_string(),
+            Box::new(object_storage::ObjectStorage::new(
+                object_storage::Scheme::OSS,
+            )),
+        );
         info!("load [oss] builtin backend ");
+
+        self.backends.insert(
+            "obs".to_string(),
+            Box::new(object_storage::ObjectStorage::new(
+                object_storage::Scheme::OBS,
+            )),
+        );
+        info!("load [obs] builtin backend");
+
+        self.backends.insert(
+            "cos".to_string(),
+            Box::new(object_storage::ObjectStorage::new(
+                object_storage::Scheme::COS,
+            )),
+        );
+        info!("load [cos] builtin backend");
     }
 
     // load_plugin_backends loads the plugin backends.

@@ -44,13 +44,41 @@ const DEFAULT_DFDAEMON_CHECK_HEALTH_INTERVAL: Duration = Duration::from_millis(2
 // DEFAULT_DFDAEMON_CHECK_HEALTH_TIMEOUT is the default timeout of checking dfdaemon's health.
 const DEFAULT_DFDAEMON_CHECK_HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
 
+const LONG_ABOUT: &str = r#"
+A download command line based on P2P technology in Dragonfly that can download resources of different protocols.
+
+The full documentation is here: https://d7y.io/docs/next/reference/commands/client/dfget/.
+
+Examples:
+  # Download a file from HTTP server.
+  $ dfget https://<host>:<port>/<path> -O /tmp/file.txt
+  
+  # Download a file from Amazon Simple Storage Service(S3).
+  $ dfget s3://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret>
+  
+  # Download a file from Google Cloud Storage Service(GCS).
+  $ dfget gcs://<bucket>/<path> -O /tmp/file.txt --storage-credential=<credential> --storage-endpoint=<endpoint>
+  
+  # Download a file from Azure Blob Storage Service(ABS).
+  $ dfget abs://<container>/<path> -O /tmp/file.txt --storage-access-key-id=<account_name> --storage-access-key-secret=<account_key> --storage-endpoint=<endpoint>
+  
+  # Download a file from Aliyun Object Storage Service(OSS).
+  $ dfget oss://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret> --storage-endpoint=<endpoint>
+  
+  # Download a file from Huawei Cloud Object Storage Service(OBS).
+  $ dfget obs://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret> --storage-endpoint=<endpoint>
+  
+  # Download a file from Tencent Cloud Object Storage Service(COS).
+  $ dfget cos://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret> --storage-endpoint=<endpoint>
+"#;
+
 #[derive(Debug, Parser)]
 #[command(
     name = dfget::NAME,
     author,
     version,
     about = "dfget is a download command line based on P2P technology",
-    long_about = "A download command line based on P2P technology in Dragonfly that can download resources of different protocols."
+    long_about = LONG_ABOUT,
 )]
 struct Args {
     #[arg(help = "Specify the URL to download")]
@@ -138,20 +166,42 @@ struct Args {
     )]
     disable_back_to_source: bool,
 
-    #[arg(
-        long,
-        help = "Specify the access key ID for the object storage service"
-    )]
-    access_key_id: Option<String>,
+    #[arg(long, help = "Specify the region for the Object Storage Service")]
+    storage_region: Option<String>,
+
+    #[arg(long, help = "Specify the endpoint for the Object Storage Service")]
+    storage_endpoint: Option<String>,
 
     #[arg(
         long,
-        help = "Specify the access key secret for the object storage service"
+        help = "Specify the access key ID for the Object Storage Service"
     )]
-    access_key_secret: Option<String>,
+    storage_access_key_id: Option<String>,
 
-    #[arg(long, help = "Specify the session token for AWS S3")]
-    session_token: Option<String>,
+    #[arg(
+        long,
+        help = "Specify the access key secret for the Object Storage Service"
+    )]
+    storage_access_key_secret: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the session token for Amazon Simple Storage Service(S3)"
+    )]
+    storage_session_token: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the credential for Google Cloud Storage Service(GCS)"
+    )]
+    storage_credential: Option<String>,
+
+    #[arg(
+        long,
+        default_value = "publicRead",
+        help = "Specify the predefined ACL for Google Cloud Storage Service(GCS)"
+    )]
+    storage_predefined_acl: Option<String>,
 
     #[arg(
         short = 'l',
@@ -462,12 +512,16 @@ async fn run(args: Args) -> Result<()> {
     // they will be pass to the `DownloadTaskRequest`.
     let mut object_storage = None;
     if let (Some(access_key_id), Some(access_key_secret)) =
-        (args.access_key_id, args.access_key_secret)
+        (args.storage_access_key_id, args.storage_access_key_secret)
     {
         object_storage = Some(ObjectStorage {
+            region: args.storage_region,
+            endpoint: args.storage_endpoint,
             access_key_id,
             access_key_secret,
-            session_token: None,
+            session_token: args.storage_session_token,
+            credential: args.storage_credential,
+            predefined_acl: args.storage_predefined_acl,
         });
     }
 
