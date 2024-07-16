@@ -536,8 +536,8 @@ impl SchedulerClient {
             Ok(client) => client,
             Err(err) => {
                 error!(
-                    "create {} health client for scheduler {}:{} failed: {}", 
-                    scheduler_addr.ip, scheduler_addr.port, err
+                    "create health client for scheduler {}:{} failed: {}", 
+                    scheduler_addr.ip(), scheduler_addr.port(), err
                 );
                 return Err(ExternalError::new(ErrorType::ConnectError)
                     .with_cause(Box::new(err))
@@ -650,7 +650,7 @@ impl SchedulerClient {
         // Clean the unavailable scheduler addrs.
         let mut unavailable_scheduler_addrs = self.unavailable_scheduler_addrs.write().await;
         unavailable_scheduler_addrs.clear();
-        drop(unavailable_scheduler_addrs)
+        drop(unavailable_scheduler_addrs);
 
         let available_scheduler_addrs = self.available_scheduler_addrs.read().await;
         info!(
