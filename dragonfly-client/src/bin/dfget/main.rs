@@ -44,13 +44,41 @@ const DEFAULT_DFDAEMON_CHECK_HEALTH_INTERVAL: Duration = Duration::from_millis(2
 // DEFAULT_DFDAEMON_CHECK_HEALTH_TIMEOUT is the default timeout of checking dfdaemon's health.
 const DEFAULT_DFDAEMON_CHECK_HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
 
+const LONG_ABOUT: &str = r#"
+A download command line based on P2P technology in Dragonfly that can download resources of different protocols.
+
+The full documentation is here: https://d7y.io/docs/next/reference/commands/client/dfget/.
+
+Examples:
+  # Download a file from HTTP server.
+  $ dfget https://<host>:<port>/<path> -O /tmp/file.txt
+  
+  # Download a file from Amazon Simple Storage Service(S3).
+  $ dfget s3://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret>
+  
+  # Download a file from Google Cloud Storage Service(GCS).
+  $ dfget gcs://<bucket>/<path> -O /tmp/file.txt --storage-credential=<credential> --storage-endpoint=<endpoint>
+  
+  # Download a file from Azure Blob Storage Service(ABS).
+  $ dfget abs://<container>/<path> -O /tmp/file.txt --storage-access-key-id=<account_name> --storage-access-key-secret=<account_key> --storage-endpoint=<endpoint>
+  
+  # Download a file from Aliyun Object Storage Service(OSS).
+  $ dfget oss://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret> --storage-endpoint=<endpoint>
+  
+  # Download a file from Huawei Cloud Object Storage Service(OBS).
+  $ dfget obs://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret> --storage-endpoint=<endpoint>
+  
+  # Download a file from Tencent Cloud Object Storage Service(COS).
+  $ dfget cos://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret> --storage-endpoint=<endpoint>
+"#;
+
 #[derive(Debug, Parser)]
 #[command(
     name = dfget::NAME,
     author,
     version,
     about = "dfget is a download command line based on P2P technology",
-    long_about = "A download command line based on P2P technology in Dragonfly that can download resources of different protocols."
+    long_about = LONG_ABOUT,
 )]
 struct Args {
     #[arg(help = "Specify the URL to download")]
@@ -138,6 +166,43 @@ struct Args {
     )]
     disable_back_to_source: bool,
 
+    #[arg(long, help = "Specify the region for the Object Storage Service")]
+    storage_region: Option<String>,
+
+    #[arg(long, help = "Specify the endpoint for the Object Storage Service")]
+    storage_endpoint: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the access key ID for the Object Storage Service"
+    )]
+    storage_access_key_id: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the access key secret for the Object Storage Service"
+    )]
+    storage_access_key_secret: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the session token for Amazon Simple Storage Service(S3)"
+    )]
+    storage_session_token: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the credential for Google Cloud Storage Service(GCS)"
+    )]
+    storage_credential: Option<String>,
+
+    #[arg(
+        long,
+        default_value = "publicRead",
+        help = "Specify the predefined ACL for Google Cloud Storage Service(GCS)"
+    )]
+    storage_predefined_acl: Option<String>,
+
     #[arg(
         short = 'l',
         long,
@@ -202,18 +267,6 @@ struct Args {
         help = "Specify the dfdaemon's max number of log files"
     )]
     dfdaemon_log_max_files: usize,
-
-    #[arg(
-        long,
-        help = "Specify the access key ID of the Object Storage Services. It should be provided with `access_key_secret` at the same time."
-    )]
-    access_key_id: Option<String>,
-
-    #[arg(
-        long,
-        help = "Specify the access key secret of the Object Storage Services. It should be provided with `access_key_id` at the same time."
-    )]
-    access_key_secret: Option<String>,
 }
 
 #[tokio::main]
@@ -239,13 +292,13 @@ async fn main() -> anyhow::Result<()> {
                 let details = status.details();
                 if let Ok(backend_err) = serde_json::from_slice::<Backend>(details) {
                     eprintln!(
-                        "{}{}{}Downloading failed, bad status code:{} {}",
+                        "{}{}{}Downloading Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
                         style::Bold,
-                        style::Reset,
-                        backend_err.status_code
+                        style::Reset
                     );
+
                     eprintln!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
@@ -253,16 +306,40 @@ async fn main() -> anyhow::Result<()> {
                         style::Bold,
                         style::Reset
                     );
+
+                    if let Some(status_code) = backend_err.status_code {
+                        eprintln!(
+                            "{}{}{}Bad status code:{} {}",
+                            color::Fg(color::Red),
+                            style::Italic,
+                            style::Bold,
+                            style::Reset,
+                            status_code
+                        );
+                    }
+
                     eprintln!(
-                        "{}{}{}Header:{}",
+                        "{}{}{}Message:{} {}",
                         color::Fg(color::Cyan),
                         style::Italic,
                         style::Bold,
-                        style::Reset
+                        style::Reset,
+                        backend_err.message
                     );
-                    for (key, value) in backend_err.header.iter() {
-                        eprintln!("  [{}]: {}", key.as_str(), value.as_str());
+
+                    if !backend_err.header.is_empty() {
+                        eprintln!(
+                            "{}{}{}Header:{}",
+                            color::Fg(color::Cyan),
+                            style::Italic,
+                            style::Bold,
+                            style::Reset
+                        );
+                        for (key, value) in backend_err.header.iter() {
+                            eprintln!("  [{}]: {}", key.as_str(), value.as_str());
+                        }
                     }
+
                     eprintln!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
@@ -272,13 +349,13 @@ async fn main() -> anyhow::Result<()> {
                     );
                 } else {
                     eprintln!(
-                        "{}{}{}Downloading failed, bad code:{} {}",
+                        "{}{}{}Downloading Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
                         style::Bold,
-                        style::Reset,
-                        status.code()
+                        style::Reset
                     );
+
                     eprintln!(
                         "{}{}{}*********************************{}",
                         color::Fg(color::Black),
@@ -286,6 +363,16 @@ async fn main() -> anyhow::Result<()> {
                         style::Bold,
                         style::Reset
                     );
+
+                    eprintln!(
+                        "{}{}{}Bad code:{} {}",
+                        color::Fg(color::Red),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset,
+                        status.code()
+                    );
+
                     eprintln!(
                         "{}{}{}Message:{} {}",
                         color::Fg(color::Cyan),
@@ -294,14 +381,18 @@ async fn main() -> anyhow::Result<()> {
                         style::Reset,
                         status.message()
                     );
-                    eprintln!(
-                        "{}{}{}Details:{} {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        std::str::from_utf8(status.details()).unwrap()
-                    );
+
+                    if !status.details().is_empty() {
+                        eprintln!(
+                            "{}{}{}Details:{} {}",
+                            color::Fg(color::Cyan),
+                            style::Italic,
+                            style::Bold,
+                            style::Reset,
+                            std::str::from_utf8(status.details()).unwrap()
+                        );
+                    }
+
                     eprintln!(
                         "{}{}{}*********************************{}",
                         color::Fg(color::Black),
@@ -313,13 +404,13 @@ async fn main() -> anyhow::Result<()> {
             }
             Error::BackendError(err) => {
                 eprintln!(
-                    "{}{}{}Downloading failed, error message:{} {}",
+                    "{}{}{}Downloading Failed!{}",
                     color::Fg(color::Red),
                     style::Italic,
                     style::Bold,
-                    style::Reset,
-                    err.message
+                    style::Reset
                 );
+
                 eprintln!(
                     "{}{}{}****************************************{}",
                     color::Fg(color::Black),
@@ -327,16 +418,29 @@ async fn main() -> anyhow::Result<()> {
                     style::Bold,
                     style::Reset
                 );
+
                 eprintln!(
-                    "{}{}{}Header:{}",
-                    color::Fg(color::Cyan),
+                    "{}{}{}Message:{} {}",
+                    color::Fg(color::Red),
                     style::Italic,
                     style::Bold,
-                    style::Reset
+                    style::Reset,
+                    err.message
                 );
-                for (key, value) in err.header.iter() {
-                    eprintln!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
+
+                if err.header.is_some() {
+                    eprintln!(
+                        "{}{}{}Header:{}",
+                        color::Fg(color::Cyan),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset
+                    );
+                    for (key, value) in err.header.unwrap_or_default().iter() {
+                        eprintln!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
+                    }
                 }
+
                 eprintln!(
                     "{}{}{}****************************************{}",
                     color::Fg(color::Black),
@@ -347,12 +451,36 @@ async fn main() -> anyhow::Result<()> {
             }
             err => {
                 eprintln!(
-                    "{}{}{}Downloading failed, error message:{} {}",
+                    "{}{}{}Downloading Failed!{}",
+                    color::Fg(color::Red),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
+
+                eprintln!(
+                    "{}{}{}****************************************{}",
+                    color::Fg(color::Black),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
+
+                eprintln!(
+                    "{}{}{}Message:{} {}",
                     color::Fg(color::Red),
                     style::Italic,
                     style::Bold,
                     style::Reset,
                     err
+                );
+
+                eprintln!(
+                    "{}{}{}****************************************{}",
+                    color::Fg(color::Black),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
                 );
             }
         }
@@ -380,16 +508,20 @@ async fn run(args: Args) -> Result<()> {
         err
     })?;
 
-    let mut object_storage = None;
-
     // Only when the `access_key_id` and `access_key_secret` are provided at the same time,
     // they will be pass to the `DownloadTaskRequest`.
+    let mut object_storage = None;
     if let (Some(access_key_id), Some(access_key_secret)) =
-        (args.access_key_id, args.access_key_secret)
+        (args.storage_access_key_id, args.storage_access_key_secret)
     {
         object_storage = Some(ObjectStorage {
+            region: args.storage_region,
+            endpoint: args.storage_endpoint,
             access_key_id,
             access_key_secret,
+            session_token: args.storage_session_token,
+            credential: args.storage_credential,
+            predefined_acl: args.storage_predefined_acl,
         });
     }
 

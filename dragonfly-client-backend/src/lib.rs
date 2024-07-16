@@ -30,7 +30,7 @@ use tracing::{error, info, warn};
 use url::Url;
 
 pub mod http;
-pub mod oss;
+pub mod object_storage;
 
 // NAME is the name of the package.
 pub const NAME: &str = "backend";
@@ -55,9 +55,6 @@ pub struct HeadRequest {
     // client_certs is the client certificates for the request.
     pub client_certs: Option<Vec<CertificateDer<'static>>>,
 
-    // recursive is to define whether to traverse the directory recersively.
-    pub recursive: bool,
-
     // object_storage is the object storage related information.
     pub object_storage: Option<ObjectStorage>,
 }
@@ -76,11 +73,12 @@ pub struct HeadResponse {
     // http_status_code is the status code of the response.
     pub http_status_code: Option<reqwest::StatusCode>,
 
+    // If path is a directory, entries will be returned. Otherwise, entries will be None.
+    // Entries is the information of the entries in the directory.
+    pub entries: Option<Vec<DirEntry>>,
+
     // error_message is the error message of the response.
     pub error_message: Option<String>,
-
-    // entries is the entries of directory.
-    pub entries: Option<Vec<DirEntry>>,
 }
 
 // GetRequest is the get request for backend.
@@ -145,10 +143,14 @@ where
 /// The File Entry of a directory, including some relevant file metadata.
 #[derive(Debug, PartialEq, Eq)]
 pub struct DirEntry {
+    // url is the url of the entry.
     pub url: String,
+
+    // content_length is the content length of the entry.
     pub content_length: usize,
+
+    // is_dir is the flag of the entry is a directory.
     pub is_dir: bool,
-    pub version: Option<String>,
 }
 
 // Backend is the interface of the backend.
@@ -230,9 +232,53 @@ impl BackendFactory {
             .insert("https".to_string(), Box::new(http::HTTP::new()));
         info!("load [https] builtin backend ");
 
-        self.backends
-            .insert("oss".to_string(), Box::new(oss::OSS::new()));
+        self.backends.insert(
+            "s3".to_string(),
+            Box::new(object_storage::ObjectStorage::new(
+                object_storage::Scheme::S3,
+            )),
+        );
+        info!("load [s3] builtin backend");
+
+        self.backends.insert(
+            "gcs".to_string(),
+            Box::new(object_storage::ObjectStorage::new(
+                object_storage::Scheme::GCS,
+            )),
+        );
+        info!("load [gcs] builtin backend");
+
+        self.backends.insert(
+            "abs".to_string(),
+            Box::new(object_storage::ObjectStorage::new(
+                object_storage::Scheme::ABS,
+            )),
+        );
+        info!("load [abs] builtin backend");
+
+        self.backends.insert(
+            "oss".to_string(),
+            Box::new(object_storage::ObjectStorage::new(
+                object_storage::Scheme::OSS,
+            )),
+        );
         info!("load [oss] builtin backend ");
+
+        self.backends.insert(
+            "obs".to_string(),
+            Box::new(object_storage::ObjectStorage::new(
+                object_storage::Scheme::OBS,
+            )),
+        );
+        info!("load [obs] builtin backend");
+
+        self.backends.insert(
+            "cos".to_string(),
+            Box::new(object_storage::ObjectStorage::new(
+                object_storage::Scheme::COS,
+            )),
+        );
+        info!("load [cos] builtin backend");
     }
 
     // load_plugin_backends loads the plugin backends.
@@ -282,6 +328,14 @@ mod tests {
         let backend_factory =
             BackendFactory::new(Some(Path::new("/var/lib/dragonfly/plugins/backend/"))).unwrap();
         let backend = backend_factory.build("http://example.com");
+        assert!(backend.is_ok());
+    }
+
+    #[test]
+    fn should_return_s3_backend() {
+        let backend_factory =
+            BackendFactory::new(Some(Path::new("/var/lib/dragonfly/plugins/backend/"))).unwrap();
+        let backend = backend_factory.build("s3://example.com");
         assert!(backend.is_ok());
     }
 }

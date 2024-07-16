@@ -144,7 +144,6 @@ impl Task {
                 timeout: self.config.download.piece_timeout,
                 client_certs: None,
                 object_storage: download.object_storage,
-                recursive: false,
             })
             .await?;
 
@@ -152,8 +151,8 @@ impl Task {
         if !response.success {
             return Err(Error::BackendError(BackendError {
                 message: response.error_message.unwrap_or_default(),
-                status_code: response.http_status_code.unwrap_or_default(),
-                header: response.http_header.unwrap_or_default(),
+                status_code: Some(response.http_status_code.unwrap_or_default()),
+                header: Some(response.http_header.unwrap_or_default()),
             }));
         }
 
@@ -161,7 +160,7 @@ impl Task {
             id,
             download.piece_length,
             response.content_length,
-            Some(response.http_header.ok_or(Error::InvalidParameter)?),
+            response.http_header,
         )
     }
 
@@ -1285,8 +1284,8 @@ impl Task {
                                                 response: Some(download_piece_back_to_source_failed_request::Response::Backend(
                                                         Backend{
                                                             message: err.message.clone(),
-                                                            header: reqwest_headermap_to_hashmap(&err.header),
-                                                            status_code: err.status_code.as_u16() as i32,
+                                                            header: reqwest_headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
+                                                            status_code: err.status_code.map(|code| code.as_u16() as i32),
                                                         }
                                                 )),
                                             }

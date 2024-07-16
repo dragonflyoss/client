@@ -29,7 +29,7 @@ pub struct HTTP;
 impl HTTP {
     // new returns a new HTTP.
     pub fn new() -> HTTP {
-        Self {}
+        Self
     }
 
     // client returns a new reqwest client.
@@ -63,13 +63,14 @@ impl HTTP {
 
 // Backend implements the Backend trait.
 #[tonic::async_trait]
-impl crate::Backend for HTTP {
+impl super::Backend for HTTP {
     // head gets the header of the request.
-    async fn head(&self, request: crate::HeadRequest) -> Result<crate::HeadResponse> {
+    async fn head(&self, request: super::HeadRequest) -> Result<super::HeadResponse> {
         info!(
             "head request {} {}: {:?}",
             request.task_id, request.url, request.http_header
         );
+
         // The header of the request is required.
         let header = request.http_header.ok_or(Error::InvalidParameter)?;
 
@@ -98,7 +99,8 @@ impl crate::Backend for HTTP {
             "head response {} {}: {:?} {:?}",
             request.task_id, request.url, status_code, header
         );
-        Ok(crate::HeadResponse {
+
+        Ok(super::HeadResponse {
             success: status_code.is_success(),
             content_length: response.content_length(),
             http_header: Some(header),
@@ -109,11 +111,12 @@ impl crate::Backend for HTTP {
     }
 
     // get gets the content of the request.
-    async fn get(&self, request: crate::GetRequest) -> Result<crate::GetResponse<crate::Body>> {
+    async fn get(&self, request: super::GetRequest) -> Result<super::GetResponse<super::Body>> {
         info!(
             "get request {} {}: {:?}",
             request.piece_id, request.url, request.http_header
         );
+
         // The header of the request is required.
         let header = request.http_header.ok_or(Error::InvalidParameter)?;
         let response = self
@@ -138,7 +141,8 @@ impl crate::Backend for HTTP {
                 .bytes_stream()
                 .map_err(|err| IOError::new(ErrorKind::Other, err)),
         ));
-        Ok(crate::GetResponse {
+
+        Ok(super::GetResponse {
             success: status_code.is_success(),
             http_header: Some(header),
             http_status_code: Some(status_code),
@@ -158,11 +162,9 @@ impl Default for HTTP {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Backend, GetRequest, HeadRequest};
+    use crate::{http, Backend, GetRequest, HeadRequest};
     use httpmock::{Method, MockServer};
     use reqwest::{header::HeaderMap, StatusCode};
-
-    use super::*;
 
     #[tokio::test]
     async fn should_get_head_response() {
@@ -174,7 +176,7 @@ mod tests {
                 .body("");
         });
 
-        let http_backend = HTTP::new();
+        let http_backend = http::HTTP::new();
         let resp = http_backend
             .head(HeadRequest {
                 task_id: "test".to_string(),
@@ -183,7 +185,6 @@ mod tests {
                 timeout: std::time::Duration::from_secs(5),
                 client_certs: None,
                 object_storage: None,
-                recursive: false,
             })
             .await
             .unwrap();
@@ -201,7 +202,7 @@ mod tests {
                 .body("");
         });
 
-        let http_backend = HTTP::new();
+        let http_backend = http::HTTP::new();
         let resp = http_backend
             .head(HeadRequest {
                 task_id: "test".to_string(),
@@ -210,7 +211,6 @@ mod tests {
                 timeout: std::time::Duration::from_secs(5),
                 client_certs: None,
                 object_storage: None,
-                recursive: false,
             })
             .await;
 
@@ -227,7 +227,7 @@ mod tests {
                 .body("OK");
         });
 
-        let http_backend = HTTP::new();
+        let http_backend = http::HTTP::new();
         let mut resp = http_backend
             .get(GetRequest {
                 piece_id: "test".to_string(),

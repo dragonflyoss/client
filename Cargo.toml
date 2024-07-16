@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.86"
+version = "0.1.87"
 authors = ["The Dragonfly Developers"]
 homepage = "https://d7y.io/"
 repository = "https://github.com/dragonflyoss/client.git"
@@ -22,15 +22,15 @@ readme = "README.md"
 edition = "2021"
 
 [workspace.dependencies]
-dragonfly-client = { path = "dragonfly-client", version = "0.1.86" }
-dragonfly-client-core = { path = "dragonfly-client-core", version = "0.1.86" }
-dragonfly-client-config = { path = "dragonfly-client-config", version = "0.1.86" }
-dragonfly-client-storage = { path = "dragonfly-client-storage", version = "0.1.86" }
-dragonfly-client-backend = { path = "dragonfly-client-backend", version = "0.1.86" }
-dragonfly-client-util = { path = "dragonfly-client-util", version = "0.1.86" }
-dragonfly-client-init = { path = "dragonfly-client-init", version = "0.1.86" }
+dragonfly-client = { path = "dragonfly-client", version = "0.1.87" }
+dragonfly-client-core = { path = "dragonfly-client-core", version = "0.1.87" }
+dragonfly-client-config = { path = "dragonfly-client-config", version = "0.1.87" }
+dragonfly-client-storage = { path = "dragonfly-client-storage", version = "0.1.87" }
+dragonfly-client-backend = { path = "dragonfly-client-backend", version = "0.1.87" }
+dragonfly-client-util = { path = "dragonfly-client-util", version = "0.1.87" }
+dragonfly-client-init = { path = "dragonfly-client-init", version = "0.1.87" }
 thiserror = "1.0"
-dragonfly-api = "2.0.131"
+dragonfly-api = "2.0.138"
 reqwest = { version = "0.12.4", features = ["stream", "native-tls", "default-tls", "rustls-tls"] }
 rcgen = { version = "0.12.1", features = ["x509-parser"] }
 hyper = { version = "1.4", features = ["full"] }
@@ -70,7 +70,15 @@ humantime = "2.1.0"
 prost-wkt-types = "0.4"
 chrono = { version = "0.4.35", features = ["serde"] }
 openssl = { version = "0.10", features = ["vendored"] }
-clap = { version = "4.5.8", features = ["derive"] }
+opendal = { version = "0.47.3", features = [
+    "services-s3", 
+    "services-azblob",
+    "services-gcs", 
+    "services-oss",
+    "services-obs",
+    "services-cos",
+] }
+clap = { version = "4.5.9", features = ["derive"] }
 anyhow = "1.0.86"
 toml_edit = "0.22.14"
 toml = "0.8.13"

@@ -518,8 +518,8 @@ impl Piece {
             self.storage.download_piece_failed(task_id, number)?;
             return Err(Error::BackendError(BackendError {
                 message: error_message,
-                status_code: response.http_status_code.unwrap_or_default(),
-                header: response.http_header.unwrap_or_default(),
+                status_code: Some(response.http_status_code.unwrap_or_default()),
+                header: Some(response.http_header.unwrap_or_default()),
             }));
         }
 

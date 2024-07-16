@@ -217,8 +217,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                 match serde_json::to_vec::<Backend>(&Backend {
                     message: err.message.clone(),
-                    header: reqwest_headermap_to_hashmap(&err.header),
-                    status_code: err.status_code.as_u16() as i32,
+                    header: reqwest_headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
+                    status_code: err.status_code.map(|code| code.as_u16() as i32),
                 }) {
                     Ok(json) => {
                         return Err(Status::with_details(
@@ -227,9 +227,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             json.into(),
                         ));
                     }
-                    Err(e) => {
-                        error!("serialize error: {}", e);
-                        return Err(Status::internal(e.to_string()));
+                    Err(err) => {
+                        error!("serialize error: {}", err);
+                        return Err(Status::internal(err.to_string()));
                     }
                 }
             }
