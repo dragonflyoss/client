@@ -34,7 +34,6 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
@@ -458,7 +457,8 @@ impl SchedulerClient {
             .await
         {
             Ok(channel) => {
-                let mut unavailable_scheduler_addrs = self.unavailable_scheduler_addrs.write().await;
+                let mut unavailable_scheduler_addrs =
+                    self.unavailable_scheduler_addrs.write().await;
                 unavailable_scheduler_addrs.remove(&addr.addr);
                 drop(unavailable_scheduler_addrs);
                 return Ok(SchedulerGRPCClient::new(channel)
@@ -468,7 +468,8 @@ impl SchedulerClient {
 
             Err(err) => {
                 error!("connect to {} failed: {}", addr.to_string(), err);
-                let mut unavailable_scheduler_addrs = self.unavailable_scheduler_addrs.write().await;
+                let mut unavailable_scheduler_addrs =
+                    self.unavailable_scheduler_addrs.write().await;
                 unavailable_scheduler_addrs
                     .entry(addr.addr)
                     .or_insert_with(std::time::Instant::now);
@@ -477,8 +478,8 @@ impl SchedulerClient {
         }
 
         // Read the shooting configuration items.
-        let config = self.dynconfig.config.clone();
-        let cooldown_duration = config.scheduler.cooldown_duration;
+        let config = self.dynconfig.get_config().await;
+        let cooldown_interval = config.scheduler.cooldown_interval;
         let max_attempts = config.scheduler.max_attempts;
         let refresh_threshold = config.scheduler.refresh_threshold;
         let mut attempts = 0;
@@ -489,14 +490,15 @@ impl SchedulerClient {
             let scheduler_addr = vnode.addr;
             let unavailable_scheduler_addrs = self.unavailable_scheduler_addrs.read().await;
             if let Some(&instant) = unavailable_scheduler_addrs.get(&scheduler_addr) {
-                if instant.elapsed() < cooldown_duration {
+                if instant.elapsed() < cooldown_interval {
                     continue;
                 }
             }
-            
+
             match self.check_scheduler(&scheduler_addr).await {
                 Ok(channel) => {
-                    let mut unavailable_scheduler_addrs = self.unavailable_scheduler_addrs.write().await;
+                    let mut unavailable_scheduler_addrs =
+                        self.unavailable_scheduler_addrs.write().await;
                     unavailable_scheduler_addrs.remove(&scheduler_addr);
                     drop(unavailable_scheduler_addrs);
                     return Ok(SchedulerGRPCClient::new(channel)
@@ -505,7 +507,8 @@ impl SchedulerClient {
                 }
                 Err(err) => {
                     error!("scheduler {} is not available: {}", scheduler_addr, err);
-                    let mut unavailable_scheduler_addrs = self.unavailable_scheduler_addrs.write().await;
+                    let mut unavailable_scheduler_addrs =
+                        self.unavailable_scheduler_addrs.write().await;
                     unavailable_scheduler_addrs
                         .entry(scheduler_addr)
                         .or_insert_with(std::time::Instant::now);
@@ -536,8 +539,10 @@ impl SchedulerClient {
             Ok(client) => client,
             Err(err) => {
                 error!(
-                    "create health client for scheduler {}:{} failed: {}", 
-                    scheduler_addr.ip(), scheduler_addr.port(), err
+                    "create health client for scheduler {}:{} failed: {}",
+                    scheduler_addr.ip(),
+                    scheduler_addr.port(),
+                    err
                 );
                 return Err(ExternalError::new(ErrorType::ConnectError)
                     .with_cause(Box::new(err))
@@ -668,7 +673,7 @@ impl SchedulerClient {
     async fn refresh_available_scheduler_addrs(&self) -> Result<()> {
         // Refresh the dynamic configuration.
         self.dynconfig.refresh().await?;
-      
+
         // Update scheduler addresses of the client.
         self.update_available_scheduler_addrs().await
     }

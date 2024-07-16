@@ -102,13 +102,13 @@ pub enum DFError {
     #[error("exceeded maximum number of attempts")]
     ExceededMaxAttempts,
 
-    // UnexpectedResponse is the error when the response is unexpected.
-    #[error{"unexpected response"}]
-    UnexpectedResponse,
-
     // SchedulerNotServing is the error when the current scheduler is not serving.
     #[error("current scheduler is not serving")]
     SchedulerNotServing,
+
+    // UnexpectedResponse is the error when the response is unexpected.
+    #[error{"unexpected response"}]
+    UnexpectedResponse,
 
     // DigestMismatch is the error when the digest is mismatch.
     #[error{"digest mismatch expected: {0}, actual: {1}"}]

@@ -139,11 +139,11 @@ fn default_scheduler_schedule_timeout() -> Duration {
     Duration::from_secs(30)
 }
 
-// default_scheduler_cooldown_duration is the default cooldown time (in seconds) for the scheduler.
+// default_scheduler_cooldown_interval is the default cooldown time (in seconds) for the scheduler.
 // This duration specifies the time period during which the scheduler will not be accessed
 // after it becomes unavailable due to an exception.
 #[inline]
-fn default_scheduler_cooldown_duration() -> Duration {
+fn default_scheduler_cooldown_interval() -> Duration {
     Duration::from_secs(60)
 }
 
@@ -520,10 +520,10 @@ pub struct Scheduler {
     // When the scheduler becomes unavailable due to an exception, this field specifies
     // the time period during which the scheduler will not be accessed.
     #[serde(
-        default = "default_scheduler_cooldown_duration",
+        default = "default_scheduler_cooldown_interval",
         with = "humantime_serde"
     )]
-    pub cooldown_duration: Duration,
+    pub cooldown_interval: Duration,
 
     // max_attempts is the maximum number of attempts to connect to the scheduler.
     // If the connection to the scheduler fails, dfdaemon will retry up to this number of times.
@@ -546,7 +546,7 @@ impl Default for Scheduler {
             announce_interval: default_scheduler_announce_interval(),
             schedule_timeout: default_scheduler_schedule_timeout(),
             max_schedule_count: default_download_max_schedule_count(),
-            cooldown_duration: default_scheduler_cooldown_duration(),
+            cooldown_interval: default_scheduler_cooldown_interval(),
             max_attempts: default_scheduler_max_attempts(),
             refresh_threshold: default_scheduler_refresh_threshold(),
         }
