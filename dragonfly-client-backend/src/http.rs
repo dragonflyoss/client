@@ -162,10 +162,9 @@ impl Default for HTTP {
 
 #[cfg(test)]
 mod tests {
+    use crate::{http, Backend, GetRequest, HeadRequest};
     use httpmock::{Method, MockServer};
     use reqwest::{header::HeaderMap, StatusCode};
-
-    use crate::*;
 
     #[tokio::test]
     async fn should_get_head_response() {
