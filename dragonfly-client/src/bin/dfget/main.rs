@@ -28,11 +28,12 @@ use dragonfly_client_core::{
 };
 use dragonfly_client_util::http::header_vec_to_hashmap;
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use std::path::PathBuf;
+use path_absolutize::*;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{cmp::min, fmt::Write};
 use termion::{color, style};
-use tracing::{error, Level};
+use tracing::{error, info, Level};
 use url::Url;
 
 const LONG_ABOUT: &str = r#"
@@ -264,7 +265,7 @@ async fn main() -> anyhow::Result<()> {
 
                     if let Some(status_code) = backend_err.status_code {
                         eprintln!(
-                            "{}{}{}Bad status code:{} {}",
+                            "{}{}{}Bad Status Code:{} {}",
                             color::Fg(color::Red),
                             style::Italic,
                             style::Bold,
@@ -472,6 +473,10 @@ async fn run(args: Args) -> Result<()> {
         });
     }
 
+    // Get the absolute path of the output file.
+    let absolute_path = Path::new(&args.output).absolutize()?;
+    info!("download file to: {}", absolute_path.to_string_lossy());
+
     // Create dfdaemon client.
     let response = dfdaemon_download_client
         .download_task(DownloadTaskRequest {
@@ -487,7 +492,7 @@ async fn run(args: Args) -> Result<()> {
                 filtered_query_params: args.filtered_query_params.unwrap_or_default(),
                 request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
                 piece_length: args.piece_length,
-                output_path: Some(args.output.into_os_string().into_string().unwrap()),
+                output_path: Some(absolute_path.to_string_lossy().to_string()),
                 timeout: Some(
                     prost_wkt_types::Duration::try_from(args.timeout)
                         .or_err(ErrorType::ParseError)?,

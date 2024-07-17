@@ -619,7 +619,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         info!("download cache task started: {:?}", request);
         let task = match self
             .cache_task
-            .download_started(task_id.as_str(), request.clone())
+            .download_started(task_id.as_str(), host_id.as_str(), request.clone())
             .await
         {
             Err(ClientError::BackendError(err)) => {

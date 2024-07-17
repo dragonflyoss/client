@@ -23,11 +23,12 @@ use dragonfly_client_core::{
     Error, Result,
 };
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
+use path_absolutize::*;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{cmp::min, fmt::Write};
 use termion::{color, style};
-use tracing::error;
+use tracing::{error, info};
 
 use super::*;
 
@@ -102,7 +103,7 @@ impl ExportCommand {
 
                         if let Some(status_code) = backend_err.status_code {
                             eprintln!(
-                                "{}{}{}Bad status code:{} {}",
+                                "{}{}{}Bad Status Code:{} {}",
                                 color::Fg(color::Red),
                                 style::Italic,
                                 style::Bold,
@@ -293,6 +294,10 @@ impl ExportCommand {
             err
         })?;
 
+        // Get the absolute path of the output file.
+        let absolute_path = Path::new(&self.output).absolutize()?;
+        info!("download file to: {}", absolute_path.to_string_lossy());
+
         // Create dfdaemon client.
         let response = dfdaemon_download_client
             .download_cache_task(DownloadCacheTaskRequest {
@@ -300,14 +305,10 @@ impl ExportCommand {
                 // When scheduler triggers the export task, it will set true. If the export task is
                 // triggered by the user, it will set false.
                 persistent: false,
-                tag: Some(self.tag),
-                application: Some(self.application),
+                tag: Some(self.tag.clone()),
+                application: Some(self.application.clone()),
                 piece_length: self.piece_length,
-                output_path: self
-                    .output
-                    .to_str()
-                    .ok_or(Error::InvalidParameter)?
-                    .to_string(),
+                output_path: absolute_path.to_string_lossy().to_string(),
                 timeout: Some(
                     prost_wkt_types::Duration::try_from(self.timeout)
                         .or_err(ErrorType::ParseError)?,

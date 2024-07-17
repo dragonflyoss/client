@@ -207,19 +207,20 @@ impl CacheTask {
     // download_started updates the metadata of the cache task when the cache task downloads started.
     pub async fn download_started(
         &self,
-        id: &str,
+        task_id: &str,
+        host_id: &str,
         request: DownloadCacheTaskRequest,
     ) -> ClientResult<metadata::CacheTask> {
         let response = self
             .scheduler_client
             .stat_cache_task(StatCacheTaskRequest {
-                host_id: request.host_id.clone(),
-                task_id: id.to_string(),
+                host_id: host_id.to_string(),
+                task_id: task_id.to_string(),
             })
             .await?;
 
         self.storage.download_cache_task_started(
-            id,
+            task_id,
             request.persistent,
             request.piece_length,
             response.content_length,
@@ -314,7 +315,9 @@ impl CacheTask {
                     peer_id: peer_id.to_string(),
                     response: Some(
                         download_cache_task_response::Response::DownloadCacheTaskStartedResponse(
-                            dfdaemon::v2::DownloadCacheTaskStartedResponse {},
+                            dfdaemon::v2::DownloadCacheTaskStartedResponse {
+                                content_length: task.content_length,
+                            },
                         ),
                     ),
                 }),
