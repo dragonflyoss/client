@@ -199,6 +199,7 @@ async fn main() -> Result<(), anyhow::Error> {
         id_generator.clone(),
         storage.clone(),
         scheduler_client.clone(),
+        backend_factory.clone(),
     );
     let cache_task = Arc::new(cache_task);
 

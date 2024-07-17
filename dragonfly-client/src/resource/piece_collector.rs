@@ -16,7 +16,7 @@
 
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use dashmap::DashMap;
-use dragonfly_api::common::v2::Peer;
+use dragonfly_api::common::v2::Host;
 use dragonfly_api::dfdaemon::v2::SyncPiecesRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::error::{ErrorType, OrErr};
@@ -29,6 +29,16 @@ use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 use tracing::{error, info, instrument, Instrument};
 
+// CollectedParent is the parent peer collected from the remote peer.
+#[derive(Clone, Debug)]
+pub struct CollectedParent {
+    // id is the id of the parent.
+    pub id: String,
+
+    // host is the host of the parent.
+    pub host: Option<Host>,
+}
+
 // CollectedPiece is the piece collected from a peer.
 pub struct CollectedPiece {
     // number is the piece number.
@@ -38,7 +48,7 @@ pub struct CollectedPiece {
     pub length: u64,
 
     // parent is the parent peer.
-    pub parent: Peer,
+    pub parent: CollectedParent,
 }
 
 // PieceCollector is used to collect pieces from peers.
@@ -53,7 +63,7 @@ pub struct PieceCollector {
     task_id: String,
 
     // parents is the parent peers.
-    parents: Vec<Peer>,
+    parents: Vec<CollectedParent>,
 
     // interested_pieces is the pieces interested by the collector.
     interested_pieces: Vec<metadata::Piece>,
@@ -69,7 +79,7 @@ impl PieceCollector {
         host_id: &str,
         task_id: &str,
         interested_pieces: Vec<metadata::Piece>,
-        parents: Vec<Peer>,
+        parents: Vec<CollectedParent>,
     ) -> Self {
         let collected_pieces = Arc::new(DashMap::new());
         interested_pieces
@@ -125,7 +135,7 @@ impl PieceCollector {
     async fn collect_from_remote_peers(
         host_id: String,
         task_id: String,
-        parents: Vec<Peer>,
+        parents: Vec<CollectedParent>,
         interested_pieces: Vec<metadata::Piece>,
         collected_pieces: Arc<DashMap<u32, String>>,
         collected_piece_tx: Sender<CollectedPiece>,
@@ -138,13 +148,13 @@ impl PieceCollector {
             async fn sync_pieces(
                 host_id: String,
                 task_id: String,
-                parent: Peer,
-                parents: Vec<Peer>,
+                parent: CollectedParent,
+                parents: Vec<CollectedParent>,
                 interested_pieces: Vec<metadata::Piece>,
                 collected_pieces: Arc<DashMap<u32, String>>,
                 collected_piece_tx: Sender<CollectedPiece>,
                 collected_piece_timeout: Duration,
-            ) -> Result<Peer> {
+            ) -> Result<CollectedParent> {
                 info!("sync pieces from parent {}", parent.id);
 
                 // If candidate_parent.host is None, skip it.
