@@ -883,13 +883,9 @@ impl DfdaemonDownloadClient {
 
     // stat_cache_task stats the cache task.
     #[instrument(skip_all)]
-    pub async fn stat_cache_task(
-        &self,
-        request: StatCacheTaskRequest,
-        timeout: Duration,
-    ) -> ClientResult<CacheTask> {
+    pub async fn stat_cache_task(&self, request: StatCacheTaskRequest) -> ClientResult<CacheTask> {
         let mut request = tonic::Request::new(request);
-        request.set_timeout(timeout);
+        request.set_timeout(super::CONNECT_TIMEOUT);
 
         let response = self.client.clone().stat_cache_task(request).await?;
         Ok(response.into_inner())

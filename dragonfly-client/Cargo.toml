@@ -59,6 +59,7 @@ openssl.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 blake3.workspace = true
+bytesize.workspace = true
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
 tracing-appender = "0.2.3"
@@ -85,6 +86,7 @@ tokio-rustls = "0.25.0-alpha.4"
 http-body-util = "0.1.2"
 futures-util = "0.3.30"
 termion = "4.0.2"
+tabled = "0.15.0"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { version = "0.5.4", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
