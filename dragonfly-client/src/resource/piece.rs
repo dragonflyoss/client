@@ -71,16 +71,16 @@ impl Piece {
             backend_factory,
             download_rate_limiter: Arc::new(
                 RateLimiter::builder()
-                    .initial(config.download.rate_limit as usize)
-                    .refill(config.download.rate_limit as usize)
+                    .initial(config.download.rate_limit.as_u64() as usize)
+                    .refill(config.download.rate_limit.as_u64() as usize)
                     .interval(Duration::from_secs(1))
                     .fair(false)
                     .build(),
             ),
             upload_rate_limiter: Arc::new(
                 RateLimiter::builder()
-                    .initial(config.upload.rate_limit as usize)
-                    .refill(config.upload.rate_limit as usize)
+                    .initial(config.upload.rate_limit.as_u64() as usize)
+                    .refill(config.upload.rate_limit.as_u64() as usize)
                     .interval(Duration::from_secs(1))
                     .build(),
             ),
