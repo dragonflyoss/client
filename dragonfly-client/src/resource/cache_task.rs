@@ -61,8 +61,8 @@ impl CacheTask {
         }
     }
 
-    // create_persistent_cache_task creates a persistent cache task from local.
-    pub async fn create_persistent_cache_task(
+    // create_persistent creates a persistent cache task from local.
+    pub async fn create_persistent(
         &self,
         task_id: &str,
         host_id: &str,
