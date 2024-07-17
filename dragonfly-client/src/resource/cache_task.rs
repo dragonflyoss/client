@@ -204,7 +204,7 @@ impl CacheTask {
         }
     }
 
-    // download_started updates the metadata of the cache task when the task downloads started.
+    // download_started updates the metadata of the cache task when the cache task downloads started.
     pub async fn download_started(
         &self,
         id: &str,
