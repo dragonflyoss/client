@@ -189,7 +189,6 @@ impl CacheTask {
                 err
             })?;
 
-        self.storage.delete_cache_task(task_id).await;
         Ok(())
     }
 }

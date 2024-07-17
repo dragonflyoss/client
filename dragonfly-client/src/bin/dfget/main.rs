@@ -365,7 +365,7 @@ async fn main() -> anyhow::Result<()> {
                     );
 
                     eprintln!(
-                        "{}{}{}Bad code:{} {}",
+                        "{}{}{}Bad Code:{} {}",
                         color::Fg(color::Red),
                         style::Italic,
                         style::Bold,

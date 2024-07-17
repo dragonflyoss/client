@@ -87,19 +87,20 @@ pub struct ImportCommand {
 
 // Implement the execute for ImportCommand.
 impl ImportCommand {
+    // execute executes the import sub command.
     pub async fn execute(&self, endpoint: &Path) -> Result<()> {
         // Run import sub command.
         if let Err(err) = self.run(endpoint).await {
             match err {
                 Error::TonicStatus(status) => {
                     eprintln!(
-                        "{}{}{}Importing failed, bad code:{} {}",
+                        "{}{}{}Importing Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
                         style::Bold,
                         style::Reset,
-                        status.code()
                     );
+
                     eprintln!(
                         "{}{}{}*********************************{}",
                         color::Fg(color::Black),
@@ -107,6 +108,16 @@ impl ImportCommand {
                         style::Bold,
                         style::Reset
                     );
+
+                    eprintln!(
+                        "{}{}{}Bad Code:{} {}",
+                        color::Fg(color::Red),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset,
+                        status.code()
+                    );
+
                     eprintln!(
                         "{}{}{}Message:{} {}",
                         color::Fg(color::Cyan),
@@ -115,6 +126,7 @@ impl ImportCommand {
                         style::Reset,
                         status.message()
                     );
+
                     eprintln!(
                         "{}{}{}Details:{} {}",
                         color::Fg(color::Cyan),
@@ -123,6 +135,7 @@ impl ImportCommand {
                         style::Reset,
                         std::str::from_utf8(status.details()).unwrap()
                     );
+
                     eprintln!(
                         "{}{}{}*********************************{}",
                         color::Fg(color::Black),
@@ -133,12 +146,36 @@ impl ImportCommand {
                 }
                 err => {
                     eprintln!(
-                        "{}{}{}Importing failed, error message:{} {}",
+                        "{}{}{}Importing Failed!{}",
+                        color::Fg(color::Red),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset
+                    );
+
+                    eprintln!(
+                        "{}{}{}****************************************{}",
+                        color::Fg(color::Black),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset
+                    );
+
+                    eprintln!(
+                        "{}{}{}Message:{} {}",
                         color::Fg(color::Red),
                         style::Italic,
                         style::Bold,
                         style::Reset,
                         err
+                    );
+
+                    eprintln!(
+                        "{}{}{}****************************************{}",
+                        color::Fg(color::Black),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset
                     );
                 }
             }
@@ -149,6 +186,7 @@ impl ImportCommand {
         Ok(())
     }
 
+    // run runs the import sub command.
     async fn run(&self, endpoint: &Path) -> Result<()> {
         let dfdaemon_download_client = self
             .get_dfdaemon_download_client(endpoint.to_path_buf())
