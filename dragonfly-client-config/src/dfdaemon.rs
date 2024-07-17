@@ -49,11 +49,6 @@ pub fn default_download_unix_socket_path() -> PathBuf {
     crate::default_root_dir().join("dfdaemon.sock")
 }
 
-// default_dfdaemon_lock_path is the default file lock path for dfdaemon service.
-pub fn default_dfdaemon_lock_path() -> PathBuf {
-    crate::default_lock_dir().join("dfdaemon.lock")
-}
-
 // default_host_hostname is the default hostname of the host.
 #[inline]
 fn default_host_hostname() -> String {
