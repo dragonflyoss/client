@@ -34,9 +34,8 @@ use dragonfly_api::scheduler::v2::{
 };
 use dragonfly_client_backend::{BackendFactory, HeadRequest};
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{
-    error::{BackendError, DownloadFromRemotePeerFailed},
+    error::{BackendError, DownloadFromRemotePeerFailed, ErrorType, OrErr},
     Error, Result as ClientResult,
 };
 use dragonfly_client_storage::{metadata, Storage};
@@ -55,9 +54,10 @@ use tokio::sync::{
 use tokio::task::JoinSet;
 use tokio::time::sleep;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
-use tonic::Request;
-use tonic::Status;
+use tonic::{Request, Status};
 use tracing::{error, info, Instrument};
+
+use super::*;
 
 // Task represents a task manager.
 pub struct Task {
@@ -77,7 +77,7 @@ pub struct Task {
     pub backend_factory: Arc<BackendFactory>,
 
     // piece is the piece manager.
-    pub piece: Arc<super::piece::Piece>,
+    pub piece: Arc<piece::Piece>,
 }
 
 // Task implements the task manager.
@@ -90,7 +90,7 @@ impl Task {
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
     ) -> Self {
-        let piece = super::piece::Piece::new(
+        let piece = piece::Piece::new(
             config.clone(),
             id_generator.clone(),
             storage.clone(),
@@ -112,15 +112,15 @@ impl Task {
     pub async fn download_started(
         &self,
         id: &str,
-        download: Download,
+        request: Download,
     ) -> ClientResult<metadata::Task> {
         let task = self
             .storage
-            .download_task_started(id, download.piece_length, None, None)?;
+            .download_task_started(id, request.piece_length, None, None)?;
 
         // Handle the request header.
         let mut request_header =
-            hashmap_to_reqwest_headermap(&download.request_header).map_err(|err| {
+            hashmap_to_reqwest_headermap(&request.request_header).map_err(|err| {
                 error!("convert header: {}", err);
                 err
             })?;
@@ -135,15 +135,15 @@ impl Task {
         request_header.remove(reqwest::header::RANGE);
 
         // Head the url to get the content length.
-        let backend = self.backend_factory.build(download.url.as_str())?;
+        let backend = self.backend_factory.build(request.url.as_str())?;
         let response = backend
             .head(HeadRequest {
                 task_id: id.to_string(),
-                url: download.url,
+                url: request.url,
                 http_header: Some(request_header),
                 timeout: self.config.download.piece_timeout,
                 client_certs: None,
-                object_storage: download.object_storage,
+                object_storage: request.object_storage,
             })
             .await?;
 
@@ -158,7 +158,7 @@ impl Task {
 
         self.storage.download_task_started(
             id,
-            download.piece_length,
+            request.piece_length,
             response.content_length,
             response.http_header,
         )
@@ -202,7 +202,7 @@ impl Task {
         task: metadata::Task,
         host_id: &str,
         peer_id: &str,
-        download: Download,
+        request: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<()> {
         // Get the content length from the task.
@@ -221,9 +221,9 @@ impl Task {
 
         // Calculate the interested pieces to download.
         let interested_pieces = match self.piece.calculate_interested(
-            download.piece_length,
+            request.piece_length,
             content_length,
-            download.range.clone(),
+            request.range.clone(),
         ) {
             Ok(interested_pieces) => interested_pieces,
             Err(err) => {
@@ -279,7 +279,7 @@ impl Task {
                         download_task_response::Response::DownloadTaskStartedResponse(
                             dfdaemon::v2::DownloadTaskStartedResponse {
                                 content_length,
-                                range: download.range.clone(),
+                                range: request.range.clone(),
                                 response_header: task.response_header.clone(),
                                 pieces,
                             },
@@ -345,7 +345,7 @@ impl Task {
                 peer_id,
                 interested_pieces.clone(),
                 content_length,
-                download.clone(),
+                request.clone(),
                 download_progress_tx.clone(),
             )
             .await
@@ -355,7 +355,7 @@ impl Task {
                 error!("download with scheduler error: {:?}", err);
 
                 // If disable back-to-source is true, return an error directly.
-                if download.disable_back_to_source {
+                if request.disable_back_to_source {
                     error!(
                         "download back-to-source is disabled, download with scheduler error: {:?}",
                         err
@@ -378,7 +378,7 @@ impl Task {
                         host_id,
                         peer_id,
                         interested_pieces.clone(),
-                        download.clone(),
+                        request.clone(),
                         download_progress_tx.clone(),
                     )
                     .await
@@ -422,7 +422,7 @@ impl Task {
         };
 
         // If disable back-to-source is true, return an error directly.
-        if download.disable_back_to_source {
+        if request.disable_back_to_source {
             error!("download back-to-source is disabled");
             download_progress_tx
                 .send_timeout(
@@ -442,7 +442,7 @@ impl Task {
                 host_id,
                 peer_id,
                 interested_pieces.clone(),
-                download.clone(),
+                request.clone(),
                 download_progress_tx.clone(),
             )
             .await
@@ -475,7 +475,7 @@ impl Task {
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
         content_length: u64,
-        download: Download,
+        request: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Initialize the schedule count.
@@ -496,7 +496,7 @@ impl Task {
                     peer_id: peer_id.to_string(),
                     request: Some(announce_peer_request::Request::RegisterPeerRequest(
                         RegisterPeerRequest {
-                            download: Some(download.clone()),
+                            download: Some(request.clone()),
                         },
                     )),
                 },
@@ -511,10 +511,10 @@ impl Task {
 
         // Initialize the stream.
         let in_stream = ReceiverStream::new(in_stream_rx);
-        let request = Request::new(in_stream);
+        let request_stream = Request::new(in_stream);
         let response = self
             .scheduler_client
-            .announce_peer(task.id.as_str(), peer_id, request)
+            .announce_peer(task.id.as_str(), peer_id, request_stream)
             .await
             .map_err(|err| {
                 error!("announce peer failed: {:?}", err);
@@ -794,7 +794,7 @@ impl Task {
                             host_id,
                             peer_id,
                             remaining_interested_pieces.clone(),
-                            download.clone(),
+                            request.clone(),
                             download_progress_tx.clone(),
                             in_stream_tx.clone(),
                         )
@@ -910,12 +910,19 @@ impl Task {
         in_stream_tx: Sender<AnnouncePeerRequest>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Initialize the piece collector.
-        let piece_collector = super::piece_collector::PieceCollector::new(
+        let piece_collector = piece_collector::PieceCollector::new(
             self.config.clone(),
             host_id,
             task.id.as_str(),
             interested_pieces.clone(),
-            parents.clone(),
+            parents
+                .clone()
+                .into_iter()
+                .map(|peer| piece_collector::CollectedParent {
+                    id: peer.id.clone(),
+                    host: peer.host.clone(),
+                })
+                .collect(),
         );
         let mut piece_collector_rx = piece_collector.run().await;
 
@@ -933,8 +940,8 @@ impl Task {
                 peer_id: String,
                 number: u32,
                 length: u64,
-                parent: Peer,
-                piece_manager: Arc<super::piece::Piece>,
+                parent: piece_collector::CollectedParent,
+                piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 _permit: OwnedSemaphorePermit,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
@@ -1121,12 +1128,12 @@ impl Task {
         host_id: &str,
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
-        download: Download,
+        request: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
         in_stream_tx: Sender<AnnouncePeerRequest>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Convert the header.
-        let request_header: HeaderMap = (&download.request_header)
+        let request_header: HeaderMap = (&request.request_header)
             .try_into()
             .or_err(ErrorType::ParseError)?;
 
@@ -1148,7 +1155,7 @@ impl Task {
                 offset: u64,
                 length: u64,
                 request_header: HeaderMap,
-                piece_manager: Arc<super::piece::Piece>,
+                piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 _permit: OwnedSemaphorePermit,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
@@ -1245,7 +1252,7 @@ impl Task {
                     host_id.to_string(),
                     peer_id.to_string(),
                     interested_piece.number,
-                    download.url.clone(),
+                    request.url.clone(),
                     interested_piece.offset,
                     interested_piece.length,
                     request_header.clone(),
@@ -1254,7 +1261,7 @@ impl Task {
                     permit,
                     download_progress_tx.clone(),
                     in_stream_tx.clone(),
-                    download.object_storage.clone(),
+                    request.object_storage.clone(),
                 )
                 .in_current_span(),
             );
@@ -1417,11 +1424,11 @@ impl Task {
         host_id: &str,
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
-        download: Download,
+        request: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Convert the header.
-        let request_header: HeaderMap = (&download.request_header)
+        let request_header: HeaderMap = (&request.request_header)
             .try_into()
             .or_err(ErrorType::ParseError)?;
 
@@ -1443,7 +1450,7 @@ impl Task {
                 offset: u64,
                 length: u64,
                 request_header: HeaderMap,
-                piece_manager: Arc<super::piece::Piece>,
+                piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 _permit: OwnedSemaphorePermit,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
@@ -1517,7 +1524,7 @@ impl Task {
                     host_id.to_string(),
                     peer_id.to_string(),
                     interested_piece.number,
-                    download.url.clone(),
+                    request.url.clone(),
                     interested_piece.offset,
                     interested_piece.length,
                     request_header.clone(),
@@ -1525,7 +1532,7 @@ impl Task {
                     self.storage.clone(),
                     permit,
                     download_progress_tx.clone(),
-                    download.object_storage.clone(),
+                    request.object_storage.clone(),
                 )
                 .in_current_span(),
             );
