@@ -138,6 +138,15 @@ impl Storage {
         });
     }
 
+    // hard_link_or_copy_cache_task hard links or copies the cache task content to the destination.
+    pub async fn hard_link_or_copy_cache_task(
+        &self,
+        task: metadata::CacheTask,
+        to: &Path,
+    ) -> Result<()> {
+        self.content.hard_link_or_copy_cache_task(task, to).await
+    }
+
     // create_persistent_cache_task creates a new persistent cache task.
     pub async fn create_persistent_cache_task(
         &self,

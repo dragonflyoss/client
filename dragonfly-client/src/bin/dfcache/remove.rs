@@ -16,14 +16,14 @@
 
 use clap::Parser;
 use dragonfly_api::dfdaemon::v2::DeleteCacheTaskRequest;
-use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
-use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client_core::{Error, Result};
 use indicatif::{ProgressBar, ProgressStyle};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 use termion::{color, style};
 use tracing::error;
+
+use super::*;
 
 // DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL is the default steady tick interval of progress bar.
 const DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL: Duration = Duration::from_millis(80);
@@ -146,13 +146,12 @@ impl RemoveCommand {
 
     // run runs the delete command.
     async fn run(&self, endpoint: &Path) -> Result<()> {
-        let dfdaemon_download_client = self
-            .get_dfdaemon_download_client(endpoint.to_path_buf())
+        let dfdaemon_download_client = get_dfdaemon_download_client(endpoint.to_path_buf())
             .await
             .map_err(|err| {
-                error!("initialize dfdaemon download client failed: {}", err);
-                err
-            })?;
+            error!("initialize dfdaemon download client failed: {}", err);
+            err
+        })?;
 
         let pb = ProgressBar::new_spinner();
         pb.enable_steady_tick(DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL);
@@ -174,19 +173,5 @@ impl RemoveCommand {
 
         pb.finish_with_message("Done");
         Ok(())
-    }
-
-    // get_and_check_dfdaemon_download_client gets a dfdaemon download client and checks its health.
-    async fn get_dfdaemon_download_client(
-        &self,
-        endpoint: PathBuf,
-    ) -> Result<DfdaemonDownloadClient> {
-        // Check dfdaemon's health.
-        let health_client = HealthClient::new_unix(endpoint.clone()).await?;
-        health_client.check_dfdaemon_download().await?;
-
-        // Get dfdaemon download client.
-        let dfdaemon_download_client = DfdaemonDownloadClient::new_unix(endpoint).await?;
-        Ok(dfdaemon_download_client)
     }
 }

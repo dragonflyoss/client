@@ -299,6 +299,47 @@ impl Content {
         })
     }
 
+    // hard_link_or_copy_cache_task hard links or copies the task content to the destination.
+    pub async fn hard_link_or_copy_cache_task(
+        &self,
+        task: crate::metadata::CacheTask,
+        to: &Path,
+    ) -> Result<()> {
+        let task_path = self.dir.join(task.id.as_str());
+
+        // If the hard link fails, copy the task content to the destination.
+        fs::remove_file(to).await.unwrap_or_else(|err| {
+            info!("remove {:?} failed: {}", to, err);
+        });
+
+        if let Err(err) = self.hard_link_task(task.id.as_str(), to).await {
+            warn!("hard link {:?} to {:?} failed: {}", task_path, to, err);
+
+            // If the cache task is empty, no need to copy. Need to open the file to
+            // ensure the file exists.
+            if task.is_empty() {
+                info!("cache task is empty, no need to copy");
+                File::create(to).await.map_err(|err| {
+                    error!("create {:?} failed: {}", to, err);
+                    err
+                })?;
+
+                return Ok(());
+            }
+
+            self.copy_task(task.id.as_str(), to).await.map_err(|err| {
+                error!("copy {:?} to {:?} failed: {}", task_path, to, err);
+                err
+            })?;
+
+            info!("copy {:?} to {:?} success", task_path, to);
+            return Ok(());
+        }
+
+        info!("hard link {:?} to {:?} success", task_path, to);
+        Ok(())
+    }
+
     // copy_cache_task copies the cache task content to the destination.
     pub async fn write_cache_task(
         &self,
