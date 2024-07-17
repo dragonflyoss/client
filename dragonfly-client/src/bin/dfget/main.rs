@@ -265,7 +265,7 @@ async fn main() -> anyhow::Result<()> {
 
                     if let Some(status_code) = backend_err.status_code {
                         eprintln!(
-                            "{}{}{}Bad status code:{} {}",
+                            "{}{}{}Bad Status Code:{} {}",
                             color::Fg(color::Red),
                             style::Italic,
                             style::Bold,
