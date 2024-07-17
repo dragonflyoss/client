@@ -650,7 +650,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Create the persistent cache task to local storage.
         let task = match self
             .cache_task
-            .create_persistent_cache_task(
+            .create_persistent(
                 task_id.as_str(),
                 host_id.as_str(),
                 peer_id.as_str(),
