@@ -237,6 +237,15 @@ impl CacheTask {
         Ok(())
     }
 
+    // hard_link_or_copy hard links or copies the cache task content to the destination.
+    pub async fn hard_link_or_copy(
+        &self,
+        task: metadata::CacheTask,
+        to: &Path,
+    ) -> ClientResult<()> {
+        self.storage.hard_link_or_copy_cache_task(task, to).await
+    }
+
     // download downloads a cache task.
     #[allow(clippy::too_many_arguments)]
     pub async fn download(

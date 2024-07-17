@@ -23,7 +23,7 @@ use crate::metrics::{
 };
 use crate::resource::{cache_task, task};
 use crate::shutdown;
-use dragonfly_api::common::v2::{CacheTask, Piece, TaskType};
+use dragonfly_api::common::v2::{CacheTask, Piece, Priority, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient,
     dfdaemon_upload_server::{DfdaemonUpload, DfdaemonUploadServer as DfdaemonUploadGRPCServer},
@@ -689,14 +689,168 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     // DownloadCacheTaskStream is the stream of the download cache task response.
     type DownloadCacheTaskStream = ReceiverStream<Result<DownloadCacheTaskResponse, Status>>;
 
-    // TODO: Implement this.
-    // download_cache_task downloads the task.
+    // download_cache_task downloads the cache task.
     #[instrument(skip_all, fields(host_id, task_id, peer_id))]
     async fn download_cache_task(
         &self,
-        _request: Request<DownloadCacheTaskRequest>,
+        request: Request<DownloadCacheTaskRequest>,
     ) -> Result<Response<Self::DownloadCacheTaskStream>, Status> {
-        unimplemented!()
+        info!("download cache task in download server");
+
+        // Record the start time.
+        let start_time = Instant::now();
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Clone the task id.
+        let task_id = request.task_id.clone();
+
+        // Generate the peer id.
+        let peer_id = self.task.id_generator.peer_id();
+
+        // Generate the task type and task priority.
+        let task_type = TaskType::Dfcache as i32;
+        let task_priority = Priority::Level0 as i32;
+
+        // Span record the host id, task id and peer id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record("peer_id", peer_id.as_str());
+
+        // Download task started.
+        info!("download cache task started: {:?}", request);
+        let task = match self
+            .cache_task
+            .download_started(task_id.as_str(), request.clone())
+            .await
+        {
+            Err(ClientError::BackendError(err)) => {
+                error!("download cache started failed by error: {}", err);
+                self.cache_task
+                    .download_failed(task_id.as_str())
+                    .await
+                    .unwrap_or_else(|err| error!("download cache task failed: {}", err));
+
+                match serde_json::to_vec::<Backend>(&Backend {
+                    message: err.message.clone(),
+                    header: reqwest_headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
+                    status_code: err.status_code.map(|code| code.as_u16() as i32),
+                }) {
+                    Ok(json) => {
+                        return Err(Status::with_details(
+                            Code::Internal,
+                            err.to_string(),
+                            json.into(),
+                        ));
+                    }
+                    Err(e) => {
+                        error!("serialize error: {}", e);
+                        return Err(Status::internal(e.to_string()));
+                    }
+                }
+            }
+            Err(err) => {
+                error!("download started failed: {}", err);
+                return Err(Status::internal(err.to_string()));
+            }
+            Ok(task) => {
+                // Collect download cache task started metrics.
+                collect_download_task_started_metrics(
+                    task_type,
+                    request.tag.clone().unwrap_or_default().as_str(),
+                    request.application.clone().unwrap_or_default().as_str(),
+                    task_priority.to_string().as_str(),
+                );
+
+                task
+            }
+        };
+
+        // Clone the cache task.
+        let task_manager = self.cache_task.clone();
+
+        // Initialize stream channel.
+        let request_clone = request.clone();
+        let task_manager_clone = task_manager.clone();
+        let task_clone = task.clone();
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(1024);
+        tokio::spawn(
+            async move {
+                match task_manager_clone
+                    .download(
+                        task_clone.clone(),
+                        host_id.as_str(),
+                        peer_id.as_str(),
+                        request_clone.clone(),
+                        out_stream_tx.clone(),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        // Collect download task finished metrics.
+                        collect_download_task_finished_metrics(
+                            task_type,
+                            request_clone.tag.clone().unwrap_or_default().as_str(),
+                            request_clone
+                                .application
+                                .clone()
+                                .unwrap_or_default()
+                                .as_str(),
+                            task_priority.to_string().as_str(),
+                            task_clone.content_length(),
+                            None,
+                            start_time.elapsed(),
+                        );
+
+                        // Download cache task succeeded.
+                        info!("download cache task succeeded");
+
+                        // Hard link or copy the cache task content to the destination.
+                        if let Err(err) = task_manager_clone
+                            .hard_link_or_copy(
+                                task_clone,
+                                Path::new(request_clone.output_path.as_str()),
+                            )
+                            .await
+                        {
+                            error!("hard link or copy cache task: {}", err);
+                            out_stream_tx
+                                .send(Err(Status::internal(err.to_string())))
+                                .await
+                                .unwrap_or_else(|err| {
+                                    error!("send download progress error: {:?}", err)
+                                });
+                        };
+                    }
+                    Err(e) => {
+                        // Download task failed.
+                        task_manager_clone
+                            .download_failed(task_clone.id.as_str())
+                            .await
+                            .unwrap_or_else(|err| error!("download cache task failed: {}", err));
+
+                        // Collect download task failure metrics.
+                        collect_download_task_failure_metrics(
+                            task_type,
+                            request.tag.clone().unwrap_or_default().as_str(),
+                            request.application.clone().unwrap_or_default().as_str(),
+                            task_priority.to_string().as_str(),
+                        );
+
+                        error!("download failed: {}", e);
+                    }
+                }
+
+                drop(out_stream_tx);
+            }
+            .in_current_span(),
+        );
+
+        Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
     // stat_cache_task stats the cache task.
