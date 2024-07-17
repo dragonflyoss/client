@@ -23,26 +23,17 @@ use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_config::{self, default_piece_length, dfdaemon, dfget};
 use dragonfly_client_core::{
-    error::{ErrorType, ExternalError, OrErr},
+    error::{ErrorType, OrErr},
     Error, Result,
 };
 use dragonfly_client_util::http::header_vec_to_hashmap;
-use fslock::LockFile;
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::time::Duration;
 use std::{cmp::min, fmt::Write};
 use termion::{color, style};
-use tokio::process::{Child, Command};
-use tracing::{error, info, Level};
+use tracing::{error, Level};
 use url::Url;
-
-// DEFAULT_DFDAEMON_CHECK_HEALTH_INTERVAL is the default interval of checking dfdaemon's health.
-const DEFAULT_DFDAEMON_CHECK_HEALTH_INTERVAL: Duration = Duration::from_millis(200);
-
-// DEFAULT_DFDAEMON_CHECK_HEALTH_TIMEOUT is the default timeout of checking dfdaemon's health.
-const DEFAULT_DFDAEMON_CHECK_HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
 
 const LONG_ABOUT: &str = r#"
 A download command line based on P2P technology in Dragonfly that can download resources of different protocols.
@@ -231,42 +222,6 @@ struct Args {
         help = "Specify whether to print log"
     )]
     verbose: bool,
-
-    #[arg(
-        short = 'c',
-        long = "dfdaemon-config",
-        default_value_os_t = dfdaemon::default_dfdaemon_config_path(),
-        help = "Specify dfdaemon's config file to use")
-    ]
-    dfdaemon_config: PathBuf,
-
-    #[arg(
-        long = "dfdaemon-lock-path",
-        default_value_os_t = dfdaemon::default_dfdaemon_lock_path(),
-        help = "Specify the dfdaemon's lock file path"
-    )]
-    dfdaemon_lock_path: PathBuf,
-
-    #[arg(
-        long = "dfdaemon-log-level",
-        default_value = "info",
-        help = "Specify the dfdaemon's logging level [trace, debug, info, warn, error]"
-    )]
-    dfdaemon_log_level: Level,
-
-    #[arg(
-        long = "dfdaemon-log-dir",
-        default_value_os_t = dfdaemon::default_dfdaemon_log_dir(),
-        help = "Specify the dfdaemon's log directory"
-    )]
-    dfdaemon_log_dir: PathBuf,
-
-    #[arg(
-        long,
-        default_value_t = 6,
-        help = "Specify the dfdaemon's max number of log files"
-    )]
-    dfdaemon_log_max_files: usize,
 }
 
 #[tokio::main]
@@ -493,20 +448,12 @@ async fn main() -> anyhow::Result<()> {
 
 // run runs the dfget command.
 async fn run(args: Args) -> Result<()> {
-    // Get or create dfdaemon download client.
-    let dfdaemon_download_client = get_or_create_dfdaemon_download_client(
-        args.dfdaemon_config,
-        args.endpoint.clone(),
-        args.dfdaemon_log_dir,
-        args.dfdaemon_log_level,
-        args.dfdaemon_log_max_files,
-        args.dfdaemon_lock_path,
-    )
-    .await
-    .map_err(|err| {
-        error!("initialize dfdaemon download client failed: {}", err);
-        err
-    })?;
+    let dfdaemon_download_client = get_dfdaemon_download_client(args.endpoint.to_path_buf())
+        .await
+        .map_err(|err| {
+            error!("initialize dfdaemon download client failed: {}", err);
+            err
+        })?;
 
     // Only when the `access_key_id` and `access_key_secret` are provided at the same time,
     // they will be pass to the `DownloadTaskRequest`.
@@ -597,66 +544,6 @@ async fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
-// get_or_create_dfdaemon_download_client gets a dfdaemon download client or creates a new one.
-async fn get_or_create_dfdaemon_download_client(
-    config_path: PathBuf,
-    endpoint: PathBuf,
-    log_dir: PathBuf,
-    log_level: Level,
-    log_max_files: usize,
-    lock_path: PathBuf,
-) -> Result<DfdaemonDownloadClient> {
-    // Get dfdaemon download client and check its health.
-    match get_dfdaemon_download_client(endpoint.clone()).await {
-        Ok(dfdaemon_download_client) => return Ok(dfdaemon_download_client),
-        Err(err) => error!("get dfdaemon download client failed: {}", err),
-    }
-
-    // Create a lock file to prevent multiple dfdaemon processes from being created.
-    let mut f = LockFile::open(lock_path.as_path())?;
-    f.lock()?;
-
-    // Check dfdaemon download client again.
-    match get_dfdaemon_download_client(endpoint.clone()).await {
-        Ok(dfdaemon_download_client) => return Ok(dfdaemon_download_client),
-        Err(err) => error!("get dfdaemon download client failed: {}", err),
-    }
-
-    // Spawn a dfdaemon process.
-    let child = spawn_dfdaemon(config_path, log_dir, log_level, log_max_files).map_err(|err| {
-        error!("spawn dfdaemon process failed: {}", err);
-        ExternalError::new(ErrorType::ConfigError).with_context(format!(
-            "Dfdaemon's unix socket is not exist in path: {:?}. dfget will spawn a dfdaemon process automatically, but spawn failed: {}. If you need to use the existing dfdaemon, please set the correct path of the dfdaemon's unix socket with --endpoint option.",
-            endpoint.to_string_lossy(),
-            err
-        ))
-    })?;
-    info!("spawn dfdaemon process: {:?}", child);
-
-    // Initialize the timeout of checking dfdaemon's health.
-    let check_health_timeout = tokio::time::sleep(DEFAULT_DFDAEMON_CHECK_HEALTH_TIMEOUT);
-    tokio::pin!(check_health_timeout);
-
-    // Wait for dfdaemon's health.
-    let mut interval = tokio::time::interval(DEFAULT_DFDAEMON_CHECK_HEALTH_INTERVAL);
-    loop {
-        tokio::select! {
-            _ = interval.tick() => {
-                match get_dfdaemon_download_client(endpoint.clone()).await {
-                    Ok(dfdaemon_download_client) => {
-                        f.unlock()?;
-                        return Ok(dfdaemon_download_client);
-                    }
-                    Err(err) => error!("get dfdaemon download client failed: {}", err),
-                }
-            }
-            _ = &mut check_health_timeout => {
-                return Err(Error::Unknown("get dfdaemon download client timeout".to_string()));
-            }
-        }
-    }
-}
-
 // get_and_check_dfdaemon_download_client gets a dfdaemon download client and checks its health.
 async fn get_dfdaemon_download_client(endpoint: PathBuf) -> Result<DfdaemonDownloadClient> {
     // Check dfdaemon's health.
@@ -666,41 +553,4 @@ async fn get_dfdaemon_download_client(endpoint: PathBuf) -> Result<DfdaemonDownl
     // Get dfdaemon download client.
     let dfdaemon_download_client = DfdaemonDownloadClient::new_unix(endpoint).await?;
     Ok(dfdaemon_download_client)
-}
-
-// spawn_dfdaemon spawns a dfdaemon process in the background.
-fn spawn_dfdaemon(
-    config_path: PathBuf,
-    log_dir: PathBuf,
-    log_level: Level,
-    log_max_files: usize,
-) -> Result<Child> {
-    // Create dfdaemon command.
-    let mut cmd = Command::new("dfdaemon");
-
-    // Set command line arguments.
-    cmd.arg("--config")
-        .arg(config_path)
-        .arg("--log-dir")
-        .arg(log_dir)
-        .arg("--log-level")
-        .arg(log_level.to_string())
-        .arg("--log-max-files")
-        .arg(log_max_files.to_string());
-
-    // Redirect stdin, stdout, stderr to /dev/null.
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-
-    // Create a new session for dfdaemon by calling setsid.
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
-
-    let child = cmd.spawn()?;
-    Ok(child)
 }
