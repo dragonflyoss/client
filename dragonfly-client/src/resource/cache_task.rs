@@ -128,10 +128,14 @@ impl CacheTask {
                 err
             })?;
 
+        // Convert prost_wkt_types::Duration to std::time::Duration.
+        let ttl = Duration::try_from(request.ttl.clone().ok_or(Error::UnexpectedResponse)?)
+            .or_err(ErrorType::ParseError)?;
+
         // Create the persistent cache task.
         match self
             .storage
-            .create_persistent_cache_task(task_id, path, request.piece_length, digest)
+            .create_persistent_cache_task(task_id, ttl, path, request.piece_length, digest)
             .await
         {
             Ok(metadata) => {
@@ -219,8 +223,13 @@ impl CacheTask {
             })
             .await?;
 
+        // Convert prost_wkt_types::Duration to std::time::Duration.
+        let ttl = Duration::try_from(response.ttl.ok_or(Error::InvalidParameter)?)
+            .or_err(ErrorType::ParseError)?;
+
         self.storage.download_cache_task_started(
             task_id,
+            ttl,
             request.persistent,
             request.piece_length,
             response.content_length,
