@@ -14,21 +14,28 @@
  * limitations under the License.
  */
 
-use crate::grpc::{manager::ManagerClient, scheduler::SchedulerClient};
+use crate::grpc::{manager::ManagerClient, scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::shutdown;
-use dragonfly_api::common::v2::{Build, Cpu, Disk, Host, Memory, Network};
+use dragonfly_api::common::v2::{Build, Cpu, Disk, Host, Memory, Network, Peer, Piece, Task};
 use dragonfly_api::manager::v2::{DeleteSeedPeerRequest, SourceType, UpdateSeedPeerRequest};
-use dragonfly_api::scheduler::v2::{AnnounceHostRequest, DeleteHostRequest};
+use dragonfly_api::scheduler::v2::{
+    AnnounceHostRequest, AnnouncePeersRequest, DeleteHostRequest, DeleteTaskRequest,
+};
 use dragonfly_client_config::{
     dfdaemon::{Config, HostType},
     CARGO_PKG_RUSTC_VERSION, CARGO_PKG_VERSION, GIT_HASH,
 };
 use dragonfly_client_core::error::{ErrorType, OrErr};
-use dragonfly_client_core::Result;
+use dragonfly_client_core::{Error, Result};
+use dragonfly_client_storage::Storage;
+use dragonfly_client_util::id_generator::IDGenerator;
+use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 use sysinfo::System;
 use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::Request;
 use tracing::{error, info};
 
 // ManagerAnnouncer is used to announce the dfdaemon information to the manager.
@@ -131,14 +138,15 @@ impl SchedulerAnnouncer {
     // new creates a new scheduler announcer.
     pub async fn new(
         config: Arc<Config>,
-        host_id: String,
         scheduler_client: Arc<SchedulerClient>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
+        id_generator: Arc<IDGenerator>,
+        storage: Arc<Storage>,
     ) -> Result<Self> {
         let announcer = Self {
             config,
-            host_id,
+            host_id: id_generator.host_id(),
             scheduler_client,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
@@ -149,6 +157,12 @@ impl SchedulerAnnouncer {
             .scheduler_client
             .init_announce_host(announcer.make_announce_host_request()?)
             .await?;
+
+        // Announce peers to the scheduler after host announcement.
+        announcer
+            .announce_peers(id_generator.clone(), storage.clone())
+            .await?;
+
         Ok(announcer)
     }
 
@@ -296,5 +310,162 @@ impl SchedulerAnnouncer {
                     .or_err(ErrorType::ParseError)?,
             ),
         })
+    }
+
+    // announce_peers announces peers to scheduler after host announcement.
+    async fn announce_peers(
+        &self,
+        id_generator: Arc<IDGenerator>,
+        storage: Arc<Storage>,
+    ) -> Result<()> {
+        for request in self
+            .make_announce_peers_request(
+                id_generator.clone(),
+                storage.clone(),
+                self.scheduler_client.clone(),
+            )
+            .await?
+        {
+            // Get the task_id to select scheduler for the announce peers request.
+            let task_id = if let Some(task) = request.peers[0].task.as_ref() {
+                task.id.clone()
+            } else {
+                continue;
+            };
+
+            // Initialize stream channel.
+            let (in_stream_tx, in_stream_rx) = mpsc::channel(4096);
+
+            // Send the announce peers request.
+            in_stream_tx
+                .send_timeout(request, REQUEST_TIMEOUT)
+                .await
+                .map_err(|err| {
+                    error!("send AnnouncePeersRequest failed: {:?}", err);
+                    err
+                })?;
+            info!("sent AnnouncePeersRequest");
+
+            // Initialize the stream.
+            let in_stream = ReceiverStream::new(in_stream_rx);
+            let request_stream = Request::new(in_stream);
+
+            // Announce peers to the scheduler.
+            self.scheduler_client
+                .announce_peers(task_id.as_str(), request_stream)
+                .await?;
+        }
+        Ok(())
+    }
+
+    // make_announce_peers_request makes the announce peers request.
+    async fn make_announce_peers_request(
+        &self,
+        id_generator: Arc<IDGenerator>,
+        storage: Arc<Storage>,
+        scheduler_client: Arc<SchedulerClient>,
+    ) -> Result<Vec<AnnouncePeersRequest>> {
+        // Get the hash ring.
+        let addrs = scheduler_client.hashring.read().await;
+
+        let mut peers = HashMap::new();
+
+        for task in storage.get_tasks()? {
+            // If the task is expired or not finished, evict the task.
+            if task.is_expired(self.config.gc.policy.task_ttl) || !task.is_finished() {
+                scheduler_client
+                    .delete_task(DeleteTaskRequest {
+                        host_id: self.host_id.clone(),
+                        task_id: task.id.clone(),
+                    })
+                    .await
+                    .unwrap_or_else(|err| {
+                        error!("failed to delete peer {}: {}", task.id, err);
+                    });
+                continue;
+            }
+
+            // Get the pieces of a peer based on the task metadata from the local storage.
+            let mut pieces = vec![];
+            for piece in storage.get_pieces(task.id.as_str()).unwrap_or_default() {
+                pieces.push(Piece {
+                    number: piece.number,
+                    parent_id: piece.parent_id,
+                    offset: piece.offset,
+                    length: piece.length,
+                    digest: piece.digest,
+                    content: None,
+                    traffic_type: None,
+                    cost: None,
+                    created_at: None,
+                });
+            }
+
+            // Construct a peer based on the task metadata from the local storage.
+            let peer = Peer {
+                id: id_generator.peer_id(),
+                range: None,
+                priority: 0,
+                pieces,
+                cost: None,
+                state: "".to_string(),
+                task: Some(Task {
+                    id: task.id.clone(),
+                    r#type: 0,
+                    url: "".to_string(),
+                    digest: None,
+                    tag: None,
+                    application: None,
+                    filtered_query_params: vec![],
+                    request_header: Default::default(),
+                    piece_length: task.piece_length,
+                    content_length: task.content_length.unwrap_or(0),
+                    piece_count: 0,
+                    size_scope: 0,
+                    pieces: vec![],
+                    state: "".to_string(),
+                    peer_count: 0,
+                    has_available_peer: false,
+                    created_at: None,
+                    updated_at: None,
+                }),
+                host: Some(Host {
+                    id: self.host_id.to_string(),
+                    r#type: 0,
+                    hostname: "".to_string(),
+                    ip: "".to_string(),
+                    port: 0,
+                    download_port: 0,
+                    os: "".to_string(),
+                    platform: "".to_string(),
+                    platform_family: "".to_string(),
+                    platform_version: "".to_string(),
+                    kernel_version: "".to_string(),
+                    cpu: None,
+                    memory: None,
+                    network: None,
+                    disk: None,
+                    build: None,
+                    scheduler_cluster_id: 0,
+                }),
+                need_back_to_source: false,
+                created_at: None,
+                updated_at: None,
+            };
+
+            // Get the scheduler address from the hash ring.
+            let addr = *addrs
+                .get(&task.id[0..5].to_string())
+                .ok_or_else(|| Error::HashRing(task.id.to_string()))?;
+
+            peers.entry(addr.to_string()).or_insert(vec![]).push(peer);
+        }
+
+        let mut requests: Vec<AnnouncePeersRequest> = Vec::new();
+        for (_, peers) in peers {
+            requests.push(AnnouncePeersRequest { peers });
+        }
+
+        Ok(requests)
     }
 }
