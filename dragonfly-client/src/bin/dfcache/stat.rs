@@ -17,9 +17,13 @@
 use chrono::{DateTime, Local};
 use clap::Parser;
 use dragonfly_api::dfdaemon::v2::StatCacheTaskRequest;
-use dragonfly_client_core::{Error, Result};
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Error, Result,
+};
 use humantime::format_duration;
 use std::path::Path;
+use std::time::Duration;
 use tabled::{
     settings::{object::Rows, Alignment, Modify, Style},
     Table, Tabled,
@@ -186,10 +190,9 @@ impl StatCommand {
         };
 
         // Convert ttl to human readable format.
-        if let Some(ttl) = task.ttl {
-            table_task.ttl =
-                format_duration(std::time::Duration::from_secs(ttl.seconds as u64)).to_string();
-        }
+        let ttl = Duration::try_from(task.ttl.ok_or(Error::InvalidParameter)?)
+            .or_err(ErrorType::ParseError)?;
+        table_task.ttl = format_duration(ttl).to_string();
 
         // Convert created_at to human readable format.
         if let Some(created_at) = task.created_at {
