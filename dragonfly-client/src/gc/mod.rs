@@ -16,7 +16,7 @@
 
 use crate::grpc::scheduler::SchedulerClient;
 use crate::shutdown;
-use dragonfly_api::scheduler::v2::DeleteTaskRequest;
+use dragonfly_api::scheduler::v2::{DeleteCacheTaskRequest, DeleteTaskRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
 use dragonfly_client_storage::{metadata, Storage};
@@ -75,14 +75,24 @@ impl GC {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    // Evict the cache by task ttl.
-                    if let Err(err) = self.evict_by_task_ttl().await {
-                        info!("failed to evict by task ttl: {}", err);
+                    // Evict the cache task by ttl.
+                    if let Err(err) = self.evict_cache_task_by_ttl().await {
+                        info!("failed to evict cache task by ttl: {}", err);
                     }
 
                     // Evict the cache by disk usage.
-                    if let Err(err) = self.evict_by_disk_usage().await {
-                        info!("failed to evict by disk usage: {}", err);
+                    if let Err(err) = self.evict_cache_task_by_disk_usage().await {
+                        info!("failed to evict cache task by disk usage: {}", err);
+                    }
+
+                    // Evict the task by ttl.
+                    if let Err(err) = self.evict_task_by_ttl().await {
+                        info!("failed to evict task by ttl: {}", err);
+                    }
+
+                    // Evict the cache by disk usage.
+                    if let Err(err) = self.evict_task_by_disk_usage().await {
+                        info!("failed to evict task by disk usage: {}", err);
                     }
                 }
                 _ = shutdown.recv() => {
@@ -94,8 +104,8 @@ impl GC {
         }
     }
 
-    // evict_by_task_ttl evicts the cache by task ttl.
-    async fn evict_by_task_ttl(&self) -> Result<()> {
+    // evict_task_by_ttl evicts the task by ttl.
+    async fn evict_task_by_ttl(&self) -> Result<()> {
         info!("start to evict by task ttl");
         for task in self.storage.get_tasks()? {
             // If the task is expired and not uploading, evict the task.
@@ -116,8 +126,8 @@ impl GC {
         Ok(())
     }
 
-    // evict_by_disk_usage evicts the cache by disk usage.
-    async fn evict_by_disk_usage(&self) -> Result<()> {
+    // evict_task_by_disk_usage evicts the task by disk usage.
+    async fn evict_task_by_disk_usage(&self) -> Result<()> {
         let stats = fs2::statvfs(self.config.storage.dir.as_path())?;
         let available_space = stats.available_space();
         let total_space = stats.total_space();
@@ -126,7 +136,7 @@ impl GC {
         let usage_percent = (100 - available_space * 100 / total_space) as u8;
         if usage_percent >= self.config.gc.policy.dist_high_threshold_percent {
             info!(
-                "start to evict by disk usage, disk usage {}% is higher than high threshold {}%",
+                "start to evict task by disk usage, disk usage {}% is higher than high threshold {}%",
                 usage_percent, self.config.gc.policy.dist_high_threshold_percent
             );
 
@@ -135,17 +145,17 @@ impl GC {
                 * ((usage_percent - self.config.gc.policy.dist_low_threshold_percent) as f64
                     / 100.0);
 
-            // Evict the cache by the need evict space.
-            if let Err(err) = self.evict_space(need_evict_space as u64).await {
-                info!("failed to evict by disk usage: {}", err);
+            // Evict the task by the need evict space.
+            if let Err(err) = self.evict_task_space(need_evict_space as u64).await {
+                info!("failed to evict task by disk usage: {}", err);
             }
         }
 
         Ok(())
     }
 
-    // evict_space evicts the cache by the given space.
-    async fn evict_space(&self, need_evict_space: u64) -> Result<()> {
+    // evict_task_space evicts the task by the given space.
+    async fn evict_task_space(&self, need_evict_space: u64) -> Result<()> {
         let mut tasks = self.storage.get_tasks()?;
         tasks.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
 
@@ -195,6 +205,108 @@ impl GC {
             .await
             .unwrap_or_else(|err| {
                 error!("failed to delete peer {}: {}", task.id, err);
+            });
+    }
+
+    // evict_cache_task_by_ttl evicts the cache task by ttl.
+    async fn evict_cache_task_by_ttl(&self) -> Result<()> {
+        info!("start to evict by cache task ttl * 2");
+        for task in self.storage.get_cache_tasks()? {
+            // If the cache task is expired and not uploading, evict the cache task.
+            if task.is_expired() {
+                // If the cache task is uploading, skip it.
+                if task.is_uploading() {
+                    continue;
+                }
+
+                self.storage.delete_cache_task(&task.id).await;
+                info!("evict cache task {}", task.id);
+
+                self.delete_cache_task_from_scheduler(task.clone()).await;
+                info!("delete cache task {} from scheduler", task.id);
+            }
+        }
+
+        Ok(())
+    }
+
+    // evict_cache_task_by_disk_usage evicts the cache task by disk usage.
+    async fn evict_cache_task_by_disk_usage(&self) -> Result<()> {
+        let stats = fs2::statvfs(self.config.storage.dir.as_path())?;
+        let available_space = stats.available_space();
+        let total_space = stats.total_space();
+
+        // Calculate the usage percent.
+        let usage_percent = (100 - available_space * 100 / total_space) as u8;
+        if usage_percent >= self.config.gc.policy.dist_high_threshold_percent {
+            info!(
+                "start to evict cache task by disk usage, disk usage {}% is higher than high threshold {}%",
+                usage_percent, self.config.gc.policy.dist_high_threshold_percent
+            );
+
+            // Calculate the need evict space.
+            let need_evict_space = total_space as f64
+                * ((usage_percent - self.config.gc.policy.dist_low_threshold_percent) as f64
+                    / 100.0);
+
+            // Evict the cache task by the need evict space.
+            if let Err(err) = self.evict_cache_task_space(need_evict_space as u64).await {
+                info!("failed to evict task by disk usage: {}", err);
+            }
+        }
+
+        Ok(())
+    }
+
+    // evict_cache_task_space evicts the cache task by the given space.
+    async fn evict_cache_task_space(&self, need_evict_space: u64) -> Result<()> {
+        let mut tasks = self.storage.get_cache_tasks()?;
+        tasks.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
+
+        let mut evicted_space = 0;
+        for task in tasks {
+            // Evict enough space.
+            if evicted_space >= need_evict_space {
+                break;
+            }
+
+            // If the cache task is uploading, skip it.
+            if task.is_uploading() {
+                continue;
+            }
+
+            // If the cache task is persistent, skip it.
+            if task.is_persistent() {
+                continue;
+            }
+
+            let task_space = task.content_length();
+
+            // Evict the task.
+            self.storage.delete_task(&task.id).await;
+
+            // Update the evicted space.
+            evicted_space += task_space;
+            info!("evict cache task {} size {}", task.id, task_space);
+
+            self.delete_cache_task_from_scheduler(task.clone()).await;
+            info!("delete cache task {} from scheduler", task.id);
+        }
+
+        info!("evict total size {}", evicted_space);
+        Ok(())
+    }
+
+    // delete_cache_task_from_scheduler deletes the cache task from the scheduler.
+    async fn delete_cache_task_from_scheduler(&self, task: metadata::CacheTask) {
+        self.scheduler_client
+            .delete_cache_task(DeleteCacheTaskRequest {
+                host_id: self.host_id.clone(),
+                task_id: task.id.clone(),
+            })
+            .await
+            .unwrap_or_else(|err| {
+                error!("failed to delete cache peer {}: {}", task.id, err);
             });
     }
 }

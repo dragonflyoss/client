@@ -132,6 +132,9 @@ pub struct CacheTask {
     // not be deleted when dfdamon runs garbage collection.
     pub persistent: bool,
 
+    // ttl is the time to live of the cache task.
+    pub ttl: Duration,
+
     // digests is the digests of the cache task.
     pub digest: String,
 
@@ -177,6 +180,14 @@ impl CacheTask {
     // is_downloading returns whether the cache task is downloading.
     pub fn is_uploading(&self) -> bool {
         self.uploading_count > 0
+    }
+
+    // is_expired returns whether the cache task is expired.
+    pub fn is_expired(&self) -> bool {
+        // When scheduler runs garbage collection, it will trigger dfdaemon to evict the cache task.
+        // But sometimes the dfdaemon may not evict the cache task in time, so we select the ttl * 1.2
+        // as the expired time to force evict the cache task.
+        self.created_at + self.ttl * 2 < Utc::now().naive_utc()
     }
 
     // is_failed returns whether the cache task downloads failed.
@@ -489,6 +500,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     pub fn create_persistent_cache_task(
         &self,
         id: &str,
+        ttl: Duration,
         piece_length: u64,
         content_length: u64,
         digest: &str,
@@ -496,6 +508,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         let task = CacheTask {
             id: id.to_string(),
             persistent: true,
+            ttl,
             piece_length,
             content_length,
             digest: digest.to_string(),
@@ -515,6 +528,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     pub fn download_cache_task_started(
         &self,
         id: &str,
+        ttl: Duration,
         persistent: bool,
         piece_length: u64,
         content_length: u64,
@@ -529,6 +543,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
             None => CacheTask {
                 id: id.to_string(),
                 persistent,
+                ttl,
                 piece_length,
                 content_length,
                 updated_at: Utc::now().naive_utc(),

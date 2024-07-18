@@ -151,6 +151,7 @@ impl Storage {
     pub async fn create_persistent_cache_task(
         &self,
         id: &str,
+        ttl: Duration,
         path: &Path,
         piece_length: u64,
         expected_digest: &str,
@@ -166,6 +167,7 @@ impl Storage {
 
         self.metadata.create_persistent_cache_task(
             id,
+            ttl,
             piece_length,
             response.length,
             digest.to_string().as_str(),
@@ -176,12 +178,13 @@ impl Storage {
     pub fn download_cache_task_started(
         &self,
         id: &str,
+        ttl: Duration,
         persistent: bool,
         piece_length: u64,
         content_length: u64,
     ) -> Result<metadata::CacheTask> {
         self.metadata
-            .download_cache_task_started(id, persistent, piece_length, content_length)
+            .download_cache_task_started(id, ttl, persistent, piece_length, content_length)
     }
 
     // download_cache_task_finished updates the metadata of the cache task when the cache task downloads finished.
