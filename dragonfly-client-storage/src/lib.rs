@@ -401,6 +401,7 @@ impl Storage {
     }
 
     // get_pieces returns the piece metadatas.
+    #[instrument(skip_all)]
     pub fn get_pieces(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
         self.metadata.get_pieces(task_id)
     }

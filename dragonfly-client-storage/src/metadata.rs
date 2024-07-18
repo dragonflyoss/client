@@ -825,6 +825,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     // get_pieces gets the piece metadatas.
+    #[instrument(skip_all)]
     pub fn get_pieces(&self, task_id: &str) -> Result<Vec<Piece>> {
         let pieces = self
             .db

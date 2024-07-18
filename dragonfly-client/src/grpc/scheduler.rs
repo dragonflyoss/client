@@ -21,9 +21,9 @@ use dragonfly_api::manager::v2::Scheduler;
 use dragonfly_api::scheduler::v2::{
     scheduler_client::SchedulerClient as SchedulerGRPCClient, AnnounceCachePeerRequest,
     AnnounceCachePeerResponse, AnnounceHostRequest, AnnouncePeerRequest, AnnouncePeerResponse,
-    DeleteCachePeerRequest, DeleteCacheTaskRequest, DeleteHostRequest, DeletePeerRequest,
-    DeleteTaskRequest, StatCachePeerRequest, StatCacheTaskRequest, StatPeerRequest,
-    StatTaskRequest, UploadCacheTaskFailedRequest, UploadCacheTaskFinishedRequest,
+    AnnouncePeersRequest, DeleteCachePeerRequest, DeleteCacheTaskRequest, DeleteHostRequest,
+    DeletePeerRequest, DeleteTaskRequest, StatCachePeerRequest, StatCacheTaskRequest,
+    StatPeerRequest, StatTaskRequest, UploadCacheTaskFailedRequest, UploadCacheTaskFinishedRequest,
     UploadCacheTaskStartedRequest,
 };
 use dragonfly_client_core::error::{ErrorType, ExternalError, OrErr};
@@ -39,7 +39,7 @@ use tracing::{error, info, instrument, Instrument};
 
 // VNode is the virtual node of the hashring.
 #[derive(Debug, Copy, Clone, Hash, PartialEq)]
-struct VNode {
+pub struct VNode {
     // addr is the address of the virtual node.
     addr: SocketAddr,
 }
@@ -208,7 +208,7 @@ impl SchedulerClient {
         Ok(())
     }
 
-    // init_announce_host announces the host to the scheduler.
+    // init_announce_host announces the host to the scheduler at startup.
     #[instrument(skip(self))]
     pub async fn init_announce_host(&self, request: AnnounceHostRequest) -> Result<()> {
         let mut join_set = JoinSet::new();
@@ -318,6 +318,20 @@ impl SchedulerClient {
             }
         }
 
+        Ok(())
+    }
+
+    // announce_peers announces the peers to the scheduler at startup.
+    #[instrument(skip_all)]
+    pub async fn announce_peers(
+        &self,
+        task_id: &str,
+        request: impl tonic::IntoStreamingRequest<Message = AnnouncePeersRequest>,
+    ) -> Result<()> {
+        self.client(task_id, None)
+            .await?
+            .announce_peers(request)
+            .await?;
         Ok(())
     }
 
@@ -444,12 +458,7 @@ impl SchedulerClient {
         self.update_available_scheduler_addrs().await?;
 
         // Get the scheduler address from the hashring.
-        let addrs = self.hashring.read().await;
-        let addr = *addrs
-            .get(&task_id[0..5].to_string())
-            .ok_or_else(|| Error::HashRing(task_id.to_string()))?;
-        drop(addrs);
-        info!("picked {:?}", addr);
+        let addr = self.get_scheduler_address(task_id).await?;
 
         let channel = match Channel::from_shared(format!("http://{}", addr))
             .map_err(|_| Error::InvalidURI(addr.to_string()))?
@@ -488,7 +497,7 @@ impl SchedulerClient {
         let data_available_schedulers_clone = data.available_schedulers.clone();
         drop(data);
 
-        // Check if the available schedulers is empty.
+        // Check if the available schedulers are empty.
         if data_available_schedulers_clone.is_empty() {
             return Err(Error::AvailableSchedulersNotFound);
         }
@@ -564,6 +573,18 @@ impl SchedulerClient {
                 .collect::<Vec<String>>(),
         );
         Ok(())
+    }
+
+    // get_scheduler_address gets the scheduler address from the hashring.
+    #[instrument(skip(self))]
+    pub async fn get_scheduler_address(&self, task_id: &str) -> Result<VNode> {
+        let addrs = self.hashring.read().await;
+        let addr = *addrs
+            .get(&task_id[0..5].to_string())
+            .ok_or_else(|| Error::HashRing(task_id.to_string()))?;
+        drop(addrs);
+        info!("picked {:?}", addr);
+        Ok(addr)
     }
 
     // refresh_available_scheduler_addrs refreshes addresses of available schedulers.

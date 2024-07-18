@@ -237,10 +237,11 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize scheduler announcer.
     let scheduler_announcer = SchedulerAnnouncer::new(
         config.clone(),
-        id_generator.host_id(),
         scheduler_client.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
+        id_generator.clone(),
+        storage.clone(),
     )
     .await
     .map_err(|err| {
