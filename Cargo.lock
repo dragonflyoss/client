@@ -1152,6 +1152,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-jaeger",
  "path-absolutize",
+ "percent-encoding",
  "pprof",
  "prometheus",
  "prost-wkt-types",

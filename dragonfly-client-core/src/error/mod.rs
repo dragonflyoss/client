@@ -168,6 +168,12 @@ pub enum DFError {
     // ExternalError is the error for external error.
     #[error(transparent)]
     ExternalError(#[from] ExternalError),
+
+    #[error("max download file count {0} exceeded")]
+    MaxDownloadFileCountExceeded(usize),
+
+    #[error(transparent)]
+    TokioJoinError(tokio::task::JoinError),
 }
 
 // SendError is the error for send.
