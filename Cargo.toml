@@ -85,6 +85,7 @@ toml = "0.8.13"
 base16ct = { version = "0.2", features = ["alloc"] }
 bytesize = {version = "1.2.0", features = ["serde"]}
 bytesize-serde = "0.2.1"
+percent-encoding = "2.3.1"
 
 [profile.release]
 debug = true

@@ -106,7 +106,7 @@ impl super::Backend for HTTP {
             http_header: Some(header),
             http_status_code: Some(status_code),
             error_message: Some(status_code.to_string()),
-            entries: None,
+            entries: Vec::new(),
         })
     }
 

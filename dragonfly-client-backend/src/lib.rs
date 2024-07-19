@@ -73,9 +73,8 @@ pub struct HeadResponse {
     // http_status_code is the status code of the response.
     pub http_status_code: Option<reqwest::StatusCode>,
 
-    // If path is a directory, entries will be returned. Otherwise, entries will be None.
     // Entries is the information of the entries in the directory.
-    pub entries: Option<Vec<DirEntry>>,
+    pub entries: Vec<DirEntry>,
 
     // error_message is the error message of the response.
     pub error_message: Option<String>,

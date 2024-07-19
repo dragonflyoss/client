@@ -1181,6 +1181,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "url",
+ "uuid",
  "validator",
  "warp",
 ]

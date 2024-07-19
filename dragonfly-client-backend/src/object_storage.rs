@@ -444,36 +444,34 @@ impl crate::Backend for ObjectStorage {
 
         // Get the entries if url point to a directory.
         let entries = if parsed_url.is_dir() {
-            Some(
-                operator
-                    .list_with(&parsed_url.key)
-                    .recursive(true)
-                    .metakey(Metakey::ContentLength | Metakey::Mode)
-                    .await // Do the list op here.
-                    .map_err(|err| {
-                        error!(
-                            "list request failed {} {}: {}",
-                            request.task_id, request.url, err
-                        );
-                        ClientError::BackendError(BackendError {
-                            message: err.to_string(),
-                            status_code: None,
-                            header: None,
-                        })
-                    })?
-                    .into_iter()
-                    .map(|entry| {
-                        let metadata = entry.metadata();
-                        super::DirEntry {
-                            url: parsed_url.make_url_by_entry_path(entry.path()).to_string(),
-                            content_length: metadata.content_length() as usize,
-                            is_dir: metadata.is_dir(),
-                        }
+            operator
+                .list_with(&parsed_url.key)
+                .recursive(true)
+                .metakey(Metakey::ContentLength | Metakey::Mode)
+                .await // Do the list op here.
+                .map_err(|err| {
+                    error!(
+                        "list request failed {} {}: {}",
+                        request.task_id, request.url, err
+                    );
+                    ClientError::BackendError(BackendError {
+                        message: err.to_string(),
+                        status_code: None,
+                        header: None,
                     })
-                    .collect(),
-            )
+                })?
+                .into_iter()
+                .map(|entry| {
+                    let metadata = entry.metadata();
+                    super::DirEntry {
+                        url: parsed_url.make_url_by_entry_path(entry.path()).to_string(),
+                        content_length: metadata.content_length() as usize,
+                        is_dir: metadata.is_dir(),
+                    }
+                })
+                .collect()
         } else {
-            None
+            Vec::new()
         };
 
         // Stat the object to get the response from the ObjectStorage.
