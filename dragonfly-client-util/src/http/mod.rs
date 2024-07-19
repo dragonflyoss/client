@@ -104,6 +104,13 @@ pub fn header_vec_to_hashmap(raw_header: Vec<String>) -> Result<HashMap<String, 
     Ok(header)
 }
 
+// header_vec_to_reqwest_headermap converts a vector of header string to a reqwest headermap.
+pub fn header_vec_to_reqwest_headermap(
+    raw_header: Vec<String>,
+) -> Result<reqwest::header::HeaderMap> {
+    hashmap_to_reqwest_headermap(&header_vec_to_hashmap(raw_header)?)
+}
+
 // get_range gets the range from http header.
 pub fn get_range(header: &HeaderMap, content_length: u64) -> Result<Option<Range>> {
     match header.get(reqwest::header::RANGE) {
