@@ -7,6 +7,7 @@
 [![Discussions](https://img.shields.io/badge/discussions-on%20github-blue?style=flat-square)](https://github.com/dragonflyoss/Dragonfly2/discussions)
 [![Twitter](https://img.shields.io/twitter/url?style=social&url=https%3A%2F%2Ftwitter.com%2Fdragonfly_oss)](https://twitter.com/dragonfly_oss)
 [![LICENSE](https://img.shields.io/github/license/dragonflyoss/Dragonfly2.svg?style=flat-square)](https://github.com/dragonflyoss/Dragonfly2/blob/main/LICENSE)
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fdragonflyoss%2Fclient.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fdragonflyoss%2Fclient?ref=badge_shield)
 
 Dragonfly client written in Rust. It can serve as both a peer and a seed peer.
 
@@ -29,3 +30,7 @@ Join the conversation and help the community.
 
 You should check out our
 [CONTRIBUTING](./CONTRIBUTING.md) and develop the project together.
+
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fdragonflyoss%2Fclient.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fdragonflyoss%2Fclient?ref=badge_large)
