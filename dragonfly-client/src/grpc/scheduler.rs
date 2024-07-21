@@ -494,6 +494,7 @@ impl SchedulerClient {
                     continue;
                 }
             }
+            drop(unavailable_scheduler_addrs);
 
             match self.check_scheduler(&scheduler_addr).await {
                 Ok(channel) => {
