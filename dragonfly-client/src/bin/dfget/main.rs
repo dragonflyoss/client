@@ -23,6 +23,7 @@ use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::{object_storage, BackendFactory, DirEntry, HeadRequest};
 use dragonfly_client_config::{self, default_piece_length, dfdaemon, dfget};
+use dragonfly_client_core::error::errors::InvalidPath;
 use dragonfly_client_core::error::{BackendError, ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::http::{header_vec_to_hashmap, header_vec_to_reqwest_headermap};
@@ -476,6 +477,8 @@ async fn run(mut args: Args) -> Result<()> {
             err
         })?;
 
+    args.output = validate_output_path(&args.url, args.output)?;
+
     // Get the absolute path of the output file.
     args.output = Path::new(&args.output).absolutize()?.into();
     info!("download file to: {}", args.output.to_string_lossy());
@@ -751,4 +754,65 @@ async fn get_dfdaemon_download_client(endpoint: PathBuf) -> Result<DfdaemonDownl
     // Get dfdaemon download client.
     let dfdaemon_download_client = DfdaemonDownloadClient::new_unix(endpoint).await?;
     Ok(dfdaemon_download_client)
+}
+
+// validate_output_path validates the correctness of output path and returns the validated path
+// based on the given url.
+fn validate_output_path(url: &Url, mut path: PathBuf) -> Result<PathBuf> {
+    // If user want to download a directory, check the output directory's existence.
+    if url.path().ends_with('/') && !path.is_dir() {
+        return Err(Error::InvalidPath(InvalidPath::DirInexist(path.clone())));
+    }
+    // Check if the user wants to download a file by verifying the output path.
+    // The output path should point to a non-existent file.
+    if !url.path().ends_with('/') {
+        // If the output ends with '/', the user intends to download file to a directory with
+        // origin name, we should check the given path.
+        if path.to_string_lossy().ends_with('/') && !path.is_dir() {
+            return Err(Error::InvalidPath(InvalidPath::DirInexist(path.clone())));
+        }
+
+        // If the output path is an existed directory, use origin filename as output path.
+        if path.is_dir() {
+            // Url::path() always contains '/', so can `.expect()` to get the output_filename safely.
+            let output_filename = url.path().rsplit_once('/').expect("unexpected url path").1;
+            path = path.join(output_filename);
+        }
+
+        // If the output path already exists, return an error indicating the file already exists.
+        if path.is_file() {
+            return Err(Error::InvalidPath(InvalidPath::FilePathExist(path.clone())));
+        }
+        // Check if the output path has a parent directory.
+        let parent_dir_path = match path.parent() {
+            Some(parent) => {
+                // User may input a path without prefix "./" or "../", for example "test.txt", in this case
+                // parent will be Path::new(""), but this path is not a valid path, so if this happen, change
+                // the parent to Path::new(".").
+                if parent == Path::new("") && std::env::current_dir().is_err() {
+                    // This situation is rare, but may happen when multiuser handling the same directory.
+                    return Err(Error::InvalidPath(InvalidPath::DirInexist(PathBuf::from(
+                        ".",
+                    ))));
+                } else {
+                    Path::new(".")
+                }
+            }
+            None => return Err(Error::InvalidPath(InvalidPath::DirInexist(path.clone()))), // This may be unreachable.
+        };
+
+        // If the parent directory does not exist, return an error indicating the directory does not exist.
+        if !parent_dir_path.exists() {
+            return Err(Error::InvalidPath(InvalidPath::DirInexist(
+                parent_dir_path.into(),
+            )));
+        }
+        // If the parent directory is not a directory, return an error indicating it is not a directory.
+        if !parent_dir_path.is_dir() {
+            return Err(Error::InvalidPath(InvalidPath::ParentNotDir(
+                parent_dir_path.into(),
+            )));
+        }
+    }
+    Ok(path)
 }
