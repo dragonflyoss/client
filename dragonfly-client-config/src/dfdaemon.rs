@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use bytesize::ByteSize;
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::Result;
 use local_ip_address::{local_ip, local_ipv6};
@@ -48,11 +49,6 @@ pub fn default_download_unix_socket_path() -> PathBuf {
     crate::default_root_dir().join("dfdaemon.sock")
 }
 
-// default_dfdaemon_lock_path is the default file lock path for dfdaemon service.
-pub fn default_dfdaemon_lock_path() -> PathBuf {
-    crate::default_lock_dir().join("dfdaemon.lock")
-}
-
 // default_host_hostname is the default hostname of the host.
 #[inline]
 fn default_host_hostname() -> String {
@@ -77,11 +73,11 @@ fn default_upload_grpc_server_port() -> u16 {
     4000
 }
 
-// default_upload_rate_limit is the default rate limit of the upload speed in bps(bytes per second).
+// default_upload_rate_limit is the default rate limit of the upload speed in GiB/Mib/Kib per second.
 #[inline]
-fn default_upload_rate_limit() -> u64 {
-    // Default rate limit is 10Gbps.
-    10_000_000_000
+fn default_upload_rate_limit() -> ByteSize {
+    // Default rate limit is 10GiB/s.
+    ByteSize::gib(10)
 }
 
 // default_health_server_port is the default port of the health server.
@@ -102,11 +98,11 @@ fn default_stats_server_port() -> u16 {
     4004
 }
 
-// default_download_rate_limit is the default rate limit of the download speed in bps(bytes per second).
+// default_download_rate_limit is the default rate limit of the download speed in GiB/Mib/Kib per second.
 #[inline]
-fn default_download_rate_limit() -> u64 {
-    // Default rate limit is 10Gbps.
-    10_000_000_000
+fn default_download_rate_limit() -> ByteSize {
+    // Default rate limit is 10GiB/s.
+    ByteSize::gib(10)
 }
 
 // default_download_piece_timeout is the default timeout for downloading a piece from source.
@@ -411,9 +407,9 @@ pub struct Download {
     // server is the download server configuration for dfdaemon.
     pub server: DownloadServer,
 
-    // rate_limit is the rate limit of the download speed in bps(bytes per second).
-    #[serde(default = "default_download_rate_limit")]
-    pub rate_limit: u64,
+    // rate_limit is the rate limit of the download speed in GiB/Mib/Kib per second.
+    #[serde(with = "bytesize_serde", default = "default_download_rate_limit")]
+    pub rate_limit: ByteSize,
 
     // piece_timeout is the timeout for downloading a piece from source.
     #[serde(default = "default_download_piece_timeout", with = "humantime_serde")]
@@ -466,9 +462,9 @@ pub struct Upload {
     // server is the upload server configuration for dfdaemon.
     pub server: UploadServer,
 
-    // rate_limit is the rate limit of the upload speed in bps(bytes per second).
-    #[serde(default = "default_upload_rate_limit")]
-    pub rate_limit: u64,
+    // rate_limit is the rate limit of the upload speed in GiB/Mib/Kib per second.
+    #[serde(with = "bytesize_serde", default = "default_upload_rate_limit")]
+    pub rate_limit: ByteSize,
 }
 
 // Upload implements Default.
@@ -1092,6 +1088,12 @@ impl Config {
 
     // convert converts the configuration.
     fn convert(&mut self) {
+        println!(
+            "convert download rate limit: {:?}",
+            self.download.rate_limit
+        );
+        println!("convert upload rate limit: {:?}", self.upload.rate_limit);
+
         // Convert advertise ip.
         if self.host.ip.is_none() {
             self.host.ip = if self.network.enable_ipv6 {

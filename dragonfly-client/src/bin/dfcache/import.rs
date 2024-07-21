@@ -16,8 +16,6 @@
 
 use clap::Parser;
 use dragonfly_api::dfdaemon::v2::UploadCacheTaskRequest;
-use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
-use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client_config::{
     default_piece_length, dfcache::default_dfcache_persistent_replica_count,
 };
@@ -30,6 +28,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use termion::{color, style};
 use tracing::error;
+
+use super::*;
 
 // DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL is the default steady tick interval of progress bar.
 const DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL: Duration = Duration::from_millis(80);
@@ -87,19 +87,20 @@ pub struct ImportCommand {
 
 // Implement the execute for ImportCommand.
 impl ImportCommand {
+    // execute executes the import sub command.
     pub async fn execute(&self, endpoint: &Path) -> Result<()> {
         // Run import sub command.
         if let Err(err) = self.run(endpoint).await {
             match err {
                 Error::TonicStatus(status) => {
                     eprintln!(
-                        "{}{}{}Importing failed, bad code:{} {}",
+                        "{}{}{}Importing Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
                         style::Bold,
                         style::Reset,
-                        status.code()
                     );
+
                     eprintln!(
                         "{}{}{}*********************************{}",
                         color::Fg(color::Black),
@@ -107,6 +108,16 @@ impl ImportCommand {
                         style::Bold,
                         style::Reset
                     );
+
+                    eprintln!(
+                        "{}{}{}Bad Code:{} {}",
+                        color::Fg(color::Red),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset,
+                        status.code()
+                    );
+
                     eprintln!(
                         "{}{}{}Message:{} {}",
                         color::Fg(color::Cyan),
@@ -115,6 +126,7 @@ impl ImportCommand {
                         style::Reset,
                         status.message()
                     );
+
                     eprintln!(
                         "{}{}{}Details:{} {}",
                         color::Fg(color::Cyan),
@@ -123,6 +135,7 @@ impl ImportCommand {
                         style::Reset,
                         std::str::from_utf8(status.details()).unwrap()
                     );
+
                     eprintln!(
                         "{}{}{}*********************************{}",
                         color::Fg(color::Black),
@@ -133,12 +146,36 @@ impl ImportCommand {
                 }
                 err => {
                     eprintln!(
-                        "{}{}{}Importing failed, error message:{} {}",
+                        "{}{}{}Importing Failed!{}",
+                        color::Fg(color::Red),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset
+                    );
+
+                    eprintln!(
+                        "{}{}{}****************************************{}",
+                        color::Fg(color::Black),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset
+                    );
+
+                    eprintln!(
+                        "{}{}{}Message:{} {}",
                         color::Fg(color::Red),
                         style::Italic,
                         style::Bold,
                         style::Reset,
                         err
+                    );
+
+                    eprintln!(
+                        "{}{}{}****************************************{}",
+                        color::Fg(color::Black),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset
                     );
                 }
             }
@@ -149,14 +186,14 @@ impl ImportCommand {
         Ok(())
     }
 
+    // run runs the import sub command.
     async fn run(&self, endpoint: &Path) -> Result<()> {
-        let dfdaemon_download_client = self
-            .get_dfdaemon_download_client(endpoint.to_path_buf())
+        let dfdaemon_download_client = get_dfdaemon_download_client(endpoint.to_path_buf())
             .await
             .map_err(|err| {
-                error!("initialize dfdaemon download client failed: {}", err);
-                err
-            })?;
+            error!("initialize dfdaemon download client failed: {}", err);
+            err
+        })?;
 
         let pb = ProgressBar::new_spinner();
         pb.enable_steady_tick(DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL);
@@ -186,19 +223,5 @@ impl ImportCommand {
 
         pb.finish_with_message("Done");
         Ok(())
-    }
-
-    // get_and_check_dfdaemon_download_client gets a dfdaemon download client and checks its health.
-    async fn get_dfdaemon_download_client(
-        &self,
-        endpoint: PathBuf,
-    ) -> Result<DfdaemonDownloadClient> {
-        // Check dfdaemon's health.
-        let health_client = HealthClient::new_unix(endpoint.clone()).await?;
-        health_client.check_dfdaemon_download().await?;
-
-        // Get dfdaemon download client.
-        let dfdaemon_download_client = DfdaemonDownloadClient::new_unix(endpoint).await?;
-        Ok(dfdaemon_download_client)
     }
 }

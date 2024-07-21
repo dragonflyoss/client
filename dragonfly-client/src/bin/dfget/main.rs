@@ -21,28 +21,26 @@ use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::tracing::init_tracing;
+use dragonfly_client_backend::{object_storage, BackendFactory, DirEntry, HeadRequest};
 use dragonfly_client_config::{self, default_piece_length, dfdaemon, dfget};
-use dragonfly_client_core::{
-    error::{ErrorType, ExternalError, OrErr},
-    Error, Result,
-};
-use dragonfly_client_util::http::header_vec_to_hashmap;
-use fslock::LockFile;
-use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use std::path::PathBuf;
-use std::process::Stdio;
+use dragonfly_client_core::error::{BackendError, ErrorType, OrErr};
+use dragonfly_client_core::{Error, Result};
+use dragonfly_client_util::http::{header_vec_to_hashmap, header_vec_to_reqwest_headermap};
+use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
+use path_absolutize::*;
+use percent_encoding::percent_decode_str;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 use std::{cmp::min, fmt::Write};
 use termion::{color, style};
-use tokio::process::{Child, Command};
-use tracing::{error, info, Level};
+use tokio::fs;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::task::JoinSet;
+use tracing::{error, info, warn, Level};
 use url::Url;
-
-// DEFAULT_DFDAEMON_CHECK_HEALTH_INTERVAL is the default interval of checking dfdaemon's health.
-const DEFAULT_DFDAEMON_CHECK_HEALTH_INTERVAL: Duration = Duration::from_millis(200);
-
-// DEFAULT_DFDAEMON_CHECK_HEALTH_TIMEOUT is the default timeout of checking dfdaemon's health.
-const DEFAULT_DFDAEMON_CHECK_HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
+use uuid::Uuid;
 
 const LONG_ABOUT: &str = r#"
 A download command line based on P2P technology in Dragonfly that can download resources of different protocols.
@@ -72,7 +70,7 @@ Examples:
   $ dfget cos://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret> --storage-endpoint=<endpoint>
 "#;
 
-#[derive(Debug, Parser)]
+#[derive(Debug, Parser, Clone)]
 #[command(
     name = dfget::NAME,
     author,
@@ -204,6 +202,20 @@ struct Args {
     storage_predefined_acl: Option<String>,
 
     #[arg(
+        long,
+        default_value_t = 10,
+        help = "Specify the max count of file to download when downloading a directory. If the actual file count is greater than this value, the downloading will be rejected"
+    )]
+    max_files: usize,
+
+    #[arg(
+        long,
+        default_value_t = 5,
+        help = "Specify the max count of concurrent download files when downloading a directory"
+    )]
+    max_concurrent_requests: usize,
+
+    #[arg(
         short = 'l',
         long,
         default_value = "info",
@@ -231,42 +243,6 @@ struct Args {
         help = "Specify whether to print log"
     )]
     verbose: bool,
-
-    #[arg(
-        short = 'c',
-        long = "dfdaemon-config",
-        default_value_os_t = dfdaemon::default_dfdaemon_config_path(),
-        help = "Specify dfdaemon's config file to use")
-    ]
-    dfdaemon_config: PathBuf,
-
-    #[arg(
-        long = "dfdaemon-lock-path",
-        default_value_os_t = dfdaemon::default_dfdaemon_lock_path(),
-        help = "Specify the dfdaemon's lock file path"
-    )]
-    dfdaemon_lock_path: PathBuf,
-
-    #[arg(
-        long = "dfdaemon-log-level",
-        default_value = "info",
-        help = "Specify the dfdaemon's logging level [trace, debug, info, warn, error]"
-    )]
-    dfdaemon_log_level: Level,
-
-    #[arg(
-        long = "dfdaemon-log-dir",
-        default_value_os_t = dfdaemon::default_dfdaemon_log_dir(),
-        help = "Specify the dfdaemon's log directory"
-    )]
-    dfdaemon_log_dir: PathBuf,
-
-    #[arg(
-        long,
-        default_value_t = 6,
-        help = "Specify the dfdaemon's max number of log files"
-    )]
-    dfdaemon_log_max_files: usize,
 }
 
 #[tokio::main]
@@ -309,7 +285,7 @@ async fn main() -> anyhow::Result<()> {
 
                     if let Some(status_code) = backend_err.status_code {
                         eprintln!(
-                            "{}{}{}Bad status code:{} {}",
+                            "{}{}{}Bad Status Code:{} {}",
                             color::Fg(color::Red),
                             style::Italic,
                             style::Bold,
@@ -365,7 +341,7 @@ async fn main() -> anyhow::Result<()> {
                     );
 
                     eprintln!(
-                        "{}{}{}Bad code:{} {}",
+                        "{}{}{}Bad Code:{} {}",
                         color::Fg(color::Red),
                         style::Italic,
                         style::Bold,
@@ -492,41 +468,155 @@ async fn main() -> anyhow::Result<()> {
 }
 
 // run runs the dfget command.
-async fn run(args: Args) -> Result<()> {
-    // Get or create dfdaemon download client.
-    let dfdaemon_download_client = get_or_create_dfdaemon_download_client(
-        args.dfdaemon_config,
-        args.endpoint.clone(),
-        args.dfdaemon_log_dir,
-        args.dfdaemon_log_level,
-        args.dfdaemon_log_max_files,
-        args.dfdaemon_lock_path,
-    )
-    .await
-    .map_err(|err| {
-        error!("initialize dfdaemon download client failed: {}", err);
-        err
-    })?;
+async fn run(mut args: Args) -> Result<()> {
+    let dfdaemon_download_client = get_dfdaemon_download_client(args.endpoint.to_path_buf())
+        .await
+        .map_err(|err| {
+            error!("initialize dfdaemon download client failed: {}", err);
+            err
+        })?;
 
+    // Get the absolute path of the output file.
+    args.output = Path::new(&args.output).absolutize()?.into();
+    info!("download file to: {}", args.output.to_string_lossy());
+
+    // If download from object storage, the path has end with '/', then download all files in then
+    // directory. Otherwise, download the single file. Only object storage protocol supports
+    // directory download.
+    let scheme = args.url.scheme();
+    if object_storage::Scheme::from_str(scheme).is_err() && args.url.path().ends_with('/') {
+        return Err(Error::Unsupported(format!("{} download directory", scheme)));
+    };
+
+    if args.url.path().ends_with('/') {
+        return download_dir(args, dfdaemon_download_client).await;
+    };
+
+    download(args, ProgressBar::new(0), dfdaemon_download_client).await
+}
+
+// download_dir downloads all files in the directory.
+async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Result<()> {
     // Only when the `access_key_id` and `access_key_secret` are provided at the same time,
-    // they will be pass to the `DownloadTaskRequest`.
+    // they will be passed to the `DownloadTaskRequest`.
     let mut object_storage = None;
-    if let (Some(access_key_id), Some(access_key_secret)) =
-        (args.storage_access_key_id, args.storage_access_key_secret)
-    {
+    if let (Some(access_key_id), Some(access_key_secret)) = (
+        args.storage_access_key_id.clone(),
+        args.storage_access_key_secret.clone(),
+    ) {
         object_storage = Some(ObjectStorage {
-            region: args.storage_region,
-            endpoint: args.storage_endpoint,
             access_key_id,
             access_key_secret,
-            session_token: args.storage_session_token,
-            credential: args.storage_credential,
-            predefined_acl: args.storage_predefined_acl,
+            session_token: args.storage_session_token.clone(),
+            region: args.storage_region.clone(),
+            endpoint: args.storage_endpoint.clone(),
+            credential: args.storage_credential.clone(),
+            predefined_acl: args.storage_predefined_acl.clone(),
+        });
+    }
+
+    // Get all entries in the directory. If the directory is empty, then return directly.
+    let entries = get_entries(args.clone(), object_storage.clone()).await?;
+    if entries.is_empty() {
+        warn!("directory {} is empty", args.url);
+        return Ok(());
+    };
+
+    // If the actual file count is greater than the max_files, then reject the downloading.
+    let count = entries.iter().filter(|entry| !entry.is_dir).count();
+    if count > args.max_files {
+        return Err(Error::MaxDownloadFilesExceeded(count));
+    }
+
+    // Initialize the multi progress bar.
+    let multi_progress_bar = MultiProgress::new();
+
+    // Initialize the join set.
+    let mut join_set = JoinSet::new();
+    let semaphore = Arc::new(Semaphore::new(args.max_concurrent_requests));
+
+    // Iterate all entries in the directory.
+    for entry in entries {
+        let entry_url: Url = entry.url.parse().or_err(ErrorType::ParseError)?;
+
+        // If entry is a directory, then create the output directory. If entry is a file,
+        // then download the file to the output directory.
+        if entry.is_dir {
+            let output_dir = make_output_by_entry(args.url.clone(), &args.output, entry)?;
+            fs::create_dir_all(&output_dir).await.map_err(|err| {
+                error!("create {} failed: {}", output_dir.to_string_lossy(), err);
+                err
+            })?;
+        } else {
+            let mut entry_args = args.clone();
+            entry_args.output = make_output_by_entry(args.url.clone(), &args.output, entry)?;
+            entry_args.url = entry_url;
+
+            let progress_bar = multi_progress_bar.add(ProgressBar::new(0));
+            async fn download_entry(
+                args: Args,
+                progress_bar: ProgressBar,
+                download_client: DfdaemonDownloadClient,
+                _permit: OwnedSemaphorePermit,
+            ) -> Result<()> {
+                download(args, progress_bar, download_client).await
+            }
+
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            join_set.spawn(download_entry(
+                entry_args,
+                progress_bar,
+                download_client.clone(),
+                permit,
+            ));
+        }
+    }
+
+    // Wait for all download tasks finished.
+    while let Some(message) = join_set
+        .join_next()
+        .await
+        .transpose()
+        .or_err(ErrorType::AsyncRuntimeError)?
+    {
+        match message {
+            Ok(_) => continue,
+            Err(err) => {
+                error!("download entry failed: {}", err);
+                return Err(err);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// download downloads the single file.
+async fn download(
+    args: Args,
+    progress_bar: ProgressBar,
+    download_client: DfdaemonDownloadClient,
+) -> Result<()> {
+    // Only when the `access_key_id` and `access_key_secret` are provided at the same time,
+    // they will be passed to the `DownloadTaskRequest`.
+    let mut object_storage = None;
+    if let (Some(access_key_id), Some(access_key_secret)) = (
+        args.storage_access_key_id.clone(),
+        args.storage_access_key_secret.clone(),
+    ) {
+        object_storage = Some(ObjectStorage {
+            access_key_id,
+            access_key_secret,
+            session_token: args.storage_session_token.clone(),
+            region: args.storage_region.clone(),
+            endpoint: args.storage_endpoint.clone(),
+            credential: args.storage_credential.clone(),
+            predefined_acl: args.storage_predefined_acl.clone(),
         });
     }
 
     // Create dfdaemon client.
-    let response = dfdaemon_download_client
+    let response = download_client
         .download_task(DownloadTaskRequest {
             download: Some(Download {
                 url: args.url.to_string(),
@@ -540,7 +630,7 @@ async fn run(args: Args) -> Result<()> {
                 filtered_query_params: args.filtered_query_params.unwrap_or_default(),
                 request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
                 piece_length: args.piece_length,
-                output_path: Some(args.output.into_os_string().into_string().unwrap()),
+                output_path: Some(args.output.to_string_lossy().to_string()),
                 timeout: Some(
                     prost_wkt_types::Duration::try_from(args.timeout)
                         .or_err(ErrorType::ParseError)?,
@@ -558,20 +648,21 @@ async fn run(args: Args) -> Result<()> {
             err
         })?;
 
-    // Initialize progress bar.
-    let pb = ProgressBar::new(0);
-    pb.set_style(
+    // Get actual path rather than percentage encoded path as download path.
+    let download_path = percent_decode_str(args.url.path()).decode_utf8_lossy();
+    progress_bar.set_style(
         ProgressStyle::with_template(
-            "[{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})",
+            "{msg:.bold}\n[{elapsed_precise}] [{bar:60.green/red}] {percent:3}% ({bytes_per_sec:.red}, {eta:.cyan})",
         )
         .or_err(ErrorType::ParseError)?
         .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
             write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
         })
-        .progress_chars("#>-"),
+        .progress_chars("=>-"),
     );
+    progress_bar.set_message(download_path.to_string());
 
-    //  Download file.
+    // Download file.
     let mut downloaded = 0;
     let mut out_stream = response.into_inner();
     while let Some(message) = out_stream.message().await.map_err(|err| {
@@ -580,81 +671,75 @@ async fn run(args: Args) -> Result<()> {
     })? {
         match message.response {
             Some(download_task_response::Response::DownloadTaskStartedResponse(response)) => {
-                pb.set_length(response.content_length);
+                progress_bar.set_length(response.content_length);
             }
             Some(download_task_response::Response::DownloadPieceFinishedResponse(response)) => {
                 let piece = response.piece.ok_or(Error::InvalidParameter)?;
 
                 downloaded += piece.length;
-                let position = min(downloaded + piece.length, pb.length().unwrap_or(0));
-                pb.set_position(position);
+                let position = min(
+                    downloaded + piece.length,
+                    progress_bar.length().unwrap_or(0),
+                );
+                progress_bar.set_position(position);
             }
             None => {}
         }
     }
 
-    pb.finish_with_message("downloaded");
+    progress_bar.finish_with_message(format!("{} downloaded", download_path));
     Ok(())
 }
 
-// get_or_create_dfdaemon_download_client gets a dfdaemon download client or creates a new one.
-async fn get_or_create_dfdaemon_download_client(
-    config_path: PathBuf,
-    endpoint: PathBuf,
-    log_dir: PathBuf,
-    log_level: Level,
-    log_max_files: usize,
-    lock_path: PathBuf,
-) -> Result<DfdaemonDownloadClient> {
-    // Get dfdaemon download client and check its health.
-    match get_dfdaemon_download_client(endpoint.clone()).await {
-        Ok(dfdaemon_download_client) => return Ok(dfdaemon_download_client),
-        Err(err) => error!("get dfdaemon download client failed: {}", err),
+// get_entries gets all entries in the directory.
+async fn get_entries(args: Args, object_storage: Option<ObjectStorage>) -> Result<Vec<DirEntry>> {
+    // Initialize backend factory and build backend.
+    let backend_factory = BackendFactory::new(None)?;
+    let backend = backend_factory.build(args.url.as_str())?;
+
+    // Send head request.
+    let response = backend
+        .head(HeadRequest {
+            // NOTE: Mock a task id for head request.
+            task_id: Uuid::new_v4().to_string(),
+            url: args.url.to_string(),
+            http_header: Some(header_vec_to_reqwest_headermap(
+                args.header.clone().unwrap_or_default(),
+            )?),
+            timeout: args.timeout,
+            client_certs: None,
+            object_storage,
+        })
+        .await?;
+
+    // Return error when response is failed.
+    if !response.success {
+        return Err(Error::BackendError(BackendError {
+            message: response.error_message.unwrap_or_default(),
+            status_code: Some(response.http_status_code.unwrap_or_default()),
+            header: Some(response.http_header.unwrap_or_default()),
+        }));
     }
 
-    // Create a lock file to prevent multiple dfdaemon processes from being created.
-    let mut f = LockFile::open(lock_path.as_path())?;
-    f.lock()?;
+    Ok(response.entries)
+}
 
-    // Check dfdaemon download client again.
-    match get_dfdaemon_download_client(endpoint.clone()).await {
-        Ok(dfdaemon_download_client) => return Ok(dfdaemon_download_client),
-        Err(err) => error!("get dfdaemon download client failed: {}", err),
-    }
+// make_output_by_entry makes the output path by the entry information.
+fn make_output_by_entry(url: Url, output: &Path, entry: DirEntry) -> Result<PathBuf> {
+    // Get the root directory of the download directory and the output root directory.
+    let root_dir = url.path().to_string();
+    let mut output_root_dir = output.to_string_lossy().to_string();
+    if !output_root_dir.ends_with('/') {
+        output_root_dir.push('/');
+    };
 
-    // Spawn a dfdaemon process.
-    let child = spawn_dfdaemon(config_path, log_dir, log_level, log_max_files).map_err(|err| {
-        error!("spawn dfdaemon process failed: {}", err);
-        ExternalError::new(ErrorType::ConfigError).with_context(format!(
-            "Dfdaemon's unix socket is not exist in path: {:?}. dfget will spawn a dfdaemon process automatically, but spawn failed: {}. If you need to use the existing dfdaemon, please set the correct path of the dfdaemon's unix socket with --endpoint option.",
-            endpoint.to_string_lossy(),
-            err
-        ))
-    })?;
-    info!("spawn dfdaemon process: {:?}", child);
-
-    // Initialize the timeout of checking dfdaemon's health.
-    let check_health_timeout = tokio::time::sleep(DEFAULT_DFDAEMON_CHECK_HEALTH_TIMEOUT);
-    tokio::pin!(check_health_timeout);
-
-    // Wait for dfdaemon's health.
-    let mut interval = tokio::time::interval(DEFAULT_DFDAEMON_CHECK_HEALTH_INTERVAL);
-    loop {
-        tokio::select! {
-            _ = interval.tick() => {
-                match get_dfdaemon_download_client(endpoint.clone()).await {
-                    Ok(dfdaemon_download_client) => {
-                        f.unlock()?;
-                        return Ok(dfdaemon_download_client);
-                    }
-                    Err(err) => error!("get dfdaemon download client failed: {}", err),
-                }
-            }
-            _ = &mut check_health_timeout => {
-                return Err(Error::Unknown("get dfdaemon download client timeout".to_string()));
-            }
-        }
-    }
+    // The url in the entry is percentage encoded, so we should decode it to get right path and
+    // replace the root directory with the output root directory.
+    let entry_url: Url = entry.url.parse().or_err(ErrorType::ParseError)?;
+    let decoded_entry_url = percent_decode_str(entry_url.path()).decode_utf8_lossy();
+    Ok(decoded_entry_url
+        .replace(root_dir.as_str(), output_root_dir.as_str())
+        .into())
 }
 
 // get_and_check_dfdaemon_download_client gets a dfdaemon download client and checks its health.
@@ -666,41 +751,4 @@ async fn get_dfdaemon_download_client(endpoint: PathBuf) -> Result<DfdaemonDownl
     // Get dfdaemon download client.
     let dfdaemon_download_client = DfdaemonDownloadClient::new_unix(endpoint).await?;
     Ok(dfdaemon_download_client)
-}
-
-// spawn_dfdaemon spawns a dfdaemon process in the background.
-fn spawn_dfdaemon(
-    config_path: PathBuf,
-    log_dir: PathBuf,
-    log_level: Level,
-    log_max_files: usize,
-) -> Result<Child> {
-    // Create dfdaemon command.
-    let mut cmd = Command::new("dfdaemon");
-
-    // Set command line arguments.
-    cmd.arg("--config")
-        .arg(config_path)
-        .arg("--log-dir")
-        .arg(log_dir)
-        .arg("--log-level")
-        .arg(log_level.to_string())
-        .arg("--log-max-files")
-        .arg(log_max_files.to_string());
-
-    // Redirect stdin, stdout, stderr to /dev/null.
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-
-    // Create a new session for dfdaemon by calling setsid.
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
-
-    let child = cmd.spawn()?;
-    Ok(child)
 }

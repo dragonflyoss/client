@@ -67,13 +67,6 @@ struct Args {
     config: PathBuf,
 
     #[arg(
-        long = "lock-path",
-        default_value_os_t = dfdaemon::default_dfdaemon_lock_path(),
-        help = "Specify the lock file path"
-    )]
-    lock_path: PathBuf,
-
-    #[arg(
         short = 'l',
         long,
         default_value = "info",
@@ -199,6 +192,7 @@ async fn main() -> Result<(), anyhow::Error> {
         id_generator.clone(),
         storage.clone(),
         scheduler_client.clone(),
+        backend_factory.clone(),
     );
     let cache_task = Arc::new(cache_task);
 

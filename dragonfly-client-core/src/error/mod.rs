@@ -176,6 +176,18 @@ pub enum DFError {
     // ExternalError is the error for external error.
     #[error(transparent)]
     ExternalError(#[from] ExternalError),
+
+    // MaxDownloadFilesExceeded is the error for max download files exceeded.
+    #[error("max number of files to download exceeded: {0}")]
+    MaxDownloadFilesExceeded(usize),
+
+    // Unsupported is the error for unsupported.
+    #[error("unsupported {0}")]
+    Unsupported(String),
+
+    // TokioJoinError is the error for tokio join.
+    #[error(transparent)]
+    TokioJoinError(tokio::task::JoinError),
 }
 
 // SendError is the error for send.

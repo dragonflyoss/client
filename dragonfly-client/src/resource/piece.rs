@@ -19,7 +19,7 @@ use crate::metrics::{
     collect_download_piece_traffic_metrics, collect_upload_piece_traffic_metrics,
 };
 use chrono::Utc;
-use dragonfly_api::common::v2::{ObjectStorage, Peer, Range, TrafficType};
+use dragonfly_api::common::v2::{ObjectStorage, Range, TrafficType};
 use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
 use dragonfly_client_backend::{BackendFactory, GetRequest};
 use dragonfly_client_config::dfdaemon::Config;
@@ -33,6 +33,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{error, info, instrument, Span};
+
+use super::*;
 
 // Piece represents a piece manager.
 pub struct Piece {
@@ -71,16 +73,16 @@ impl Piece {
             backend_factory,
             download_rate_limiter: Arc::new(
                 RateLimiter::builder()
-                    .initial(config.download.rate_limit as usize)
-                    .refill(config.download.rate_limit as usize)
+                    .initial(config.download.rate_limit.as_u64() as usize)
+                    .refill(config.download.rate_limit.as_u64() as usize)
                     .interval(Duration::from_secs(1))
                     .fair(false)
                     .build(),
             ),
             upload_rate_limiter: Arc::new(
                 RateLimiter::builder()
-                    .initial(config.upload.rate_limit as usize)
-                    .refill(config.upload.rate_limit as usize)
+                    .initial(config.upload.rate_limit.as_u64() as usize)
+                    .refill(config.upload.rate_limit.as_u64() as usize)
                     .interval(Duration::from_secs(1))
                     .build(),
             ),
@@ -324,7 +326,7 @@ impl Piece {
         task_id: &str,
         number: u32,
         length: u64,
-        parent: Peer,
+        parent: piece_collector::CollectedParent,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", self.storage.piece_id(task_id, number));
