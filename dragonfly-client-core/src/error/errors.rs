@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use std::{error::Error as ErrorTrait, fmt, path::PathBuf};
+use std::{error::Error as ErrorTrait, fmt};
 
 use super::message::Message;
 
@@ -180,21 +180,6 @@ pub struct DownloadFromRemotePeerFailed {
 
     // parent_id is the parent id of the piece.
     pub parent_id: String,
-}
-
-// InvalidPath is the error for invalid path.
-#[derive(Debug, thiserror::Error)]
-pub enum InvalidPath {
-    // FileExist is for when dfget download a single file, the file path should not exist.
-    #[error("path already exists: {0}")]
-    FilePathExist(PathBuf),
-    // ParentNotDir is for when dfget download a single file, the file parent path should be directory.
-    #[error("path is not a directory: {0}")]
-    ParentNotDir(PathBuf),
-    // DirInexist is for when dfget download a directory, the directory should exist or dfget
-    // download a single file, the file parent directory should exist.
-    #[error("path inexist or lack of permission: {0}")]
-    DirInexist(PathBuf),
 }
 
 #[cfg(test)]
