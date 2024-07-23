@@ -29,7 +29,6 @@ use tabled::{
     Table, Tabled,
 };
 use termion::{color, style};
-use tracing::error;
 
 use super::*;
 
@@ -44,8 +43,51 @@ pub struct StatCommand {
 impl StatCommand {
     // execute executes the stat command.
     pub async fn execute(&self, endpoint: &Path) -> Result<()> {
+        // Get dfdaemon download client.
+        let dfdaemon_download_client =
+            match get_dfdaemon_download_client(endpoint.to_path_buf()).await {
+                Ok(client) => client,
+                Err(err) => {
+                    eprintln!(
+                        "{}{}{}Connect Dfdaemon Failed!{}",
+                        color::Fg(color::Red),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset
+                    );
+
+                    eprintln!(
+                        "{}{}{}****************************************{}",
+                        color::Fg(color::Black),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset
+                    );
+
+                    eprintln!(
+                        "{}{}{}Message:{}, can not connect {}, please check the unix socket.{}",
+                        color::Fg(color::Cyan),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset,
+                        err,
+                        endpoint.to_string_lossy(),
+                    );
+
+                    eprintln!(
+                        "{}{}{}****************************************{}",
+                        color::Fg(color::Black),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset
+                    );
+
+                    std::process::exit(1);
+                }
+            };
+
         // Run stat sub command.
-        if let Err(err) = self.run(endpoint).await {
+        if let Err(err) = self.run(dfdaemon_download_client).await {
             match err {
                 Error::TonicStatus(status) => {
                     eprintln!(
@@ -142,14 +184,7 @@ impl StatCommand {
     }
 
     // run runs the stat command.
-    async fn run(&self, endpoint: &Path) -> Result<()> {
-        let dfdaemon_download_client = get_dfdaemon_download_client(endpoint.to_path_buf())
-            .await
-            .map_err(|err| {
-            error!("initialize dfdaemon download client failed: {}", err);
-            err
-        })?;
-
+    async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
         let task = dfdaemon_download_client
             .stat_cache_task(StatCacheTaskRequest {
                 task_id: self.id.clone(),

@@ -79,8 +79,89 @@ pub struct ExportCommand {
 impl ExportCommand {
     // execute executes the export command.
     pub async fn execute(&self, endpoint: &Path) -> Result<()> {
+        // Validate the command line arguments.
+        if let Err(err) = self.validate_args() {
+            eprintln!(
+                "{}{}{}Validating Failed!{}",
+                color::Fg(color::Red),
+                style::Italic,
+                style::Bold,
+                style::Reset
+            );
+
+            eprintln!(
+                "{}{}{}****************************************{}",
+                color::Fg(color::Black),
+                style::Italic,
+                style::Bold,
+                style::Reset
+            );
+
+            eprintln!(
+                "{}{}{}Message:{} {}",
+                color::Fg(color::Cyan),
+                style::Italic,
+                style::Bold,
+                style::Reset,
+                err,
+            );
+
+            eprintln!(
+                "{}{}{}****************************************{}",
+                color::Fg(color::Black),
+                style::Italic,
+                style::Bold,
+                style::Reset
+            );
+
+            std::process::exit(1);
+        }
+
+        // Get dfdaemon download client.
+        let dfdaemon_download_client =
+            match get_dfdaemon_download_client(endpoint.to_path_buf()).await {
+                Ok(client) => client,
+                Err(err) => {
+                    eprintln!(
+                        "{}{}{}Connect Dfdaemon Failed!{}",
+                        color::Fg(color::Red),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset
+                    );
+
+                    eprintln!(
+                        "{}{}{}****************************************{}",
+                        color::Fg(color::Black),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset
+                    );
+
+                    eprintln!(
+                        "{}{}{}Message:{}, can not connect {}, please check the unix socket.{}",
+                        color::Fg(color::Cyan),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset,
+                        err,
+                        endpoint.to_string_lossy(),
+                    );
+
+                    eprintln!(
+                        "{}{}{}****************************************{}",
+                        color::Fg(color::Black),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset
+                    );
+
+                    std::process::exit(1);
+                }
+            };
+
         // Run export command.
-        if let Err(err) = self.run(endpoint).await {
+        if let Err(err) = self.run(dfdaemon_download_client).await {
             match err {
                 Error::TonicStatus(status) => {
                     let details = status.details();
@@ -286,14 +367,7 @@ impl ExportCommand {
     }
 
     // run runs the export command.
-    async fn run(&self, endpoint: &Path) -> Result<()> {
-        let dfdaemon_download_client = get_dfdaemon_download_client(endpoint.to_path_buf())
-            .await
-            .map_err(|err| {
-            error!("initialize dfdaemon download client failed: {}", err);
-            err
-        })?;
-
+    async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
         // Get the absolute path of the output file.
         let absolute_path = Path::new(&self.output).absolutize()?;
         info!("download file to: {}", absolute_path.to_string_lossy());
@@ -360,6 +434,36 @@ impl ExportCommand {
         }
 
         pb.finish_with_message("downloaded");
+        Ok(())
+    }
+
+    // validate_args validates the command line arguments.
+    fn validate_args(&self) -> Result<()> {
+        let absolute_path = Path::new(&self.output).absolutize()?;
+        match absolute_path.parent() {
+            Some(parent_path) => {
+                if !parent_path.is_dir() {
+                    return Err(Error::ValidationError(format!(
+                        "output path {} is not a directory",
+                        parent_path.to_string_lossy()
+                    )));
+                }
+            }
+            None => {
+                return Err(Error::ValidationError(format!(
+                    "output path {} is not exist",
+                    self.output.to_string_lossy()
+                )));
+            }
+        }
+
+        if absolute_path.exists() {
+            return Err(Error::ValidationError(format!(
+                "output path {} is already exist",
+                self.output.to_string_lossy()
+            )));
+        }
+
         Ok(())
     }
 }
