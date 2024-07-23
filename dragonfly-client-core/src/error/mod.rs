@@ -20,7 +20,6 @@ pub mod message;
 pub use errors::ErrorType;
 pub use errors::ExternalError;
 
-use errors::InvalidPath;
 pub use errors::OrErr;
 pub use errors::{BackendError, DownloadFromRemotePeerFailed};
 
@@ -182,9 +181,9 @@ pub enum DFError {
     #[error(transparent)]
     TokioJoinError(tokio::task::JoinError),
 
-    // InvalidPath is the error for invalid path.
-    #[error("invalid path: {0}")]
-    InvalidPath(InvalidPath),
+    // ValidationError is the error for validate.
+    #[error("validate failed: {0}")]
+    ValidationError(String),
 }
 
 // SendError is the error for send.
