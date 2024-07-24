@@ -108,7 +108,7 @@ fn default_download_rate_limit() -> ByteSize {
 // default_download_piece_timeout is the default timeout for downloading a piece from source.
 #[inline]
 fn default_download_piece_timeout() -> Duration {
-    Duration::from_secs(180)
+    Duration::from_secs(60)
 }
 
 // default_download_concurrent_piece_count is the default number of concurrent pieces to download.
