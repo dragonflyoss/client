@@ -243,9 +243,9 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             json.into(),
                         ));
                     }
-                    Err(e) => {
-                        error!("serialize error: {}", e);
-                        return Err(Status::internal(e.to_string()));
+                    Err(err) => {
+                        error!("serialize error: {}", err);
+                        return Err(Status::internal(err.to_string()));
                     }
                 }
             }
@@ -405,12 +405,56 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             };
                         }
                     }
-                    Err(e) => {
-                        // Download task failed.
+                    Err(ClientError::BackendError(err)) => {
+                        // Collect download task failure metrics.
+                        collect_download_task_failure_metrics(
+                            download_clone.r#type,
+                            download_clone.tag.clone().unwrap_or_default().as_str(),
+                            download_clone
+                                .application
+                                .clone()
+                                .unwrap_or_default()
+                                .as_str(),
+                            download_clone.priority.to_string().as_str(),
+                        );
+
                         task_manager_clone
                             .download_failed(task_clone.id.as_str())
                             .await
                             .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+                        match serde_json::to_vec::<Backend>(&Backend {
+                            message: err.message.clone(),
+                            header: reqwest_headermap_to_hashmap(
+                                &err.header.clone().unwrap_or_default(),
+                            ),
+                            status_code: err.status_code.map(|code| code.as_u16() as i32),
+                        }) {
+                            Ok(json) => {
+                                out_stream_tx
+                                    .send(Err(Status::with_details(
+                                        Code::Internal,
+                                        err.to_string(),
+                                        json.into(),
+                                    )))
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        error!("send download progress error: {:?}", err)
+                                    });
+                            }
+                            Err(err) => {
+                                out_stream_tx
+                                    .send(Err(Status::internal(err.to_string())))
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        error!("send download progress error: {:?}", err)
+                                    });
+                                error!("serialize error: {}", err);
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        error!("download failed: {}", err);
 
                         // Collect download task failure metrics.
                         collect_download_task_failure_metrics(
@@ -424,7 +468,18 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             download_clone.priority.to_string().as_str(),
                         );
 
-                        error!("download failed: {}", e);
+                        // Download task failed.
+                        task_manager_clone
+                            .download_failed(task_clone.id.as_str())
+                            .await
+                            .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+                        out_stream_tx
+                            .send(Err(Status::internal(err.to_string())))
+                            .await
+                            .unwrap_or_else(|err| {
+                                error!("send download progress error: {:?}", err)
+                            });
                     }
                 }
 

@@ -208,14 +208,6 @@ impl Task {
         // Get the content length from the task.
         let Some(content_length) = task.content_length() else {
             error!("content length not found");
-            download_progress_tx
-                .send_timeout(
-                    Err(Status::internal("content length not found")),
-                    REQUEST_TIMEOUT,
-                )
-                .await
-                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
             return Err(Error::InvalidContentLength);
         };
 
@@ -228,17 +220,6 @@ impl Task {
             Ok(interested_pieces) => interested_pieces,
             Err(err) => {
                 error!("calculate interested pieces error: {:?}", err);
-                download_progress_tx
-                    .send_timeout(
-                        Err(Status::invalid_argument(format!(
-                            "calculate interested pieces error: {:?}",
-                            err
-                        ))),
-                        REQUEST_TIMEOUT,
-                    )
-                    .await
-                    .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
                 return Err(err);
             }
         };
@@ -309,11 +290,6 @@ impl Task {
             Ok(finished_pieces) => finished_pieces,
             Err(err) => {
                 error!("download from local peer error: {:?}", err);
-                download_progress_tx
-                    .send_timeout(Err(Status::internal(err.to_string())), REQUEST_TIMEOUT)
-                    .await
-                    .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
                 return Err(err);
             }
         };
@@ -360,14 +336,6 @@ impl Task {
                         "download back-to-source is disabled, download with scheduler error: {:?}",
                         err
                     );
-                    download_progress_tx
-                        .send_timeout(
-                            Err(Status::internal("download back-to-source is disabled")),
-                            REQUEST_TIMEOUT,
-                        )
-                        .await
-                        .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
                     return Err(Error::Unknown("download failed".to_string()));
                 };
 
@@ -384,17 +352,6 @@ impl Task {
                     .await
                 {
                     error!("download from source error: {:?}", err);
-                    download_progress_tx
-                        .send_timeout(
-                            Err(Status::internal(format!(
-                                "download from source error: {}",
-                                err
-                            ))),
-                            REQUEST_TIMEOUT,
-                        )
-                        .await
-                        .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
                     return Err(err);
                 }
 
@@ -424,14 +381,6 @@ impl Task {
         // If disable back-to-source is true, return an error directly.
         if request.disable_back_to_source {
             error!("download back-to-source is disabled");
-            download_progress_tx
-                .send_timeout(
-                    Err(Status::internal("download back-to-source is disabled")),
-                    REQUEST_TIMEOUT,
-                )
-                .await
-                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
             return Err(Error::Unknown("download failed".to_string()));
         };
 
@@ -448,17 +397,6 @@ impl Task {
             .await
         {
             error!("download from source error: {:?}", err);
-            download_progress_tx
-                .send_timeout(
-                    Err(Status::internal(format!(
-                        "download from source error: {}",
-                        err
-                    ))),
-                    REQUEST_TIMEOUT,
-                )
-                .await
-                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
             return Err(err);
         }
 
@@ -1595,10 +1533,8 @@ impl Task {
         match task {
             Some(task) => {
                 // Check current task is valid to be deleted.
-                if !task.is_finished() && task.is_uploading() {
-                    return Err(Error::InvalidState(
-                        "current task is not finished or uploading".to_string(),
-                    ));
+                if task.is_uploading() {
+                    return Err(Error::InvalidState("current task is uploading".to_string()));
                 }
 
                 self.storage.delete_task(task.id.as_str()).await;
