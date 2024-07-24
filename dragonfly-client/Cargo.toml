@@ -96,3 +96,25 @@ tikv-jemallocator = { version = "0.5.4", features = ["profiling", "stats", "unpr
 
 [target.'cfg(target_os = "linux")'.dependencies]
 jemalloc_pprof = "0.4.2"
+
+[package.metadata.generate-rpm.variants.x86_64-unknown-linux-musl]
+assets = [
+  {source = "../target/release/dfget.d", dest = "/usr/bin/client/dfget", mode = "755"},
+  {source = "../target/release/dfdaemon.d", dest = "/usr/bin/client/dfdaemon", mode = "755"},
+  {source = "../target/release/dfcache.d", dest = "/usr/bin/client/dfcache", mode = "755"},
+  {source = "../target/release/dfstore.d", dest = "/usr/bin/client/dfstore", mode = "755"},
+  {source = "../CONTRIBUTING.md", dest = "/usr/bin/client/CONTRIBUTING.md", mode = "644", doc = true},
+  {source = "../LICENSE", dest = "/usr/bin/client/LICENSE.md", mode = "644", doc = true},
+  {source = "../README.md", dest = "/usr/bin/client/README.md", mode = "644", doc = true},
+]
+
+[package.metadata.generate-rpm.variants.x86_64-unknown-linux-gnu]
+assets = [
+  {source = "../target/release/dfget.d", dest = "/usr/bin/client/dfget", mode = "755"},
+  {source = "../target/release/dfdaemon.d", dest = "/usr/bin/client/dfdaemon", mode = "755"},
+  {source = "../target/release/dfcache.d", dest = "/usr/bin/client/dfcache", mode = "755"},
+  {source = "../target/release/dfstore.d", dest = "/usr/bin/client/dfstore", mode = "755"},
+  {source = "../CONTRIBUTING.md", dest = "/usr/bin/client/CONTRIBUTING.md", mode = "644", doc = true},
+  {source = "../LICENSE", dest = "/usr/bin/client/LICENSE.md", mode = "644", doc = true},
+  {source = "../README.md", dest = "/usr/bin/client/README.md", mode = "644", doc = true},
+]
