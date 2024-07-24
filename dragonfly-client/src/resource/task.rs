@@ -1587,12 +1587,12 @@ impl Task {
 
     // Delete a task and reclaim local storage.
     pub async fn delete(&self, task_id: &str) -> ClientResult<()> {
-        let task_result = self.storage.get_task(task_id).map_err(|err| {
+        let task = self.storage.get_task(task_id).map_err(|err| {
             error!("get task {} from local storage error: {:?}", task_id, err);
             err
         })?;
 
-        match task_result {
+        match task {
             Some(task) => {
                 // Check current task is valid to be deleted.
                 if !task.is_finished() && task.is_uploading() {
