@@ -72,6 +72,7 @@ impl ManagerClient {
         let channel = Channel::from_shared(available_addr.clone())
             .map_err(|_| Error::InvalidURI(available_addr.clone()))?
             .connect_timeout(super::CONNECT_TIMEOUT)
+            .timeout(super::REQUEST_TIMEOUT)
             .connect()
             .await
             .map_err(|err| {

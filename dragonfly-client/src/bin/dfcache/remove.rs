@@ -32,14 +32,6 @@ const DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL: Duration = Duration::from_milli
 pub struct RemoveCommand {
     #[arg(help = "Specify the cache task ID to remove")]
     id: String,
-
-    #[arg(
-        long = "timeout",
-        value_parser= humantime::parse_duration,
-        default_value = "30m",
-        help = "Specify the timeout for removing a file"
-    )]
-    timeout: Duration,
 }
 
 // Implement the execute for RemoveCommand.
@@ -198,12 +190,9 @@ impl RemoveCommand {
         pb.set_message("Removing...");
 
         dfdaemon_download_client
-            .delete_cache_task(
-                DeleteCacheTaskRequest {
-                    task_id: self.id.clone(),
-                },
-                self.timeout,
-            )
+            .delete_cache_task(DeleteCacheTaskRequest {
+                task_id: self.id.clone(),
+            })
             .await?;
 
         pb.finish_with_message("Done");

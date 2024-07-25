@@ -173,6 +173,7 @@ impl SchedulerClient {
                 let channel = Channel::from_shared(format!("http://{}", addr))
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
                     .connect_timeout(super::CONNECT_TIMEOUT)
+                    .timeout(super::REQUEST_TIMEOUT)
                     .connect()
                     .await
                     .map_err(|err| {
@@ -225,6 +226,7 @@ impl SchedulerClient {
                 let channel = Channel::from_shared(format!("http://{}", addr))
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
                     .connect_timeout(super::CONNECT_TIMEOUT)
+                    .timeout(super::REQUEST_TIMEOUT)
                     .connect()
                     .await
                     .map_err(|err| {
@@ -282,6 +284,7 @@ impl SchedulerClient {
                 let channel = Channel::from_shared(format!("http://{}", addr))
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
                     .connect_timeout(super::CONNECT_TIMEOUT)
+                    .timeout(super::REQUEST_TIMEOUT)
                     .connect()
                     .await
                     .map_err(|err| {
@@ -445,6 +448,7 @@ impl SchedulerClient {
         let channel = match Channel::from_shared(format!("http://{}", addr))
             .map_err(|_| Error::InvalidURI(addr.to_string()))?
             .connect_timeout(super::CONNECT_TIMEOUT)
+            .timeout(super::REQUEST_TIMEOUT)
             .connect()
             .await
         {

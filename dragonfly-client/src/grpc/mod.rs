@@ -35,7 +35,7 @@ pub mod security;
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 
 // REQUEST_TIMEOUT is the timeout for GRPC requests.
-pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 // CONCURRENCY_LIMIT_PER_CONNECTION is the limit of concurrency for each connection.
 pub const CONCURRENCY_LIMIT_PER_CONNECTION: usize = 4096;
