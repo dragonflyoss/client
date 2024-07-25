@@ -1102,14 +1102,8 @@ impl DfdaemonDownloadClient {
 
     // delete_cache_task deletes the cache task.
     #[instrument(skip_all)]
-    pub async fn delete_cache_task(
-        &self,
-        request: DeleteCacheTaskRequest,
-        timeout: Duration,
-    ) -> ClientResult<()> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(timeout);
-
+    pub async fn delete_cache_task(&self, request: DeleteCacheTaskRequest) -> ClientResult<()> {
+        let request = Self::make_request(request);
         let _response = self.client.clone().delete_cache_task(request).await?;
         Ok(())
     }

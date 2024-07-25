@@ -41,6 +41,7 @@ impl HealthClient {
         let channel = Channel::from_shared(addr.to_string())
             .map_err(|_| Error::InvalidURI(addr.into()))?
             .connect_timeout(super::CONNECT_TIMEOUT)
+            .timeout(super::REQUEST_TIMEOUT)
             .connect()
             .await
             .map_err(|err| {
