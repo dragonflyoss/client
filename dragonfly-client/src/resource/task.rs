@@ -49,7 +49,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{
     mpsc::{self, Sender},
-    OwnedSemaphorePermit, Semaphore,
+    Semaphore,
 };
 use tokio::task::JoinSet;
 use tokio::time::sleep;
@@ -881,10 +881,13 @@ impl Task {
                 parent: piece_collector::CollectedParent,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
-                _permit: OwnedSemaphorePermit,
+                semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnouncePeerRequest>,
             ) -> ClientResult<metadata::Piece> {
+                // Limit the concurrent piece count.
+                let _permit = semaphore.acquire().await.unwrap();
+
                 info!(
                     "start to download piece {} from remote peer {:?}",
                     storage.piece_id(task_id.as_str(), number),
@@ -981,7 +984,6 @@ impl Task {
                 Ok(metadata)
             }
 
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 download_from_remote_peer(
                     task.id.clone(),
@@ -992,7 +994,7 @@ impl Task {
                     collect_piece.parent.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
-                    permit,
+                    semaphore.clone(),
                     download_progress_tx.clone(),
                     in_stream_tx.clone(),
                 )
@@ -1095,11 +1097,14 @@ impl Task {
                 request_header: HeaderMap,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
-                _permit: OwnedSemaphorePermit,
+                semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnouncePeerRequest>,
                 object_storage: Option<ObjectStorage>,
             ) -> ClientResult<metadata::Piece> {
+                // Limit the concurrent download count.
+                let _permit = semaphore.acquire().await.unwrap();
+
                 info!(
                     "start to download piece {} from source",
                     storage.piece_id(task_id.as_str(), number)
@@ -1183,7 +1188,6 @@ impl Task {
                 Ok(metadata)
             }
 
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 download_from_source(
                     task.id.clone(),
@@ -1196,7 +1200,7 @@ impl Task {
                     request_header.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
-                    permit,
+                    semaphore.clone(),
                     download_progress_tx.clone(),
                     in_stream_tx.clone(),
                     request.object_storage.clone(),
@@ -1258,6 +1262,7 @@ impl Task {
                                 .await
                                 .unwrap_or_else(|err| error!("send DownloadPieceBackToSourceFailedRequest error: {:?}", err));
 
+                    join_set.abort_all();
                     return Err(err);
                 }
             }
@@ -1378,6 +1383,7 @@ impl Task {
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.concurrent_piece_count as usize,
         ));
+
         for interested_piece in &interested_pieces {
             async fn download_from_source(
                 task_id: String,
@@ -1390,10 +1396,13 @@ impl Task {
                 request_header: HeaderMap,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
-                _permit: OwnedSemaphorePermit,
+                semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 object_storage: Option<ObjectStorage>,
             ) -> ClientResult<metadata::Piece> {
+                // Limit the concurrent download count.
+                let _permit = semaphore.acquire().await.unwrap();
+
                 info!(
                     "start to download piece {} from source",
                     storage.piece_id(task_id.as_str(), number)
@@ -1455,7 +1464,6 @@ impl Task {
                 Ok(metadata)
             }
 
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 download_from_source(
                     task.id.clone(),
@@ -1468,7 +1476,7 @@ impl Task {
                     request_header.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
-                    permit,
+                    semaphore.clone(),
                     download_progress_tx.clone(),
                     request.object_storage.clone(),
                 )

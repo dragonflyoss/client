@@ -36,7 +36,7 @@ use std::time::Duration;
 use std::{cmp::min, fmt::Write};
 use termion::{color, style};
 use tokio::fs;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::{error, info, warn, Level};
 use url::Url;
@@ -631,17 +631,18 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
                 args: Args,
                 progress_bar: ProgressBar,
                 download_client: DfdaemonDownloadClient,
-                _permit: OwnedSemaphorePermit,
+                semaphore: Arc<Semaphore>,
             ) -> Result<()> {
+                // Limit the concurrent download tasks.
+                let _permit = semaphore.acquire().await.unwrap();
                 download(args, progress_bar, download_client).await
             }
 
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(download_entry(
                 entry_args,
                 progress_bar,
                 download_client.clone(),
-                permit,
+                semaphore.clone(),
             ));
         }
     }

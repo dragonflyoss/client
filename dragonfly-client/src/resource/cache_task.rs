@@ -44,7 +44,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{
     mpsc::{self, Sender},
-    OwnedSemaphorePermit, Semaphore,
+    Semaphore,
 };
 use tokio::task::JoinSet;
 use tokio::time::sleep;
@@ -782,10 +782,13 @@ impl CacheTask {
                 parent: piece_collector::CollectedParent,
                 piece_manager: Arc<super::piece::Piece>,
                 storage: Arc<Storage>,
-                _permit: OwnedSemaphorePermit,
+                semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadCacheTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnounceCachePeerRequest>,
             ) -> ClientResult<metadata::Piece> {
+                // Limit the concurrent download count.
+                let _permit = semaphore.acquire().await.unwrap();
+
                 info!(
                     "start to download piece {} from remote peer {:?}",
                     storage.piece_id(task_id.as_str(), number),
@@ -882,7 +885,6 @@ impl CacheTask {
                 Ok(metadata)
             }
 
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 download_from_remote_peer(
                     task.id.clone(),
@@ -893,7 +895,7 @@ impl CacheTask {
                     collect_piece.parent.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
-                    permit,
+                    semaphore.clone(),
                     download_progress_tx.clone(),
                     in_stream_tx.clone(),
                 )
