@@ -38,6 +38,7 @@ impl CertificateClient {
     pub async fn new(addr: String) -> Result<Self> {
         let channel = Channel::from_static(Box::leak(addr.into_boxed_str()))
             .connect_timeout(super::CONNECT_TIMEOUT)
+            .timeout(super::REQUEST_TIMEOUT)
             .connect()
             .await
             .or_err(ErrorType::ConnectError)?;

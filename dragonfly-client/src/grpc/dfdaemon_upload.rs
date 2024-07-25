@@ -997,6 +997,7 @@ impl DfdaemonUploadClient {
     pub async fn new(addr: String) -> ClientResult<Self> {
         let channel = Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
             .connect_timeout(super::CONNECT_TIMEOUT)
+            .timeout(super::REQUEST_TIMEOUT)
             .connect()
             .await
             .map_err(|err| {
@@ -1088,23 +1089,15 @@ impl DfdaemonUploadClient {
     // stat_cache_task stats the cache task.
     #[instrument(skip_all)]
     pub async fn stat_cache_task(&self, request: StatCacheTaskRequest) -> ClientResult<CacheTask> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::CONNECT_TIMEOUT);
-
+        let request = Self::make_request(request);
         let response = self.client.clone().stat_cache_task(request).await?;
         Ok(response.into_inner())
     }
 
     // delete_cache_task deletes the cache task.
     #[instrument(skip_all)]
-    pub async fn delete_cache_task(
-        &self,
-        request: DeleteCacheTaskRequest,
-        timeout: Duration,
-    ) -> ClientResult<()> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(timeout);
-
+    pub async fn delete_cache_task(&self, request: DeleteCacheTaskRequest) -> ClientResult<()> {
+        let request = Self::make_request(request);
         let _response = self.client.clone().delete_cache_task(request).await?;
         Ok(())
     }
