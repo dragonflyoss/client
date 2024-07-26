@@ -18,6 +18,7 @@ use dragonfly_api::common;
 use dragonfly_client_core::error::BackendError;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use opendal::{raw::HttpClient, Metakey, Operator};
+use percent_encoding::percent_decode_str;
 use std::fmt;
 use std::result::Result;
 use std::str::FromStr;
@@ -136,14 +137,15 @@ impl TryFrom<Url> for ParsedURL {
         let key = url
             .path()
             .strip_prefix('/')
-            .ok_or_else(|| ClientError::InvalidURI(url.to_string()))?
-            .to_string();
+            .ok_or_else(|| ClientError::InvalidURI(url.to_string()))?;
+        // Decode the key.
+        let decoded_key = percent_decode_str(key).decode_utf8_lossy().to_string();
 
         Ok(Self {
             url,
             scheme,
             bucket,
-            key,
+            key: decoded_key,
         })
     }
 }

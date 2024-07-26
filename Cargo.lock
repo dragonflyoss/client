@@ -1197,6 +1197,7 @@ dependencies = [
  "httpmock",
  "libloading",
  "opendal",
+ "percent-encoding",
  "reqwest",
  "rustls",
  "rustls-pki-types",
