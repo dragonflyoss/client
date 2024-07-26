@@ -22,6 +22,7 @@ tonic.workspace = true
 url.workspace = true
 tracing.workspace = true
 opendal.workspace = true
+percent-encoding.workspace = true
 futures = "0.3.28"
 libloading = "0.8.4"
 
