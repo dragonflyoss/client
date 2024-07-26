@@ -125,6 +125,7 @@ jobs:
           generate_release_notes: true
           draft: true
           files: |
+            ${{ env.CLIENT_RPM_ASSET }}
             ${{ env.DFGET_ASSET }}
             ${{ env.DFDAEMON_ASSET }}
             ${{ env.DFSTORE_ASSET }}
