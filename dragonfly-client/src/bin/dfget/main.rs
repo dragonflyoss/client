@@ -762,7 +762,7 @@ async fn download(
         }
     }
 
-    progress_bar.finish_with_message(format!("{} downloaded", download_path));
+    progress_bar.finish();
     Ok(())
 }
 
@@ -813,7 +813,7 @@ fn make_output_by_entry(url: Url, output: &Path, entry: DirEntry) -> Result<Path
     let entry_url: Url = entry.url.parse().or_err(ErrorType::ParseError)?;
     let decoded_entry_url = percent_decode_str(entry_url.path()).decode_utf8_lossy();
     Ok(decoded_entry_url
-        .replace(root_dir.as_str(), output_root_dir.as_str())
+        .replacen(root_dir.as_str(), output_root_dir.as_str(), 1)
         .into())
 }
 
