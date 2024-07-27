@@ -49,7 +49,12 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-generate-rpm
-          
+
+      - name: Install cargo-deb
+        uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: cargo-deb
+        
       - name: Install cross-compilation tools
         uses: taiki-e/setup-cross-toolchain-action@v1
         with:
@@ -73,6 +78,15 @@ jobs:
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
           cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
           echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
+
+      - name: Build archive client .deb
+        shell: bash
+        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          binary_name="client"
+          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          cargo deb -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.deb
+          echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
 
       - name: Build archive dfget
         shell: bash
@@ -126,6 +140,7 @@ jobs:
           draft: true
           files: |
             ${{ env.CLIENT_RPM_ASSET }}
+            ${{ env.CLIENT_DEB_ASSET }}            
             ${{ env.DFGET_ASSET }}
             ${{ env.DFDAEMON_ASSET }}
             ${{ env.DFSTORE_ASSET }}

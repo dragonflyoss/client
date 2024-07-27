@@ -118,3 +118,89 @@ assets = [
   {source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true},
   {source = "../README.md", dest = "/usr/share/doc/client/README.md", mode = "644", doc = true},
 ]
+
+[package.metadata.deb.variants.x86_64-unknown-linux-musl]
+maintainer = "dragonflyoss <https://github.com/dragonflyoss#:~:text=dragonfly%2Dmaintainers%40googlegroups.com>"
+license-file = ["../LICENSE", "0"]
+extended-description-file = "README.md"
+section = "rust"
+assets = [
+  [
+    "../target/x86_64-unknown-linux-musl/release/dfget",
+    "/usr/bin/client/dfget",
+    "755",
+  ],
+  [
+    "../target/x86_64-unknown-linux-musl/release/dfdaemon",
+    "/usr/bin/client/dfdaemon",
+    "755",
+  ],
+  [
+    "../target/x86_64-unknown-linux-musl/release/dfcache",
+    "/usr/bin/client/dfcache",
+    "755",
+  ],
+  [
+    "../target/x86_64-unknown-linux-musl/release/dfstore",
+    "/usr/bin/client/dfstore",
+    "755",
+  ],
+  [
+    "../CONTRIBUTING.md",
+    "usr/share/doc/client/",
+    "644",
+  ],
+  [
+    "../LICENSE",
+    "usr/share/doc/client/",
+    "644",
+  ],
+  [
+    "../README.md",
+    "usr/share/doc/client/",
+    "644",
+  ],
+]
+
+[package.metadata.deb.variants.x86_64-unknown-linux-gnu]
+maintainer = "Gaius <https://github.com/dragonflyoss#:~:text=dragonfly%2Dmaintainers%40googlegroups.com>"
+license-file = ["../LICENSE", "0"]
+extended-description-file = "README.md"
+section = "rust"
+assets = [
+  [
+    "../target/x86_64-unknown-linux-gnu/release/dfget",
+    "/usr/bin/client/dfget",
+    "755",
+  ],
+  [
+    "../target/x86_64-unknown-linux-gnu/release/dfdaemon",
+    "/usr/bin/client/dfdaemon",
+    "755",
+  ],
+  [
+    "../target/x86_64-unknown-linux-gnu/release/dfcache",
+    "/usr/bin/client/dfcache",
+    "755",
+  ],
+  [
+    "../target/x86_64-unknown-linux-gnu/release/dfstore",
+    "/usr/bin/client/dfstore",
+    "755",
+  ],
+  [
+    "../CONTRIBUTING.md",
+    "usr/share/doc/client/",
+    "644",
+  ],
+  [
+    "../LICENSE",
+    "usr/share/doc/client/",
+    "644",
+  ],
+  [
+    "../README.md",
+    "usr/share/doc/client/",
+    "644",
+  ],
+]
