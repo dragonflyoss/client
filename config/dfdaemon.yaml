@@ -1,8 +1,0 @@
-# Dfdaemon configuration.
-manager:
-  addrs:
-    - http://dragonfly-manager:65003
-seedPeer:
-  enable: true
-  type: super
-  clusterID: 1
