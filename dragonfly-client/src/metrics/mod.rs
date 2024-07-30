@@ -347,8 +347,8 @@ pub fn collect_upload_task_finished_metrics(
     if task_size == TaskSize::Level1 && cost > UPLOAD_TASK_LEVEL1_DURATION_THRESHOLD {
         warn!(
             "upload task cost is too long: {}ms {}bytes",
+            cost.as_millis(),
             content_length,
-            cost.as_millis()
         );
     }
 
@@ -405,8 +405,8 @@ pub fn collect_download_task_finished_metrics(
     if task_size == TaskSize::Level1 && cost > DOWNLOAD_TASK_LEVEL1_DURATION_THRESHOLD {
         warn!(
             "download task cost is too long: {}ms {}bytes",
+            cost.as_millis(),
             size,
-            cost.as_millis()
         );
     }
 
