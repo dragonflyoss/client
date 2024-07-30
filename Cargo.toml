@@ -94,6 +94,7 @@ debug = true
 debug = true
 
 [package.metadata.deb.variants.x86_64-unknown-linux-musl]
+name = "Dragonfly client"
 maintainer = "Dragonfly <dragonfly-maintainers@googlegroups.com>"
 section = "rust"
 priority = "optional"
@@ -141,6 +142,7 @@ assets = [
 ]
 
 [package.metadata.deb.variants.x86_64-unknown-linux-gnu]
+name = "Dragonfly client"
 maintainer = "Dragonfly <dragonfly-maintainers@googlegroups.com>"
 priority = "optional"
 section = "rust"
@@ -188,6 +190,7 @@ assets = [
 ]
 
 [package.metadata.deb.variants.aarch64-unknown-linux-gnu]
+name = "Dragonfly client"
 maintainer = "Dragonfly <dragonfly-maintainers@googlegroups.com>"
 priority = "optional"
 section = "rust"
@@ -235,6 +238,7 @@ assets = [
 ]
 
 [package.metadata.deb.variants.aarch64-unknown-linux-musl]
+name = "Dragonfly client"
 maintainer = "Dragonfly <dragonfly-maintainers@googlegroups.com>"
 priority = "optional"
 section = "rust"
