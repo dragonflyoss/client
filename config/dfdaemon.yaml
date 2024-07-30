@@ -1,4 +1,4 @@
-# Seed Peer configuration.
+# Dfdaemon configuration.
 manager:
   addrs:
     - http://dragonfly-manager:65003
