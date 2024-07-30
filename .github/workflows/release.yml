@@ -45,11 +45,6 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cargo-generate-rpm
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-generate-rpm
-
       - name: Install cross-compilation tools
         uses: taiki-e/setup-cross-toolchain-action@v1
         with:
@@ -59,7 +54,12 @@ jobs:
         uses: taiki-e/cache-cargo-install-action@v2
         with:
           tool: cargo-deb
-        
+
+      - name: Install cargo-generate-rpm
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-generate-rpm
+          
       - name: Install dependencies
         run: |
           sudo apt-get update
