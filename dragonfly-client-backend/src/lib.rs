@@ -60,6 +60,7 @@ pub struct HeadRequest {
 }
 
 // HeadResponse is the head response for backend.
+#[derive(Debug)]
 pub struct HeadResponse {
     // success is the success of the response.
     pub success: bool,

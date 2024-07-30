@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult>
+  <Name>test-bucket</Name>
+  <Prefix>test_dir_recursive</Prefix>
+  <MaxKeys>1</MaxKeys>
+  <Delimiter></Delimiter>
+  <IsTruncated>true</IsTruncated>
+  <NextContinuationToken>Chh0ZXN0X2Rpcl9yZWN1cnNpdmUvZGlyMS8QAQ--</NextContinuationToken>
+  <Contents>
+    <Key>test_dir_recursive/</Key>
+    <LastModified>2024-07-07T01:36:49.000Z</LastModified>
+    <ETag>"D41D8CD98F00B204E9800998********"</ETag>
+    <Type>Normal</Type>
+    <Size>0</Size>
+    <StorageClass>Standard</StorageClass>
+  </Contents>
+  <KeyCount>1</KeyCount>
+</ListBucketResult>
