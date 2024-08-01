@@ -70,7 +70,7 @@ jobs:
         run: |
             cargo build --release --bins --target ${{ matrix.target }}
 
-      - name: Build archive client (deb)
+      - name: Build archive client(DEB)
         shell: bash
         run: |
           binary_name="client"
@@ -78,7 +78,7 @@ jobs:
           cargo deb -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.deb
           echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
 
-      - name: Build archive client (rpm)
+      - name: Build archive client(RPM)
         shell: bash
         run: |
           binary_name="client"
