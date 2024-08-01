@@ -25,7 +25,6 @@ use dragonfly_client_config::{
 };
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::Result;
-use nix::sys;
 use std::env;
 use std::sync::Arc;
 use sysinfo::System;
@@ -239,19 +238,16 @@ impl SchedulerAnnouncer {
         };
 
         // Get the disk information.
-        let statvfs = sys::statvfs::statvfs(self.config.storage.dir.as_path())
-            .or_err(ErrorType::ConfigError)?;
-        let total = statvfs.blocks() as u64 * statvfs.fragment_size() as u64;
-        let avail_to_root = statvfs.blocks_free() as u64 * statvfs.fragment_size() as u64;
-        let used = total - avail_to_root;
-
-        let avail_to_user = statvfs.blocks_available() as u64 * statvfs.fragment_size() as u64;
-        let used_percent = (used as f64 / (used + avail_to_user) as f64) * 100.0;
+        let stats = fs2::statvfs(self.config.storage.dir.as_path())?;
+        let total_space = stats.total_space();
+        let available_space = stats.available_space();
+        let used_space = total_space - available_space;
+        let used_percent = (used_space as f64 / (total_space) as f64) * 100.0;
 
         let disk = Disk {
-            total,
-            free: avail_to_user,
-            used,
+            total: total_space,
+            free: available_space,
+            used: used_space,
             used_percent,
 
             // TODO: Get the disk inodes information.
