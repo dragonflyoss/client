@@ -80,7 +80,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: dragonfly-client/Dockerfile
+          file: ci/Dockerfile
           platforms: linux/amd64,linux/arm64
           labels: |-
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -172,7 +172,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: dragonfly-client-init/Dockerfile
+          file: ci/Dockerfile.dfinit
           platforms: linux/amd64,linux/arm64
           labels: |-
             org.opencontainers.image.source=https://github.com/${{ github.repository }}

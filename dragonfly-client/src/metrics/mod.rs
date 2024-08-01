@@ -25,8 +25,16 @@ use prometheus::{
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use warp::{Filter, Rejection, Reply};
+
+// DOWNLOAD_TASK_LEVEL1_DURATION_THRESHOLD is the threshold of download task level1 duration for
+// recording slow download task.
+const DOWNLOAD_TASK_LEVEL1_DURATION_THRESHOLD: Duration = Duration::from_millis(500);
+
+// UPLOAD_TASK_LEVEL1_DURATION_THRESHOLD is the threshold of upload task level1 duration for
+// recording slow upload task.
+const UPLOAD_TASK_LEVEL1_DURATION_THRESHOLD: Duration = Duration::from_millis(500);
 
 lazy_static! {
     // REGISTRY is used to register all metrics.
@@ -188,6 +196,7 @@ lazy_static! {
 }
 
 // TaskSize represents the size of the task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskSize {
     // Level0 represents unknown size.
     Level0,
@@ -332,13 +341,19 @@ pub fn collect_upload_task_finished_metrics(
     content_length: u64,
     cost: Duration,
 ) {
+    let task_size = TaskSize::calculate_size_level(content_length);
+
+    // Collect the slow upload Level1 task for analysis.
+    if task_size == TaskSize::Level1 && cost > UPLOAD_TASK_LEVEL1_DURATION_THRESHOLD {
+        warn!(
+            "upload task cost is too long: {}ms {}bytes",
+            cost.as_millis(),
+            content_length,
+        );
+    }
+
     UPLOAD_TASK_DURATION
-        .with_label_values(&[
-            typ.to_string().as_str(),
-            TaskSize::calculate_size_level(content_length)
-                .to_string()
-                .as_str(),
-        ])
+        .with_label_values(&[typ.to_string().as_str(), task_size.to_string().as_str()])
         .observe(cost.as_millis() as f64);
 
     CONCURRENT_UPLOAD_TASK_GAUGE
@@ -383,11 +398,20 @@ pub fn collect_download_task_finished_metrics(
         None => content_length,
     };
 
+    let task_size = TaskSize::calculate_size_level(size);
+
+    // Nydus will request the small range of the file, so the download task duration
+    // should be short. Collect the slow download Level1 task for analysis.
+    if task_size == TaskSize::Level1 && cost > DOWNLOAD_TASK_LEVEL1_DURATION_THRESHOLD {
+        warn!(
+            "download task cost is too long: {}ms {}bytes",
+            cost.as_millis(),
+            size,
+        );
+    }
+
     DOWNLOAD_TASK_DURATION
-        .with_label_values(&[
-            typ.to_string().as_str(),
-            TaskSize::calculate_size_level(size).to_string().as_str(),
-        ])
+        .with_label_values(&[typ.to_string().as_str(), task_size.to_string().as_str()])
         .observe(cost.as_millis() as f64);
 
     CONCURRENT_DOWNLOAD_TASK_GAUGE

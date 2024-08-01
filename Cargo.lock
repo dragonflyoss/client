@@ -1118,7 +1118,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "0.1.90"
+version = "0.1.92"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1188,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "0.1.90"
+version = "0.1.92"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-core",
@@ -1210,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "0.1.90"
+version = "0.1.92"
 dependencies = [
  "bytesize",
  "bytesize-serde",
@@ -1231,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "0.1.90"
+version = "0.1.92"
 dependencies = [
  "hyper 1.4.0",
  "hyper-util",
@@ -1246,7 +1246,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "0.1.90"
+version = "0.1.92"
 dependencies = [
  "anyhow",
  "clap",
@@ -1262,7 +1262,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "0.1.90"
+version = "0.1.92"
 dependencies = [
  "base16ct",
  "blake3",
@@ -1286,7 +1286,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "0.1.90"
+version = "0.1.92"
 dependencies = [
  "base16ct",
  "blake3",
@@ -1755,7 +1755,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "0.1.90"
+version = "0.1.92"
 dependencies = [
  "dragonfly-client-backend",
  "dragonfly-client-core",
@@ -4488,9 +4488,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.29.11"
+version = "0.30.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd727fc423c2060f6c92d9534cef765c65a6ed3f428a03d7def74a8c4348e666"
+checksum = "0a5b4ddaee55fb2bea2bf0e5000747e5f5c0de765e5a5ff87f4cd106439f4bb3"
 dependencies = [
  "cfg-if",
  "core-foundation-sys",
@@ -4498,7 +4498,7 @@ dependencies = [
  "ntapi",
  "once_cell",
  "rayon",
- "winapi",
+ "windows",
 ]
 
 [[package]]
