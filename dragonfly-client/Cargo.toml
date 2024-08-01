@@ -90,7 +90,6 @@ futures-util = "0.3.30"
 termion = "4.0.2"
 tabled = "0.15.0"
 path-absolutize = "3.1.1"
-nix = { version = "0.29.0", features = ["fs"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { version = "0.5.4", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
