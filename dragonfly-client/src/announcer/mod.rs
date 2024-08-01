@@ -16,7 +16,7 @@
 
 use crate::grpc::{manager::ManagerClient, scheduler::SchedulerClient};
 use crate::shutdown;
-use dragonfly_api::common::v2::{Build, Cpu, Host, Memory, Network};
+use dragonfly_api::common::v2::{Build, Cpu, Disk, Host, Memory, Network};
 use dragonfly_api::manager::v2::{DeleteSeedPeerRequest, SourceType, UpdateSeedPeerRequest};
 use dragonfly_api::scheduler::v2::{AnnounceHostRequest, DeleteHostRequest};
 use dragonfly_client_config::{
@@ -25,9 +25,10 @@ use dragonfly_client_config::{
 };
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::Result;
+use nix::sys;
 use std::env;
 use std::sync::Arc;
-use sysinfo::{CpuExt, ProcessExt, System, SystemExt};
+use sysinfo::System;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
@@ -222,9 +223,7 @@ impl SchedulerAnnouncer {
             available: sys.available_memory(),
             used: sys.used_memory(),
             used_percent: (sys.used_memory() / sys.total_memory()) as f64,
-
-            // TODO: Get the process used memory.
-            process_used_percent: 0 as f64,
+            process_used_percent: (process.memory() / sys.total_memory()) as f64,
             free: sys.free_memory(),
         };
 
@@ -237,6 +236,29 @@ impl SchedulerAnnouncer {
             upload_tcp_connection_count: 0,
             idc: self.config.host.idc.clone(),
             location: self.config.host.location.clone(),
+        };
+
+        // Get the disk information.
+        let statvfs = sys::statvfs::statvfs(self.config.storage.dir.as_path())
+            .or_err(ErrorType::ConfigError)?;
+        let total = statvfs.blocks() as u64 * statvfs.fragment_size() as u64;
+        let avail_to_root = statvfs.blocks_free() as u64 * statvfs.fragment_size() as u64;
+        let used = total - avail_to_root;
+
+        let avail_to_user = statvfs.blocks_available() as u64 * statvfs.fragment_size() as u64;
+        let used_percent = (used as f64 / (used + avail_to_user) as f64) * 100.0;
+
+        let disk = Disk {
+            total,
+            free: avail_to_user,
+            used,
+            used_percent,
+
+            // TODO: Get the disk inodes information.
+            inodes_total: 0,
+            inodes_used: 0,
+            inodes_free: 0,
+            inodes_used_percent: 0.0,
         };
 
         // Get the build information.
@@ -259,14 +281,12 @@ impl SchedulerAnnouncer {
             os: env::consts::OS.to_string(),
             platform: env::consts::OS.to_string(),
             platform_family: env::consts::FAMILY.to_string(),
-            platform_version: sys.os_version().unwrap_or_default(),
-            kernel_version: sys.kernel_version().unwrap_or_default(),
+            platform_version: System::os_version().unwrap_or_default(),
+            kernel_version: System::kernel_version().unwrap_or_default(),
             cpu: Some(cpu),
             memory: Some(memory),
             network: Some(network),
-
-            // TODO: Get the disk information.
-            disk: None,
+            disk: Some(disk),
             build: Some(build),
 
             // TODO: Get scheduler cluster id from dynconfig.
