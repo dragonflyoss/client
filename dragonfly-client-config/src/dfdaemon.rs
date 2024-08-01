@@ -1040,12 +1040,6 @@ impl Config {
 
     // convert converts the configuration.
     fn convert(&mut self) {
-        println!(
-            "convert download rate limit: {:?}",
-            self.download.rate_limit
-        );
-        println!("convert upload rate limit: {:?}", self.upload.rate_limit);
-
         // Convert advertise ip.
         if self.host.ip.is_none() {
             self.host.ip = if self.network.enable_ipv6 {
