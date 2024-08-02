@@ -63,6 +63,6 @@ COPY --from=builder /app/client/target/release/dfdaemon /usr/local/bin/dfdaemon
 COPY --from=builder /app/client/target/release/dfstore /usr/local/bin/dfstore
 COPY --from=builder /app/client/target/release/dfcache /usr/local/bin/dfcache
 COPY --from=health /bin/grpc_health_probe /bin/grpc_health_probe
-# COPY --from=pprof /go/bin/pprof /bin/pprof
+COPY --from=pprof /go/bin/pprof /bin/pprof
 
 ENTRYPOINT ["/usr/local/bin/dfdaemon"]
