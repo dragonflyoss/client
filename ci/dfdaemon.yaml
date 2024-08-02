@@ -1,5 +1,5 @@
 # bose prints log.
-verbose: false
+verbose: true
 log:
   # Specify the logging level [trace, debug, info, warn, error]
   level: info
