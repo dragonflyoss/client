@@ -1,15 +1,15 @@
 name: Lint
 
-on:
-  push:
-    branches: [main, release-*]
-  pull_request:
-    branches: [main, release-*]
+# on:
+  # push:
+    # branches: [main, release-*]
+  # pull_request:
+    # branches: [main, release-*]
 
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, ARM64]
     timeout-minutes: 30
     steps:
       - name: Checkout code

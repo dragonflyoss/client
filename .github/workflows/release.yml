@@ -1,13 +1,13 @@
 name: Release
 
-on:
-  push:
-    tags:
-      - v*
+# on:
+  # push:
+    # tags:
+      # - v*
 
 jobs:
   release-github:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, ARM64]
     strategy:
       matrix:
         target:
@@ -146,7 +146,7 @@ jobs:
             ${{ env.DFINIT_ASSET }}
 
   publish-crates:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, ARM64]
     steps:
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main

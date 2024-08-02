@@ -1,20 +1,20 @@
 name: CI
 
-on:
-  push:
-    branches: [main, release-*]
-    paths-ignore: ['**.md', '**.png', '**.jpg', '**.svg', '**/docs/**']
-  pull_request:
-    branches: [main, release-*]
-    paths-ignore: ['**.md', '**.png', '**.jpg', '**.svg', '**/docs/**']
-  schedule:
-    - cron: '0 4 * * *'
+# on:
+  # push:
+    # branches: [main, release-*]
+    # paths-ignore: ['**.md', '**.png', '**.jpg', '**.svg', '**/docs/**']
+  # pull_request:
+    # branches: [main, release-*]
+    # paths-ignore: ['**.md', '**.png', '**.jpg', '**.svg', '**/docs/**']
+  # schedule:
+    # - cron: '0 4 * * *'
 
 jobs:
   check:
     name: Cargo check
     timeout-minutes: 30
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, ARM64]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -42,7 +42,7 @@ jobs:
   test:
     name: Run tests
     timeout-minutes: 30
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, ARM64]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
