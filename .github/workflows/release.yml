@@ -62,8 +62,8 @@ jobs:
           
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install protobuf-compiler libclang-dev
+          sudo apt-get update -y
+          sudo apt-get install -y protobuf-compiler libclang-dev
 
       - name: Build binaries
         shell: bash
