@@ -424,9 +424,12 @@ pub async fn upgraded_handler(
     Span::current().record("uri", request.uri().to_string().as_str());
     Span::current().record("method", request.method().as_str());
 
-    *request.uri_mut() = format!("https://{}{}", host, request.uri())
-        .parse()
-        .or_err(ErrorType::ParseError)?;
+    // If the scheme is not set, set the scheme to https.
+    if request.uri().scheme().is_none() {
+        *request.uri_mut() = format!("https://{}{}", host, request.uri())
+            .parse()
+            .or_err(ErrorType::ParseError)?;
+    }
 
     // If find the matching rule, proxy the request via the dfdaemon.
     let request_uri = request.uri();
