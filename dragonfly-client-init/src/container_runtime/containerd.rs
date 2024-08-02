@@ -204,10 +204,15 @@ impl Containerd {
             // Add endpoints to the mirror configuration.
             let mut endpoints = Array::default();
             endpoints.push(Value::from(proxy_config.addr.clone()));
-            endpoints.push(Value::from(registry.server_addr));
+            endpoints.push(Value::from(registry.server_addr.clone()));
 
             let mut mirror_table = Table::new();
             mirror_table.insert("endpoint", value(endpoints));
+
+            // Add X-Dragonfly-Registry header to the mirror configuration.
+            let mut headers_table = Table::new();
+            headers_table.insert(DRAGONFLY_REGISTRY_HEADER, value(registry.server_addr));
+            mirror_table.insert("header", Item::Table(headers_table));
 
             mirrors_table.insert(&registry.host_namespace, Item::Table(mirror_table));
         }
