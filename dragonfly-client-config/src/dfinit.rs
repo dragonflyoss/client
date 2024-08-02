@@ -344,7 +344,7 @@ containerRuntime:
             proxy: 
                 addr: "hello"
         "#;
-        let cfg: Config = serde_yaml::from_str(&raw_data).expect("failed to deserialize");
+        let cfg: Config = serde_yaml::from_str(raw_data).expect("failed to deserialize");
         assert!(cfg.container_runtime.config.is_none());
         assert_eq!("hello".to_string(), cfg.proxy.addr);
 
@@ -355,7 +355,7 @@ containerRuntime:
                 containerd:
                     configPath: "test_path"
         "#;
-        let cfg: Config = serde_yaml::from_str(&raw_data).expect("failed to deserialize");
+        let cfg: Config = serde_yaml::from_str(raw_data).expect("failed to deserialize");
         assert_eq!("hello".to_string(), cfg.proxy.addr);
         if let Some(ContainerRuntimeConfig::Containerd(c)) = cfg.container_runtime.config {
             assert_eq!(PathBuf::from("test_path"), c.config_path);
@@ -381,7 +381,7 @@ containerRuntime:
                         - prefix: "prefix2"
                           location: "location2"
         "#;
-        let cfg: Config = serde_yaml::from_str(&raw_data).expect("failed to deserialize");
+        let cfg: Config = serde_yaml::from_str(raw_data).expect("failed to deserialize");
         if let Some(ContainerRuntimeConfig::CRIO(c)) = cfg.container_runtime.config {
             assert_eq!(PathBuf::from("test_path"), c.config_path);
             assert_eq!(vec!["reg1", "reg2"], c.unqualified_search_registries);

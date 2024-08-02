@@ -14,7 +14,7 @@ jobs:
   check:
     name: Cargo check
     timeout-minutes: 30
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -27,22 +27,23 @@ jobs:
       - name: Install Protoc
         uses: arduino/setup-protoc@v2
 
-      - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Clang
+        uses: egor-tensin/setup-clang@v1
         with:
-          profile: minimal
-          toolchain: stable
-          override: true
+          version: latest
+          platform: x64
 
       - name: Run cargo check
-        uses: actions-rs/cargo@v1
-        with:
-          command: check
+        run: |
+          cargo check --all --all-targets
 
   test:
     name: Run tests
     timeout-minutes: 30
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -54,6 +55,15 @@ jobs:
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Clang
+        uses: egor-tensin/setup-clang@v1
+        with:
+          version: latest
+          platform: x64
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2

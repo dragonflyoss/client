@@ -10,7 +10,7 @@ on:
 jobs:
   push_client_image_to_registry:
     name: Push Client Image
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 480
     steps:
       - name: Free Disk Space (Ubuntu)
@@ -102,7 +102,7 @@ jobs:
 
   push_dfinit_image_to_registry:
     name: Push Dfinit Image
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 480
     steps:
       - name: Free Disk Space (Ubuntu)
