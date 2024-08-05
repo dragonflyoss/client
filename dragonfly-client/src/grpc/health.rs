@@ -42,6 +42,7 @@ impl HealthClient {
             .map_err(|_| Error::InvalidURI(addr.into()))?
             .connect_timeout(super::CONNECT_TIMEOUT)
             .timeout(super::REQUEST_TIMEOUT)
+            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .connect()
             .await
             .map_err(|err| {

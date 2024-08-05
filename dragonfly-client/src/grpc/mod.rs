@@ -32,13 +32,13 @@ pub mod scheduler;
 pub mod security;
 
 // CONNECT_TIMEOUT is the timeout for GRPC connection.
-pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
 // REQUEST_TIMEOUT is the timeout for GRPC requests.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 // CONCURRENCY_LIMIT_PER_CONNECTION is the limit of concurrency for each connection.
-pub const CONCURRENCY_LIMIT_PER_CONNECTION: usize = 4096;
+pub const CONCURRENCY_LIMIT_PER_CONNECTION: usize = 8192;
 
 // TCP_KEEPALIVE is the keepalive duration for TCP connection.
 pub const TCP_KEEPALIVE: Duration = Duration::from_secs(60);

@@ -292,10 +292,9 @@ impl Content {
 
         // Calculate the hash of the piece.
         let hash = hasher.finalize();
-
         Ok(WritePieceResponse {
             length,
-            hash: base16ct::lower::encode_string(hash.as_bytes()),
+            hash: base16ct::lower::encode_string(&hash.to_be_bytes()),
         })
     }
 
@@ -380,10 +379,9 @@ impl Content {
 
         // Calculate the hash of the content.
         let hash = hasher.finalize();
-
         Ok(WriteCacheTaskResponse {
             length,
-            hash: base16ct::lower::encode_string(hash.as_bytes()),
+            hash: base16ct::lower::encode_string(&hash.to_be_bytes()),
         })
     }
 
