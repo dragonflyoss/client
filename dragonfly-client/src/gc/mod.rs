@@ -110,11 +110,6 @@ impl GC {
         for task in self.storage.get_tasks()? {
             // If the task is expired and not uploading, evict the task.
             if task.is_expired(self.config.gc.policy.task_ttl) {
-                // If the task is uploading, skip it.
-                if task.is_uploading() {
-                    continue;
-                }
-
                 self.storage.delete_task(&task.id).await;
                 info!("evict task {}", task.id);
 
@@ -166,11 +161,6 @@ impl GC {
                 break;
             }
 
-            // If the task is uploading, skip it.
-            if task.is_uploading() {
-                continue;
-            }
-
             // If the task has no content length, skip it.
             let task_space = match task.content_length() {
                 Some(content_length) => content_length,
@@ -214,11 +204,6 @@ impl GC {
         for task in self.storage.get_cache_tasks()? {
             // If the cache task is expired and not uploading, evict the cache task.
             if task.is_expired() {
-                // If the cache task is uploading, skip it.
-                if task.is_uploading() {
-                    continue;
-                }
-
                 self.storage.delete_cache_task(&task.id).await;
                 info!("evict cache task {}", task.id);
 
@@ -268,11 +253,6 @@ impl GC {
             // Evict enough space.
             if evicted_space >= need_evict_space {
                 break;
-            }
-
-            // If the cache task is uploading, skip it.
-            if task.is_uploading() {
-                continue;
             }
 
             // If the cache task is persistent, skip it.

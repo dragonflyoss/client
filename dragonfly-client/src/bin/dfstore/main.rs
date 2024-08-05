@@ -110,7 +110,7 @@ fn main() {
     // Initialize tracing.
     let _guards = init_tracing(
         dfstore::NAME,
-        &args.log_dir,
+        args.log_dir,
         args.log_level,
         args.log_max_files,
         None,

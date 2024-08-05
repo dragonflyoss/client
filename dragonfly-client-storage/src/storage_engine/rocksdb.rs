@@ -20,7 +20,10 @@ use dragonfly_client_core::{
     Error, Result,
 };
 use rocksdb::{ReadOptions, WriteOptions};
-use std::{ops::Deref, path::Path};
+use std::{
+    ops::Deref,
+    path::{Path, PathBuf},
+};
 use tracing::{info, warn};
 
 /// RocksdbStorageEngine is a storage engine based on rocksdb.
@@ -45,8 +48,8 @@ impl RocksdbStorageEngine {
     /// DEFAULT_DIR_NAME is the default directory name to store metadata.
     const DEFAULT_DIR_NAME: &'static str = "metadata";
 
-    /// DEFAULT_MEMTABLE_MEMORY_BUDGET is the default memory budget for memtable, default is 64MB.
-    const DEFAULT_MEMTABLE_MEMORY_BUDGET: usize = 64 * 1024 * 1024;
+    /// DEFAULT_MEMTABLE_MEMORY_BUDGET is the default memory budget for memtable, default is 256MB.
+    const DEFAULT_MEMTABLE_MEMORY_BUDGET: usize = 256 * 1024 * 1024;
 
     /// DEFAULT_MAX_OPEN_FILES is the default max open files for rocksdb.
     const DEFAULT_MAX_OPEN_FILES: i32 = 10_000;
@@ -57,8 +60,14 @@ impl RocksdbStorageEngine {
     /// DEFAULT_CACHE_SIZE is the default cache size for rocksdb.
     const DEFAULT_CACHE_SIZE: usize = 32 * 1024 * 1024;
 
+    // DEFAULT_LOG_MAX_SIZE is the default max log size for rocksdb, default is 64MB.
+    const DEFAULT_LOG_MAX_SIZE: usize = 64 * 1024 * 1024;
+
+    // DEFAULT_LOG_MAX_FILES is the default max log files for rocksdb.
+    const DEFAULT_LOG_MAX_FILES: usize = 10;
+
     /// open opens a rocksdb storage engine with the given directory and column families.
-    pub fn open(dir: &Path, cf_names: &[&str], keep: bool) -> Result<Self> {
+    pub fn open(dir: &Path, log_dir: &PathBuf, cf_names: &[&str], keep: bool) -> Result<Self> {
         info!("initializing metadata directory: {:?} {:?}", dir, cf_names);
         // Initialize rocksdb options.
         let mut options = rocksdb::Options::default();
@@ -67,6 +76,12 @@ impl RocksdbStorageEngine {
         options.optimize_level_style_compaction(Self::DEFAULT_MEMTABLE_MEMORY_BUDGET);
         options.increase_parallelism(num_cpus::get() as i32);
         options.set_max_open_files(Self::DEFAULT_MAX_OPEN_FILES);
+
+        // Set rocksdb log options.
+        options.set_db_log_dir(log_dir);
+        options.set_log_level(rocksdb::LogLevel::Debug);
+        options.set_max_log_file_size(Self::DEFAULT_LOG_MAX_SIZE);
+        options.set_keep_log_file_num(Self::DEFAULT_LOG_MAX_FILES);
 
         // Initialize rocksdb block based table options.
         let mut block_options = rocksdb::BlockBasedOptions::default();
