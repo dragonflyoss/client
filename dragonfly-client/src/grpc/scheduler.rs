@@ -174,6 +174,7 @@ impl SchedulerClient {
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
                     .connect_timeout(super::CONNECT_TIMEOUT)
                     .timeout(super::REQUEST_TIMEOUT)
+                    .tcp_keepalive(Some(super::TCP_KEEPALIVE))
                     .connect()
                     .await
                     .map_err(|err| {
@@ -227,6 +228,7 @@ impl SchedulerClient {
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
                     .connect_timeout(super::CONNECT_TIMEOUT)
                     .timeout(super::REQUEST_TIMEOUT)
+                    .tcp_keepalive(Some(super::TCP_KEEPALIVE))
                     .connect()
                     .await
                     .map_err(|err| {
@@ -285,6 +287,7 @@ impl SchedulerClient {
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
                     .connect_timeout(super::CONNECT_TIMEOUT)
                     .timeout(super::REQUEST_TIMEOUT)
+                    .tcp_keepalive(Some(super::TCP_KEEPALIVE))
                     .connect()
                     .await
                     .map_err(|err| {
@@ -449,6 +452,7 @@ impl SchedulerClient {
             .map_err(|_| Error::InvalidURI(addr.to_string()))?
             .connect_timeout(super::CONNECT_TIMEOUT)
             .timeout(super::REQUEST_TIMEOUT)
+            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .connect()
             .await
         {

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use dragonfly_client_core::Result as ClientResult;
+use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use sha2::Digest as Sha2Digest;
 use std::fmt;
 use std::path::Path;
@@ -26,6 +26,9 @@ pub const SEPARATOR: &str = ":";
 // Algorithm is an enum of the algorithm that is used to generate digest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Algorithm {
+    // Crc32 is crc32 algorithm for generate digest.
+    Crc32,
+
     // Blake3 is blake3 algorithm for generate digest.
     Blake3,
 
@@ -41,6 +44,7 @@ impl fmt::Display for Algorithm {
     // fmt formats the value using the given formatter.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Algorithm::Crc32 => write!(f, "crc32"),
             Algorithm::Blake3 => write!(f, "blake3"),
             Algorithm::Sha256 => write!(f, "sha256"),
             Algorithm::Sha512 => write!(f, "sha512"),
@@ -55,6 +59,7 @@ impl FromStr for Algorithm {
     // from_str parses an algorithm string.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "crc32" => Ok(Algorithm::Crc32),
             "blake3" => Ok(Algorithm::Blake3),
             "sha256" => Ok(Algorithm::Sha256),
             "sha512" => Ok(Algorithm::Sha512),
@@ -110,6 +115,7 @@ impl FromStr for Digest {
         }
 
         let algorithm = match parts[0] {
+            "crc32" => Algorithm::Crc32,
             "blake3" => Algorithm::Blake3,
             "sha256" => Algorithm::Sha256,
             "sha512" => Algorithm::Sha512,
@@ -125,6 +131,7 @@ pub fn calculate_file_hash(algorithm: Algorithm, path: &Path) -> ClientResult<Di
     let f = std::fs::File::open(path)?;
     let mut reader = std::io::BufReader::new(f);
     match algorithm {
+        Algorithm::Crc32 => Err(ClientError::Unimplemented),
         Algorithm::Blake3 => {
             let mut hasher = blake3::Hasher::new();
             std::io::copy(&mut reader, &mut hasher)?;

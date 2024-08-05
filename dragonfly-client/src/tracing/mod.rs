@@ -70,7 +70,6 @@ pub fn init_tracing(
         log_max_files,
     )
     .expect("failed to create rolling file appender");
-    println!("log_dir: {:?}", log_dir);
 
     let (rolling_writer, rolling_writer_guard) = tracing_appender::non_blocking(rolling_appender);
     let file_logging_layer = Layer::new()

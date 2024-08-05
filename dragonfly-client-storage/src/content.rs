@@ -259,8 +259,8 @@ impl Content {
         // Use a buffer to read the piece.
         let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
 
-        // Blake3 is used to calculate the hash of the piece.
-        let mut hasher = blake3::Hasher::new();
+        // Crc32 is used to calculate the hash of the piece.
+        let mut hasher = crc32fast::Hasher::new();
 
         // InspectReader is used to calculate the hash of the piece.
         let mut tee = InspectReader::new(reader, |bytes| {
@@ -292,10 +292,9 @@ impl Content {
 
         // Calculate the hash of the piece.
         let hash = hasher.finalize();
-
         Ok(WritePieceResponse {
             length,
-            hash: base16ct::lower::encode_string(hash.as_bytes()),
+            hash: base16ct::lower::encode_string(&hash.to_be_bytes()),
         })
     }
 
@@ -352,8 +351,8 @@ impl Content {
         // Use a buffer to read the content.
         let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, from_f);
 
-        // Blake3 is used to calculate the hash of the content.
-        let mut hasher = blake3::Hasher::new();
+        // Crc32 is used to calculate the hash of the content.
+        let mut hasher = crc32fast::Hasher::new();
 
         // InspectReader is used to calculate the hash of the content.
         let mut tee = InspectReader::new(reader, |bytes| {
@@ -380,10 +379,9 @@ impl Content {
 
         // Calculate the hash of the content.
         let hash = hasher.finalize();
-
         Ok(WriteCacheTaskResponse {
             length,
-            hash: base16ct::lower::encode_string(hash.as_bytes()),
+            hash: base16ct::lower::encode_string(&hash.to_be_bytes()),
         })
     }
 
