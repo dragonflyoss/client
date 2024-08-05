@@ -915,9 +915,9 @@ dependencies = [
 
 [[package]]
 name = "crc32fast"
-version = "1.3.2"
+version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b540bd8bc810d3885c6ea91e2018302f68baba2129ab3e88f32389ee9370880d"
+checksum = "a97769d94ddab943e4510d138150169a2758b5ef3eb191a9ee688de3e23ef7b3"
 dependencies = [
  "cfg-if",
 ]
@@ -1103,9 +1103,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.0.141"
+version = "2.0.142"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fbf4a1b96eee4cbdb3e57fa344bceb375e4dee90d6954fac6f1463cd7a64a5d"
+checksum = "0258d872ecbd38b4b2afe77828e71575bf5d7445a3b7332ea983bff9ec88862b"
 dependencies = [
  "prost 0.11.9",
  "prost-types 0.13.1",
@@ -1265,8 +1265,8 @@ name = "dragonfly-client-storage"
 version = "0.1.94"
 dependencies = [
  "base16ct",
- "blake3",
  "chrono",
+ "crc32fast",
  "dragonfly-api",
  "dragonfly-client-config",
  "dragonfly-client-core",
@@ -1290,6 +1290,7 @@ version = "0.1.94"
 dependencies = [
  "base16ct",
  "blake3",
+ "crc32fast",
  "dragonfly-api",
  "dragonfly-client-core",
  "hex",

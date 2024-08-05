@@ -998,6 +998,7 @@ impl DfdaemonUploadClient {
         let channel = Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
             .connect_timeout(super::CONNECT_TIMEOUT)
             .timeout(super::REQUEST_TIMEOUT)
+            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .connect()
             .await
             .map_err(|err| {
