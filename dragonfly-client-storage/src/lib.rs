@@ -157,7 +157,7 @@ impl Storage {
         expected_digest: &str,
     ) -> Result<metadata::CacheTask> {
         let response = self.content.write_cache_task(id, path).await?;
-        let digest = Digest::new(Algorithm::Blake3, response.hash);
+        let digest = Digest::new(Algorithm::Crc32, response.hash);
         if expected_digest != digest.to_string() {
             return Err(Error::DigestMismatch(
                 expected_digest.to_string(),
@@ -251,7 +251,7 @@ impl Storage {
         reader: &mut R,
     ) -> Result<metadata::Piece> {
         let response = self.content.write_piece(task_id, offset, reader).await?;
-        let digest = Digest::new(Algorithm::Blake3, response.hash);
+        let digest = Digest::new(Algorithm::Crc32, response.hash);
 
         self.metadata.download_piece_finished(
             task_id,
@@ -275,7 +275,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self.content.write_piece(task_id, offset, reader).await?;
         let length = response.length;
-        let digest = Digest::new(Algorithm::Blake3, response.hash);
+        let digest = Digest::new(Algorithm::Crc32, response.hash);
 
         // Check the digest of the piece.
         if expected_digest != digest.to_string() {
