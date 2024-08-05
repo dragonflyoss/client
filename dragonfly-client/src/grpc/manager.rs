@@ -74,6 +74,8 @@ impl ManagerClient {
             .connect_timeout(super::CONNECT_TIMEOUT)
             .timeout(super::REQUEST_TIMEOUT)
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+            .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+            .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
             .connect()
             .await
             .map_err(|err| {

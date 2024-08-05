@@ -41,7 +41,13 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 pub const CONCURRENCY_LIMIT_PER_CONNECTION: usize = 8192;
 
 // TCP_KEEPALIVE is the keepalive duration for TCP connection.
-pub const TCP_KEEPALIVE: Duration = Duration::from_secs(60);
+pub const TCP_KEEPALIVE: Duration = Duration::from_secs(3600);
+
+// HTTP2_KEEP_ALIVE_INTERVAL is the interval for HTTP2 keep alive.
+pub const HTTP2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(60);
+
+// HTTP2_KEEP_ALIVE_TIMEOUT is the timeout for HTTP2 keep alive.
+pub const HTTP2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(5);
 
 // MAX_FRAME_SIZE is the max frame size for GRPC, default is 12MB.
 pub const MAX_FRAME_SIZE: u32 = 12 * 1024 * 1024;

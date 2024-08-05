@@ -44,6 +44,7 @@ use dragonfly_client_util::{
     digest::{calculate_file_hash, Algorithm},
     http::{get_range, hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap},
 };
+use hyper_util::rt::TokioIo;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -133,7 +134,6 @@ impl DfdaemonDownloadServer {
         Server::builder()
             .max_frame_size(super::MAX_FRAME_SIZE)
             .concurrency_limit_per_connection(super::CONCURRENCY_LIMIT_PER_CONNECTION)
-            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .add_service(reflection.clone())
             .add_service(health_service)
             .add_service(self.service.clone())
@@ -369,7 +369,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                 .as_str(),
                             download_clone.priority.to_string().as_str(),
                             task_clone.content_length().unwrap_or_default(),
-                            download_clone.range.clone(),
+                            download_clone.range,
                             start_time.elapsed(),
                         );
 
@@ -391,7 +391,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                 .hard_link_or_copy(
                                     task_clone,
                                     Path::new(output_path.as_str()),
-                                    download_clone.range.clone(),
+                                    download_clone.range,
                                 )
                                 .await
                             {
@@ -986,7 +986,12 @@ impl DfdaemonDownloadClient {
         let channel = Endpoint::try_from("http://[::]:50051")
             .unwrap()
             .connect_with_connector(service_fn(move |_: Uri| {
-                UnixStream::connect(socket_path.clone())
+                let socket_path = socket_path.clone();
+                async move {
+                    Ok::<_, std::io::Error>(TokioIo::new(
+                        UnixStream::connect(socket_path.clone()).await?,
+                    ))
+                }
             }))
             .await
             .map_err(|err| {

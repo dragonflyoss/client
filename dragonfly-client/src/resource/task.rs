@@ -215,7 +215,7 @@ impl Task {
         let interested_pieces = match self.piece.calculate_interested(
             request.piece_length,
             content_length,
-            request.range.clone(),
+            request.range,
         ) {
             Ok(interested_pieces) => interested_pieces,
             Err(err) => {
@@ -260,7 +260,7 @@ impl Task {
                         download_task_response::Response::DownloadTaskStartedResponse(
                             dfdaemon::v2::DownloadTaskStartedResponse {
                                 content_length,
-                                range: request.range.clone(),
+                                range: request.range,
                                 response_header: task.response_header.clone(),
                                 pieces,
                             },

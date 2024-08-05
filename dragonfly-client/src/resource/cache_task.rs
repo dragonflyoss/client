@@ -119,7 +119,7 @@ impl CacheTask {
                 tag: request.tag.clone(),
                 application: request.application.clone(),
                 piece_length: request.piece_length,
-                ttl: request.ttl.clone(),
+                ttl: request.ttl,
                 timeout: request.timeout,
             })
             .await
@@ -129,7 +129,7 @@ impl CacheTask {
             })?;
 
         // Convert prost_wkt_types::Duration to std::time::Duration.
-        let ttl = Duration::try_from(request.ttl.clone().ok_or(Error::UnexpectedResponse)?)
+        let ttl = Duration::try_from(request.ttl.ok_or(Error::UnexpectedResponse)?)
             .or_err(ErrorType::ParseError)?;
 
         // Create the persistent cache task.
