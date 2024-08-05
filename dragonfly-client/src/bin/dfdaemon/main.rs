@@ -108,7 +108,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize tracing.
     let _guards = init_tracing(
         dfdaemon::NAME,
-        &args.log_dir,
+        args.log_dir.clone(),
         args.log_level,
         args.log_max_files,
         config.tracing.addr.to_owned(),
@@ -117,7 +117,7 @@ async fn main() -> Result<(), anyhow::Error> {
     );
 
     // Initialize storage.
-    let storage = Storage::new(config.clone(), config.storage.dir.as_path())
+    let storage = Storage::new(config.clone(), config.storage.dir.as_path(), args.log_dir)
         .await
         .map_err(|err| {
             error!("initialize storage failed: {}", err);

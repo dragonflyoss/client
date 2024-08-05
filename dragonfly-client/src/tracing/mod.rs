@@ -19,7 +19,7 @@ use rolling_file::*;
 use std::fs;
 use std::fs::OpenOptions;
 use std::os::unix::io::AsRawFd;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tracing::{info, Level};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_log::LogTracer;
@@ -32,7 +32,7 @@ use tracing_subscriber::{
 
 pub fn init_tracing(
     name: &str,
-    log_dir: &PathBuf,
+    log_dir: PathBuf,
     log_level: Level,
     log_max_files: usize,
     jaeger_addr: Option<String>,
@@ -63,13 +63,14 @@ pub fn init_tracing(
     guards.push(stdout_guard);
 
     // Setup file layer.
-    fs::create_dir_all(log_dir).expect("failed to create log directory");
+    fs::create_dir_all(log_dir.clone()).expect("failed to create log directory");
     let rolling_appender = BasicRollingFileAppender::new(
         log_dir.join(name).with_extension("log"),
         RollingConditionBasic::new().hourly(),
         log_max_files,
     )
     .expect("failed to create rolling file appender");
+    println!("log_dir: {:?}", log_dir);
 
     let (rolling_writer, rolling_writer_guard) = tracing_appender::non_blocking(rolling_appender);
     let file_logging_layer = Layer::new()
@@ -128,7 +129,7 @@ pub fn init_tracing(
 }
 
 // Redirect stderr to file.
-fn redirect_stderr_to_file(log_dir: &Path) {
+fn redirect_stderr_to_file(log_dir: PathBuf) {
     let log_path = log_dir.join("stderr.log");
     let file = OpenOptions::new()
         .create(true)
