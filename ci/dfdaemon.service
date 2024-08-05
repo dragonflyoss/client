@@ -18,7 +18,7 @@ CPUQuota=100%
 # Limiting CPU Consumption of a Unit.
 CPUWeight=400
 
-# Limit Memory usage to 4G, beyond that the process will be OOM killed.
+# Limit Memory usage to 8G, beyond that the process will be OOM killed.
 MemoryMax=8G
 
 [Install]
