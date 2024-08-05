@@ -1,5 +1,5 @@
 [Unit]
-Description=Dragonfly’s P2P download daemon
+Description=dfdaemon is a high performance P2P download daemon
 Documentation=https://github.com/dragonflyoss/client
 After=network-online.target
 After=network.target
