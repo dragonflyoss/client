@@ -78,7 +78,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize tracing.
     let _guards = init_tracing(
         dfinit::NAME,
-        &args.log_dir,
+        args.log_dir,
         args.log_level,
         args.log_max_files,
         None,

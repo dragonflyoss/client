@@ -140,7 +140,7 @@ async fn main() -> anyhow::Result<()> {
     // Initialize tracing.
     let _guards = init_tracing(
         dfcache::NAME,
-        &args.log_dir,
+        args.log_dir,
         args.log_level,
         args.log_max_files,
         None,
