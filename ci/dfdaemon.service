@@ -1,5 +1,5 @@
 [Unit]
-Description=Dragonfly’s P2P download daemon
+Description=dfdaemon is a high performance P2P download daemon
 Documentation=https://github.com/dragonflyoss/client
 After=network-online.target
 After=network.target
@@ -12,14 +12,14 @@ Environment=HOME=/root
 
 Restart=on-success
 
-# Limit CPU usage to 1 CPU core
+# Limit CPU usage to 1 CPU core.
 CPUQuota=100%
 
-# Limiting CPU Consumption of a Unit
+# Limiting CPU Consumption of a Unit.
 CPUWeight=400
 
-# Limit Memory usage to 4G, beyond that the process will be OOM killed
-MemoryMax=4G
+# Limit Memory usage to 8G, beyond that the process will be OOM killed.
+MemoryMax=8G
 
 [Install]
 WantedBy=multi-user.target
