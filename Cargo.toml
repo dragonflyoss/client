@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.94"
+version = "0.1.95"
 authors = ["The Dragonfly Developers"]
 homepage = "https://d7y.io/"
 repository = "https://github.com/dragonflyoss/client.git"
@@ -22,15 +22,15 @@ readme = "README.md"
 edition = "2021"
 
 [workspace.dependencies]
-dragonfly-client = { path = "dragonfly-client", version = "0.1.94" }
-dragonfly-client-core = { path = "dragonfly-client-core", version = "0.1.94" }
-dragonfly-client-config = { path = "dragonfly-client-config", version = "0.1.94" }
-dragonfly-client-storage = { path = "dragonfly-client-storage", version = "0.1.94" }
-dragonfly-client-backend = { path = "dragonfly-client-backend", version = "0.1.94" }
-dragonfly-client-util = { path = "dragonfly-client-util", version = "0.1.94" }
-dragonfly-client-init = { path = "dragonfly-client-init", version = "0.1.94" }
+dragonfly-client = { path = "dragonfly-client", version = "0.1.95" }
+dragonfly-client-core = { path = "dragonfly-client-core", version = "0.1.95" }
+dragonfly-client-config = { path = "dragonfly-client-config", version = "0.1.95" }
+dragonfly-client-storage = { path = "dragonfly-client-storage", version = "0.1.95" }
+dragonfly-client-backend = { path = "dragonfly-client-backend", version = "0.1.95" }
+dragonfly-client-util = { path = "dragonfly-client-util", version = "0.1.95" }
+dragonfly-client-init = { path = "dragonfly-client-init", version = "0.1.95" }
 thiserror = "1.0"
-dragonfly-api = "2.0.141"
+dragonfly-api = "2.0.143"
 reqwest = { version = "0.12.4", features = ["stream", "native-tls", "default-tls", "rustls-tls"] }
 rcgen = { version = "0.12.1", features = ["x509-parser"] }
 hyper = { version = "1.4", features = ["full"] }
@@ -48,17 +48,18 @@ tracing = "0.1"
 url = "2.5.2"
 rustls = "0.22.4"
 rustls-pki-types = "1.7.0"
-rustls-pemfile = "2.1.1"
+rustls-pemfile = "2.1.3"
 sha2 = "0.10"
 blake3 = "1.5.1"
-uuid = { version = "1.9", features = ["v4"] }
+crc32fast = "1.4.2"
+uuid = { version = "1.10", features = ["v4"] }
 hex = "0.4"
 rocksdb = "0.22.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1.0"
 http = "1"
-tonic = { version = "0.9.2", features = ["gzip"] }
+tonic = { version = "0.12.1", features = ["gzip"] }
 tokio = { version = "1.39.2", features = ["full"] }
 tokio-util = { version = "0.7.11", features = ["full"] }
 tokio-stream = "0.1.15"
@@ -67,7 +68,7 @@ warp = "0.3.5"
 headers = "0.4.0"
 regex = "1.10.5"
 humantime = "2.1.0"
-prost-wkt-types = "0.4"
+prost-wkt-types = "0.6"
 chrono = { version = "0.4.35", features = ["serde", "clock"] }
 openssl = { version = "0.10", features = ["vendored"] }
 opendal = { version = "0.47.3", features = [
@@ -81,7 +82,7 @@ opendal = { version = "0.47.3", features = [
 clap = { version = "4.5.11", features = ["derive"] }
 anyhow = "1.0.86"
 toml_edit = "0.22.14"
-toml = "0.8.16"
+toml = "0.8.19"
 base16ct = { version = "0.2", features = ["alloc"] }
 bytesize = {version = "1.2.0", features = ["serde"]}
 bytesize-serde = "0.2.1"

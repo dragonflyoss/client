@@ -121,7 +121,6 @@ impl DfdaemonUploadServer {
         Server::builder()
             .max_frame_size(super::MAX_FRAME_SIZE)
             .concurrency_limit_per_connection(super::CONCURRENCY_LIMIT_PER_CONNECTION)
-            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .add_service(reflection.clone())
             .add_service(health_service)
             .add_service(self.service.clone())
@@ -354,7 +353,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                 .as_str(),
                             download_clone.priority.to_string().as_str(),
                             task_clone.content_length().unwrap_or_default(),
-                            download_clone.range.clone(),
+                            download_clone.range,
                             start_time.elapsed(),
                         );
 
@@ -376,7 +375,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                 .hard_link_or_copy(
                                     task_clone,
                                     Path::new(output_path.as_str()),
-                                    download_clone.range.clone(),
+                                    download_clone.range,
                                 )
                                 .await
                             {

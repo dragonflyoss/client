@@ -253,7 +253,7 @@ async fn main() -> anyhow::Result<()> {
     // Initialize tracing.
     let _guards = init_tracing(
         dfget::NAME,
-        &args.log_dir,
+        args.log_dir.clone(),
         args.log_level,
         args.log_max_files,
         None,
