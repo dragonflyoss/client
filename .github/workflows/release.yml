@@ -82,7 +82,7 @@ jobs:
           dfinit="target/${{ matrix.target }}/release/dfinit"
           dirname="client-v0.1.95-aarch64-unknown-linux-gnu"
           mkdir "$dirname"
-          mv dfget dfdaemon dfstore dfcache dfinit "$dirname"/
+          mv "$dfget" "$dfdaemon" "$dfstore" "$dfcache" "$dfinit" "$dirname"/
           tar -czf "$dirname.tar.gz" "$dirname"
           echo "CLIENT_TAR_GZ_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
 
