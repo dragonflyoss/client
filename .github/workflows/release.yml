@@ -70,6 +70,20 @@ jobs:
         run: |
             cargo build --release --bins --target ${{ matrix.target }}
 
+      - name: Build archive client(Tar GZ)
+        shell: bash
+        run: |
+          binary_name="client"
+          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          dfget="target/${{ matrix.target }}/release/dfget"
+          dfdaemon="target/${{ matrix.target }}/release/dfdaemon"
+          dfstore="target/${{ matrix.target }}/release/dfstore"
+          dfcache="target/${{ matrix.target }}/release/dfcache"
+          dfinit="target/${{ matrix.target }}/release/dfinit"
+          mv dfget dfdaemon dfstore dfcache dfinit "$dirname"
+          tar -czf "$dirname.tar.gz" "$dirname"
+          echo "CLIENT_TAR_GZ_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+
       - name: Build archive client(DEB)
         shell: bash
         run: |
@@ -78,58 +92,13 @@ jobs:
           cargo deb -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.deb
           echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
 
-      - name: Build archive client(RPM)
-        shell: bash
-        run: |
-          binary_name="client"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
-          echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
-
-      - name: Build archive dfget
-        shell: bash
-        run: |
-          binary_name="dfget"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
-          tar -czf "$dirname.tar.gz" "$dirname"
-          echo "DFGET_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
-
-      - name: Build archive dfdaemon
-        shell: bash
-        run: |
-          binary_name="dfdaemon"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
-          tar -czf "$dirname.tar.gz" "$dirname"
-          echo "DFDAEMON_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
-
-      - name: Build archive dfstore
-        shell: bash
-        run: |
-          binary_name="dfstore"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
-          tar -czf "$dirname.tar.gz" "$dirname"
-          echo "DFSTORE_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
-
-      - name: Build archive dfcache
-        shell: bash
-        run: |
-          binary_name="dfcache"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
-          tar -czf "$dirname.tar.gz" "$dirname"
-          echo "DFCACHE_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
-
-      - name: Build archive dfinit
-        shell: bash
-        run: |
-          binary_name="dfinit"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
-          tar -czf "$dirname.tar.gz" "$dirname"
-          echo "DFINIT_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+      # - name: Build archive client(RPM)
+      #   shell: bash
+      #   run: |
+      #     binary_name="client"
+      #     dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+      #     cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
+      #     echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -139,11 +108,7 @@ jobs:
           files: |
             ${{ env.CLIENT_RPM_ASSET }}
             ${{ env.CLIENT_DEB_ASSET }}            
-            ${{ env.DFGET_ASSET }}
-            ${{ env.DFDAEMON_ASSET }}
-            ${{ env.DFSTORE_ASSET }}
-            ${{ env.DFCACHE_ASSET }}
-            ${{ env.DFINIT_ASSET }}
+            ${{ env.CLIENT_TAR_GZ_ASSET }}
 
   publish-crates:
     runs-on: ubuntu-latest
