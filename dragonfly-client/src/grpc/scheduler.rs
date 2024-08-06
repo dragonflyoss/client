@@ -172,6 +172,7 @@ impl SchedulerClient {
                 // Connect to the scheduler.
                 let channel = Channel::from_shared(format!("http://{}", addr))
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
+                    .buffer_size(super::BUFFER_SIZE)
                     .connect_timeout(super::CONNECT_TIMEOUT)
                     .timeout(super::REQUEST_TIMEOUT)
                     .connect()
@@ -225,6 +226,7 @@ impl SchedulerClient {
                 // Connect to the scheduler.
                 let channel = Channel::from_shared(format!("http://{}", addr))
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
+                    .buffer_size(super::BUFFER_SIZE)
                     .connect_timeout(super::CONNECT_TIMEOUT)
                     .timeout(super::REQUEST_TIMEOUT)
                     .connect()
@@ -283,6 +285,7 @@ impl SchedulerClient {
                 // Connect to the scheduler.
                 let channel = Channel::from_shared(format!("http://{}", addr))
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
+                    .buffer_size(super::BUFFER_SIZE)
                     .connect_timeout(super::CONNECT_TIMEOUT)
                     .timeout(super::REQUEST_TIMEOUT)
                     .connect()
@@ -447,6 +450,7 @@ impl SchedulerClient {
 
         let channel = match Channel::from_shared(format!("http://{}", addr))
             .map_err(|_| Error::InvalidURI(addr.to_string()))?
+            .buffer_size(super::BUFFER_SIZE)
             .connect_timeout(super::CONNECT_TIMEOUT)
             .timeout(super::REQUEST_TIMEOUT)
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))

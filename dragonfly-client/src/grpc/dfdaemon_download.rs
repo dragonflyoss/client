@@ -985,6 +985,7 @@ impl DfdaemonDownloadClient {
         // Ignore the uri because it is not used.
         let channel = Endpoint::try_from("http://[::]:50051")
             .unwrap()
+            .buffer_size(super::BUFFER_SIZE)
             .connect_with_connector(service_fn(move |_: Uri| {
                 let socket_path = socket_path.clone();
                 async move {
