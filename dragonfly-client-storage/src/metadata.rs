@@ -787,7 +787,10 @@ impl<E: StorageEngineOwned> Metadata<E> {
         for ele in iter {
             let (key, _) = ele?;
 
-            info!("delete piece metadata {}", task_id);
+            info!(
+                "delete piece metadata {}",
+                std::str::from_utf8(&key).unwrap_or_default().to_string()
+            );
             self.db.delete::<Piece>(&key)?;
         }
 
