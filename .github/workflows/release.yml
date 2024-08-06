@@ -49,7 +49,8 @@ jobs:
         uses: taiki-e/setup-cross-toolchain-action@v1
         with:
           target: ${{ matrix.target }}
-
+          
+      - run: sudo apt update      
       - name: Add musl tools
         run: sudo apt install -y musl musl-dev musl-tools
         if: endsWith(matrix.target, '-musl')
