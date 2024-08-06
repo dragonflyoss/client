@@ -995,6 +995,7 @@ impl DfdaemonUploadClient {
     // new creates a new DfdaemonUploadClient.
     pub async fn new(addr: String) -> ClientResult<Self> {
         let channel = Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
+            .buffer_size(super::BUFFER_SIZE)
             .connect_timeout(super::CONNECT_TIMEOUT)
             .timeout(super::REQUEST_TIMEOUT)
             .connect()

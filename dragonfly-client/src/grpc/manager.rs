@@ -71,6 +71,7 @@ impl ManagerClient {
         // Initialize the manager client by the available address.
         let channel = Channel::from_shared(available_addr.clone())
             .map_err(|_| Error::InvalidURI(available_addr.clone()))?
+            .buffer_size(super::BUFFER_SIZE)
             .connect_timeout(super::CONNECT_TIMEOUT)
             .timeout(super::REQUEST_TIMEOUT)
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
