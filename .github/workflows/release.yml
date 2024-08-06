@@ -50,6 +50,13 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
+      - name: Add musl tools
+        run: sudo apt install -y musl musl-dev musl-tools
+        if: endsWith(matrix.target, '-musl')
+      - name: Add aarch-gnu tools
+        run: sudo apt install -y gcc-aarch64-linux-gnu
+        if: startsWith(matrix.target, 'aarch64-unknown-linux')
+        
       - name: Install cargo-deb
         uses: taiki-e/cache-cargo-install-action@v2
         with:
@@ -70,6 +77,22 @@ jobs:
         run: |
             cargo build --release --bins --target ${{ matrix.target }}
 
+      - name: Build archive client(DEB)
+        shell: bash
+        run: |
+          binary_name="client"
+          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          cargo deb -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.deb
+          echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
+
+      - name: Build archive client(RPM)
+        shell: bash
+        run: |
+          binary_name="client"
+          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
+          echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
+
       - name: Build archive client(Tar GZ)
         shell: bash
         run: |
@@ -85,22 +108,6 @@ jobs:
           mv "$dfget" "$dfdaemon" "$dfstore" "$dfcache" "$dfinit" "$dirname"/
           tar -czf "$dirname.tar.gz" "$dirname"
           echo "CLIENT_TAR_GZ_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
-
-      - name: Build archive client(DEB)
-        shell: bash
-        run: |
-          binary_name="client"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          cargo deb -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.deb
-          echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
-
-      # - name: Build archive client(RPM)
-      #   shell: bash
-      #   run: |
-      #     binary_name="client"
-      #     dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-      #     cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
-      #     echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
 
       - name: Release
         uses: softprops/action-gh-release@v2
