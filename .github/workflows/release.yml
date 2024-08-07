@@ -82,7 +82,9 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          mv target/${{ matrix.target }}/release target
+          mkdir target/release
+          mv target/${{ matrix.target }}/release/* target/release
+          rm target/${{ matrix.target }}
 
       - name: Build archive client(DEB)
         shell: bash
