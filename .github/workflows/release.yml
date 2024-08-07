@@ -82,8 +82,12 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir target/release
-          mv target/${{ matrix.target }}/release/* target/release
+          mkdir -p target/release
+          cp target/${{ matrix.target }}/release/dfdaemon target/release
+          cp target/${{ matrix.target }}/release/dfget target/release
+          cp target/${{ matrix.target }}/release/dfstore target/release
+          cp target/${{ matrix.target }}/release/dfcache target/release
+          cp target/${{ matrix.target }}/release/dfinit target/release
           rm target/${{ matrix.target }}
 
       - name: Build archive client(DEB)
