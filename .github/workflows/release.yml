@@ -105,12 +105,11 @@ jobs:
         run: |
           binary_name="client"
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          dfget="target/${{ matrix.target }}/release/dfget"
-          dfdaemon="target/${{ matrix.target }}/release/dfdaemon"
-          dfstore="target/${{ matrix.target }}/release/dfstore"
-          dfcache="target/${{ matrix.target }}/release/dfcache"
-          dfinit="target/${{ matrix.target }}/release/dfinit"
-          dirname="client-v0.1.95-aarch64-unknown-linux-gnu"
+          dfget="target/release/dfget"
+          dfdaemon="target/release/dfdaemon"
+          dfstore="target/release/dfstore"
+          dfcache="target/release/dfcache"
+          dfinit="target/release/dfinit"
           mkdir "$dirname"
           mv "$dfget" "$dfdaemon" "$dfstore" "$dfcache" "$dfinit" "$dirname"/
           tar -czf "$dirname.tar.gz" "$dirname"
