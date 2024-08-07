@@ -1,3 +1,5 @@
+# @format
+
 name: Release
 
 on:
@@ -33,8 +35,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-            key: ${{ matrix.target }}
-            cache-on-failure: true
+          key: ${{ matrix.target }}
+          cache-on-failure: true
 
       - name: Get the release version from the tag
         shell: bash
@@ -50,14 +52,14 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      - run: sudo apt update      
+      - run: sudo apt update
       - name: Add musl tools
         run: sudo apt install -y musl musl-dev musl-tools
         if: endsWith(matrix.target, '-musl')
       - name: Add aarch-gnu tools
         run: sudo apt install -y gcc-aarch64-linux-gnu
         if: startsWith(matrix.target, 'aarch64-unknown-linux')
-        
+
       - name: Install cargo-deb
         uses: taiki-e/cache-cargo-install-action@v2
         with:
@@ -67,7 +69,7 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-generate-rpm
-          
+
       - name: Install dependencies
         run: |
           sudo apt-get update -y
@@ -76,18 +78,22 @@ jobs:
       - name: Build binaries
         shell: bash
         run: |
-            cargo build --release --bins --target ${{ matrix.target }}
+          cargo build --release --bins --target ${{ matrix.target }}
 
       - name: Package
         shell: bash
         run: |
           set -euxo pipefail
+
+          dirname="$client-${{ env.VERSION }}-${{ matrix.target }}"
+          dfget=target/${{ matrix.target }}/release/dfget
+          dfdaemon=target/${{ matrix.target }}/release/dfdaemon
+          dfstore=target/${{ matrix.target }}/release/dfstore
+          dfcache=target/${{ matrix.target }}/release/dfcache
+          dfinit=target/${{ matrix.target }}/release/dfinit
+
           mkdir -p target/release
-          cp target/${{ matrix.target }}/release/dfdaemon target/release
-          cp target/${{ matrix.target }}/release/dfget target/release
-          cp target/${{ matrix.target }}/release/dfstore target/release
-          cp target/${{ matrix.target }}/release/dfcache target/release
-          cp target/${{ matrix.target }}/release/dfinit target/release
+          cp "$dfget" "$dfdaemon" "$dfstore" "$dfcache" "$dfinit" target/release
 
       - name: Build archive client(DEB)
         shell: bash
@@ -115,8 +121,9 @@ jobs:
           dfstore="target/release/dfstore"
           dfcache="target/release/dfcache"
           dfinit="target/release/dfinit"
+
           mkdir "$dirname"
-          mv "$dfget" "$dfdaemon" "$dfstore" "$dfcache" "$dfinit" "$dirname"/
+          cp -r CONTRIBUTING.md LICENSE README.md "$dfget" "$dfdaemon" "$dfstore" "$dfcache" "$dfinit" "$dirname"/
           tar -czf "$dirname.tar.gz" "$dirname"
           echo "CLIENT_TAR_GZ_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
 
@@ -143,7 +150,7 @@ jobs:
           large-packages: true
           docker-images: true
           swap-storage: true
-            
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -157,5 +164,5 @@ jobs:
 
       - uses: katyo/publish-crates@v2
         with:
-           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-           ignore-unpublished-changes: true
+          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          ignore-unpublished-changes: true
