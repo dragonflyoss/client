@@ -52,6 +52,7 @@ use tokio::fs;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
+use tonic::codec::CompressionEncoding;
 use tonic::{
     transport::{Channel, Endpoint, Server, Uri},
     Code, Request, Response, Status,
@@ -90,6 +91,8 @@ impl DfdaemonDownloadServer {
             task,
             cache_task,
         })
+        .send_compressed(CompressionEncoding::Zstd)
+        .accept_compressed(CompressionEncoding::Zstd)
         .max_decoding_message_size(usize::MAX)
         .max_encoding_message_size(usize::MAX);
 
@@ -985,6 +988,7 @@ impl DfdaemonDownloadClient {
         // Ignore the uri because it is not used.
         let channel = Endpoint::try_from("http://[::]:50051")
             .unwrap()
+            .buffer_size(super::BUFFER_SIZE)
             .connect_with_connector(service_fn(move |_: Uri| {
                 let socket_path = socket_path.clone();
                 async move {
@@ -1000,6 +1004,8 @@ impl DfdaemonDownloadClient {
             })
             .or_err(ErrorType::ConnectError)?;
         let client = DfdaemonDownloadGRPCClient::new(channel)
+            .send_compressed(CompressionEncoding::Zstd)
+            .accept_compressed(CompressionEncoding::Zstd)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);
         Ok(Self { client })

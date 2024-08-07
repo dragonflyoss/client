@@ -1120,7 +1120,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "0.1.95"
+version = "0.1.96"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1190,7 +1190,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "0.1.95"
+version = "0.1.96"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-core",
@@ -1212,7 +1212,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "0.1.95"
+version = "0.1.96"
 dependencies = [
  "bytesize",
  "bytesize-serde",
@@ -1233,7 +1233,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "0.1.95"
+version = "0.1.96"
 dependencies = [
  "hyper 1.4.0",
  "hyper-util",
@@ -1248,7 +1248,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "0.1.95"
+version = "0.1.96"
 dependencies = [
  "anyhow",
  "clap",
@@ -1264,7 +1264,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "0.1.95"
+version = "0.1.96"
 dependencies = [
  "base16ct",
  "chrono",
@@ -1288,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "0.1.95"
+version = "0.1.96"
 dependencies = [
  "base16ct",
  "blake3",
@@ -1758,7 +1758,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "0.1.95"
+version = "0.1.96"
 dependencies = [
  "dragonfly-client-backend",
  "dragonfly-client-core",
@@ -4865,7 +4865,6 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "bytes",
- "flate2",
  "h2 0.4.2",
  "http 1.1.0",
  "http-body 1.0.0",
@@ -4883,6 +4882,7 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+ "zstd",
 ]
 
 [[package]]
@@ -5690,6 +5690,24 @@ name = "zeroize"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "525b4ec142c6b68a2d10f01f7bbf6755599ca3f81ea53b8431b7dd348f5fdb2d"
+
+[[package]]
+name = "zstd"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bffb3309596d527cfcba7dfc6ed6052f1d39dfbd7c867aa2e865e4a449c10110"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "7.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43747c7422e2924c11144d5229878b98180ef8b06cca4ab5af37afc8a8d8ea3e"
+dependencies = [
+ "zstd-sys",
+]
 
 [[package]]
 name = "zstd-sys"
