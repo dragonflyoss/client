@@ -88,7 +88,6 @@ jobs:
           cp target/${{ matrix.target }}/release/dfstore target/release
           cp target/${{ matrix.target }}/release/dfcache target/release
           cp target/${{ matrix.target }}/release/dfinit target/release
-          rm target/${{ matrix.target }}
 
       - name: Build archive client(DEB)
         shell: bash
