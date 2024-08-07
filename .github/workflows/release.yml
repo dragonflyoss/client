@@ -82,8 +82,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
-          dirname="$client-${{ env.VERSION }}-${{ matrix.target }}"
+          dirname="client-${{ env.VERSION }}-${{ matrix.target }}"
           dfget=target/${{ matrix.target }}/release/dfget
           dfdaemon=target/${{ matrix.target }}/release/dfdaemon
           dfstore=target/${{ matrix.target }}/release/dfstore
@@ -119,7 +118,6 @@ jobs:
           dfstore="target/release/dfstore"
           dfcache="target/release/dfcache"
           dfinit="target/release/dfinit"
-
           mkdir "$dirname"
           cp -r CONTRIBUTING.md LICENSE README.md "$dfget" "$dfdaemon" "$dfstore" "$dfcache" "$dfinit" "$dirname"/
           tar -czf "$dirname.tar.gz" "$dirname"
