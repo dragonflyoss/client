@@ -49,7 +49,7 @@ jobs:
         uses: taiki-e/setup-cross-toolchain-action@v1
         with:
           target: ${{ matrix.target }}
-          
+
       - run: sudo apt update      
       - name: Add musl tools
         run: sudo apt install -y musl musl-dev musl-tools
@@ -78,12 +78,18 @@ jobs:
         run: |
             cargo build --release --bins --target ${{ matrix.target }}
 
+      - name: Package
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mv target/${{ matrix.target }}/release target
+
       - name: Build archive client(DEB)
         shell: bash
         run: |
           binary_name="client"
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          cargo deb -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.deb
+          cargo deb -p dragonfly-client --target ${{ matrix.target }} --output $dirname.deb
           echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
 
       - name: Build archive client(RPM)
@@ -91,7 +97,7 @@ jobs:
         run: |
           binary_name="client"
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
+          cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --output $dirname.rpm
           echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
 
       - name: Build archive client(Tar GZ)
@@ -99,12 +105,11 @@ jobs:
         run: |
           binary_name="client"
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          dfget="target/${{ matrix.target }}/release/dfget"
-          dfdaemon="target/${{ matrix.target }}/release/dfdaemon"
-          dfstore="target/${{ matrix.target }}/release/dfstore"
-          dfcache="target/${{ matrix.target }}/release/dfcache"
-          dfinit="target/${{ matrix.target }}/release/dfinit"
-          dirname="client-v0.1.95-aarch64-unknown-linux-gnu"
+          dfget="target/release/dfget"
+          dfdaemon="target/release/dfdaemon"
+          dfstore="target/release/dfstore"
+          dfcache="target/release/dfcache"
+          dfinit="target/release/dfinit"
           mkdir "$dirname"
           mv "$dfget" "$dfdaemon" "$dfstore" "$dfcache" "$dfinit" "$dirname"/
           tar -czf "$dirname.tar.gz" "$dirname"
