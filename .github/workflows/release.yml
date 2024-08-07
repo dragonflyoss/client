@@ -69,6 +69,7 @@ jobs:
         shell: bash
         run: |
             cargo build --release --bins --target ${{ matrix.target }}
+
       - name: Package
         shell: bash
         run: |
@@ -112,7 +113,7 @@ jobs:
           mkdir "$dirname"
           cp -r CONTRIBUTING.md LICENSE README.md "$dfget" "$dfdaemon" "$dfstore" "$dfcache" "$dfinit" "$dirname"/
           tar -czf "$dirname.tar.gz" "$dirname"
-          echo "CLIENT_TAR_GZ_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+          echo "CLIENT_TAR_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -122,7 +123,7 @@ jobs:
           files: |
             ${{ env.CLIENT_RPM_ASSET }}
             ${{ env.CLIENT_DEB_ASSET }}            
-            ${{ env.CLIENT_TAR_GZ_ASSET }}
+            ${{ env.CLIENT_TAR_ASSET }}
 
   publish-crates:
     runs-on: ubuntu-latest
