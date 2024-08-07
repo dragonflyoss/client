@@ -208,12 +208,6 @@ impl Containerd {
 
             let mut mirror_table = Table::new();
             mirror_table.insert("endpoint", value(endpoints));
-
-            // Add X-Dragonfly-Registry header to the mirror configuration.
-            let mut headers_table = Table::new();
-            headers_table.insert(DRAGONFLY_REGISTRY_HEADER, value(registry.server_addr));
-            mirror_table.insert("header", Item::Table(headers_table));
-
             mirrors_table.insert(&registry.host_namespace, Item::Table(mirror_table));
         }
 
