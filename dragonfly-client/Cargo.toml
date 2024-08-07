@@ -59,9 +59,6 @@ openssl.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 blake3.workspace = true
-bytesize.workspace = true
-uuid.workspace = true
-percent-encoding.workspace = true
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
 tracing-appender = "0.2.3"
@@ -72,10 +69,10 @@ opentelemetry-jaeger = { version = "0.17.0", features = ["rt-tokio"] }
 pprof = { version = "0.13", features = ["flamegraph", "protobuf-codec"] }
 lazy_static = "1.5"
 prometheus = { version = "0.13", features = ["process"] }
-tonic-health = "0.12.1"
-tonic-reflection = "0.12.1"
-bytes = "1.7"
-sysinfo = "0.30.13"
+tonic-health = "0.9.2"
+tonic-reflection = "0.9.2"
+bytes = "1.6"
+sysinfo = "0.29.6"
 tower = "0.4.13"
 indicatif = "0.17.8"
 dashmap = "6.0.1"
@@ -88,8 +85,6 @@ tokio-rustls = "0.25.0-alpha.4"
 http-body-util = "0.1.2"
 futures-util = "0.3.30"
 termion = "4.0.2"
-tabled = "0.15.0"
-path-absolutize = "3.1.1"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { version = "0.5.4", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
@@ -97,28 +92,28 @@ tikv-jemallocator = { version = "0.5.4", features = ["profiling", "stats", "unpr
 [target.'cfg(target_os = "linux")'.dependencies]
 jemalloc_pprof = "0.4.2"
 
-[package.metadata.deb.variants.x86_64-unknown-linux-gnu]
+[package.metadata.deb]
 maintainer = "Dragonfly <dragonfly-maintainers@googlegroups.com>"
 priority = "optional"
 section = "rust"
 assets = [
   [
-    "../target/x86_64-unknown-linux-gnu/release/dfget",
+    "../target/release/dfget",
     "usr/bin/dfget",
     "755",
   ],
   [
-    "../target/x86_64-unknown-linux-gnu/release/dfdaemon",
+    "../target/release/dfdaemon",
     "usr/bin/dfdaemon",
     "755",
   ],
   [
-    "../target/x86_64-unknown-linux-gnu/release/dfcache",
+    "../target/release/dfcache",
     "usr/bin/dfcache",
     "755",
   ],
   [
-    "../target/x86_64-unknown-linux-gnu/release/dfstore",
+    "../target/release/dfstore",
     "usr/bin/dfstore",
     "755",
   ],
@@ -149,207 +144,12 @@ assets = [
   ],
 ]
 
-[package.metadata.deb.variants.x86_64-unknown-linux-musl]
-maintainer = "Dragonfly <dragonfly-maintainers@googlegroups.com>"
-section = "rust"
-priority = "optional"
+[package.metadata.generate-rpm]
 assets = [
-  [
-    "../target/x86_64-unknown-linux-musl/release/dfget",
-    "usr/bin/dfget",
-    "755",
-  ],
-  [
-    "../target/x86_64-unknown-linux-musl/release/dfdaemon",
-    "usr/bin/dfdaemon",
-    "755",
-  ],
-  [
-    "../target/x86_64-unknown-linux-musl/release/dfcache",
-    "usr/bin/dfcache",
-    "755",
-  ],
-  [
-    "../target/x86_64-unknown-linux-musl/release/dfstore",
-    "usr/bin/dfstore",
-    "755",
-  ],
-  [
-    "../ci/dfdaemon.service",
-    "lib/systemd/system/dfdaemon.service",
-    "644",
-  ],
-  [
-    "../ci/dfdaemon.yaml",
-    "etc/dragonfly/dfdaemon.yaml",
-    "644",
-  ],  
-  [
-    "../CONTRIBUTING.md",
-    "usr/share/doc/client/CONTRIBUTING.md",
-    "644",
-  ],
-  [
-    "../LICENSE",
-    "usr/share/doc/client/LICENSE",
-    "644",
-  ],
-  [
-    "../README.md",
-    "usr/share/doc/client/README.md",
-    "644",
-  ],
-]
-
-[package.metadata.deb.variants.aarch64-unknown-linux-gnu]
-maintainer = "Dragonfly <dragonfly-maintainers@googlegroups.com>"
-priority = "optional"
-section = "rust"
-assets = [
-  [
-    "../target/aarch64-unknown-linux-gnu/release/dfget",
-    "usr/bin/dfget",
-    "755",
-  ],
-  [
-    "../target/aarch64-unknown-linux-gnu/release/dfdaemon",
-    "usr/bin/dfdaemon",
-    "755",
-  ],
-  [
-    "../target/aarch64-unknown-linux-gnu/release/dfcache",
-    "usr/bin/dfcache",
-    "755",
-  ],
-  [
-    "../target/aarch64-unknown-linux-gnu/release/dfstore",
-    "usr/bin/dfstore",
-    "755",
-  ],
-  [
-    "../ci/dfdaemon.service",
-    "lib/systemd/system/dfdaemon.service",
-    "644",
-  ],
-  [
-    "../ci/dfdaemon.yaml",
-    "etc/dragonfly/dfdaemon.yaml",
-    "644",
-  ],
-  [
-    "../CONTRIBUTING.md",
-    "usr/share/doc/client/CONTRIBUTING.md",
-    "644",
-  ],
-  [
-    "../LICENSE",
-    "usr/share/doc/client/LICENSE",
-    "644",
-  ],
-  [
-    "../README.md",
-    "usr/share/doc/client/README.md",
-    "644",
-  ],
-]
-
-[package.metadata.deb.variants.aarch64-unknown-linux-musl]
-maintainer = "Dragonfly <dragonfly-maintainers@googlegroups.com>"
-priority = "optional"
-section = "rust"
-assets = [
-  [
-    "../target/aarch64-unknown-linux-musl/release/dfget",
-    "usr/bin/dfget",
-    "755",
-  ],
-  [
-    "../target/aarch64-unknown-linux-musl/release/dfdaemon",
-    "usr/bin/dfdaemon",
-    "755",
-  ],
-  [
-    "../target/aarch64-unknown-linux-musl/release/dfcache",
-    "usr/bin/dfcache",
-    "755",
-  ],
-  [
-    "../target/aarch64-unknown-linux-musl/release/dfstore",
-    "usr/bin/dfstore",
-    "755",
-  ],
-  [
-    "../ci/dfdaemon.service",
-    "lib/systemd/system/dfdaemon.service",
-    "644",
-  ],
-  [
-    "../ci/dfdaemon.yaml",
-    "etc/dragonfly/dfdaemon.yaml",
-    "644",
-  ],
-  [
-    "../CONTRIBUTING.md",
-    "usr/share/doc/client/CONTRIBUTING.md",
-    "644",
-  ],
-  [
-    "../LICENSE",
-    "usr/share/doc/client/LICENSE",
-    "644",
-  ],
-  [
-    "../README.md",
-    "usr/share/doc/client/README.md",
-    "644",
-  ],
-]
-
-[package.metadata.generate-rpm.variants.x86_64-unknown-linux-gnu]
-assets = [
-  {source = "../target/x86_64-unknown-linux-gnu/release/dfget", dest = "/usr/bin/dfget", mode = "755"},
-  {source = "../target/x86_64-unknown-linux-gnu/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755"},
-  {source = "../target/x86_64-unknown-linux-gnu/release/dfcache", dest = "/usr/bin/dfcache", mode = "755"},
-  {source = "../target/x86_64-unknown-linux-gnu/release/dfstore", dest = "/usr/bin/dfstore", mode = "755"}, 
-  {source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
-  {source = "../ci/dfdaemon.yaml", dest = "/etc/dragonfly/dfdaemon.yaml", mode = "644", config = true }, 
-  {source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true},
-  {source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true},
-  {source = "../README.md", dest = "/usr/share/doc/client/README.md", mode = "644", doc = true},
-]
-
-[package.metadata.generate-rpm.variants.x86_64-unknown-linux-musl]
-assets = [
-  {source = "../target/x86_64-unknown-linux-musl/release/dfget", dest = "/usr/bin/dfget", mode = "755"},
-  {source = "../target/x86_64-unknown-linux-musl/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755"},
-  {source = "../target/x86_64-unknown-linux-musl/release/dfcache", dest = "/usr/bin/dfcache", mode = "755"},
-  {source = "../target/x86_64-unknown-linux-musl/release/dfstore", dest = "/usr/bin/dfstore", mode = "755"}, 
-  {source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
-  {source = "../ci/dfdaemon.yaml", dest = "/etc/dragonfly/dfdaemon.yaml", mode = "644", config = true },   
-  {source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true},
-  {source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true},
-  {source = "../README.md", dest = "/usr/share/doc/client/README.md", mode = "644", doc = true},
-]
-
-[package.metadata.generate-rpm.variants.aarch64-unknown-linux-gnu]
-assets = [
-  {source = "../target/aarch64-unknown-linux-gnu/release/dfget", dest = "/usr/bin/dfget", mode = "755"},
-  {source = "../target/aarch64-unknown-linux-gnu/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755"},
-  {source = "../target/aarch64-unknown-linux-gnu/release/dfcache", dest = "/usr/bin/dfcache", mode = "755"},
-  {source = "../target/aarch64-unknown-linux-gnu/release/dfstore", dest = "/usr/bin/dfstore", mode = "755"},
-  {source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
-  {source = "../ci/dfdaemon.yaml", dest = "/etc/dragonfly/dfdaemon.yaml", mode = "644", config = true },     
-  {source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true},
-  {source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true},
-  {source = "../README.md", dest = "/usr/share/doc/client/README.md", mode = "644", doc = true},
-]
-
-[package.metadata.generate-rpm.variants.aarch64-unknown-linux-musl]
-assets = [
-  {source = "../target/aarch64-unknown-linux-musl/release/dfget", dest = "/usr/bin/dfget", mode = "755"},
-  {source = "../target/aarch64-unknown-linux-musl/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755"},
-  {source = "../target/aarch64-unknown-linux-musl/release/dfcache", dest = "/usr/bin/dfcache", mode = "755"},
-  {source = "../target/aarch64-unknown-linux-musl/release/dfstore", dest = "/usr/bin/dfstore", mode = "755"},
+  {source = "../target/release/dfget", dest = "/usr/bin/dfget", mode = "755"},
+  {source = "../target/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755"},
+  {source = "../target/release/dfcache", dest = "/usr/bin/dfcache", mode = "755"},
+  {source = "../target/release/dfstore", dest = "/usr/bin/dfstore", mode = "755"},
   {source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
   {source = "../ci/dfdaemon.yaml", dest = "/etc/dragonfly/dfdaemon.yaml", mode = "644", config = true },     
   {source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true},
