@@ -47,6 +47,7 @@ use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
+use tonic::codec::CompressionEncoding;
 use tonic::{
     transport::{Channel, Server},
     Code, Request, Response, Status,
@@ -85,6 +86,8 @@ impl DfdaemonUploadServer {
             task,
             cache_task,
         })
+        .send_compressed(CompressionEncoding::Zstd)
+        .accept_compressed(CompressionEncoding::Zstd)
         .max_decoding_message_size(usize::MAX)
         .max_encoding_message_size(usize::MAX);
 
@@ -1006,6 +1009,8 @@ impl DfdaemonUploadClient {
             })
             .or_err(ErrorType::ConnectError)?;
         let client = DfdaemonUploadGRPCClient::new(channel)
+            .send_compressed(CompressionEncoding::Zstd)
+            .accept_compressed(CompressionEncoding::Zstd)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
