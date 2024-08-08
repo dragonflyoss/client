@@ -132,7 +132,7 @@ fn default_scheduler_announce_interval() -> Duration {
 // default_scheduler_schedule_timeout is the default timeout for scheduling.
 #[inline]
 fn default_scheduler_schedule_timeout() -> Duration {
-    Duration::from_secs(30)
+    Duration::from_secs(10)
 }
 
 // default_dynconfig_refresh_interval is the default interval to refresh dynamic configuration from manager.
