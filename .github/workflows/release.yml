@@ -69,13 +69,13 @@ jobs:
         shell: bash
         run: |
             cargo build --release --bins --target ${{ matrix.target }}
-            cp target/${{ matrix.target }}/release/* target/release            
 
       - name: Build archive client(DEB)
         shell: bash
         run: |
           binary_name="client"
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          cp -r target/${{ matrix.target }}/release/* target/release            
           cargo deb -p dragonfly-client --no-build --no-strip --target ${{ matrix.target }} --output $dirname.deb
           echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
 
