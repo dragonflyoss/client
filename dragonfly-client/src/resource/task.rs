@@ -948,7 +948,11 @@ impl Task {
                     )
                     .await
                     .map_err(|err| {
-                        error!("send DownloadPieceFinishedRequest failed: {:?}", err);
+                        error!(
+                            "send DownloadPieceFinishedRequest for piece {} failed: {:?}",
+                            storage.piece_id(task_id.as_str(), number),
+                            err
+                        );
                         err
                     })?;
 
@@ -971,7 +975,11 @@ impl Task {
                     )
                     .await
                     .map_err(|err| {
-                        error!("send DownloadPieceFinishedResponse failed: {:?}", err);
+                        error!(
+                            "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                            storage.piece_id(task_id.as_str(), number),
+                            err
+                        );
                         err
                     })?;
 
@@ -1018,12 +1026,7 @@ impl Task {
                     finished_pieces.push(metadata.clone());
                 }
                 Err(Error::DownloadFromRemotePeerFailed(err)) => {
-                    error!(
-                        "download piece {} from remote peer {} error: {:?}",
-                        self.storage.piece_id(task.id.as_str(), err.piece_number),
-                        err.parent_id,
-                        err
-                    );
+                    let (piece_number, parent_id) = (err.piece_number, err.parent_id);
 
                     // Send the download piece failed request.
                     in_stream_tx
@@ -1036,7 +1039,7 @@ impl Task {
                                     announce_peer_request::Request::DownloadPieceFailedRequest(
                                         DownloadPieceFailedRequest {
                                             piece_number: Some(err.piece_number),
-                                            parent_id: err.parent_id,
+                                            parent_id,
                                             temporary: true,
                                         },
                                     ),
@@ -1046,17 +1049,35 @@ impl Task {
                         )
                         .await
                         .unwrap_or_else(|err| {
-                            error!("send DownloadPieceFailedRequest failed: {:?}", err)
+                            error!(
+                                "send DownloadPieceFailedRequest for piece {} failed: {:?}",
+                                self.storage.piece_id(task.id.as_str(), piece_number),
+                                err
+                            )
                         });
 
+                    // If the download failed from the remote peer, continue to download the next
+                    // piece and ignore the error.
                     continue;
+                }
+                Err(Error::SendTimeout) => {
+                    join_set.detach_all();
+
+                    // If the send timeout with scheduler or download progress, return the finished pieces.
+                    // It will stop the download from the remote peer with scheduler
+                    // and download from the source directly from middle.
+                    return Ok(finished_pieces);
                 }
                 Err(err) => {
                     error!("download from remote peer error: {:?}", err);
+
+                    // If the unknown error occurred, continue to download the next piece and
+                    // ignore the error.
                     continue;
                 }
             }
         }
+
         Ok(finished_pieces)
     }
 
@@ -1154,7 +1175,11 @@ impl Task {
                     )
                     .await
                     .map_err(|err| {
-                        error!("send DownloadPieceFinishedResponse failed: {:?}", err);
+                        error!(
+                            "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                            storage.piece_id(task_id.as_str(), number),
+                            err
+                        );
                         err
                     })?;
 
@@ -1176,7 +1201,7 @@ impl Task {
                             REQUEST_TIMEOUT,
                         )
                         .await.map_err(|err| {
-                            error!("send DownloadPieceBackToSourceFinishedRequest failed: {:?}", err);
+                            error!("send DownloadPieceBackToSourceFinishedRequest for piece {} failed: {:?}", storage.piece_id(task_id.as_str(), number), err);
                             err
                         })?;
 
@@ -1222,6 +1247,8 @@ impl Task {
                     finished_pieces.push(metadata.clone());
                 }
                 Err(Error::BackendError(err)) => {
+                    join_set.detach_all();
+
                     // Send the download piece http failed request.
                     in_stream_tx.send_timeout(AnnouncePeerRequest {
                                     host_id: host_id.to_string(),
@@ -1243,10 +1270,14 @@ impl Task {
                                 .await
                                 .unwrap_or_else(|err| error!("send DownloadPieceBackToSourceFailedRequest error: {:?}", err));
 
-                    join_set.abort_all();
+                    // If the backend error with source, return the error.
+                    // It will stop the download from the source with scheduler
+                    // and download from the source directly from beginning.
                     return Err(Error::BackendError(err));
                 }
-                Err(err) => {
+                Err(Error::SendTimeout) => {
+                    join_set.detach_all();
+
                     // Send the download piece failed request.
                     in_stream_tx.send_timeout(AnnouncePeerRequest {
                                     host_id: host_id.to_string(),
@@ -1262,7 +1293,32 @@ impl Task {
                                 .await
                                 .unwrap_or_else(|err| error!("send DownloadPieceBackToSourceFailedRequest error: {:?}", err));
 
-                    join_set.abort_all();
+                    // If the send timeout with scheduler or download progress, return
+                    // the finished pieces. It will stop the download from the source with
+                    // scheduler and download from the source directly from middle.
+                    return Ok(finished_pieces);
+                }
+                Err(err) => {
+                    join_set.detach_all();
+
+                    // Send the download piece failed request.
+                    in_stream_tx.send_timeout(AnnouncePeerRequest {
+                                    host_id: host_id.to_string(),
+                                    task_id: task.id,
+                                    peer_id: peer_id.to_string(),
+                                    request: Some(announce_peer_request::Request::DownloadPieceBackToSourceFailedRequest(
+                                            DownloadPieceBackToSourceFailedRequest{
+                                                piece_number: None,
+                                                response: None,
+                                            }
+                                    )),
+                                }, REQUEST_TIMEOUT)
+                                .await
+                                .unwrap_or_else(|err| error!("send DownloadPieceBackToSourceFailedRequest error: {:?}", err));
+
+                    // If the unknown error, return the error.
+                    // It will stop the download from the source with scheduler
+                    // and download from the source directly from beginning.
                     return Err(err);
                 }
             }
@@ -1348,7 +1404,11 @@ impl Task {
                 )
                 .await
                 .map_err(|err| {
-                    error!("send DownloadPieceFinishedResponse failed: {:?}", err);
+                    error!(
+                        "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                        self.storage.piece_id(task.id.as_str(), piece.number),
+                        err
+                    );
                     err
                 })?;
 
@@ -1452,7 +1512,11 @@ impl Task {
                     )
                     .await
                     .map_err(|err| {
-                        error!("send DownloadPieceFinishedResponse failed: {:?}", err);
+                        error!(
+                            "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                            storage.piece_id(task_id.as_str(), metadata.number),
+                            err
+                        );
                         err
                     })?;
 
@@ -1497,7 +1561,10 @@ impl Task {
                     finished_pieces.push(metadata.clone());
                 }
                 Err(err) => {
-                    join_set.abort_all();
+                    join_set.detach_all();
+
+                    // If the download failed from the source, return the error.
+                    // It will stop the download from the source.
                     return Err(err);
                 }
             }

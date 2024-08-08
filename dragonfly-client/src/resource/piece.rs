@@ -335,7 +335,13 @@ impl Piece {
         self.download_rate_limiter.acquire(length as usize).await;
 
         // Record the start of downloading piece.
-        self.storage.download_piece_started(task_id, number).await?;
+        let piece = self.storage.download_piece_started(task_id, number).await?;
+
+        // If the piece is downloaded by the other thread,
+        // return the piece directly.
+        if piece.is_finished() {
+            return Ok(piece);
+        }
 
         // Create a dfdaemon client.
         let host = parent.host.clone().ok_or_else(|| {
@@ -458,7 +464,13 @@ impl Piece {
         self.download_rate_limiter.acquire(length as usize).await;
 
         // Record the start of downloading piece.
-        self.storage.download_piece_started(task_id, number).await?;
+        let piece = self.storage.download_piece_started(task_id, number).await?;
+
+        // If the piece is downloaded by the other thread,
+        // return the piece directly.
+        if piece.is_finished() {
+            return Ok(piece);
+        }
 
         // Add range header to the request by offset and length.
         let mut request_header = request_header.clone();
