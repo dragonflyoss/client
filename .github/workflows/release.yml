@@ -70,34 +70,33 @@ jobs:
         run: |
             cargo build --release --bins --target ${{ matrix.target }}
 
-      - name: Build archive client(DEB)
-        shell: bash
-        run: |
-          binary_name="client"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          cargo deb -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.deb
-          echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
+      # - name: Build archive client(DEB)
+      #   shell: bash
+      #   run: |
+      #     binary_name="client"
+      #     dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+      #     cargo deb -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.deb
+      #     echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
 
-      - name: Build archive client(RPM)
-        shell: bash
-        run: |
-          binary_name="client"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
-          echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
+      # - name: Build archive client(RPM)
+      #   shell: bash
+      #   run: |
+      #     binary_name="client"
+      #     dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+      #     cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
+      #     echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
 
       - name: Build archive client(TAR)
         shell: bash
         run: |
           binary_name="client"
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          dfget="target/release/dfget"
-          dfdaemon="target/release/dfdaemon"
-          dfstore="target/release/dfstore"
-          dfcache="target/release/dfcache"
-          dfinit="target/release/dfinit"
-          mkdir "$dirname"
-          cp -r CONTRIBUTING.md LICENSE README.md "$dfget" "$dfdaemon" "$dfstore" "$dfcache" "$dfinit" "$dirname"/
+          mv "target/${{ matrix.target }}/release/dfget" "$dirname"
+          mv "target/${{ matrix.target }}/release/dfdaemon" "$dirname"
+          mv "target/${{ matrix.target }}/release/dfstore" "$dirname"
+          mv "target/${{ matrix.target }}/release/dfcache" "$dirname"
+          mv "target/${{ matrix.target }}/release/dfinit" "$dirname"
+          mv CONTRIBUTING.md LICENSE README.md "$dirname"
           tar -czf "$dirname.tar.gz" "$dirname"
           echo "CLIENT_TAR_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
 
