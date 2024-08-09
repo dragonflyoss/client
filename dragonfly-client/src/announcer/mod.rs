@@ -14,22 +14,30 @@
  * limitations under the License.
  */
 
-use crate::grpc::{manager::ManagerClient, scheduler::SchedulerClient};
+use crate::grpc::{manager::ManagerClient, scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::shutdown;
-use dragonfly_api::common::v2::{Build, Cpu, Disk, Host, Memory, Network};
+use dragonfly_api::common::v2::{Build, Cpu, Disk, Host, Memory, Network, Peer, Piece, Task};
 use dragonfly_api::manager::v2::{DeleteSeedPeerRequest, SourceType, UpdateSeedPeerRequest};
-use dragonfly_api::scheduler::v2::{AnnounceHostRequest, DeleteHostRequest};
+use dragonfly_api::scheduler::v2::{
+    AnnounceHostRequest, AnnouncePeersRequest, DeleteHostRequest, DeleteTaskRequest,
+};
 use dragonfly_client_config::{
     dfdaemon::{Config, HostType},
     CARGO_PKG_RUSTC_VERSION, CARGO_PKG_VERSION, GIT_HASH,
 };
 use dragonfly_client_core::error::{ErrorType, OrErr};
-use dragonfly_client_core::Result;
+use dragonfly_client_core::{Error, Result};
+use dragonfly_client_storage::Storage;
+use dragonfly_client_util::id_generator::IDGenerator;
+use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 use sysinfo::System;
-use tokio::sync::mpsc;
-use tracing::{error, info};
+use tokio::sync::{mpsc, Semaphore};
+use tokio::task::JoinSet;
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::Request;
+use tracing::{error, info, Instrument};
 
 // ManagerAnnouncer is used to announce the dfdaemon information to the manager.
 pub struct ManagerAnnouncer {
@@ -131,14 +139,15 @@ impl SchedulerAnnouncer {
     // new creates a new scheduler announcer.
     pub async fn new(
         config: Arc<Config>,
-        host_id: String,
         scheduler_client: Arc<SchedulerClient>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
+        id_generator: Arc<IDGenerator>,
+        storage: Arc<Storage>,
     ) -> Result<Self> {
         let announcer = Self {
             config,
-            host_id,
+            host_id: id_generator.host_id(),
             scheduler_client,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
@@ -149,6 +158,12 @@ impl SchedulerAnnouncer {
             .scheduler_client
             .init_announce_host(announcer.make_announce_host_request()?)
             .await?;
+
+        // Announce peers to the scheduler after host announcement.
+        announcer
+            .announce_peers(id_generator.clone(), storage.clone())
+            .await?;
+
         Ok(announcer)
     }
 
@@ -296,5 +311,174 @@ impl SchedulerAnnouncer {
                     .or_err(ErrorType::ParseError)?,
             ),
         })
+    }
+
+    // announce_peers announces peers to scheduler after host announcement.
+    async fn announce_peers(
+        &self,
+        id_generator: Arc<IDGenerator>,
+        storage: Arc<Storage>,
+    ) -> Result<()> {
+        // Announce peers with a maximum concurrency of 5.
+        let mut join_set = JoinSet::new();
+        let semaphore = Arc::new(Semaphore::new(5));
+
+        for request in self
+            .make_announce_peers_request(
+                id_generator.clone(),
+                storage.clone(),
+                self.scheduler_client.clone(),
+            )
+            .await?
+        {
+            // Get the task_id to select scheduler for the announce peers request.
+            let task_id = if let Some(task) = request.peers[0].task.as_ref() {
+                task.id.clone()
+            } else {
+                continue;
+            };
+
+            async fn announce_peers(
+                scheduler_client: Arc<SchedulerClient>,
+                task_id: String,
+                request: AnnouncePeersRequest,
+                semaphore: Arc<Semaphore>,
+            ) -> Result<()> {
+                // Limit the concurrent announcement count.
+                let _permit = semaphore.acquire().await.unwrap();
+
+                // Initialize stream channel.
+                let (in_stream_tx, in_stream_rx) = mpsc::channel(4096);
+
+                // Initialize the stream.
+                let in_stream = ReceiverStream::new(in_stream_rx);
+                let request_stream = Request::new(in_stream);
+
+                // Announce peers to the scheduler.
+                scheduler_client
+                    .announce_peers(task_id.as_str(), request_stream)
+                    .await?;
+
+                // Send the announce peers request, in groups of 10.
+                for chunk in request.peers.chunks(10) {
+                    in_stream_tx
+                        .send_timeout(
+                            AnnouncePeersRequest {
+                                peers: chunk.to_vec(),
+                            },
+                            REQUEST_TIMEOUT,
+                        )
+                        .await
+                        .map_err(|err| {
+                            error!("send AnnouncePeersRequest failed: {:?}", err);
+                            err
+                        })?;
+                }
+
+                Ok(())
+            }
+
+            join_set.spawn(
+                announce_peers(
+                    self.scheduler_client.clone(),
+                    task_id,
+                    request,
+                    semaphore.clone(),
+                )
+                .in_current_span(),
+            );
+        }
+
+        while let Some(message) = join_set
+            .join_next()
+            .await
+            .transpose()
+            .or_err(ErrorType::AsyncRuntimeError)?
+        {
+            match message {
+                Err(Error::SendTimeout) => {
+                    join_set.detach_all();
+                }
+                Err(err) => {
+                    error!("failed to announce peers: {}", err);
+                }
+                Ok(_) => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    // make_announce_peers_request makes the announce peers request.
+    async fn make_announce_peers_request(
+        &self,
+        id_generator: Arc<IDGenerator>,
+        storage: Arc<Storage>,
+        scheduler_client: Arc<SchedulerClient>,
+    ) -> Result<Vec<AnnouncePeersRequest>> {
+        // Get the hash ring.
+        let addrs = scheduler_client.hashring.read().await;
+
+        let mut peers = HashMap::new();
+
+        for task in storage.get_tasks()? {
+            // If the task is expired or not finished, evict the task in scheduler.
+            if task.is_expired(self.config.gc.policy.task_ttl) || !task.is_finished() {
+                scheduler_client
+                    .delete_task(DeleteTaskRequest {
+                        host_id: self.host_id.clone(),
+                        task_id: task.id.clone(),
+                    })
+                    .await
+                    .unwrap_or_else(|err| {
+                        error!("failed to delete peer {}: {}", task.id, err);
+                    });
+                continue;
+            }
+
+            // Get the pieces of a peer based on the task metadata from the local storage.
+            let mut pieces = vec![];
+            for piece in storage.get_pieces(task.id.as_str()).unwrap_or_default() {
+                pieces.push(Piece {
+                    number: piece.number,
+                    parent_id: piece.parent_id,
+                    offset: piece.offset,
+                    length: piece.length,
+                    digest: piece.digest,
+                    ..Default::default()
+                });
+            }
+
+            // Construct a peer based on the task metadata from the local storage.
+            let peer = Peer {
+                id: id_generator.peer_id(),
+                pieces,
+                task: Some(Task {
+                    id: task.id.clone(),
+                    piece_length: task.piece_length,
+                    content_length: task.content_length.unwrap_or_default(),
+                    ..Default::default()
+                }),
+                host: Some(Host {
+                    id: self.host_id.to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+
+            // Get the scheduler address from the hash ring.
+            let addr = *addrs
+                .get(&task.id[0..5].to_string())
+                .ok_or_else(|| Error::HashRing(task.id.to_string()))?;
+
+            peers.entry(addr.to_string()).or_insert(vec![]).push(peer);
+        }
+
+        let mut requests: Vec<AnnouncePeersRequest> = Vec::new();
+        for (_, peers) in peers {
+            requests.push(AnnouncePeersRequest { peers });
+        }
+
+        Ok(requests)
     }
 }
