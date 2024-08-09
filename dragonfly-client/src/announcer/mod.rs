@@ -34,9 +34,10 @@ use std::env;
 use std::sync::Arc;
 use sysinfo::System;
 use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
-use tracing::{error, info};
+use tracing::{error, info, Instrument};
 
 // ManagerAnnouncer is used to announce the dfdaemon information to the manager.
 pub struct ManagerAnnouncer {
@@ -318,6 +319,8 @@ impl SchedulerAnnouncer {
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
     ) -> Result<()> {
+        let mut join_set = JoinSet::new();
+
         for request in self
             .make_announce_peers_request(
                 id_generator.clone(),
@@ -333,34 +336,58 @@ impl SchedulerAnnouncer {
                 continue;
             };
 
-            // Initialize stream channel.
-            let (in_stream_tx, in_stream_rx) = mpsc::channel(4096);
+            async fn announce_peers(
+                scheduler_client: Arc<SchedulerClient>,
+                task_id: String,
+                request: AnnouncePeersRequest,
+            ) -> Result<()> {
+                // Initialize stream channel.
+                let (in_stream_tx, in_stream_rx) = mpsc::channel(4096);
 
-            // Initialize the stream.
-            let in_stream = ReceiverStream::new(in_stream_rx);
-            let request_stream = Request::new(in_stream);
+                // Initialize the stream.
+                let in_stream = ReceiverStream::new(in_stream_rx);
+                let request_stream = Request::new(in_stream);
 
-            // Announce peers to the scheduler.
-            self.scheduler_client
-                .announce_peers(task_id.as_str(), request_stream)
-                .await?;
+                // Announce peers to the scheduler.
+                scheduler_client
+                    .announce_peers(task_id.as_str(), request_stream)
+                    .await?;
 
-            // Send the announce peers request, in groups of 10.
-            for chunk in request.peers.chunks(10) {
-                in_stream_tx
-                    .send_timeout(
-                        AnnouncePeersRequest {
-                            peers: chunk.to_vec(),
-                        },
-                        REQUEST_TIMEOUT,
-                    )
-                    .await
-                    .map_err(|err| {
-                        error!("send AnnouncePeersRequest failed: {:?}", err);
-                        err
-                    })?;
+                // Send the announce peers request, in groups of 10.
+                for chunk in request.peers.chunks(10) {
+                    in_stream_tx
+                        .send_timeout(
+                            AnnouncePeersRequest {
+                                peers: chunk.to_vec(),
+                            },
+                            REQUEST_TIMEOUT,
+                        )
+                        .await
+                        .map_err(|err| {
+                            error!("send AnnouncePeersRequest failed: {:?}", err);
+                            err
+                        })?;
+                }
+
+                Ok(())
+            }
+
+            join_set.spawn(
+                announce_peers(self.scheduler_client.clone(), task_id, request).in_current_span(),
+            );
+        }
+
+        while let Some(message) = join_set
+            .join_next()
+            .await
+            .transpose()
+            .or_err(ErrorType::AsyncRuntimeError)?
+        {
+            if let Err(err) = message {
+                error!("failed to announce peers: {}", err);
             }
         }
+
         Ok(())
     }
 
