@@ -202,7 +202,7 @@ impl ObjectStorage {
 
         // Initialize the S3 operator with the object storage.
         let mut builder = opendal::services::S3::default();
-        builder
+        builder = builder
             .access_key_id(&object_storage.access_key_id)
             .secret_access_key(&object_storage.access_key_secret)
             .http_client(HttpClient::with(client))
@@ -210,17 +210,17 @@ impl ObjectStorage {
 
         // Configure the region and endpoint if they are provided.
         if let Some(region) = object_storage.region.as_deref() {
-            builder.region(region);
+            builder = builder.region(region);
         }
 
         // Configure the endpoint if it is provided.
         if let Some(endpoint) = object_storage.endpoint.as_deref() {
-            builder.endpoint(endpoint);
+            builder = builder.endpoint(endpoint);
         }
 
         // Configure the session token if it is provided.
         if let Some(session_token) = object_storage.session_token.as_deref() {
-            builder.security_token(session_token);
+            builder = builder.session_token(session_token);
         }
 
         Ok(Operator::new(builder)?.finish())
@@ -248,13 +248,13 @@ impl ObjectStorage {
 
         // Initialize the GCS operator with the object storage.
         let mut builder = opendal::services::Gcs::default();
-        builder
+        builder = builder
             .http_client(HttpClient::with(client))
             .bucket(&parsed_url.bucket);
 
         // Configure the region and endpoint if they are provided.
         if let Some(credential) = object_storage.credential.as_deref() {
-            builder.credential(credential);
+            builder = builder.credential(credential);
         } else {
             error!("need credential");
             return Err(ClientError::BackendError(BackendError {
@@ -266,7 +266,7 @@ impl ObjectStorage {
 
         // Configure the predefined ACL if it is provided.
         if let Some(predefined_acl) = object_storage.predefined_acl.as_deref() {
-            builder.predefined_acl(predefined_acl);
+            builder = builder.predefined_acl(predefined_acl);
         }
 
         Ok(Operator::new(builder)?.finish())
@@ -294,7 +294,7 @@ impl ObjectStorage {
 
         // Initialize the ABS operator with the object storage.
         let mut builder = opendal::services::Azblob::default();
-        builder
+        builder = builder
             .account_name(&object_storage.access_key_id)
             .account_key(&object_storage.access_key_secret)
             .http_client(HttpClient::with(client))
@@ -302,7 +302,7 @@ impl ObjectStorage {
 
         // Configure the endpoint if it is provided.
         if let Some(endpoint) = object_storage.endpoint.as_deref() {
-            builder.endpoint(endpoint);
+            builder = builder.endpoint(endpoint);
         }
 
         Ok(Operator::new(builder)?.finish())
@@ -325,12 +325,26 @@ impl ObjectStorage {
             }));
         };
 
+        #[allow(unused_mut)]
+        let mut client_builder = reqwest::Client::builder().timeout(timeout);
+
+        // Due to opendal must set bucket and endpoint to build the url, so ip address can not
+        // be used.
+        // Concequently, use `ClientBuilder::resolve` to resolve a host to mock server ip address.
+        #[cfg(test)]
+        {
+            client_builder = client_builder.resolve(
+                "test-bucket.test-endpoint.local",
+                std::net::SocketAddr::new([127, 0, 0, 1].into(), 8080),
+            );
+        }
+
         // Create a reqwest http client.
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
+        let client = client_builder.build()?;
 
         // Initialize the OSS operator with the object storage.
         let mut builder = opendal::services::Oss::default();
-        builder
+        builder = builder
             .access_key_id(&object_storage.access_key_id)
             .access_key_secret(&object_storage.access_key_secret)
             .http_client(HttpClient::with(client))
@@ -339,7 +353,14 @@ impl ObjectStorage {
 
         // Configure the endpoint if provided.
         if let Some(endpoint) = object_storage.endpoint {
-            builder.endpoint(&endpoint);
+            builder = builder.endpoint(&endpoint);
+        } else {
+            error!("need endpoint");
+            return Err(ClientError::BackendError(BackendError {
+                message: "need endpoint".to_string(),
+                status_code: None,
+                header: None,
+            }));
         }
 
         Ok(Operator::new(builder)?.finish())
@@ -367,7 +388,7 @@ impl ObjectStorage {
 
         // Initialize the OBS operator with the object storage.
         let mut builder = opendal::services::Obs::default();
-        builder
+        builder = builder
             .access_key_id(&object_storage.access_key_id)
             .secret_access_key(&object_storage.access_key_secret)
             .http_client(HttpClient::with(client))
@@ -375,7 +396,7 @@ impl ObjectStorage {
 
         // Configure the endpoint if provided.
         if let Some(endpoint) = object_storage.endpoint {
-            builder.endpoint(&endpoint);
+            builder = builder.endpoint(&endpoint);
         }
 
         Ok(Operator::new(builder)?.finish())
@@ -403,7 +424,7 @@ impl ObjectStorage {
 
         // Initialize the COS operator with the object storage.
         let mut builder = opendal::services::Cos::default();
-        builder
+        builder = builder
             .secret_id(&object_storage.access_key_id)
             .secret_key(&object_storage.access_key_secret)
             .http_client(HttpClient::with(client))
@@ -411,7 +432,7 @@ impl ObjectStorage {
 
         // Configure the endpoint if provided.
         if let Some(endpoint) = object_storage.endpoint {
-            builder.endpoint(&endpoint);
+            builder = builder.endpoint(&endpoint);
         }
 
         Ok(Operator::new(builder)?.finish())
@@ -581,5 +602,584 @@ impl crate::Backend for ObjectStorage {
             reader: Box::new(StreamReader::new(stream)),
             error_message: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::TcpListener;
+
+    use crate::{Backend, DirEntry, GetRequest, HeadRequest};
+
+    use super::*;
+    use common::v2::Range;
+    use dragonfly_client_core::Error;
+    use wiremock::{matchers::*, Mock, ResponseTemplate};
+
+    #[test]
+    fn should_get_parsed_url() {
+        let file_key = "test-bucket/file";
+        let dir_key = "test-bucket/path/to/dir/";
+        let schemes = vec![
+            Scheme::OBS,
+            Scheme::S3,
+            Scheme::ABS,
+            Scheme::OSS,
+            Scheme::COS,
+            Scheme::GCS,
+        ];
+
+        // Test each scheme for both file and directory URLs.
+        for scheme in schemes {
+            let file_url = format!("{}://{}", scheme, file_key);
+
+            let url: Url = file_url.parse().unwrap();
+            let parsed_url: ParsedURL = url.try_into().unwrap();
+
+            // Assert that the file URL is parsed correctly.
+            assert!(!parsed_url.is_dir());
+            assert_eq!(parsed_url.bucket, "test-bucket");
+            assert_eq!(parsed_url.key, "file");
+            assert_eq!(parsed_url.scheme, scheme);
+
+            let dir_url = format!("{}://{}", scheme, dir_key);
+
+            let url: Url = dir_url.parse().unwrap();
+            let parsed_url: ParsedURL = url.try_into().unwrap();
+
+            // Assert that the directory URL is parsed correctly.
+            assert!(parsed_url.is_dir());
+            assert_eq!(parsed_url.bucket, "test-bucket");
+            assert_eq!(parsed_url.key, "path/to/dir/");
+            assert_eq!(parsed_url.scheme, scheme);
+        }
+    }
+
+    #[test]
+    fn should_return_error_when_scheme_not_valid() {
+        let url: Url = "github://test-bucket/file".parse().unwrap();
+
+        let result = TryInto::<ParsedURL>::try_into(url);
+
+        // Assert that an invalid scheme returns an error.
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::InvalidURI(..)));
+    }
+
+    #[test]
+    fn should_return_error_when_bucket_not_valid() {
+        let url: Url = "oss:///file".parse().unwrap();
+
+        let result = TryInto::<ParsedURL>::try_into(url);
+
+        // Assert that an invalid bucket returns an error.
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::InvalidURI(..)));
+    }
+
+    #[test]
+    fn should_get_oss_operator() {
+        let url: Url = "oss://test-bucket/file".parse().unwrap();
+        let parsed_url: ParsedURL = url.try_into().unwrap();
+
+        let object_storage = dragonfly_api::common::v2::ObjectStorage {
+            endpoint: Some("test-endpoint.local".into()),
+            access_key_id: "access-key-id".into(),
+            access_key_secret: "access-key-secret".into(),
+            ..Default::default()
+        };
+
+        let result = ObjectStorage::new(Scheme::OSS).oss_operator(
+            &parsed_url,
+            Some(object_storage),
+            Duration::from_secs(3),
+        );
+
+        // Assert that the OSS operator is successfully created.
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn should_return_error_when_oss_aksk_not_provided() {
+        let url: Url = "oss://test-bucket/file".parse().unwrap();
+        let parsed_url: ParsedURL = url.try_into().unwrap();
+
+        let result =
+            ObjectStorage::new(Scheme::OSS).oss_operator(&parsed_url, None, Duration::from_secs(3));
+
+        // Assert that missing access keys return an error.
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::BackendError(..)));
+    }
+
+    #[test]
+    fn should_return_error_when_oss_endpoint_not_provided() {
+        let url: Url = "oss://test-bucket/file".parse().unwrap();
+        let parsed_url: ParsedURL = url.try_into().unwrap();
+
+        let object_storage = dragonfly_api::common::v2::ObjectStorage {
+            access_key_id: "access-key-id".into(),
+            access_key_secret: "access-key-secret".into(),
+            ..Default::default()
+        };
+
+        let result = ObjectStorage::new(Scheme::OSS).oss_operator(
+            &parsed_url,
+            Some(object_storage),
+            Duration::from_secs(3),
+        );
+
+        // Assert that missing endpoint returns an error.
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::BackendError(..)));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn should_get_oss_head_response_of_file() {
+        let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
+        let server = wiremock::MockServer::builder()
+            .listener(listener)
+            .start()
+            .await;
+
+        // Mock the response.
+        Mock::given(method("HEAD"))
+            .and(path("/test.txt"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Server", "AliyunOSS")
+                    .insert_header("Content-Type", "text/plain")
+                    .insert_header("Content-Length", "24")
+                    .insert_header("Connection", "keep-alive")
+                    .insert_header("Accept-Ranges", "bytes")
+                    .insert_header("Last-Modified", "Sun, 07 Jul 2024 04:12:50 GMT")
+                    .insert_header("Content-MD5", "a9OkUn+nmTdHwZ/EuShY6A=="),
+            )
+            .mount(&server)
+            .await;
+
+        let url = "oss://test-bucket/test.txt";
+
+        let object_storage = build_oss_info();
+        let backend = ObjectStorage::new(Scheme::OSS);
+        let head_response = backend
+            .head(build_head_request(url, object_storage))
+            .await
+            .unwrap();
+
+        assert!(head_response.success);
+        assert_eq!(head_response.content_length, Some(24));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn should_get_oss_head_response_of_dir() {
+        let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
+        let server = wiremock::MockServer::builder()
+            .listener(listener)
+            .start()
+            .await;
+
+        // Mock the response.
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .and(query_param("list-type", "2"))
+            .and(query_param("delimiter", ""))
+            .and(query_param("prefix", "test_dir_recursive"))
+            .and(query_param("max-keys", "1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Server", "AliyunOSS")
+                    .insert_header("Content-Type", "application/xml")
+                    .insert_header("Content-Length", "598")
+                    .insert_header("Connection", "keep-alive")
+                    .set_body_string(include_str!(
+                        "../test-assets/should_get_oss_head_response_of_dir_stat.xml"
+                    )),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .and(query_param("list-type", "2"))
+            .and(query_param("delimiter", ""))
+            .and(query_param("prefix", "test_dir_recursive/"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Server", "AliyunOSS")
+                    .insert_header("Content-Type", "application/xml")
+                    .insert_header("Content-Length", "2613")
+                    .insert_header("Connection", "keep-alive")
+                    .set_body_string(include_str!(
+                        "../test-assets/should_get_oss_head_response_of_dir_list.xml"
+                    )),
+            )
+            .mount(&server)
+            .await;
+
+        let entries = vec![
+            DirEntry {
+                url: "oss://test-bucket/test_dir_recursive/dir1/".into(),
+                content_length: 0,
+                is_dir: true,
+            },
+            DirEntry {
+                url: "oss://test-bucket/test_dir_recursive/dir1/aaa.txt".into(),
+                content_length: 16,
+                is_dir: false,
+            },
+            DirEntry {
+                url: "oss://test-bucket/test_dir_recursive/dir1/ccc.txt".into(),
+                content_length: 16,
+                is_dir: false,
+            },
+            DirEntry {
+                url: "oss://test-bucket/test_dir_recursive/dir2/".into(),
+                content_length: 0,
+                is_dir: true,
+            },
+            DirEntry {
+                url: "oss://test-bucket/test_dir_recursive/dir2/bbb.txt".into(),
+                content_length: 16,
+                is_dir: false,
+            },
+            DirEntry {
+                url: "oss://test-bucket/test_dir_recursive/dir2/ddd.txt".into(),
+                content_length: 16,
+                is_dir: false,
+            },
+            DirEntry {
+                url: "oss://test-bucket/test_dir_recursive/dir2/eee.txt".into(),
+                content_length: 16,
+                is_dir: false,
+            },
+            DirEntry {
+                url: "oss://test-bucket/test_dir_recursive/test.txt".into(),
+                content_length: 14,
+                is_dir: false,
+            },
+        ];
+        let url = "oss://test-bucket/test_dir_recursive/";
+
+        let object_storage = build_oss_info();
+        let backend = ObjectStorage::new(Scheme::OSS);
+        let head_response = backend
+            .head(build_head_request(url, object_storage))
+            .await
+            .unwrap();
+
+        assert!(head_response.success);
+        assert_eq!(head_response.content_length, Some(0));
+        assert_eq!(head_response.entries, entries);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn should_return_error_response_when_head_inexists() {
+        let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
+        let server = wiremock::MockServer::builder()
+            .listener(listener)
+            .start()
+            .await;
+
+        // Mock the response.
+        Mock::given(method("HEAD"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let file_url = "oss://test-bucket/test.txt";
+        let dir_url = "oss://test-bucket/path/to/dir/";
+        let backend = ObjectStorage::new(Scheme::OSS);
+
+        let file_head_result = backend
+            .head(build_head_request(file_url, build_oss_info()))
+            .await;
+        assert!(file_head_result.is_err());
+        assert!(matches!(
+            file_head_result.unwrap_err(),
+            Error::BackendError(..)
+        ));
+
+        let dir_head_result = backend
+            .head(build_head_request(dir_url, build_oss_info()))
+            .await;
+        assert!(dir_head_result.is_err());
+        assert!(matches!(
+            dir_head_result.unwrap_err(),
+            Error::BackendError(..)
+        ));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn should_get_oss_get_response() {
+        let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
+        let server = wiremock::MockServer::builder()
+            .listener(listener)
+            .start()
+            .await;
+
+        // Mock the response.
+        Mock::given(method("HEAD"))
+            .and(path("/test.txt"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Server", "AliyunOSS")
+                    .insert_header("Content-Type", "text/plain")
+                    .insert_header("Content-Length", "24")
+                    .insert_header("Connection", "keep-alive")
+                    .insert_header("Accept-Ranges", "bytes")
+                    .insert_header("Last-Modified", "Sun, 07 Jul 2024 04:12:50 GMT")
+                    .insert_header("x-oss-hash-crc64ecma", "11089307625450993923")
+                    .insert_header("Content-MD5", "a9OkUn+nmTdHwZ/EuShY6A=="),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/test.txt"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Server", "AliyunOSS")
+                    .insert_header("Content-Type", "text/plain")
+                    .insert_header("Content-Length", "24")
+                    .insert_header("Connection", "keep-alive")
+                    .insert_header("Content-Range", "bytes 0-23/24")
+                    .insert_header("Accept-Ranges", "bytes")
+                    .insert_header("Last-Modified", "Sun, 07 Jul 2024 04:12:50 GMT")
+                    .insert_header("x-oss-hash-crc64ecma", "11089307625450993923")
+                    .insert_header("Content-MD5", "a9OkUn+nmTdHwZ/EuShY6A==")
+                    .set_body_string("Hello, world!\nVersion 2."),
+            )
+            .mount(&server)
+            .await;
+
+        let url = "oss://test-bucket/test.txt";
+
+        let object_storage = build_oss_info();
+        let backend = ObjectStorage::new(Scheme::OSS);
+        let mut get_response = backend
+            .get(build_get_request(url, None, object_storage))
+            .await
+            .unwrap();
+
+        assert!(get_response.success);
+        assert_eq!(
+            get_response.text().await.unwrap(),
+            "Hello, world!\nVersion 2.".to_string()
+        )
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn should_get_oss_get_response_with_range() {
+        let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
+        let server = wiremock::MockServer::builder()
+            .listener(listener)
+            .start()
+            .await;
+
+        // Mock the response.
+        Mock::given(method("GET"))
+            .and(path("/test.txt"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Server", "AliyunOSS")
+                    .insert_header("Content-Type", "text/plain")
+                    .insert_header("Content-Length", "6")
+                    .insert_header("Connection", "keep-alive")
+                    .insert_header("Content-Range", "bytes 1-6/24")
+                    .insert_header("Accept-Ranges", "bytes")
+                    .insert_header("Last-Modified", "Sun, 07 Jul 2024 04:12:50 GMT")
+                    .insert_header("x-oss-hash-crc64ecma", "11089307625450993923")
+                    .set_body_string("ello, "),
+            )
+            .mount(&server)
+            .await;
+
+        let url = "oss://test-bucket/test.txt";
+
+        let object_storage = build_oss_info();
+        let backend = ObjectStorage::new(Scheme::OSS);
+        let mut get_response = backend
+            .get(build_get_request(
+                url,
+                Some(Range {
+                    start: 1,
+                    length: 6,
+                }),
+                object_storage,
+            ))
+            .await
+            .unwrap();
+
+        assert!(get_response.success);
+        assert_eq!(get_response.text().await.unwrap(), "ello, ".to_string())
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn should_return_error_response_when_get_inexists() {
+        let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
+        let server = wiremock::MockServer::builder()
+            .listener(listener)
+            .start()
+            .await;
+
+        // Mock the response.
+        Mock::given(method("HEAD"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let url = "oss://test-bucket/test.txt";
+        let backend = ObjectStorage::new(Scheme::OSS);
+
+        let result = backend
+            .get(build_get_request(url, None, build_oss_info()))
+            .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn should_get_oss_head_response_of_file_with_non_ascii() {
+        let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
+        let server = wiremock::MockServer::builder()
+            .listener(listener)
+            .start()
+            .await;
+
+        // Mock the response.
+        Mock::given(method("HEAD"))
+            .and(path(
+                "/test_dir_non_recursive/%F0%9F%8E%89%E5%9B%BE%E7%89%87%F0%9F%8E%89.jpg",
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Server", "AliyunOSS")
+                    .insert_header("Content-Type", "image/jpeg")
+                    .insert_header("Content-Length", "30137")
+                    .insert_header("Connection", "keep-alive")
+                    .insert_header("Accept-Ranges", "bytes")
+                    .insert_header("Last-Modified", "Fri, 02 Aug 2024 07:01:37 GMT")
+                    .insert_header("x-oss-hash-crc64ecma", "9171375736106722013")
+                    .insert_header("Content-MD5", "8nHHAiFN3uTYSG0pH4fW7g=="),
+            )
+            .mount(&server)
+            .await;
+
+        let url = "oss://test-bucket/test_dir_non_recursive/🎉图片🎉.jpg";
+
+        let object_storage = build_oss_info();
+        let backend = ObjectStorage::new(Scheme::OSS);
+        let head_response = backend
+            .head(build_head_request(url, object_storage))
+            .await
+            .unwrap();
+
+        assert!(head_response.success);
+        assert_eq!(head_response.content_length, Some(30137));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn should_get_oss_get_response_of_file_with_non_ascii() {
+        let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
+        let server = wiremock::MockServer::builder()
+            .listener(listener)
+            .start()
+            .await;
+
+        // Mock the response.
+        Mock::given(method("HEAD"))
+            .and(path(
+                "/test_dir_non_recursive/%F0%9F%8E%89%E5%9B%BE%E7%89%87%F0%9F%8E%89.txt",
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Server", "AliyunOSS")
+                    .insert_header("Content-Type", "text/plain")
+                    .insert_header("Content-Length", "3")
+                    .insert_header("Connection", "keep-alive")
+                    .insert_header("Accept-Ranges", "bytes")
+                    .insert_header("Last-Modified", "Fri, 02 Aug 2024 07:01:37 GMT"),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(
+                "/test_dir_non_recursive/%F0%9F%8E%89%E5%9B%BE%E7%89%87%F0%9F%8E%89.txt",
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Server", "AliyunOSS")
+                    .insert_header("Content-Type", "text/plain")
+                    .insert_header("Content-Length", "3")
+                    .insert_header("Connection", "keep-alive")
+                    .insert_header("Content-Range", "bytes 0-23/24")
+                    .insert_header("Accept-Ranges", "bytes")
+                    .insert_header("Last-Modified", "Fri, 02 Aug 2024 07:01:37 GMT")
+                    .set_body_string("111"),
+            )
+            .mount(&server)
+            .await;
+        let url = "oss://test-bucket/test_dir_non_recursive/🎉图片🎉.txt";
+
+        let object_storage = build_oss_info();
+        let backend = ObjectStorage::new(Scheme::OSS);
+        let mut get_response = backend
+            .get(build_get_request(url, None, object_storage))
+            .await
+            .unwrap();
+
+        assert!(get_response.success);
+        assert_eq!(get_response.text().await.unwrap(), "111");
+    }
+
+    /// Returns the object storage info of oss for test.
+    fn build_oss_info() -> dragonfly_api::common::v2::ObjectStorage {
+        dragonfly_api::common::v2::ObjectStorage {
+            access_key_id: "test-access-key-id".into(),
+            access_key_secret: "test-access-key-secret".into(),
+            endpoint: Some("http://test-endpoint.local:8080".into()),
+            ..Default::default()
+        }
+    }
+
+    /// Returns the head request uesd for test.
+    fn build_head_request(
+        url: &str,
+        object_storage: dragonfly_api::common::v2::ObjectStorage,
+    ) -> HeadRequest {
+        HeadRequest {
+            task_id: "test-task".to_string(),
+            url: url.into(),
+            http_header: None,
+            timeout: Duration::from_secs(3),
+            client_certs: None,
+            object_storage: Some(object_storage),
+        }
+    }
+
+    /// Returns the get request uesd for test.
+    fn build_get_request(
+        url: &str,
+        range: Option<Range>,
+        object_storage: dragonfly_api::common::v2::ObjectStorage,
+    ) -> GetRequest {
+        GetRequest {
+            piece_id: "test-task".into(),
+            url: url.into(),
+            range,
+            http_header: None,
+            timeout: Duration::from_secs(3),
+            client_certs: None,
+            object_storage: Some(object_storage),
+        }
     }
 }
