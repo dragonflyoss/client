@@ -86,50 +86,20 @@ jobs:
           cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
           echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
 
-      - name: Build archive dfget
+      - name: Build archive client(TAR)
         shell: bash
         run: |
-          binary_name="dfget"
+          binary_name="client"
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
+          mkdir -p "$dirname"
+          mv "target/${{ matrix.target }}/release/dfget" "$dirname"
+          mv "target/${{ matrix.target }}/release/dfdaemon" "$dirname"
+          mv "target/${{ matrix.target }}/release/dfstore" "$dirname"
+          mv "target/${{ matrix.target }}/release/dfcache" "$dirname"
+          mv "target/${{ matrix.target }}/release/dfinit" "$dirname"
+          mv CONTRIBUTING.md LICENSE README.md "$dirname"
           tar -czf "$dirname.tar.gz" "$dirname"
-          echo "DFGET_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
-
-      - name: Build archive dfdaemon
-        shell: bash
-        run: |
-          binary_name="dfdaemon"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
-          tar -czf "$dirname.tar.gz" "$dirname"
-          echo "DFDAEMON_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
-
-      - name: Build archive dfstore
-        shell: bash
-        run: |
-          binary_name="dfstore"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
-          tar -czf "$dirname.tar.gz" "$dirname"
-          echo "DFSTORE_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
-
-      - name: Build archive dfcache
-        shell: bash
-        run: |
-          binary_name="dfcache"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
-          tar -czf "$dirname.tar.gz" "$dirname"
-          echo "DFCACHE_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
-
-      - name: Build archive dfinit
-        shell: bash
-        run: |
-          binary_name="dfinit"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
-          tar -czf "$dirname.tar.gz" "$dirname"
-          echo "DFINIT_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
+          echo "CLIENT_TAR_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -139,11 +109,7 @@ jobs:
           files: |
             ${{ env.CLIENT_RPM_ASSET }}
             ${{ env.CLIENT_DEB_ASSET }}            
-            ${{ env.DFGET_ASSET }}
-            ${{ env.DFDAEMON_ASSET }}
-            ${{ env.DFSTORE_ASSET }}
-            ${{ env.DFCACHE_ASSET }}
-            ${{ env.DFINIT_ASSET }}
+            ${{ env.CLIENT_TAR_ASSET }}
 
   publish-crates:
     runs-on: ubuntu-latest
