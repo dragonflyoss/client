@@ -336,16 +336,6 @@ impl SchedulerAnnouncer {
             // Initialize stream channel.
             let (in_stream_tx, in_stream_rx) = mpsc::channel(4096);
 
-            // Send the announce peers request.
-            in_stream_tx
-                .send_timeout(request, REQUEST_TIMEOUT)
-                .await
-                .map_err(|err| {
-                    error!("send AnnouncePeersRequest failed: {:?}", err);
-                    err
-                })?;
-            info!("sent AnnouncePeersRequest");
-
             // Initialize the stream.
             let in_stream = ReceiverStream::new(in_stream_rx);
             let request_stream = Request::new(in_stream);
@@ -354,6 +344,22 @@ impl SchedulerAnnouncer {
             self.scheduler_client
                 .announce_peers(task_id.as_str(), request_stream)
                 .await?;
+
+            // Send the announce peers request, in groups of 10.
+            for chunk in request.peers.chunks(10) {
+                in_stream_tx
+                    .send_timeout(
+                        AnnouncePeersRequest {
+                            peers: chunk.to_vec(),
+                        },
+                        REQUEST_TIMEOUT,
+                    )
+                    .await
+                    .map_err(|err| {
+                        error!("send AnnouncePeersRequest failed: {:?}", err);
+                        err
+                    })?;
+            }
         }
         Ok(())
     }
@@ -371,7 +377,7 @@ impl SchedulerAnnouncer {
         let mut peers = HashMap::new();
 
         for task in storage.get_tasks()? {
-            // If the task is expired or not finished, evict the task.
+            // If the task is expired or not finished, evict the task in scheduler.
             if task.is_expired(self.config.gc.policy.task_ttl) || !task.is_finished() {
                 scheduler_client
                     .delete_task(DeleteTaskRequest {
@@ -394,63 +400,25 @@ impl SchedulerAnnouncer {
                     offset: piece.offset,
                     length: piece.length,
                     digest: piece.digest,
-                    content: None,
-                    traffic_type: None,
-                    cost: None,
-                    created_at: None,
+                    ..Default::default()
                 });
             }
 
             // Construct a peer based on the task metadata from the local storage.
             let peer = Peer {
                 id: id_generator.peer_id(),
-                range: None,
-                priority: 0,
                 pieces,
-                cost: None,
-                state: "".to_string(),
                 task: Some(Task {
                     id: task.id.clone(),
-                    r#type: 0,
-                    url: "".to_string(),
-                    digest: None,
-                    tag: None,
-                    application: None,
-                    filtered_query_params: vec![],
-                    request_header: Default::default(),
                     piece_length: task.piece_length,
                     content_length: task.content_length.unwrap_or(0),
-                    piece_count: 0,
-                    size_scope: 0,
-                    pieces: vec![],
-                    state: "".to_string(),
-                    peer_count: 0,
-                    has_available_peer: false,
-                    created_at: None,
-                    updated_at: None,
+                    ..Default::default()
                 }),
                 host: Some(Host {
                     id: self.host_id.to_string(),
-                    r#type: 0,
-                    hostname: "".to_string(),
-                    ip: "".to_string(),
-                    port: 0,
-                    download_port: 0,
-                    os: "".to_string(),
-                    platform: "".to_string(),
-                    platform_family: "".to_string(),
-                    platform_version: "".to_string(),
-                    kernel_version: "".to_string(),
-                    cpu: None,
-                    memory: None,
-                    network: None,
-                    disk: None,
-                    build: None,
-                    scheduler_cluster_id: 0,
+                    ..Default::default()
                 }),
-                need_back_to_source: false,
-                created_at: None,
-                updated_at: None,
+                ..Default::default()
             };
 
             // Get the scheduler address from the hash ring.
