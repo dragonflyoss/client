@@ -91,6 +91,7 @@ jobs:
         run: |
           binary_name="client"
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          mkdir -p "$dirname"
           mv "target/${{ matrix.target }}/release/dfget" "$dirname"
           mv "target/${{ matrix.target }}/release/dfdaemon" "$dirname"
           mv "target/${{ matrix.target }}/release/dfstore" "$dirname"
