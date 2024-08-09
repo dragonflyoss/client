@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 use sysinfo::System;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
@@ -319,7 +319,9 @@ impl SchedulerAnnouncer {
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
     ) -> Result<()> {
+        // Announce peers with a maximum concurrency of 5.
         let mut join_set = JoinSet::new();
+        let semaphore = Arc::new(Semaphore::new(5));
 
         for request in self
             .make_announce_peers_request(
@@ -340,7 +342,11 @@ impl SchedulerAnnouncer {
                 scheduler_client: Arc<SchedulerClient>,
                 task_id: String,
                 request: AnnouncePeersRequest,
+                semaphore: Arc<Semaphore>,
             ) -> Result<()> {
+                // Limit the concurrent announcement count.
+                let _permit = semaphore.acquire().await.unwrap();
+
                 // Initialize stream channel.
                 let (in_stream_tx, in_stream_rx) = mpsc::channel(4096);
 
@@ -373,7 +379,13 @@ impl SchedulerAnnouncer {
             }
 
             join_set.spawn(
-                announce_peers(self.scheduler_client.clone(), task_id, request).in_current_span(),
+                announce_peers(
+                    self.scheduler_client.clone(),
+                    task_id,
+                    request,
+                    semaphore.clone(),
+                )
+                .in_current_span(),
             );
         }
 
@@ -383,8 +395,14 @@ impl SchedulerAnnouncer {
             .transpose()
             .or_err(ErrorType::AsyncRuntimeError)?
         {
-            if let Err(err) = message {
-                error!("failed to announce peers: {}", err);
+            match message {
+                Err(Error::SendTimeout) => {
+                    join_set.detach_all();
+                }
+                Err(err) => {
+                    error!("failed to announce peers: {}", err);
+                }
+                Ok(_) => {}
             }
         }
 
@@ -438,7 +456,7 @@ impl SchedulerAnnouncer {
                 task: Some(Task {
                     id: task.id.clone(),
                     piece_length: task.piece_length,
-                    content_length: task.content_length.unwrap_or(0),
+                    content_length: task.content_length.unwrap_or_default(),
                     ..Default::default()
                 }),
                 host: Some(Host {
