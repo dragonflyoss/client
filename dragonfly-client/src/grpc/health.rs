@@ -18,6 +18,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
+use hyper_util::rt::TokioIo;
 use std::path::PathBuf;
 use tokio::net::UnixStream;
 use tonic::transport::{Channel, Endpoint, Uri};
@@ -41,6 +42,10 @@ impl HealthClient {
         let channel = Channel::from_shared(addr.to_string())
             .map_err(|_| Error::InvalidURI(addr.into()))?
             .connect_timeout(super::CONNECT_TIMEOUT)
+            .timeout(super::REQUEST_TIMEOUT)
+            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+            .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+            .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
             .connect()
             .await
             .map_err(|err| {
@@ -61,7 +66,12 @@ impl HealthClient {
         let channel = Endpoint::try_from("http://[::]:50051")
             .unwrap()
             .connect_with_connector(service_fn(move |_: Uri| {
-                UnixStream::connect(socket_path.clone())
+                let socket_path = socket_path.clone();
+                async move {
+                    Ok::<_, std::io::Error>(TokioIo::new(
+                        UnixStream::connect(socket_path.clone()).await?,
+                    ))
+                }
             }))
             .await
             .map_err(|err| {

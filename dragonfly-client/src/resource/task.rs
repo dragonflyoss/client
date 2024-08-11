@@ -49,7 +49,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{
     mpsc::{self, Sender},
-    OwnedSemaphorePermit, Semaphore,
+    Semaphore,
 };
 use tokio::task::JoinSet;
 use tokio::time::sleep;
@@ -208,14 +208,6 @@ impl Task {
         // Get the content length from the task.
         let Some(content_length) = task.content_length() else {
             error!("content length not found");
-            download_progress_tx
-                .send_timeout(
-                    Err(Status::internal("content length not found")),
-                    REQUEST_TIMEOUT,
-                )
-                .await
-                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
             return Err(Error::InvalidContentLength);
         };
 
@@ -223,22 +215,11 @@ impl Task {
         let interested_pieces = match self.piece.calculate_interested(
             request.piece_length,
             content_length,
-            request.range.clone(),
+            request.range,
         ) {
             Ok(interested_pieces) => interested_pieces,
             Err(err) => {
                 error!("calculate interested pieces error: {:?}", err);
-                download_progress_tx
-                    .send_timeout(
-                        Err(Status::invalid_argument(format!(
-                            "calculate interested pieces error: {:?}",
-                            err
-                        ))),
-                        REQUEST_TIMEOUT,
-                    )
-                    .await
-                    .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
                 return Err(err);
             }
         };
@@ -279,7 +260,7 @@ impl Task {
                         download_task_response::Response::DownloadTaskStartedResponse(
                             dfdaemon::v2::DownloadTaskStartedResponse {
                                 content_length,
-                                range: request.range.clone(),
+                                range: request.range,
                                 response_header: task.response_header.clone(),
                                 pieces,
                             },
@@ -309,11 +290,6 @@ impl Task {
             Ok(finished_pieces) => finished_pieces,
             Err(err) => {
                 error!("download from local peer error: {:?}", err);
-                download_progress_tx
-                    .send_timeout(Err(Status::internal(err.to_string())), REQUEST_TIMEOUT)
-                    .await
-                    .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
                 return Err(err);
             }
         };
@@ -360,14 +336,6 @@ impl Task {
                         "download back-to-source is disabled, download with scheduler error: {:?}",
                         err
                     );
-                    download_progress_tx
-                        .send_timeout(
-                            Err(Status::internal("download back-to-source is disabled")),
-                            REQUEST_TIMEOUT,
-                        )
-                        .await
-                        .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
                     return Err(Error::Unknown("download failed".to_string()));
                 };
 
@@ -384,17 +352,6 @@ impl Task {
                     .await
                 {
                     error!("download from source error: {:?}", err);
-                    download_progress_tx
-                        .send_timeout(
-                            Err(Status::internal(format!(
-                                "download from source error: {}",
-                                err
-                            ))),
-                            REQUEST_TIMEOUT,
-                        )
-                        .await
-                        .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
                     return Err(err);
                 }
 
@@ -424,14 +381,6 @@ impl Task {
         // If disable back-to-source is true, return an error directly.
         if request.disable_back_to_source {
             error!("download back-to-source is disabled");
-            download_progress_tx
-                .send_timeout(
-                    Err(Status::internal("download back-to-source is disabled")),
-                    REQUEST_TIMEOUT,
-                )
-                .await
-                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
             return Err(Error::Unknown("download failed".to_string()));
         };
 
@@ -448,17 +397,6 @@ impl Task {
             .await
         {
             error!("download from source error: {:?}", err);
-            download_progress_tx
-                .send_timeout(
-                    Err(Status::internal(format!(
-                        "download from source error: {}",
-                        err
-                    ))),
-                    REQUEST_TIMEOUT,
-                )
-                .await
-                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
-
             return Err(err);
         }
 
@@ -943,10 +881,13 @@ impl Task {
                 parent: piece_collector::CollectedParent,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
-                _permit: OwnedSemaphorePermit,
+                semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnouncePeerRequest>,
             ) -> ClientResult<metadata::Piece> {
+                // Limit the concurrent piece count.
+                let _permit = semaphore.acquire().await.unwrap();
+
                 info!(
                     "start to download piece {} from remote peer {:?}",
                     storage.piece_id(task_id.as_str(), number),
@@ -1007,7 +948,11 @@ impl Task {
                     )
                     .await
                     .map_err(|err| {
-                        error!("send DownloadPieceFinishedRequest failed: {:?}", err);
+                        error!(
+                            "send DownloadPieceFinishedRequest for piece {} failed: {:?}",
+                            storage.piece_id(task_id.as_str(), number),
+                            err
+                        );
                         err
                     })?;
 
@@ -1030,7 +975,11 @@ impl Task {
                     )
                     .await
                     .map_err(|err| {
-                        error!("send DownloadPieceFinishedResponse failed: {:?}", err);
+                        error!(
+                            "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                            storage.piece_id(task_id.as_str(), number),
+                            err
+                        );
                         err
                     })?;
 
@@ -1043,7 +992,6 @@ impl Task {
                 Ok(metadata)
             }
 
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 download_from_remote_peer(
                     task.id.clone(),
@@ -1054,7 +1002,7 @@ impl Task {
                     collect_piece.parent.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
-                    permit,
+                    semaphore.clone(),
                     download_progress_tx.clone(),
                     in_stream_tx.clone(),
                 )
@@ -1078,12 +1026,7 @@ impl Task {
                     finished_pieces.push(metadata.clone());
                 }
                 Err(Error::DownloadFromRemotePeerFailed(err)) => {
-                    error!(
-                        "download piece {} from remote peer {} error: {:?}",
-                        self.storage.piece_id(task.id.as_str(), err.piece_number),
-                        err.parent_id,
-                        err
-                    );
+                    let (piece_number, parent_id) = (err.piece_number, err.parent_id);
 
                     // Send the download piece failed request.
                     in_stream_tx
@@ -1096,7 +1039,7 @@ impl Task {
                                     announce_peer_request::Request::DownloadPieceFailedRequest(
                                         DownloadPieceFailedRequest {
                                             piece_number: Some(err.piece_number),
-                                            parent_id: err.parent_id,
+                                            parent_id,
                                             temporary: true,
                                         },
                                     ),
@@ -1106,17 +1049,35 @@ impl Task {
                         )
                         .await
                         .unwrap_or_else(|err| {
-                            error!("send DownloadPieceFailedRequest failed: {:?}", err)
+                            error!(
+                                "send DownloadPieceFailedRequest for piece {} failed: {:?}",
+                                self.storage.piece_id(task.id.as_str(), piece_number),
+                                err
+                            )
                         });
 
+                    // If the download failed from the remote peer, continue to download the next
+                    // piece and ignore the error.
                     continue;
+                }
+                Err(Error::SendTimeout) => {
+                    join_set.detach_all();
+
+                    // If the send timeout with scheduler or download progress, return the finished pieces.
+                    // It will stop the download from the remote peer with scheduler
+                    // and download from the source directly from middle.
+                    return Ok(finished_pieces);
                 }
                 Err(err) => {
                     error!("download from remote peer error: {:?}", err);
+
+                    // If the unknown error occurred, continue to download the next piece and
+                    // ignore the error.
                     continue;
                 }
             }
         }
+
         Ok(finished_pieces)
     }
 
@@ -1157,11 +1118,14 @@ impl Task {
                 request_header: HeaderMap,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
-                _permit: OwnedSemaphorePermit,
+                semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnouncePeerRequest>,
                 object_storage: Option<ObjectStorage>,
             ) -> ClientResult<metadata::Piece> {
+                // Limit the concurrent download count.
+                let _permit = semaphore.acquire().await.unwrap();
+
                 info!(
                     "start to download piece {} from source",
                     storage.piece_id(task_id.as_str(), number)
@@ -1192,28 +1156,6 @@ impl Task {
                     created_at: Some(prost_wkt_types::Timestamp::from(metadata.created_at)),
                 };
 
-                // Send the download piece finished request.
-                in_stream_tx
-                        .send_timeout(
-                            AnnouncePeerRequest {
-                                host_id: host_id.to_string(),
-                                task_id: task_id.clone(),
-                                peer_id: peer_id.to_string(),
-                                request: Some(
-                                    announce_peer_request::Request::DownloadPieceBackToSourceFinishedRequest(
-                                        DownloadPieceBackToSourceFinishedRequest {
-                                            piece: Some(piece.clone()),
-                                        },
-                                    ),
-                                ),
-                            },
-                            REQUEST_TIMEOUT,
-                        )
-                        .await.map_err(|err| {
-                            error!("send DownloadPieceBackToSourceFinishedRequest failed: {:?}", err);
-                            err
-                        })?;
-
                 // Send the download progress.
                 download_progress_tx
                     .send_timeout(
@@ -1233,9 +1175,35 @@ impl Task {
                     )
                     .await
                     .map_err(|err| {
-                        error!("send DownloadPieceFinishedResponse failed: {:?}", err);
+                        error!(
+                            "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                            storage.piece_id(task_id.as_str(), number),
+                            err
+                        );
                         err
                     })?;
+
+                // Send the download piece finished request.
+                in_stream_tx
+                        .send_timeout(
+                            AnnouncePeerRequest {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.clone(),
+                                peer_id: peer_id.to_string(),
+                                request: Some(
+                                    announce_peer_request::Request::DownloadPieceBackToSourceFinishedRequest(
+                                        DownloadPieceBackToSourceFinishedRequest {
+                                            piece: Some(piece.clone()),
+                                        },
+                                    ),
+                                ),
+                            },
+                            REQUEST_TIMEOUT,
+                        )
+                        .await.map_err(|err| {
+                            error!("send DownloadPieceBackToSourceFinishedRequest for piece {} failed: {:?}", storage.piece_id(task_id.as_str(), number), err);
+                            err
+                        })?;
 
                 info!(
                     "finished piece {} from source",
@@ -1245,7 +1213,6 @@ impl Task {
                 Ok(metadata)
             }
 
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 download_from_source(
                     task.id.clone(),
@@ -1258,7 +1225,7 @@ impl Task {
                     request_header.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
-                    permit,
+                    semaphore.clone(),
                     download_progress_tx.clone(),
                     in_stream_tx.clone(),
                     request.object_storage.clone(),
@@ -1280,6 +1247,8 @@ impl Task {
                     finished_pieces.push(metadata.clone());
                 }
                 Err(Error::BackendError(err)) => {
+                    join_set.detach_all();
+
                     // Send the download piece http failed request.
                     in_stream_tx.send_timeout(AnnouncePeerRequest {
                                     host_id: host_id.to_string(),
@@ -1301,10 +1270,14 @@ impl Task {
                                 .await
                                 .unwrap_or_else(|err| error!("send DownloadPieceBackToSourceFailedRequest error: {:?}", err));
 
-                    join_set.abort_all();
+                    // If the backend error with source, return the error.
+                    // It will stop the download from the source with scheduler
+                    // and download from the source directly from beginning.
                     return Err(Error::BackendError(err));
                 }
-                Err(err) => {
+                Err(Error::SendTimeout) => {
+                    join_set.detach_all();
+
                     // Send the download piece failed request.
                     in_stream_tx.send_timeout(AnnouncePeerRequest {
                                     host_id: host_id.to_string(),
@@ -1320,6 +1293,32 @@ impl Task {
                                 .await
                                 .unwrap_or_else(|err| error!("send DownloadPieceBackToSourceFailedRequest error: {:?}", err));
 
+                    // If the send timeout with scheduler or download progress, return
+                    // the finished pieces. It will stop the download from the source with
+                    // scheduler and download from the source directly from middle.
+                    return Ok(finished_pieces);
+                }
+                Err(err) => {
+                    join_set.detach_all();
+
+                    // Send the download piece failed request.
+                    in_stream_tx.send_timeout(AnnouncePeerRequest {
+                                    host_id: host_id.to_string(),
+                                    task_id: task.id,
+                                    peer_id: peer_id.to_string(),
+                                    request: Some(announce_peer_request::Request::DownloadPieceBackToSourceFailedRequest(
+                                            DownloadPieceBackToSourceFailedRequest{
+                                                piece_number: None,
+                                                response: None,
+                                            }
+                                    )),
+                                }, REQUEST_TIMEOUT)
+                                .await
+                                .unwrap_or_else(|err| error!("send DownloadPieceBackToSourceFailedRequest error: {:?}", err));
+
+                    // If the unknown error, return the error.
+                    // It will stop the download from the source with scheduler
+                    // and download from the source directly from beginning.
                     return Err(err);
                 }
             }
@@ -1405,7 +1404,11 @@ impl Task {
                 )
                 .await
                 .map_err(|err| {
-                    error!("send DownloadPieceFinishedResponse failed: {:?}", err);
+                    error!(
+                        "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                        self.storage.piece_id(task.id.as_str(), piece.number),
+                        err
+                    );
                     err
                 })?;
 
@@ -1440,6 +1443,7 @@ impl Task {
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.concurrent_piece_count as usize,
         ));
+
         for interested_piece in &interested_pieces {
             async fn download_from_source(
                 task_id: String,
@@ -1452,10 +1456,13 @@ impl Task {
                 request_header: HeaderMap,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
-                _permit: OwnedSemaphorePermit,
+                semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 object_storage: Option<ObjectStorage>,
             ) -> ClientResult<metadata::Piece> {
+                // Limit the concurrent download count.
+                let _permit = semaphore.acquire().await.unwrap();
+
                 info!(
                     "start to download piece {} from source",
                     storage.piece_id(task_id.as_str(), number)
@@ -1505,7 +1512,11 @@ impl Task {
                     )
                     .await
                     .map_err(|err| {
-                        error!("send DownloadPieceFinishedResponse failed: {:?}", err);
+                        error!(
+                            "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                            storage.piece_id(task_id.as_str(), metadata.number),
+                            err
+                        );
                         err
                     })?;
 
@@ -1517,7 +1528,6 @@ impl Task {
                 Ok(metadata)
             }
 
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 download_from_source(
                     task.id.clone(),
@@ -1530,7 +1540,7 @@ impl Task {
                     request_header.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
-                    permit,
+                    semaphore.clone(),
                     download_progress_tx.clone(),
                     request.object_storage.clone(),
                 )
@@ -1551,7 +1561,10 @@ impl Task {
                     finished_pieces.push(metadata.clone());
                 }
                 Err(err) => {
-                    join_set.abort_all();
+                    join_set.detach_all();
+
+                    // If the download failed from the source, return the error.
+                    // It will stop the download from the source.
                     return Err(err);
                 }
             }
@@ -1587,18 +1600,16 @@ impl Task {
 
     // Delete a task and reclaim local storage.
     pub async fn delete(&self, task_id: &str) -> ClientResult<()> {
-        let task_result = self.storage.get_task(task_id).map_err(|err| {
+        let task = self.storage.get_task(task_id).map_err(|err| {
             error!("get task {} from local storage error: {:?}", task_id, err);
             err
         })?;
 
-        match task_result {
+        match task {
             Some(task) => {
                 // Check current task is valid to be deleted.
-                if !task.is_finished() && task.is_uploading() {
-                    return Err(Error::InvalidState(
-                        "current task is not finished or uploading".to_string(),
-                    ));
+                if task.is_uploading() {
+                    return Err(Error::InvalidState("current task is uploading".to_string()));
                 }
 
                 self.storage.delete_task(task.id.as_str()).await;

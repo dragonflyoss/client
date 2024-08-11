@@ -20,6 +20,7 @@ use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::digest::{Algorithm, Digest};
 use reqwest::header::HeaderMap;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
@@ -47,8 +48,8 @@ pub struct Storage {
 // Storage implements the storage.
 impl Storage {
     // new returns a new storage.
-    pub async fn new(config: Arc<Config>, dir: &Path) -> Result<Self> {
-        let metadata = metadata::Metadata::new(config.clone(), dir)?;
+    pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf) -> Result<Self> {
+        let metadata = metadata::Metadata::new(config.clone(), dir, &log_dir)?;
         let content = content::Content::new(config.clone(), dir).await?;
         Ok(Storage {
             config,
@@ -157,7 +158,7 @@ impl Storage {
         expected_digest: &str,
     ) -> Result<metadata::CacheTask> {
         let response = self.content.write_cache_task(id, path).await?;
-        let digest = Digest::new(Algorithm::Blake3, response.hash);
+        let digest = Digest::new(Algorithm::Crc32, response.hash);
         if expected_digest != digest.to_string() {
             return Err(Error::DigestMismatch(
                 expected_digest.to_string(),
@@ -251,7 +252,7 @@ impl Storage {
         reader: &mut R,
     ) -> Result<metadata::Piece> {
         let response = self.content.write_piece(task_id, offset, reader).await?;
-        let digest = Digest::new(Algorithm::Blake3, response.hash);
+        let digest = Digest::new(Algorithm::Crc32, response.hash);
 
         self.metadata.download_piece_finished(
             task_id,
@@ -275,7 +276,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self.content.write_piece(task_id, offset, reader).await?;
         let length = response.length;
-        let digest = Digest::new(Algorithm::Blake3, response.hash);
+        let digest = Digest::new(Algorithm::Crc32, response.hash);
 
         // Check the digest of the piece.
         if expected_digest != digest.to_string() {
@@ -322,8 +323,8 @@ impl Storage {
         }
 
         // Get the piece metadata and return the content of the piece.
-        match self.metadata.get_piece(task_id, number)? {
-            Some(piece) => {
+        match self.metadata.get_piece(task_id, number) {
+            Ok(Some(piece)) => {
                 match self
                     .content
                     .read_piece(task_id, piece.offset, piece.length, range)
@@ -347,13 +348,21 @@ impl Storage {
                     }
                 }
             }
-            None => {
+            Ok(None) => {
                 // Failed uploading the task.
                 self.metadata.upload_task_failed(task_id)?;
 
                 // Failed uploading the piece.
                 self.metadata.upload_piece_failed(task_id, number)?;
                 Err(Error::PieceNotFound(self.piece_id(task_id, number)))
+            }
+            Err(err) => {
+                // Failed uploading the task.
+                self.metadata.upload_task_failed(task_id)?;
+
+                // Failed uploading the piece.
+                self.metadata.upload_piece_failed(task_id, number)?;
+                Err(err)
             }
         }
     }

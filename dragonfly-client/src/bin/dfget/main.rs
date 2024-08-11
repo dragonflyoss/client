@@ -36,7 +36,7 @@ use std::time::Duration;
 use std::{cmp::min, fmt::Write};
 use termion::{color, style};
 use tokio::fs;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::{error, info, warn, Level};
 use url::Url;
@@ -253,7 +253,7 @@ async fn main() -> anyhow::Result<()> {
     // Initialize tracing.
     let _guards = init_tracing(
         dfget::NAME,
-        &args.log_dir,
+        args.log_dir.clone(),
         args.log_level,
         args.log_max_files,
         None,
@@ -261,8 +261,89 @@ async fn main() -> anyhow::Result<()> {
         args.verbose,
     );
 
+    // Validate command line arguments.
+    if let Err(err) = validate_args(&args) {
+        eprintln!(
+            "{}{}{}Validating Failed!{}",
+            color::Fg(color::Red),
+            style::Italic,
+            style::Bold,
+            style::Reset
+        );
+
+        eprintln!(
+            "{}{}{}****************************************{}",
+            color::Fg(color::Black),
+            style::Italic,
+            style::Bold,
+            style::Reset
+        );
+
+        eprintln!(
+            "{}{}{}Message:{} {}",
+            color::Fg(color::Cyan),
+            style::Italic,
+            style::Bold,
+            style::Reset,
+            err,
+        );
+
+        eprintln!(
+            "{}{}{}****************************************{}",
+            color::Fg(color::Black),
+            style::Italic,
+            style::Bold,
+            style::Reset
+        );
+
+        std::process::exit(1);
+    }
+
+    // Get dfdaemon download client.
+    let dfdaemon_download_client =
+        match get_dfdaemon_download_client(args.endpoint.to_path_buf()).await {
+            Ok(client) => client,
+            Err(err) => {
+                eprintln!(
+                    "{}{}{}Connect Dfdaemon Failed!{}",
+                    color::Fg(color::Red),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
+
+                eprintln!(
+                    "{}{}{}****************************************{}",
+                    color::Fg(color::Black),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
+
+                eprintln!(
+                    "{}{}{}Message:{}, can not connect {}, please check the unix socket.{}",
+                    color::Fg(color::Cyan),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset,
+                    err,
+                    args.endpoint.to_string_lossy(),
+                );
+
+                eprintln!(
+                    "{}{}{}****************************************{}",
+                    color::Fg(color::Black),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
+
+                std::process::exit(1);
+            }
+        };
+
     // Run dfget command.
-    if let Err(err) = run(args).await {
+    if let Err(err) = run(args, dfdaemon_download_client).await {
         match err {
             Error::TonicStatus(status) => {
                 let details = status.details();
@@ -468,14 +549,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 // run runs the dfget command.
-async fn run(mut args: Args) -> Result<()> {
-    let dfdaemon_download_client = get_dfdaemon_download_client(args.endpoint.to_path_buf())
-        .await
-        .map_err(|err| {
-            error!("initialize dfdaemon download client failed: {}", err);
-            err
-        })?;
-
+async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
     // Get the absolute path of the output file.
     args.output = Path::new(&args.output).absolutize()?.into();
     info!("download file to: {}", args.output.to_string_lossy());
@@ -557,17 +631,18 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
                 args: Args,
                 progress_bar: ProgressBar,
                 download_client: DfdaemonDownloadClient,
-                _permit: OwnedSemaphorePermit,
+                semaphore: Arc<Semaphore>,
             ) -> Result<()> {
+                // Limit the concurrent download tasks.
+                let _permit = semaphore.acquire().await.unwrap();
                 download(args, progress_bar, download_client).await
             }
 
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(download_entry(
                 entry_args,
                 progress_bar,
                 download_client.clone(),
-                permit,
+                semaphore.clone(),
             ));
         }
     }
@@ -687,7 +762,7 @@ async fn download(
         }
     }
 
-    progress_bar.finish_with_message(format!("{} downloaded", download_path));
+    progress_bar.finish();
     Ok(())
 }
 
@@ -738,7 +813,7 @@ fn make_output_by_entry(url: Url, output: &Path, entry: DirEntry) -> Result<Path
     let entry_url: Url = entry.url.parse().or_err(ErrorType::ParseError)?;
     let decoded_entry_url = percent_decode_str(entry_url.path()).decode_utf8_lossy();
     Ok(decoded_entry_url
-        .replace(root_dir.as_str(), output_root_dir.as_str())
+        .replacen(root_dir.as_str(), output_root_dir.as_str(), 1)
         .into())
 }
 
@@ -751,4 +826,46 @@ async fn get_dfdaemon_download_client(endpoint: PathBuf) -> Result<DfdaemonDownl
     // Get dfdaemon download client.
     let dfdaemon_download_client = DfdaemonDownloadClient::new_unix(endpoint).await?;
     Ok(dfdaemon_download_client)
+}
+
+// validate_args validates the command line arguments.
+fn validate_args(args: &Args) -> Result<()> {
+    // If the URL is a directory, the output path should be a directory.
+    if args.url.path().ends_with('/') && !args.output.is_dir() {
+        return Err(Error::ValidationError(format!(
+            "output path {} is not a directory",
+            args.output.to_string_lossy()
+        )));
+    }
+
+    // If the URL is a file, the output path should be a file and the parent directory should
+    // exist.
+    if !args.url.path().ends_with('/') {
+        let absolute_path = Path::new(&args.output).absolutize()?;
+        match absolute_path.parent() {
+            Some(parent_path) => {
+                if !parent_path.is_dir() {
+                    return Err(Error::ValidationError(format!(
+                        "output path {} is not a directory",
+                        parent_path.to_string_lossy()
+                    )));
+                }
+            }
+            None => {
+                return Err(Error::ValidationError(format!(
+                    "output path {} is not exist",
+                    args.output.to_string_lossy()
+                )));
+            }
+        }
+
+        if absolute_path.exists() {
+            return Err(Error::ValidationError(format!(
+                "output path {} is already exist",
+                args.output.to_string_lossy()
+            )));
+        }
+    }
+
+    Ok(())
 }

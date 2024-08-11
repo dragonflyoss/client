@@ -47,6 +47,7 @@ use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
+use tonic::codec::CompressionEncoding;
 use tonic::{
     transport::{Channel, Server},
     Code, Request, Response, Status,
@@ -85,6 +86,8 @@ impl DfdaemonUploadServer {
             task,
             cache_task,
         })
+        .send_compressed(CompressionEncoding::Zstd)
+        .accept_compressed(CompressionEncoding::Zstd)
         .max_decoding_message_size(usize::MAX)
         .max_encoding_message_size(usize::MAX);
 
@@ -121,7 +124,6 @@ impl DfdaemonUploadServer {
         Server::builder()
             .max_frame_size(super::MAX_FRAME_SIZE)
             .concurrency_limit_per_connection(super::CONCURRENCY_LIMIT_PER_CONNECTION)
-            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .add_service(reflection.clone())
             .add_service(health_service)
             .add_service(self.service.clone())
@@ -354,7 +356,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                 .as_str(),
                             download_clone.priority.to_string().as_str(),
                             task_clone.content_length().unwrap_or_default(),
-                            download_clone.range.clone(),
+                            download_clone.range,
                             start_time.elapsed(),
                         );
 
@@ -376,7 +378,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                 .hard_link_or_copy(
                                     task_clone,
                                     Path::new(output_path.as_str()),
-                                    download_clone.range.clone(),
+                                    download_clone.range,
                                 )
                                 .await
                             {
@@ -390,12 +392,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             };
                         }
                     }
-                    Err(err) => {
-                        // Download task failed.
-                        task_manager_clone
-                            .download_failed(task_clone.id.as_str())
-                            .await
-                            .unwrap_or_else(|err| error!("download task failed: {}", err));
+                    Err(ClientError::BackendError(err)) => {
+                        error!("download failed by error: {}", err);
 
                         // Collect download task failure metrics.
                         collect_download_task_failure_metrics(
@@ -409,7 +407,68 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             download_clone.priority.to_string().as_str(),
                         );
 
+                        task_manager_clone
+                            .download_failed(task_clone.id.as_str())
+                            .await
+                            .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+                        match serde_json::to_vec::<Backend>(&Backend {
+                            message: err.message.clone(),
+                            header: reqwest_headermap_to_hashmap(
+                                &err.header.clone().unwrap_or_default(),
+                            ),
+                            status_code: err.status_code.map(|code| code.as_u16() as i32),
+                        }) {
+                            Ok(json) => {
+                                out_stream_tx
+                                    .send(Err(Status::with_details(
+                                        Code::Internal,
+                                        err.to_string(),
+                                        json.into(),
+                                    )))
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        error!("send download progress error: {:?}", err)
+                                    });
+                            }
+                            Err(err) => {
+                                out_stream_tx
+                                    .send(Err(Status::internal(err.to_string())))
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        error!("send download progress error: {:?}", err)
+                                    });
+                                error!("serialize error: {}", err);
+                            }
+                        }
+                    }
+                    Err(err) => {
                         error!("download failed: {}", err);
+
+                        // Collect download task failure metrics.
+                        collect_download_task_failure_metrics(
+                            download_clone.r#type,
+                            download_clone.tag.clone().unwrap_or_default().as_str(),
+                            download_clone
+                                .application
+                                .clone()
+                                .unwrap_or_default()
+                                .as_str(),
+                            download_clone.priority.to_string().as_str(),
+                        );
+
+                        // Download task failed.
+                        task_manager_clone
+                            .download_failed(task_clone.id.as_str())
+                            .await
+                            .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+                        out_stream_tx
+                            .send(Err(Status::internal(err.to_string())))
+                            .await
+                            .unwrap_or_else(|err| {
+                                error!("send download progress error: {:?}", err)
+                            });
                     }
                 }
 
@@ -939,7 +998,9 @@ impl DfdaemonUploadClient {
     // new creates a new DfdaemonUploadClient.
     pub async fn new(addr: String) -> ClientResult<Self> {
         let channel = Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
+            .buffer_size(super::BUFFER_SIZE)
             .connect_timeout(super::CONNECT_TIMEOUT)
+            .timeout(super::REQUEST_TIMEOUT)
             .connect()
             .await
             .map_err(|err| {
@@ -948,6 +1009,8 @@ impl DfdaemonUploadClient {
             })
             .or_err(ErrorType::ConnectError)?;
         let client = DfdaemonUploadGRPCClient::new(channel)
+            .send_compressed(CompressionEncoding::Zstd)
+            .accept_compressed(CompressionEncoding::Zstd)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
@@ -1031,23 +1094,15 @@ impl DfdaemonUploadClient {
     // stat_cache_task stats the cache task.
     #[instrument(skip_all)]
     pub async fn stat_cache_task(&self, request: StatCacheTaskRequest) -> ClientResult<CacheTask> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::CONNECT_TIMEOUT);
-
+        let request = Self::make_request(request);
         let response = self.client.clone().stat_cache_task(request).await?;
         Ok(response.into_inner())
     }
 
     // delete_cache_task deletes the cache task.
     #[instrument(skip_all)]
-    pub async fn delete_cache_task(
-        &self,
-        request: DeleteCacheTaskRequest,
-        timeout: Duration,
-    ) -> ClientResult<()> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(timeout);
-
+    pub async fn delete_cache_task(&self, request: DeleteCacheTaskRequest) -> ClientResult<()> {
+        let request = Self::make_request(request);
         let _response = self.client.clone().delete_cache_task(request).await?;
         Ok(())
     }

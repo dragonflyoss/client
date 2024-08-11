@@ -22,6 +22,7 @@ use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info};
@@ -785,6 +786,11 @@ impl<E: StorageEngineOwned> Metadata<E> {
         let iter = self.db.prefix_iter::<Piece>(task_id.as_bytes())?;
         for ele in iter {
             let (key, _) = ele?;
+
+            info!(
+                "delete piece metadata {}",
+                std::str::from_utf8(&key).unwrap_or_default().to_string()
+            );
             self.db.delete::<Piece>(&key)?;
         }
 
@@ -800,9 +806,14 @@ impl<E: StorageEngineOwned> Metadata<E> {
 // Metadata implements the metadata of the storage engine.
 impl Metadata<RocksdbStorageEngine> {
     // new creates a new metadata instance.
-    pub fn new(config: Arc<Config>, dir: &Path) -> Result<Metadata<RocksdbStorageEngine>> {
+    pub fn new(
+        config: Arc<Config>,
+        dir: &Path,
+        log_dir: &PathBuf,
+    ) -> Result<Metadata<RocksdbStorageEngine>> {
         let db = RocksdbStorageEngine::open(
             dir,
+            log_dir,
             &[Task::NAMESPACE, Piece::NAMESPACE, CacheTask::NAMESPACE],
             config.storage.keep,
         )?;
@@ -820,7 +831,8 @@ mod tests {
     #[test]
     fn should_create_metadata_db() {
         let dir = TempDir::new("metadata_db").unwrap();
-        let metadata = Metadata::new(Arc::new(Config::default()), dir.path()).unwrap();
+        let log_dir = dir.path().join("log");
+        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
         assert!(metadata.get_tasks().unwrap().is_empty());
         assert!(metadata.get_pieces("task").unwrap().is_empty());
     }
@@ -828,7 +840,8 @@ mod tests {
     #[test]
     fn test_task_lifecycle() {
         let dir = TempDir::new("metadata_db").unwrap();
-        let metadata = Metadata::new(Arc::new(Config::default()), dir.path()).unwrap();
+        let log_dir = dir.path().join("log");
+        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
 
         let task_id = "task1";
 
@@ -906,7 +919,8 @@ mod tests {
     #[test]
     fn test_piece_lifecycle() {
         let dir = TempDir::new("metadata_db").unwrap();
-        let metadata = Metadata::new(Arc::new(Config::default()), dir.path()).unwrap();
+        let log_dir = dir.path().join("log");
+        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
         let task_id = "task3";
 
         // Test download_piece_started.

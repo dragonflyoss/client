@@ -10,20 +10,9 @@ on:
 jobs:
   push_client_image_to_registry:
     name: Push Client Image
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 480
     steps:
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
       - name: Check out code
         uses: actions/checkout@v4
         with:
@@ -80,7 +69,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: dragonfly-client/Dockerfile
+          file: ci/Dockerfile
           platforms: linux/amd64,linux/arm64
           labels: |-
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -102,20 +91,9 @@ jobs:
 
   push_dfinit_image_to_registry:
     name: Push Dfinit Image
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 480
     steps:
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
       - name: Check out code
         uses: actions/checkout@v4
         with:
@@ -172,7 +150,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: dragonfly-client-init/Dockerfile
+          file: ci/Dockerfile.dfinit
           platforms: linux/amd64,linux/arm64
           labels: |-
             org.opencontainers.image.source=https://github.com/${{ github.repository }}

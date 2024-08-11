@@ -21,7 +21,6 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::path::Path;
 use std::time::Duration;
 use termion::{color, style};
-use tracing::error;
 
 use super::*;
 
@@ -33,22 +32,57 @@ const DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL: Duration = Duration::from_milli
 pub struct RemoveCommand {
     #[arg(help = "Specify the cache task ID to remove")]
     id: String,
-
-    #[arg(
-        long = "timeout",
-        value_parser= humantime::parse_duration,
-        default_value = "30m",
-        help = "Specify the timeout for removing a file"
-    )]
-    timeout: Duration,
 }
 
 // Implement the execute for RemoveCommand.
 impl RemoveCommand {
     // execute executes the delete command.
     pub async fn execute(&self, endpoint: &Path) -> Result<()> {
+        // Get dfdaemon download client.
+        let dfdaemon_download_client =
+            match get_dfdaemon_download_client(endpoint.to_path_buf()).await {
+                Ok(client) => client,
+                Err(err) => {
+                    eprintln!(
+                        "{}{}{}Connect Dfdaemon Failed!{}",
+                        color::Fg(color::Red),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset
+                    );
+
+                    eprintln!(
+                        "{}{}{}****************************************{}",
+                        color::Fg(color::Black),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset
+                    );
+
+                    eprintln!(
+                        "{}{}{}Message:{}, can not connect {}, please check the unix socket.{}",
+                        color::Fg(color::Cyan),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset,
+                        err,
+                        endpoint.to_string_lossy(),
+                    );
+
+                    eprintln!(
+                        "{}{}{}****************************************{}",
+                        color::Fg(color::Black),
+                        style::Italic,
+                        style::Bold,
+                        style::Reset
+                    );
+
+                    std::process::exit(1);
+                }
+            };
+
         // Run delete sub command.
-        if let Err(err) = self.run(endpoint).await {
+        if let Err(err) = self.run(dfdaemon_download_client).await {
             match err {
                 Error::TonicStatus(status) => {
                     eprintln!(
@@ -145,14 +179,7 @@ impl RemoveCommand {
     }
 
     // run runs the delete command.
-    async fn run(&self, endpoint: &Path) -> Result<()> {
-        let dfdaemon_download_client = get_dfdaemon_download_client(endpoint.to_path_buf())
-            .await
-            .map_err(|err| {
-            error!("initialize dfdaemon download client failed: {}", err);
-            err
-        })?;
-
+    async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
         let pb = ProgressBar::new_spinner();
         pb.enable_steady_tick(DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL);
         pb.set_style(
@@ -163,12 +190,9 @@ impl RemoveCommand {
         pb.set_message("Removing...");
 
         dfdaemon_download_client
-            .delete_cache_task(
-                DeleteCacheTaskRequest {
-                    task_id: self.id.clone(),
-                },
-                self.timeout,
-            )
+            .delete_cache_task(DeleteCacheTaskRequest {
+                task_id: self.id.clone(),
+            })
             .await?;
 
         pb.finish_with_message("Done");

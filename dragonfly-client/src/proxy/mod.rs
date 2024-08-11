@@ -40,7 +40,7 @@ use dragonfly_client_util::{
     },
 };
 use futures_util::TryStreamExt;
-use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full, StreamBody};
+use http_body_util::{combinators::BoxBody, BodyExt, Empty, StreamBody};
 use hyper::body::Frame;
 use hyper::client::conn::http1::Builder;
 use hyper::server::conn::http1;
@@ -241,7 +241,7 @@ pub async fn handler(
         return https_handler(config, task, request, registry_certs, server_ca_cert).await;
     }
 
-    return http_handler(config, task, request, registry_certs).await;
+    http_handler(config, task, request, registry_certs).await
 }
 
 // registry_mirror_http_handler handles the http request for the registry mirror by client.
@@ -345,11 +345,7 @@ pub async fn https_handler(
 
         Ok(Response::new(empty()))
     } else {
-        return Ok(make_error_response(
-            http::StatusCode::BAD_REQUEST,
-            "CONNECT must be to a socket address",
-            None,
-        ));
+        return Ok(make_error_response(http::StatusCode::BAD_REQUEST, None));
     }
 }
 
@@ -428,9 +424,12 @@ pub async fn upgraded_handler(
     Span::current().record("uri", request.uri().to_string().as_str());
     Span::current().record("method", request.method().as_str());
 
-    *request.uri_mut() = format!("https://{}{}", host, request.uri())
-        .parse()
-        .or_err(ErrorType::ParseError)?;
+    // If the scheme is not set, set the scheme to https.
+    if request.uri().scheme().is_none() {
+        *request.uri_mut() = format!("https://{}{}", host, request.uri())
+            .parse()
+            .or_err(ErrorType::ParseError)?;
+    }
 
     // If find the matching rule, proxy the request via the dfdaemon.
     let request_uri = request.uri();
@@ -478,7 +477,6 @@ async fn proxy_by_dfdaemon(
                 error!("create dfdaemon download client failed: {}", err);
                 return Ok(make_error_response(
                     http::StatusCode::INTERNAL_SERVER_ERROR,
-                    err.to_string().as_str(),
                     None,
                 ));
             }
@@ -491,7 +489,6 @@ async fn proxy_by_dfdaemon(
             error!("make download task request failed: {}", err);
             return Ok(make_error_response(
                 http::StatusCode::INTERNAL_SERVER_ERROR,
-                err.to_string().as_str(),
                 None,
             ));
         }
@@ -513,15 +510,13 @@ async fn proxy_by_dfdaemon(
                                 backend.status_code.unwrap_or_default() as u16
                             )
                             .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
-                            "download task failed",
                             Some(hashmap_to_hyper_header_map(&backend.header)?),
                         ));
                     }
-                    Err(err) => {
-                        error!("download task failed by tonic status: {}", err.to_string());
+                    Err(_) => {
+                        error!("download task failed: {}", err);
                         return Ok(make_error_response(
                             http::StatusCode::INTERNAL_SERVER_ERROR,
-                            err.to_string().as_str(),
                             None,
                         ));
                     }
@@ -531,7 +526,6 @@ async fn proxy_by_dfdaemon(
                 error!("download task failed: {}", err);
                 return Ok(make_error_response(
                     http::StatusCode::INTERNAL_SERVER_ERROR,
-                    err.to_string().as_str(),
                     None,
                 ));
             }
@@ -544,7 +538,6 @@ async fn proxy_by_dfdaemon(
         error!("response message failed");
         return Ok(make_error_response(
             http::StatusCode::INTERNAL_SERVER_ERROR,
-            "response message failed",
             None,
         ));
     };
@@ -557,13 +550,15 @@ async fn proxy_by_dfdaemon(
         error!("response is not started");
         return Ok(make_error_response(
             http::StatusCode::INTERNAL_SERVER_ERROR,
-            "response is not started",
             None,
         ));
     };
 
     // Write the task data to the reader.
     let (reader, mut writer) = tokio::io::duplex(1024);
+
+    // Write the status code to the writer.
+    let (sender, mut receiver) = mpsc::channel(4096);
 
     // Construct the response body.
     let reader_stream = ReaderStream::new(reader);
@@ -577,6 +572,9 @@ async fn proxy_by_dfdaemon(
 
     // Get the read buffer size from the config.
     let read_buffer_size = config.proxy.read_buffer_size;
+
+    // Return the response if the client return the first piece.
+    let mut initialized = false;
 
     // Write task data to pipe. If grpc received error message,
     // shutdown the writer.
@@ -598,76 +596,141 @@ async fn proxy_by_dfdaemon(
         // Read piece data from stream and write to pipe. If the piece data is
         // not in order, store it in the hashmap, and write it to the pipe
         // when the previous piece data is written.
-        while let Ok(Some(message)) = out_stream.message().await {
-            if let Some(download_task_response::Response::DownloadPieceFinishedResponse(response)) =
-                message.response
-            {
-                let Some(piece) = response.piece else {
-                    error!("response piece is empty");
-                    if let Err(err) = writer.shutdown().await {
-                        error!("writer shutdown error: {}", err);
+        loop {
+            match out_stream.message().await {
+                Ok(Some(message)) => {
+                    if let Some(download_task_response::Response::DownloadPieceFinishedResponse(
+                        download_task_response,
+                    )) = message.response
+                    {
+                        // Send the none response to the client, if the first piece is received.
+                        if !initialized {
+                            info!("first piece received, send response");
+                            sender.send(None).await.unwrap_or_default();
+                            initialized = true;
+                        }
+
+                        let Some(piece) = download_task_response.piece else {
+                            error!("response piece is empty");
+                            writer.shutdown().await.unwrap_or_else(|err| {
+                                error!("writer shutdown error: {}", err);
+                            });
+
+                            return;
+                        };
+
+                        let piece_reader = match task
+                            .piece
+                            .download_from_local_peer_into_async_read(
+                                message.task_id.as_str(),
+                                piece.number,
+                                piece.length,
+                                download_task_started_response.range,
+                                true,
+                            )
+                            .await
+                        {
+                            Ok(piece_reader) => piece_reader,
+                            Err(err) => {
+                                error!("download piece reader error: {}", err);
+                                writer.shutdown().await.unwrap_or_else(|err| {
+                                    error!("writer shutdown error: {}", err);
+                                });
+
+                                return;
+                            }
+                        };
+
+                        // Use a buffer to read the piece.
+                        let piece_reader = BufReader::with_capacity(read_buffer_size, piece_reader);
+
+                        // Write the piece data to the pipe in order.
+                        finished_piece_readers.insert(piece.number, piece_reader);
+                        while let Some(piece_reader) =
+                            finished_piece_readers.get_mut(&need_piece_number)
+                        {
+                            info!("copy piece {} to stream", need_piece_number);
+                            if let Err(err) = tokio::io::copy(piece_reader, &mut writer).await {
+                                error!("download piece reader error: {}", err);
+                                writer.shutdown().await.unwrap_or_else(|err| {
+                                    error!("writer shutdown error: {}", err);
+                                });
+
+                                return;
+                            }
+
+                            need_piece_number += 1;
+                        }
+                    } else {
+                        error!("response unknown message");
+                        writer.shutdown().await.unwrap_or_else(|err| {
+                            error!("writer shutdown error: {}", err);
+                        });
+
+                        return;
+                    }
+                }
+                Ok(None) => {
+                    info!("message is none");
+                    if let Err(err) = writer.flush().await {
+                        error!("writer flush error: {}", err);
                     }
 
                     return;
-                };
-
-                let piece_reader = match task
-                    .piece
-                    .download_from_local_peer_into_async_read(
-                        message.task_id.as_str(),
-                        piece.number,
-                        piece.length,
-                        download_task_started_response.range.clone(),
-                        true,
-                    )
-                    .await
-                {
-                    Ok(piece_reader) => piece_reader,
-                    Err(err) => {
-                        error!("download piece reader error: {}", err);
-                        if let Err(err) = writer.shutdown().await {
-                            error!("writer shutdown error: {}", err);
-                        }
-
-                        return;
-                    }
-                };
-
-                // Use a buffer to read the piece.
-                let piece_reader = BufReader::with_capacity(read_buffer_size, piece_reader);
-
-                // Write the piece data to the pipe in order.
-                finished_piece_readers.insert(piece.number, piece_reader);
-                while let Some(piece_reader) = finished_piece_readers.get_mut(&need_piece_number) {
-                    info!("copy piece {} to stream", need_piece_number);
-                    if let Err(err) = tokio::io::copy(piece_reader, &mut writer).await {
-                        error!("download piece reader error: {}", err);
-                        if let Err(err) = writer.shutdown().await {
-                            error!("writer shutdown error: {}", err);
+                }
+                Err(err) => {
+                    if initialized {
+                        error!("stream error: {}", err);
+                        if let Err(err) = writer.flush().await {
+                            error!("writer flush error: {}", err);
                         }
 
                         return;
                     }
 
-                    need_piece_number += 1;
-                }
-            } else {
-                error!("response unknown message");
-                if let Err(err) = writer.shutdown().await {
-                    error!("writer shutdown error: {}", err);
-                }
+                    match serde_json::from_slice::<Backend>(err.details()) {
+                        Ok(backend) => {
+                            error!("download task failed: {:?}", backend);
+                            sender
+                                .send(Some(make_error_response(
+                                    http::StatusCode::from_u16(
+                                        backend.status_code.unwrap_or_default() as u16,
+                                    )
+                                    .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
+                                    Some(
+                                        hashmap_to_hyper_header_map(&backend.header)
+                                            .unwrap_or_default(),
+                                    ),
+                                )))
+                                .await
+                                .unwrap_or_default();
+                        }
+                        Err(_) => {
+                            error!("download task failed: {}", err);
+                            sender
+                                .send(Some(make_error_response(
+                                    http::StatusCode::INTERNAL_SERVER_ERROR,
+                                    None,
+                                )))
+                                .await
+                                .unwrap_or_default();
+                        }
+                    }
 
-                return;
-            }
-        }
-
-        info!("copy finished");
-        if let Err(err) = writer.flush().await {
-            error!("writer flush error: {}", err);
+                    return;
+                }
+            };
         }
     });
 
-    Ok(response)
+    match receiver.recv().await {
+        Some(Some(response)) => return Ok(response),
+        Some(None) => Ok(response),
+        None => Ok(make_error_response(
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            None,
+        )),
+    }
 }
 
 // proxy_http proxies the HTTP request directly to the remote server.
@@ -675,11 +738,7 @@ async fn proxy_by_dfdaemon(
 async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
     let Some(host) = request.uri().host() else {
         error!("CONNECT host is not socket addr: {:?}", request.uri());
-        return Ok(make_error_response(
-            http::StatusCode::BAD_REQUEST,
-            "CONNECT must be to a socket address",
-            None,
-        ));
+        return Ok(make_error_response(http::StatusCode::BAD_REQUEST, None));
     };
     let port = request.uri().port_u16().unwrap_or(80);
 
@@ -876,12 +935,8 @@ fn find_matching_rule(rules: Option<Vec<Rule>>, url: &str) -> Option<Rule> {
 
 // make_error_response makes an error response with the given status and message.
 #[instrument(skip_all)]
-fn make_error_response(
-    status: http::StatusCode,
-    message: &str,
-    header: Option<http::HeaderMap>,
-) -> Response {
-    let mut response = Response::new(full(message.as_bytes().to_vec()));
+fn make_error_response(status: http::StatusCode, header: Option<http::HeaderMap>) -> Response {
+    let mut response = Response::new(empty());
     *response.status_mut() = status;
     if let Some(header) = header {
         for (k, v) in header.iter() {
@@ -896,14 +951,6 @@ fn make_error_response(
 #[instrument(skip_all)]
 fn empty() -> BoxBody<Bytes, ClientError> {
     Empty::<Bytes>::new()
-        .map_err(|never| match never {})
-        .boxed()
-}
-
-// full returns a body with the given chunk.
-#[instrument(skip_all)]
-fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, ClientError> {
-    Full::new(chunk.into())
         .map_err(|never| match never {})
         .boxed()
 }

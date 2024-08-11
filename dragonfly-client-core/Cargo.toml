@@ -18,4 +18,4 @@ tokio-stream.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 opendal.workspace = true
-libloading = "0.8.4"
+libloading = "0.8.5"

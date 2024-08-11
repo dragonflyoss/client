@@ -188,6 +188,10 @@ pub enum DFError {
     // TokioJoinError is the error for tokio join.
     #[error(transparent)]
     TokioJoinError(tokio::task::JoinError),
+
+    // ValidationError is the error for validate.
+    #[error("validate failed: {0}")]
+    ValidationError(String),
 }
 
 // SendError is the error for send.
