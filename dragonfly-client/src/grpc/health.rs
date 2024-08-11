@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use dragonfly_client_core::{
+ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
