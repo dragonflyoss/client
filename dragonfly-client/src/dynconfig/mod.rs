@@ -26,6 +26,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{error, info};
+use mockall::automock;
 
 // Data is the dynamic configuration of the dfdaemon.
 #[derive(Default)]
@@ -62,6 +63,7 @@ pub struct Dynconfig {
 }
 
 // Dynconfig is the implementation of Dynconfig.
+#[automock]
 impl Dynconfig {
     // new creates a new Dynconfig.
     pub async fn new(
