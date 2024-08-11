@@ -122,4 +122,5 @@ impl HealthClient {
         request.set_timeout(super::REQUEST_TIMEOUT);
         request
     }
+    
 }
