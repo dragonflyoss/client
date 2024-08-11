@@ -1163,7 +1163,6 @@ dependencies = [
  "leaky-bucket",
  "libc",
  "mockall",
- "mockall_double",
  "openssl",
  "opentelemetry",
  "opentelemetry-jaeger",
@@ -2651,18 +2650,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "mockall_double"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1ca96e5ac35256ae3e13536edd39b172b88f41615e1d7b653c8ad24524113e8"
-dependencies = [
- "cfg-if",
- "proc-macro2",
- "quote",
- "syn 2.0.48",
 ]
 
 [[package]]
