@@ -184,7 +184,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 download.digest.as_deref(),
                 download.tag.as_deref(),
                 download.application.as_deref(),
-                download.piece_length,
                 download.filtered_query_params.clone(),
             )
             .map_err(|e| {
@@ -275,7 +274,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             return Err(Status::internal("missing content length in the response"));
         };
 
-        info!("content length: {}", content_length);
+        info!(
+            "content length {}, piece length {}",
+            content_length,
+            task.piece_length().unwrap_or_default()
+        );
 
         // Download's range priority is higher than the request header's range.
         // If download protocol is http, use the range of the request header.
@@ -828,6 +831,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 task
             }
         };
+        info!(
+            "content length {}, piece length {}",
+            task.content_length(),
+            task.piece_length()
+        );
 
         // Clone the cache task.
         let task_manager = self.cache_task.clone();

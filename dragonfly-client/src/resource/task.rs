@@ -114,9 +114,10 @@ impl Task {
         id: &str,
         request: Download,
     ) -> ClientResult<metadata::Task> {
-        let task = self
-            .storage
-            .download_task_started(id, request.piece_length, None, None)?;
+        let task = self.storage.download_task_started(id, None, None, None)?;
+        if task.content_length.is_some() && task.piece_length.is_some() {
+            return Ok(task);
+        }
 
         // Handle the request header.
         let mut request_header =
@@ -124,10 +125,6 @@ impl Task {
                 error!("convert header: {}", err);
                 err
             })?;
-
-        if task.content_length.is_some() {
-            return Ok(task);
-        }
 
         // Remove the range header to prevent the server from
         // returning a 206 partial content and returning
@@ -156,10 +153,20 @@ impl Task {
             }));
         }
 
+        let content_length = match response.content_length {
+            Some(content_length) => content_length,
+            None => return Err(Error::InvalidContentLength),
+        };
+
+        let piece_length = self.piece.calculate_piece_length(
+            piece::PieceLengthStrategy::OptimizeByFileLength,
+            content_length,
+        );
+
         self.storage.download_task_started(
             id,
-            request.piece_length,
-            response.content_length,
+            Some(piece_length),
+            Some(content_length),
             response.http_header,
         )
     }
@@ -171,8 +178,7 @@ impl Task {
 
     // download_failed updates the metadata of the task when the task downloads failed.
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
-        let _ = self.storage.download_task_failed(id).await?;
-        Ok(())
+        self.storage.download_task_failed(id).await.map(|_| ())
     }
 
     // prefetch_task_started updates the metadata of the task when the task prefetch started.
@@ -211,18 +217,24 @@ impl Task {
             return Err(Error::InvalidContentLength);
         };
 
-        // Calculate the interested pieces to download.
-        let interested_pieces = match self.piece.calculate_interested(
-            request.piece_length,
-            content_length,
-            request.range,
-        ) {
-            Ok(interested_pieces) => interested_pieces,
-            Err(err) => {
-                error!("calculate interested pieces error: {:?}", err);
-                return Err(err);
-            }
+        // Get the piece length from the task.
+        let Some(piece_length) = task.piece_length() else {
+            error!("piece length not found");
+            return Err(Error::InvalidPieceLength);
         };
+
+        // Calculate the interested pieces to download.
+        let interested_pieces =
+            match self
+                .piece
+                .calculate_interested(piece_length, content_length, request.range)
+            {
+                Ok(interested_pieces) => interested_pieces,
+                Err(err) => {
+                    error!("calculate interested pieces error: {:?}", err);
+                    return Err(err);
+                }
+            };
         info!(
             "interested pieces: {:?}",
             interested_pieces

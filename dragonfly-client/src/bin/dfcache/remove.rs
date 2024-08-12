@@ -60,7 +60,7 @@ impl RemoveCommand {
                     );
 
                     eprintln!(
-                        "{}{}{}Message:{}, can not connect {}, please check the unix socket.{}",
+                        "{}{}{}Message:{}, can not connect {}, please check the unix socket {}",
                         color::Fg(color::Cyan),
                         style::Italic,
                         style::Bold,

@@ -109,6 +109,24 @@ impl CacheTask {
         digest: &str,
         request: UploadCacheTaskRequest,
     ) -> ClientResult<CommonCacheTask> {
+        // Convert prost_wkt_types::Duration to std::time::Duration.
+        let ttl = Duration::try_from(request.ttl.ok_or(Error::UnexpectedResponse)?)
+            .or_err(ErrorType::ParseError)?;
+
+        // Get the content length of the file.
+        let content_length = std::fs::metadata(path)
+            .map_err(|err| {
+                error!("get file metadata error: {}", err);
+                err
+            })?
+            .len();
+
+        // Get the piece length of the file.
+        let piece_length = self.piece.calculate_piece_length(
+            piece::PieceLengthStrategy::OptimizeByFileLength,
+            content_length,
+        );
+
         // Notify the scheduler that the cache task is started.
         self.scheduler_client
             .upload_cache_task_started(UploadCacheTaskStartedRequest {
@@ -118,7 +136,7 @@ impl CacheTask {
                 persistent_replica_count: request.persistent_replica_count,
                 tag: request.tag.clone(),
                 application: request.application.clone(),
-                piece_length: request.piece_length,
+                piece_length,
                 ttl: request.ttl,
                 timeout: request.timeout,
             })
@@ -128,14 +146,10 @@ impl CacheTask {
                 err
             })?;
 
-        // Convert prost_wkt_types::Duration to std::time::Duration.
-        let ttl = Duration::try_from(request.ttl.ok_or(Error::UnexpectedResponse)?)
-            .or_err(ErrorType::ParseError)?;
-
         // Create the persistent cache task.
         match self
             .storage
-            .create_persistent_cache_task(task_id, ttl, path, request.piece_length, digest)
+            .create_persistent_cache_task(task_id, ttl, path, piece_length, content_length, digest)
             .await
         {
             Ok(metadata) => {
@@ -177,7 +191,7 @@ impl CacheTask {
                     digest: digest.to_string(),
                     tag: request.tag,
                     application: request.application,
-                    piece_length: request.piece_length,
+                    piece_length: metadata.piece_length,
                     content_length: metadata.content_length,
                     piece_count: response.piece_count,
                     state: response.state,
@@ -231,7 +245,7 @@ impl CacheTask {
             task_id,
             ttl,
             request.persistent,
-            request.piece_length,
+            response.piece_length,
             response.content_length,
         )
     }
@@ -270,7 +284,7 @@ impl CacheTask {
         let interested_pieces =
             match self
                 .piece
-                .calculate_interested(request.piece_length, task.content_length, None)
+                .calculate_interested(task.piece_length, task.content_length, None)
             {
                 Ok(interested_pieces) => interested_pieces,
                 Err(err) => {

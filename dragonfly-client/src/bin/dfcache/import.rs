@@ -16,9 +16,7 @@
 
 use clap::Parser;
 use dragonfly_api::dfdaemon::v2::UploadCacheTaskRequest;
-use dragonfly_client_config::{
-    default_piece_length, dfcache::default_dfcache_persistent_replica_count,
-};
+use dragonfly_client_config::dfcache::default_dfcache_persistent_replica_count;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -59,13 +57,6 @@ pub struct ImportCommand {
         help = "Different tags for the same file will be divided into different cache tasks"
     )]
     tag: Option<String>,
-
-    #[arg(
-        long = "piece-length",
-        default_value_t = default_piece_length(),
-        help = "Specify the byte length of the piece"
-    )]
-    piece_length: u64,
 
     #[arg(
         long = "ttl",
@@ -148,7 +139,7 @@ impl ImportCommand {
                     );
 
                     eprintln!(
-                        "{}{}{}Message:{}, can not connect {}, please check the unix socket.{}",
+                        "{}{}{}Message:{}, can not connect {}, please check the unix socket {}",
                         color::Fg(color::Cyan),
                         style::Italic,
                         style::Bold,
@@ -283,7 +274,6 @@ impl ImportCommand {
                 persistent_replica_count: self.persistent_replica_count,
                 tag: self.tag.clone(),
                 application: self.application.clone(),
-                piece_length: self.piece_length,
                 ttl: Some(
                     prost_wkt_types::Duration::try_from(self.ttl).or_err(ErrorType::ParseError)?,
                 ),

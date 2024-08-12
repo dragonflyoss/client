@@ -17,7 +17,6 @@
 use clap::Parser;
 use dragonfly_api::dfdaemon::v2::{download_cache_task_response, DownloadCacheTaskRequest};
 use dragonfly_api::errordetails::v2::Backend;
-use dragonfly_client_config::default_piece_length;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -51,13 +50,6 @@ pub struct ExportCommand {
         help = "Different tags for the same file will be divided into different cache tasks"
     )]
     tag: String,
-
-    #[arg(
-        long = "piece-length",
-        default_value_t = default_piece_length(),
-        help = "Specify the byte length of the piece"
-    )]
-    piece_length: u64,
 
     #[arg(
         short = 'O',
@@ -139,7 +131,7 @@ impl ExportCommand {
                     );
 
                     eprintln!(
-                        "{}{}{}Message:{}, can not connect {}, please check the unix socket.{}",
+                        "{}{}{}Message:{}, can not connect {}, please check the unix socket {}",
                         color::Fg(color::Cyan),
                         style::Italic,
                         style::Bold,
@@ -381,7 +373,6 @@ impl ExportCommand {
                 persistent: false,
                 tag: Some(self.tag.clone()),
                 application: Some(self.application.clone()),
-                piece_length: self.piece_length,
                 output_path: absolute_path.to_string_lossy().to_string(),
                 timeout: Some(
                     prost_wkt_types::Duration::try_from(self.timeout)
