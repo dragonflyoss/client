@@ -36,7 +36,7 @@ pub struct Task {
     pub id: String,
 
     // piece_length is the length of the piece.
-    pub piece_length: u64,
+    pub piece_length: Option<u64>,
 
     // content_length is the length of the content.
     pub content_length: Option<u64>,
@@ -114,6 +114,11 @@ impl Task {
         }
 
         false
+    }
+
+    // piece_length returns the piece length of the task.
+    pub fn piece_length(&self) -> Option<u64> {
+        self.piece_length
     }
 
     // content_length returns the content length of the task.
@@ -213,6 +218,11 @@ impl CacheTask {
     // is_persistent returns whether the cache task is persistent.
     pub fn is_persistent(&self) -> bool {
         self.persistent
+    }
+
+    // piece_length returns the piece length of the cache task.
+    pub fn piece_length(&self) -> u64 {
+        self.piece_length
     }
 
     // content_length returns the content length of the cache task.
@@ -320,7 +330,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     pub fn download_task_started(
         &self,
         id: &str,
-        piece_length: u64,
+        piece_length: Option<u64>,
         content_length: Option<u64>,
         response_header: Option<HeaderMap>,
     ) -> Result<Task> {
@@ -339,6 +349,11 @@ impl<E: StorageEngineOwned> Metadata<E> {
                 // Protect content length to be overwritten by None.
                 if content_length.is_some() {
                     task.content_length = content_length;
+                }
+
+                // Protect piece length to be overwritten by None.
+                if piece_length.is_some() {
+                    task.piece_length = piece_length;
                 }
 
                 // If the task has the response header, the response header
@@ -847,14 +862,14 @@ mod tests {
 
         // Test download_task_started.
         metadata
-            .download_task_started(task_id, 1024, Some(1024), None)
+            .download_task_started(task_id, Some(1024), Some(1024), None)
             .unwrap();
         let task = metadata
             .get_task(task_id)
             .unwrap()
             .expect("task should exist after download_task_started");
         assert_eq!(task.id, task_id);
-        assert_eq!(task.piece_length, 1024);
+        assert_eq!(task.piece_length, Some(1024));
         assert_eq!(task.content_length, Some(1024));
         assert!(task.response_header.is_empty());
         assert_eq!(task.uploading_count, 0);
@@ -905,7 +920,7 @@ mod tests {
         let task_id = "task2";
 
         metadata
-            .download_task_started(task_id, 1024, None, None)
+            .download_task_started(task_id, Some(1024), None, None)
             .unwrap();
         let tasks = metadata.get_tasks().unwrap();
         assert_eq!(tasks.len(), 2, "should get 2 tasks in total");

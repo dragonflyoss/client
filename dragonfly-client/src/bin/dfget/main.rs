@@ -22,7 +22,7 @@ use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::{object_storage, BackendFactory, DirEntry, HeadRequest};
-use dragonfly_client_config::{self, default_piece_length, dfdaemon, dfget};
+use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{BackendError, ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::http::{header_vec_to_hashmap, header_vec_to_reqwest_headermap};
@@ -104,13 +104,6 @@ struct Args {
         help = "Specify the timeout for downloading a file"
     )]
     timeout: Duration,
-
-    #[arg(
-        long = "piece-length",
-        default_value_t = default_piece_length(),
-        help = "Specify the byte length of the piece"
-    )]
-    piece_length: u64,
 
     #[arg(
         short = 'd',
@@ -321,7 +314,7 @@ async fn main() -> anyhow::Result<()> {
                 );
 
                 eprintln!(
-                    "{}{}{}Message:{}, can not connect {}, please check the unix socket.{}",
+                    "{}{}{}Message:{}, can not connect {}, please check the unix socket {}",
                     color::Fg(color::Cyan),
                     style::Italic,
                     style::Bold,
@@ -704,7 +697,7 @@ async fn download(
                 priority: args.priority,
                 filtered_query_params: args.filtered_query_params.unwrap_or_default(),
                 request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
-                piece_length: args.piece_length,
+                piece_length: None,
                 output_path: Some(args.output.to_string_lossy().to_string()),
                 timeout: Some(
                     prost_wkt_types::Duration::try_from(args.timeout)

@@ -82,6 +82,9 @@ pub struct HeadResponse {
 
 // GetRequest is the get request for backend.
 pub struct GetRequest {
+    // task_id is the id of the task.
+    pub task_id: String,
+
     // piece_id is the id of the piece.
     pub piece_id: String,
 

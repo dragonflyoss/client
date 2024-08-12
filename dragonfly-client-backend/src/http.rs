@@ -113,8 +113,8 @@ impl super::Backend for HTTP {
     // get gets the content of the request.
     async fn get(&self, request: super::GetRequest) -> Result<super::GetResponse<super::Body>> {
         info!(
-            "get request {} {}: {:?}",
-            request.piece_id, request.url, request.http_header
+            "get request {} {} {}: {:?}",
+            request.task_id, request.piece_id, request.url, request.http_header
         );
 
         // The header of the request is required.
@@ -128,8 +128,8 @@ impl super::Backend for HTTP {
             .await
             .map_err(|err| {
                 error!(
-                    "get request failed {} {}: {}",
-                    request.piece_id, request.url, err
+                    "get request failed {} {} {}: {}",
+                    request.task_id, request.piece_id, request.url, err
                 );
                 err
             })?;
@@ -230,6 +230,7 @@ mod tests {
         let http_backend = http::HTTP::new();
         let mut resp = http_backend
             .get(GetRequest {
+                task_id: "test".to_string(),
                 piece_id: "test".to_string(),
                 url: server.url("/get"),
                 range: None,
