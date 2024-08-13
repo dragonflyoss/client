@@ -603,13 +603,16 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         collect_delete_task_started_metrics(TaskType::Dfdaemon as i32);
 
         // Delete the task from the scheduler.
-        self.task.delete(task_id.as_str()).await.map_err(|err| {
-            // Collect the delete task failure metrics.
-            collect_delete_task_failure_metrics(TaskType::Dfdaemon as i32);
+        self.task
+            .delete(task_id.as_str(), host_id.as_str())
+            .await
+            .map_err(|err| {
+                // Collect the delete task failure metrics.
+                collect_delete_task_failure_metrics(TaskType::Dfdaemon as i32);
 
-            error!("delete task: {}", err);
-            Status::internal(err.to_string())
-        })?;
+                error!("delete task: {}", err);
+                Status::internal(err.to_string())
+            })?;
 
         Ok(Response::new(()))
     }

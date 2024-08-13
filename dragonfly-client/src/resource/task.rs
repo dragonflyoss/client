@@ -25,7 +25,7 @@ use dragonfly_api::dfdaemon::{
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::{
     announce_peer_request, announce_peer_response, download_piece_back_to_source_failed_request,
-    AnnouncePeerRequest, DownloadPeerBackToSourceFailedRequest,
+    AnnouncePeerRequest, DeleteTaskRequest, DownloadPeerBackToSourceFailedRequest,
     DownloadPeerBackToSourceFinishedRequest, DownloadPeerBackToSourceStartedRequest,
     DownloadPeerFailedRequest, DownloadPeerFinishedRequest, DownloadPeerStartedRequest,
     DownloadPieceBackToSourceFailedRequest, DownloadPieceBackToSourceFinishedRequest,
@@ -1611,7 +1611,7 @@ impl Task {
     }
 
     // Delete a task and reclaim local storage.
-    pub async fn delete(&self, task_id: &str) -> ClientResult<()> {
+    pub async fn delete(&self, task_id: &str, host_id: &str) -> ClientResult<()> {
         let task = self.storage.get_task(task_id).map_err(|err| {
             error!("get task {} from local storage error: {:?}", task_id, err);
             err
@@ -1619,14 +1619,20 @@ impl Task {
 
         match task {
             Some(task) => {
-                // Check current task is valid to be deleted.
-                if task.is_uploading() {
-                    return Err(Error::InvalidState("current task is uploading".to_string()));
-                }
-
                 self.storage.delete_task(task.id.as_str()).await;
-                info!("delete task {} from local storage", task.id);
 
+                self.scheduler_client
+                    .delete_task(DeleteTaskRequest {
+                        host_id: host_id.to_string(),
+                        task_id: task_id.to_string(),
+                    })
+                    .await
+                    .map_err(|err| {
+                        error!("delete task {} failed from scheudler: {:?}", task_id, err);
+                        err
+                    })?;
+
+                info!("delete task {} from local storage", task.id);
                 Ok(())
             }
             None => {

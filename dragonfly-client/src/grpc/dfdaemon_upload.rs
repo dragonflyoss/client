@@ -23,13 +23,13 @@ use crate::metrics::{
 };
 use crate::resource::{cache_task, task};
 use crate::shutdown;
-use dragonfly_api::common::v2::{CacheTask, Piece, Priority, TaskType};
+use dragonfly_api::common::v2::{CacheTask, Piece, Priority, Task, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient,
     dfdaemon_upload_server::{DfdaemonUpload, DfdaemonUploadServer as DfdaemonUploadGRPCServer},
-    DeleteCacheTaskRequest, DownloadCacheTaskRequest, DownloadCacheTaskResponse,
+    DeleteCacheTaskRequest, DeleteTaskRequest, DownloadCacheTaskRequest, DownloadCacheTaskResponse,
     DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest, DownloadTaskResponse,
-    StatCacheTaskRequest, SyncPiecesRequest, SyncPiecesResponse,
+    StatCacheTaskRequest, StatTaskRequest, SyncPiecesRequest, SyncPiecesResponse,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_config::dfdaemon::Config;
@@ -526,6 +526,78 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         }
 
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
+    }
+
+    // stat_task stats the task.
+    #[instrument(skip_all, fields(host_id, task_id))]
+    async fn stat_task(&self, request: Request<StatTaskRequest>) -> Result<Response<Task>, Status> {
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+
+        // Collect the stat task metrics.
+        collect_stat_task_started_metrics(TaskType::Dfdaemon as i32);
+
+        // Get the task from the scheduler.
+        let task = self
+            .task
+            .stat(task_id.as_str(), host_id.as_str())
+            .await
+            .map_err(|err| {
+                // Collect the stat task failure metrics.
+                collect_stat_task_failure_metrics(TaskType::Dfdaemon as i32);
+
+                error!("stat task: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        Ok(Response::new(task))
+    }
+
+    // delete_task deletes the task.
+    #[instrument(skip_all, fields(host_id, task_id))]
+    async fn delete_task(
+        &self,
+        request: Request<DeleteTaskRequest>,
+    ) -> Result<Response<()>, Status> {
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+
+        // Collect the delete task started metrics.
+        collect_delete_task_started_metrics(TaskType::Dfdaemon as i32);
+
+        // Delete the task from the scheduler.
+        self.task
+            .delete(task_id.as_str(), host_id.as_str())
+            .await
+            .map_err(|err| {
+                // Collect the delete task failure metrics.
+                collect_delete_task_failure_metrics(TaskType::Dfdaemon as i32);
+
+                error!("delete task: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        Ok(Response::new(()))
     }
 
     // SyncPiecesStream is the stream of the sync pieces response.
