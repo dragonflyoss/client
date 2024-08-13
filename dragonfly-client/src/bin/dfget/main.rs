@@ -683,6 +683,12 @@ async fn download(
         });
     }
 
+    // If the `filtered_query_params` is not provided, then use the default value.
+    let filtered_query_params = match args.filtered_query_params {
+        Some(params) => params,
+        None => dfdaemon::default_proxy_rule_filtered_query_params(),
+    };
+
     // Create dfdaemon client.
     let response = download_client
         .download_task(DownloadTaskRequest {
@@ -695,7 +701,7 @@ async fn download(
                 tag: Some(args.tag),
                 application: Some(args.application),
                 priority: args.priority,
-                filtered_query_params: args.filtered_query_params.unwrap_or_default(),
+                filtered_query_params,
                 request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
                 piece_length: None,
                 output_path: Some(args.output.to_string_lossy().to_string()),
