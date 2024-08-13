@@ -79,7 +79,8 @@ impl IDGenerator {
         let url = Url::parse(url).or_err(ErrorType::ParseError)?;
         let query = url
             .query_pairs()
-            .filter(|(k, _)| filtered_query_params.contains(&k.to_string()));
+            .filter(|(k, _)| !filtered_query_params.contains(&k.to_string()));
+
         let mut artifact_url = url.clone();
         artifact_url.query_pairs_mut().clear().extend_pairs(query);
 
