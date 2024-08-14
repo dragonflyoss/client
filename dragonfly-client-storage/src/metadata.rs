@@ -18,6 +18,7 @@ use chrono::{NaiveDateTime, Utc};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::http::reqwest_headermap_to_hashmap;
+use rayon::prelude::*;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -500,8 +501,19 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
     // get_tasks gets the task metadatas.
     pub fn get_tasks(&self) -> Result<Vec<Task>> {
-        let iter = self.db.iter::<Task>()?;
-        iter.map(|ele| ele.map(|(_, task)| task)).collect()
+        let tasks = self
+            .db
+            .iter_raw::<Task>()?
+            .map(|ele| {
+                let (_, value) = ele?;
+                Ok(value)
+            })
+            .collect::<Result<Vec<Box<[u8]>>>>()?;
+
+        tasks
+            .par_iter()
+            .map(|task| Task::deserialize_from(task))
+            .collect()
     }
 
     // delete_task deletes the task metadata.
@@ -783,12 +795,6 @@ impl<E: StorageEngineOwned> Metadata<E> {
         self.db.get(self.piece_id(task_id, number).as_bytes())
     }
 
-    // get_pieces gets the piece metadatas.
-    pub fn get_pieces(&self, task_id: &str) -> Result<Vec<Piece>> {
-        let iter = self.db.prefix_iter::<Piece>(task_id.as_bytes())?;
-        iter.map(|ele| ele.map(|(_, piece)| piece)).collect()
-    }
-
     // delete_piece deletes the piece metadata.
     pub fn delete_piece(&self, task_id: &str, number: u32) -> Result<()> {
         info!("delete piece metadata {}", self.piece_id(task_id, number));
@@ -798,17 +804,29 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
     // delete_pieces deletes the piece metadatas.
     pub fn delete_pieces(&self, task_id: &str) -> Result<()> {
-        let iter = self.db.prefix_iter::<Piece>(task_id.as_bytes())?;
-        for ele in iter {
-            let (key, _) = ele?;
+        let piece_ids = self
+            .db
+            .prefix_iter_raw::<Piece>(task_id.as_bytes())?
+            .map(|ele| {
+                let (key, _) = ele?;
+                Ok(key)
+            })
+            .collect::<Result<Vec<Box<[u8]>>>>()?;
 
-            info!(
-                "delete piece metadata {}",
-                std::str::from_utf8(&key).unwrap_or_default().to_string()
-            );
-            self.db.delete::<Piece>(&key)?;
-        }
+        let piece_ids_refs = piece_ids
+            .par_iter()
+            .map(|id| {
+                let id_ref = id.as_ref();
+                info!(
+                    "delete piece metadata {} in batch",
+                    std::str::from_utf8(id_ref).unwrap_or_default(),
+                );
 
+                id_ref
+            })
+            .collect::<Vec<&[u8]>>();
+
+        self.db.batch_delete::<Piece>(piece_ids_refs)?;
         Ok(())
     }
 
@@ -849,7 +867,6 @@ mod tests {
         let log_dir = dir.path().join("log");
         let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
         assert!(metadata.get_tasks().unwrap().is_empty());
-        assert!(metadata.get_pieces("task").unwrap().is_empty());
     }
 
     #[test]
@@ -960,13 +977,9 @@ mod tests {
             "piece should be updated after download_piece_finished"
         );
 
-        // Test get_pieces.
+        // Test download_piece_failed.
         metadata.download_piece_started(task_id, 2).unwrap();
         metadata.download_piece_started(task_id, 3).unwrap();
-        let pieces = metadata.get_pieces(task_id).unwrap();
-        assert_eq!(pieces.len(), 3, "should get 3 pieces in total");
-
-        // Test download_piece_failed.
         metadata.download_piece_failed(task_id, 2).unwrap();
         let piece = metadata.get_piece(task_id, 2).unwrap();
         assert!(
@@ -1002,10 +1015,5 @@ mod tests {
             piece.uploading_count, 0,
             "piece should be updated after upload_piece_failed"
         );
-
-        // Test delete_pieces.
-        metadata.delete_pieces(task_id).unwrap();
-        let pieces = metadata.get_pieces(task_id).unwrap();
-        assert!(pieces.is_empty(), "should get 0 pieces after delete_pieces");
     }
 }

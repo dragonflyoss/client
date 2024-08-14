@@ -31,12 +31,12 @@ pub trait DatabaseObject: Serialize + DeserializeOwned {
 
     /// serialized serializes the object to bytes.
     fn serialized(&self) -> Result<Vec<u8>> {
-        Ok(serde_json::to_vec(self).or_err(ErrorType::SerializeError)?)
+        Ok(bincode::serialize(self).or_err(ErrorType::SerializeError)?)
     }
 
     /// deserialize_from deserializes the object from bytes.
     fn deserialize_from(bytes: &[u8]) -> Result<Self> {
-        Ok(serde_json::from_slice(bytes).or_err(ErrorType::SerializeError)?)
+        Ok(bincode::deserialize(bytes).or_err(ErrorType::SerializeError)?)
     }
 }
 
@@ -61,9 +61,23 @@ pub trait Operations {
     /// iter iterates all objects.
     fn iter<O: DatabaseObject>(&self) -> Result<impl Iterator<Item = Result<(Box<[u8]>, O)>>>;
 
+    /// iter_raw iterates all objects without serialization.
+    fn iter_raw<O: DatabaseObject>(
+        &self,
+    ) -> Result<impl Iterator<Item = Result<(Box<[u8]>, Box<[u8]>)>>>;
+
     /// prefix_iter iterates all objects with prefix.
     fn prefix_iter<O: DatabaseObject>(
         &self,
         prefix: &[u8],
     ) -> Result<impl Iterator<Item = Result<(Box<[u8]>, O)>>>;
+
+    /// prefix_iter_raw iterates all objects with prefix without serialization.
+    fn prefix_iter_raw<O: DatabaseObject>(
+        &self,
+        prefix: &[u8],
+    ) -> Result<impl Iterator<Item = Result<(Box<[u8]>, Box<[u8]>)>>>;
+
+    // batch_delete deletes objects by keys.
+    fn batch_delete<O: DatabaseObject>(&self, keys: Vec<&[u8]>) -> Result<()>;
 }
