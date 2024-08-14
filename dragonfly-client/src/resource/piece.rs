@@ -113,12 +113,6 @@ impl Piece {
         self.storage.get_piece(task_id, number)
     }
 
-    // get_all gets all pieces from the local storage.
-    #[instrument(skip_all)]
-    pub fn get_all(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
-        self.storage.get_pieces(task_id)
-    }
-
     // calculate_interested calculates the interested pieces by content_length and range.
     #[instrument(skip_all)]
     pub fn calculate_interested(
