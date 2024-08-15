@@ -791,7 +791,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             })?;
 
         // Read the content of the piece.
-        let mut content = Vec::new();
+        let mut content = Vec::with_capacity(piece.length as usize);
         reader.read_to_end(&mut content).await.map_err(|err| {
             // Collect upload piece failure metrics.
             collect_upload_piece_failure_metrics();
