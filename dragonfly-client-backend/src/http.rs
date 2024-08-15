@@ -141,6 +141,10 @@ impl super::Backend for HTTP {
                 .bytes_stream()
                 .map_err(|err| IOError::new(ErrorKind::Other, err)),
         ));
+        info!(
+            "get response {} {}: {:?} {:?}",
+            request.task_id, request.piece_id, status_code, header
+        );
 
         Ok(super::GetResponse {
             success: status_code.is_success(),
