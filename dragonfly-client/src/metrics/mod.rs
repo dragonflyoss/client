@@ -138,15 +138,36 @@ lazy_static! {
             &["task_type", "task_size_level"]
         ).expect("metric can be created");
 
-    // PROXY_REQUSET_COUNT is used to count the number of proxy requset.
-    pub static ref PROXY_REQUSET_COUNT: IntCounterVec =
+    // BACKEND_REQUEST_COUNT is used to count the number of backend requset.
+    pub static ref BACKEND_REQUEST_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("backend_request_total", "Counter of the number of the backend request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["scheme", "method"]
+        ).expect("metric can be created");
+
+    // BACKEND_REQUEST_FAILURE_COUNT is used to count the failed number of backend request.
+    pub static ref BACKEND_REQUEST_FAILURE_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("backend_request_failure_total", "Counter of the number of failed of the backend request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["scheme", "method"]
+        ).expect("metric can be created");
+
+    // BACKEND_REQUEST_DURATION is used to record the backend request duration.
+    pub static ref BACKEND_REQUEST_DURATION: HistogramVec =
+        HistogramVec::new(
+            HistogramOpts::new("backend_request_duration_milliseconds", "Histogram of the backend request duration.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME).buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
+            &["scheme", "method"]
+        ).expect("metric can be created");
+
+    // PROXY_REQUEST_COUNT is used to count the number of proxy requset.
+    pub static ref PROXY_REQUEST_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("proxy_request_total", "Counter of the number of the proxy request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
             &[]
         ).expect("metric can be created");
 
-    // PROXY_REQUSET_FAILURE_COUNT is used to count the failed number of proxy request.
-    pub static ref PROXY_REQUSET_FAILURE_COUNT: IntCounterVec =
+    // PROXY_REQUEST_FAILURE_COUNT is used to count the failed number of proxy request.
+    pub static ref PROXY_REQUEST_FAILURE_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("proxy_request_failure_total", "Counter of the number of failed of the proxy request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
             &[]
@@ -473,14 +494,35 @@ pub fn collect_upload_piece_failure_metrics() {
     CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).dec();
 }
 
+// collect_backend_request_started_metrics collects the backend request started metrics.
+pub fn collect_backend_request_started_metrics(scheme: &str, method: &str) {
+    BACKEND_REQUEST_COUNT
+        .with_label_values(&[scheme, method])
+        .inc();
+}
+
+// collect_backend_request_failure_metrics collects the backend request failure metrics.
+pub fn collect_backend_request_failure_metrics(scheme: &str, method: &str) {
+    BACKEND_REQUEST_FAILURE_COUNT
+        .with_label_values(&[scheme, method])
+        .inc();
+}
+
+// collect_backend_request_finished_metrics collects the backend request finished metrics.
+pub fn collect_backend_request_finished_metrics(scheme: &str, method: &str, cost: Duration) {
+    BACKEND_REQUEST_DURATION
+        .with_label_values(&[scheme, method])
+        .observe(cost.as_millis() as f64);
+}
+
 // collect_proxy_request_started_metrics collects the proxy request started metrics.
 pub fn collect_proxy_request_started_metrics() {
-    PROXY_REQUSET_COUNT.with_label_values(&[]).inc();
+    PROXY_REQUEST_COUNT.with_label_values(&[]).inc();
 }
 
 // collect_proxy_request_failure_metrics collects the proxy request failure metrics.
 pub fn collect_proxy_request_failure_metrics() {
-    PROXY_REQUSET_FAILURE_COUNT.with_label_values(&[]).inc();
+    PROXY_REQUEST_FAILURE_COUNT.with_label_values(&[]).inc();
 }
 
 // collect_stat_task_started_metrics collects the stat task started metrics.
@@ -634,11 +676,23 @@ impl Metrics {
             .expect("metric can be registered");
 
         REGISTRY
-            .register(Box::new(PROXY_REQUSET_COUNT.clone()))
+            .register(Box::new(BACKEND_REQUEST_COUNT.clone()))
             .expect("metric can be registered");
 
         REGISTRY
-            .register(Box::new(PROXY_REQUSET_FAILURE_COUNT.clone()))
+            .register(Box::new(BACKEND_REQUEST_FAILURE_COUNT.clone()))
+            .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(BACKEND_REQUEST_DURATION.clone()))
+            .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(PROXY_REQUEST_COUNT.clone()))
+            .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(PROXY_REQUEST_FAILURE_COUNT.clone()))
             .expect("metric can be registered");
 
         REGISTRY

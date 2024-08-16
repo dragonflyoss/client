@@ -16,7 +16,9 @@
 
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::metrics::{
-    collect_download_piece_traffic_metrics, collect_upload_piece_traffic_metrics,
+    collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
+    collect_backend_request_started_metrics, collect_download_piece_traffic_metrics,
+    collect_upload_piece_traffic_metrics,
 };
 use chrono::Utc;
 use dragonfly_api::common::v2::{ObjectStorage, Range, TrafficType};
@@ -30,7 +32,7 @@ use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{error, info, instrument, Span};
 
@@ -526,6 +528,14 @@ impl Piece {
             err
         })?;
 
+        // Record the start time.
+        let start_time = Instant::now();
+
+        // Collect the backend request started metrics.
+        collect_backend_request_started_metrics(
+            backend.scheme().as_str(),
+            http::Method::GET.as_str(),
+        );
         let mut response = backend
             .get(GetRequest {
                 task_id: task_id.to_string(),
@@ -542,7 +552,12 @@ impl Piece {
             })
             .await
             .map_err(|err| {
-                // Record the failure of downloading piece,
+                // Collect the backend request failure metrics.
+                collect_backend_request_failure_metrics(
+                    backend.scheme().as_str(),
+                    http::Method::GET.as_str(),
+                );
+
                 // if the request is failed.
                 error!("backend get failed: {}", err);
                 if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
@@ -553,7 +568,12 @@ impl Piece {
             })?;
 
         if !response.success {
-            // Record the failure of downloading piece,
+            // Collect the backend request failure metrics.
+            collect_backend_request_failure_metrics(
+                backend.scheme().as_str(),
+                http::Method::GET.as_str(),
+            );
+
             // if the status code is not OK.
             let mut buffer = String::new();
             response
@@ -572,6 +592,13 @@ impl Piece {
                 header: Some(response.http_header.unwrap_or_default()),
             }));
         }
+
+        // Collect the backend request finished metrics.
+        collect_backend_request_finished_metrics(
+            backend.scheme().as_str(),
+            http::Method::GET.as_str(),
+            start_time.elapsed(),
+        );
 
         // Record the finish of downloading piece.
         self.storage
