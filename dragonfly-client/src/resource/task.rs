@@ -15,6 +15,10 @@
  */
 
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
+use crate::metrics::{
+    collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
+    collect_backend_request_started_metrics,
+};
 use dragonfly_api::common::v2::{
     Download, ObjectStorage, Peer, Piece, Range, Task as CommonTask, TrafficType,
 };
@@ -46,7 +50,7 @@ use dragonfly_client_util::{
 use reqwest::header::HeaderMap;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{
     mpsc::{self, Sender},
     Semaphore,
@@ -133,6 +137,15 @@ impl Task {
 
         // Head the url to get the content length.
         let backend = self.backend_factory.build(request.url.as_str())?;
+
+        // Record the start time.
+        let start_time = Instant::now();
+
+        // Collect the backend request started metrics.
+        collect_backend_request_started_metrics(
+            backend.scheme().as_str(),
+            http::Method::HEAD.as_str(),
+        );
         let response = backend
             .head(HeadRequest {
                 task_id: id.to_string(),
@@ -142,16 +155,37 @@ impl Task {
                 client_certs: None,
                 object_storage: request.object_storage,
             })
-            .await?;
+            .await
+            .map_err(|err| {
+                // Collect the backend request failure metrics.
+                collect_backend_request_failure_metrics(
+                    backend.scheme().as_str(),
+                    http::Method::HEAD.as_str(),
+                );
+                err
+            })?;
 
         // Check if the status code is success.
         if !response.success {
+            // Collect the backend request failure metrics.
+            collect_backend_request_failure_metrics(
+                backend.scheme().as_str(),
+                http::Method::HEAD.as_str(),
+            );
+
             return Err(Error::BackendError(BackendError {
                 message: response.error_message.unwrap_or_default(),
                 status_code: Some(response.http_status_code.unwrap_or_default()),
                 header: Some(response.http_header.unwrap_or_default()),
             }));
         }
+
+        // Collect the backend request finished metrics.
+        collect_backend_request_finished_metrics(
+            backend.scheme().as_str(),
+            http::Method::HEAD.as_str(),
+            start_time.elapsed(),
+        );
 
         let content_length = match response.content_length {
             Some(content_length) => content_length,

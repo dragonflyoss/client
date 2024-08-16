@@ -30,6 +30,11 @@ impl Hdfs {
 // Implement the Backend trait for Hdfs.
 #[tonic::async_trait]
 impl Backend for Hdfs {
+    // scheme returns the scheme of the backend.
+    fn scheme(&self) -> String {
+        "hdfs".to_string()
+    }
+
     // head is an async function that takes a HeadRequest and returns a HeadResponse.
     async fn head(&self, request: HeadRequest) -> Result<HeadResponse> {
         println!("HDFS head url: {}", request.url);

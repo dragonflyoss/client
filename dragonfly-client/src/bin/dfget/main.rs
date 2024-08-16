@@ -20,6 +20,10 @@ use dragonfly_api::dfdaemon::v2::{download_task_response, DownloadTaskRequest};
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
+use dragonfly_client::metrics::{
+    collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
+    collect_backend_request_started_metrics,
+};
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::{object_storage, BackendFactory, DirEntry, HeadRequest};
 use dragonfly_client_config::{self, dfdaemon, dfget};
@@ -32,7 +36,7 @@ use percent_encoding::percent_decode_str;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{cmp::min, fmt::Write};
 use termion::{color, style};
 use tokio::fs;
@@ -771,7 +775,11 @@ async fn get_entries(args: Args, object_storage: Option<ObjectStorage>) -> Resul
     let backend_factory = BackendFactory::new(None)?;
     let backend = backend_factory.build(args.url.as_str())?;
 
-    // Send head request.
+    // Collect backend request started metrics.
+    collect_backend_request_started_metrics(backend.scheme().as_str(), http::Method::HEAD.as_str());
+
+    // Record the start time.
+    let start_time = Instant::now();
     let response = backend
         .head(HeadRequest {
             // NOTE: Mock a task id for head request.
@@ -784,16 +792,38 @@ async fn get_entries(args: Args, object_storage: Option<ObjectStorage>) -> Resul
             client_certs: None,
             object_storage,
         })
-        .await?;
+        .await
+        .map_err(|err| {
+            // Collect backend request failure metrics.
+            collect_backend_request_failure_metrics(
+                backend.scheme().as_str(),
+                http::Method::HEAD.as_str(),
+            );
+
+            err
+        })?;
 
     // Return error when response is failed.
     if !response.success {
+        // Collect backend request failure metrics.
+        collect_backend_request_failure_metrics(
+            backend.scheme().as_str(),
+            http::Method::HEAD.as_str(),
+        );
+
         return Err(Error::BackendError(BackendError {
             message: response.error_message.unwrap_or_default(),
             status_code: Some(response.http_status_code.unwrap_or_default()),
             header: Some(response.http_header.unwrap_or_default()),
         }));
     }
+
+    // Collect backend request finished metrics.
+    collect_backend_request_finished_metrics(
+        backend.scheme().as_str(),
+        http::Method::HEAD.as_str(),
+        start_time.elapsed(),
+    );
 
     Ok(response.entries)
 }

@@ -421,6 +421,11 @@ impl ObjectStorage {
 // Backend implements the Backend trait.
 #[tonic::async_trait]
 impl crate::Backend for ObjectStorage {
+    // scheme returns the scheme of the object storage.
+    fn scheme(&self) -> String {
+        self.scheme.to_string()
+    }
+
     //head gets the header of the request.
     async fn head(&self, request: super::HeadRequest) -> ClientResult<super::HeadResponse> {
         info!(

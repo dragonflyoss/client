@@ -23,13 +23,18 @@ use tokio_util::io::StreamReader;
 use tracing::{error, info};
 
 // HTTP is the HTTP backend.
-pub struct HTTP;
+pub struct HTTP {
+    // scheme is the scheme of the HTTP backend.
+    scheme: String,
+}
 
 // HTTP implements the http interface.
 impl HTTP {
     // new returns a new HTTP.
-    pub fn new() -> HTTP {
-        Self
+    pub fn new(scheme: &str) -> HTTP {
+        Self {
+            scheme: scheme.to_string(),
+        }
     }
 
     // client returns a new reqwest client.
@@ -64,6 +69,11 @@ impl HTTP {
 // Backend implements the Backend trait.
 #[tonic::async_trait]
 impl super::Backend for HTTP {
+    // scheme returns the scheme of the HTTP backend.
+    fn scheme(&self) -> String {
+        self.scheme.clone()
+    }
+
     // head gets the header of the request.
     async fn head(&self, request: super::HeadRequest) -> Result<super::HeadResponse> {
         info!(
@@ -160,7 +170,7 @@ impl super::Backend for HTTP {
 impl Default for HTTP {
     // default returns a new default HTTP.
     fn default() -> Self {
-        Self::new()
+        Self::new("http")
     }
 }
 
@@ -180,7 +190,7 @@ mod tests {
                 .body("");
         });
 
-        let http_backend = http::HTTP::new();
+        let http_backend = http::HTTP::new("http");
         let resp = http_backend
             .head(HeadRequest {
                 task_id: "test".to_string(),
@@ -206,7 +216,7 @@ mod tests {
                 .body("");
         });
 
-        let http_backend = http::HTTP::new();
+        let http_backend = http::HTTP::new("http");
         let resp = http_backend
             .head(HeadRequest {
                 task_id: "test".to_string(),
@@ -231,7 +241,7 @@ mod tests {
                 .body("OK");
         });
 
-        let http_backend = http::HTTP::new();
+        let http_backend = http::HTTP::new("http");
         let mut resp = http_backend
             .get(GetRequest {
                 task_id: "test".to_string(),
