@@ -39,6 +39,12 @@ pub const DRAGONFLY_REGISTRY_HEADER: &str = "X-Dragonfly-Registry";
 // Default value includes the filtered query params of s3, gcs, oss, obs, cos.
 pub const DRAGONFLY_FILTERED_QUERY_PARAMS_HEADER: &str = "X-Dragonfly-Filtered-Query-Params";
 
+// DRAGONFLY_CONTENT_LENGTH_OF_TASK_HEADER is the header key of task content length in http request.
+// If add this header, the task content length will be used the value of this header,
+// otherwise the dfdaemon will call the head request to get the task content length.
+// Set header of the task content length to skip the head request.
+pub const DRAGONFLY_CONTENT_LENGTH_OF_TASK_HEADER: &str = "X-Dragonfly-Content-Length-Of-Task";
+
 // get_tag gets the tag from http header.
 pub fn get_tag(header: &HeaderMap) -> Option<String> {
     match header.get(DRAGONFLY_TAG_HEADER) {
@@ -116,5 +122,19 @@ pub fn get_filtered_query_params(
             }
         },
         None => default_filtered_query_params,
+    }
+}
+
+// get_content_length_of_task gets the task content length from http header.
+pub fn get_content_length_of_task(header: &HeaderMap) -> Option<String> {
+    match header.get(DRAGONFLY_CONTENT_LENGTH_OF_TASK_HEADER) {
+        Some(registry) => match registry.to_str() {
+            Ok(registry) => Some(registry.to_string()),
+            Err(err) => {
+                error!("get content length of task from header failed: {}", err);
+                None
+            }
+        },
+        None => None,
     }
 }
