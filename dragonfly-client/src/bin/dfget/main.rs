@@ -20,9 +20,13 @@ use dragonfly_api::dfdaemon::v2::{download_task_response, DownloadTaskRequest};
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
+use dragonfly_client::metrics::{
+    collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
+    collect_backend_request_started_metrics,
+};
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::{object_storage, BackendFactory, DirEntry, HeadRequest};
-use dragonfly_client_config::{self, default_piece_length, dfdaemon, dfget};
+use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{BackendError, ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::http::{header_vec_to_hashmap, header_vec_to_reqwest_headermap};
@@ -32,7 +36,7 @@ use percent_encoding::percent_decode_str;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{cmp::min, fmt::Write};
 use termion::{color, style};
 use tokio::fs;
@@ -104,13 +108,6 @@ struct Args {
         help = "Specify the timeout for downloading a file"
     )]
     timeout: Duration,
-
-    #[arg(
-        long = "piece-length",
-        default_value_t = default_piece_length(),
-        help = "Specify the byte length of the piece"
-    )]
-    piece_length: u64,
 
     #[arg(
         short = 'd',
@@ -321,7 +318,7 @@ async fn main() -> anyhow::Result<()> {
                 );
 
                 eprintln!(
-                    "{}{}{}Message:{}, can not connect {}, please check the unix socket.{}",
+                    "{}{}{}Message:{}, can not connect {}, please check the unix socket {}",
                     color::Fg(color::Cyan),
                     style::Italic,
                     style::Bold,
@@ -690,6 +687,12 @@ async fn download(
         });
     }
 
+    // If the `filtered_query_params` is not provided, then use the default value.
+    let filtered_query_params = match args.filtered_query_params {
+        Some(params) => params,
+        None => dfdaemon::default_proxy_rule_filtered_query_params(),
+    };
+
     // Create dfdaemon client.
     let response = download_client
         .download_task(DownloadTaskRequest {
@@ -702,9 +705,9 @@ async fn download(
                 tag: Some(args.tag),
                 application: Some(args.application),
                 priority: args.priority,
-                filtered_query_params: args.filtered_query_params.unwrap_or_default(),
+                filtered_query_params,
                 request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
-                piece_length: args.piece_length,
+                piece_length: None,
                 output_path: Some(args.output.to_string_lossy().to_string()),
                 timeout: Some(
                     prost_wkt_types::Duration::try_from(args.timeout)
@@ -772,7 +775,11 @@ async fn get_entries(args: Args, object_storage: Option<ObjectStorage>) -> Resul
     let backend_factory = BackendFactory::new(None)?;
     let backend = backend_factory.build(args.url.as_str())?;
 
-    // Send head request.
+    // Collect backend request started metrics.
+    collect_backend_request_started_metrics(backend.scheme().as_str(), http::Method::HEAD.as_str());
+
+    // Record the start time.
+    let start_time = Instant::now();
     let response = backend
         .head(HeadRequest {
             // NOTE: Mock a task id for head request.
@@ -785,16 +792,38 @@ async fn get_entries(args: Args, object_storage: Option<ObjectStorage>) -> Resul
             client_certs: None,
             object_storage,
         })
-        .await?;
+        .await
+        .map_err(|err| {
+            // Collect backend request failure metrics.
+            collect_backend_request_failure_metrics(
+                backend.scheme().as_str(),
+                http::Method::HEAD.as_str(),
+            );
+
+            err
+        })?;
 
     // Return error when response is failed.
     if !response.success {
+        // Collect backend request failure metrics.
+        collect_backend_request_failure_metrics(
+            backend.scheme().as_str(),
+            http::Method::HEAD.as_str(),
+        );
+
         return Err(Error::BackendError(BackendError {
             message: response.error_message.unwrap_or_default(),
             status_code: Some(response.http_status_code.unwrap_or_default()),
             header: Some(response.http_header.unwrap_or_default()),
         }));
     }
+
+    // Collect backend request finished metrics.
+    collect_backend_request_finished_metrics(
+        backend.scheme().as_str(),
+        http::Method::HEAD.as_str(),
+        start_time.elapsed(),
+    );
 
     Ok(response.entries)
 }

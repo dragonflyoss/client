@@ -73,14 +73,14 @@ impl IDGenerator {
         digest: Option<&str>,
         tag: Option<&str>,
         application: Option<&str>,
-        piece_length: u64,
         filtered_query_params: Vec<String>,
     ) -> Result<String> {
         // Filter the query parameters.
         let url = Url::parse(url).or_err(ErrorType::ParseError)?;
         let query = url
             .query_pairs()
-            .filter(|(k, _)| filtered_query_params.contains(&k.to_string()));
+            .filter(|(k, _)| !filtered_query_params.contains(&k.to_string()));
+
         let mut artifact_url = url.clone();
         artifact_url.query_pairs_mut().clear().extend_pairs(query);
 
@@ -105,9 +105,6 @@ impl IDGenerator {
             hasher.update(application);
         }
 
-        // Add the piece length to generate the task id.
-        hasher.update(piece_length.to_string());
-
         // Generate the task id.
         Ok(hex::encode(hasher.finalize()))
     }
@@ -118,7 +115,6 @@ impl IDGenerator {
         path: &PathBuf,
         tag: Option<&str>,
         application: Option<&str>,
-        piece_length: u64,
     ) -> Result<String> {
         // Initialize the hasher.
         let mut hasher = blake3::Hasher::new();
@@ -136,9 +132,6 @@ impl IDGenerator {
         if let Some(application) = application {
             hasher.update(application.as_bytes());
         }
-
-        // Add the piece length to generate the cache task id.
-        hasher.update(piece_length.to_string().as_bytes());
 
         // Generate the cache task id.
         Ok(hasher.finalize().to_hex().to_string())

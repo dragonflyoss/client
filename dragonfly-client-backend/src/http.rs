@@ -23,13 +23,18 @@ use tokio_util::io::StreamReader;
 use tracing::{error, info};
 
 // HTTP is the HTTP backend.
-pub struct HTTP;
+pub struct HTTP {
+    // scheme is the scheme of the HTTP backend.
+    scheme: String,
+}
 
 // HTTP implements the http interface.
 impl HTTP {
     // new returns a new HTTP.
-    pub fn new() -> HTTP {
-        Self
+    pub fn new(scheme: &str) -> HTTP {
+        Self {
+            scheme: scheme.to_string(),
+        }
     }
 
     // client returns a new reqwest client.
@@ -64,6 +69,11 @@ impl HTTP {
 // Backend implements the Backend trait.
 #[tonic::async_trait]
 impl super::Backend for HTTP {
+    // scheme returns the scheme of the HTTP backend.
+    fn scheme(&self) -> String {
+        self.scheme.clone()
+    }
+
     // head gets the header of the request.
     async fn head(&self, request: super::HeadRequest) -> Result<super::HeadResponse> {
         info!(
@@ -113,8 +123,8 @@ impl super::Backend for HTTP {
     // get gets the content of the request.
     async fn get(&self, request: super::GetRequest) -> Result<super::GetResponse<super::Body>> {
         info!(
-            "get request {} {}: {:?}",
-            request.piece_id, request.url, request.http_header
+            "get request {} {} {}: {:?}",
+            request.task_id, request.piece_id, request.url, request.http_header
         );
 
         // The header of the request is required.
@@ -128,8 +138,8 @@ impl super::Backend for HTTP {
             .await
             .map_err(|err| {
                 error!(
-                    "get request failed {} {}: {}",
-                    request.piece_id, request.url, err
+                    "get request failed {} {} {}: {}",
+                    request.task_id, request.piece_id, request.url, err
                 );
                 err
             })?;
@@ -141,6 +151,10 @@ impl super::Backend for HTTP {
                 .bytes_stream()
                 .map_err(|err| IOError::new(ErrorKind::Other, err)),
         ));
+        info!(
+            "get response {} {}: {:?} {:?}",
+            request.task_id, request.piece_id, status_code, header
+        );
 
         Ok(super::GetResponse {
             success: status_code.is_success(),
@@ -156,7 +170,7 @@ impl super::Backend for HTTP {
 impl Default for HTTP {
     // default returns a new default HTTP.
     fn default() -> Self {
-        Self::new()
+        Self::new("http")
     }
 }
 
@@ -176,7 +190,7 @@ mod tests {
                 .body("");
         });
 
-        let http_backend = http::HTTP::new();
+        let http_backend = http::HTTP::new("http");
         let resp = http_backend
             .head(HeadRequest {
                 task_id: "test".to_string(),
@@ -202,7 +216,7 @@ mod tests {
                 .body("");
         });
 
-        let http_backend = http::HTTP::new();
+        let http_backend = http::HTTP::new("http");
         let resp = http_backend
             .head(HeadRequest {
                 task_id: "test".to_string(),
@@ -227,9 +241,10 @@ mod tests {
                 .body("OK");
         });
 
-        let http_backend = http::HTTP::new();
+        let http_backend = http::HTTP::new("http");
         let mut resp = http_backend
             .get(GetRequest {
+                task_id: "test".to_string(),
                 piece_id: "test".to_string(),
                 url: server.url("/get"),
                 range: None,
