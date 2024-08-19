@@ -99,7 +99,7 @@ mod test {
         let runtime = ContainerRuntime::new(&Config {
             container_runtime: dragonfly_client_config::dfinit::ContainerRuntime {
                 config: Some(
-                    dragonfly_client_config::dfinit::ContainerRuntimeConfig::Containerd(
+                    ContainerRuntimeConfig::Containerd(
                         Containerd {
                             ..Default::default()
                         },
@@ -113,7 +113,7 @@ mod test {
         let runtime = ContainerRuntime::new(&Config {
             container_runtime: dragonfly_client_config::dfinit::ContainerRuntime {
                 config: Some(
-                    dragonfly_client_config::dfinit::ContainerRuntimeConfig::CRIO(
+                    ContainerRuntimeConfig::CRIO(
                         Default::default(),
                     ),
                 ),
