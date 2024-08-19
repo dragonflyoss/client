@@ -298,7 +298,7 @@ fn cos_filtered_query_params() -> Vec<String> {
 
 // default_proxy_rule_filtered_query_params is the default filtered query params to generate the task id.
 #[inline]
-fn default_proxy_rule_filtered_query_params() -> Vec<String> {
+pub fn default_proxy_rule_filtered_query_params() -> Vec<String> {
     let mut visited = HashSet::new();
     for query_param in s3_filtered_query_params() {
         visited.insert(query_param);

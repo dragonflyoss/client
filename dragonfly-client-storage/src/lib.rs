@@ -81,7 +81,7 @@ impl Storage {
     pub fn download_task_started(
         &self,
         id: &str,
-        piece_length: u64,
+        piece_length: Option<u64>,
         content_length: Option<u64>,
         response_header: Option<HeaderMap>,
     ) -> Result<metadata::Task> {
@@ -155,6 +155,7 @@ impl Storage {
         ttl: Duration,
         path: &Path,
         piece_length: u64,
+        content_length: u64,
         expected_digest: &str,
     ) -> Result<metadata::CacheTask> {
         let response = self.content.write_cache_task(id, path).await?;
@@ -170,7 +171,7 @@ impl Storage {
             id,
             ttl,
             piece_length,
-            response.length,
+            content_length,
             digest.to_string().as_str(),
         )
     }
@@ -370,11 +371,6 @@ impl Storage {
     // get_piece returns the piece metadata.
     pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<metadata::Piece>> {
         self.metadata.get_piece(task_id, number)
-    }
-
-    // get_pieces returns the piece metadatas.
-    pub fn get_pieces(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
-        self.metadata.get_pieces(task_id)
     }
 
     // piece_id returns the piece id.

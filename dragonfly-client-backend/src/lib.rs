@@ -82,6 +82,9 @@ pub struct HeadResponse {
 
 // GetRequest is the get request for backend.
 pub struct GetRequest {
+    // task_id is the id of the task.
+    pub task_id: String,
+
     // piece_id is the id of the piece.
     pub piece_id: String,
 
@@ -155,6 +158,9 @@ pub struct DirEntry {
 // Backend is the interface of the backend.
 #[tonic::async_trait]
 pub trait Backend {
+    // scheme returns the scheme of the backend.
+    fn scheme(&self) -> String;
+
     // head gets the header of the request.
     async fn head(&self, request: HeadRequest) -> Result<HeadResponse>;
 
@@ -224,11 +230,11 @@ impl BackendFactory {
     // load_builtin_backends loads the builtin backends.
     fn load_builtin_backends(&mut self) {
         self.backends
-            .insert("http".to_string(), Box::new(http::HTTP::new()));
+            .insert("http".to_string(), Box::new(http::HTTP::new("http")));
         info!("load [http] builtin backend");
 
         self.backends
-            .insert("https".to_string(), Box::new(http::HTTP::new()));
+            .insert("https".to_string(), Box::new(http::HTTP::new("https")));
         info!("load [https] builtin backend ");
 
         self.backends.insert(

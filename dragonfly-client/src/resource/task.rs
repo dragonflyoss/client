@@ -15,6 +15,10 @@
  */
 
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
+use crate::metrics::{
+    collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
+    collect_backend_request_started_metrics,
+};
 use dragonfly_api::common::v2::{
     Download, ObjectStorage, Peer, Piece, Range, Task as CommonTask, TrafficType,
 };
@@ -25,7 +29,7 @@ use dragonfly_api::dfdaemon::{
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::{
     announce_peer_request, announce_peer_response, download_piece_back_to_source_failed_request,
-    AnnouncePeerRequest, DownloadPeerBackToSourceFailedRequest,
+    AnnouncePeerRequest, DeleteTaskRequest, DownloadPeerBackToSourceFailedRequest,
     DownloadPeerBackToSourceFinishedRequest, DownloadPeerBackToSourceStartedRequest,
     DownloadPeerFailedRequest, DownloadPeerFinishedRequest, DownloadPeerStartedRequest,
     DownloadPieceBackToSourceFailedRequest, DownloadPieceBackToSourceFinishedRequest,
@@ -46,7 +50,7 @@ use dragonfly_client_util::{
 use reqwest::header::HeaderMap;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{
     mpsc::{self, Sender},
     Semaphore,
@@ -114,9 +118,10 @@ impl Task {
         id: &str,
         request: Download,
     ) -> ClientResult<metadata::Task> {
-        let task = self
-            .storage
-            .download_task_started(id, request.piece_length, None, None)?;
+        let task = self.storage.download_task_started(id, None, None, None)?;
+        if task.content_length.is_some() && task.piece_length.is_some() {
+            return Ok(task);
+        }
 
         // Handle the request header.
         let mut request_header =
@@ -125,10 +130,6 @@ impl Task {
                 err
             })?;
 
-        if task.content_length.is_some() {
-            return Ok(task);
-        }
-
         // Remove the range header to prevent the server from
         // returning a 206 partial content and returning
         // a 200 full content.
@@ -136,6 +137,15 @@ impl Task {
 
         // Head the url to get the content length.
         let backend = self.backend_factory.build(request.url.as_str())?;
+
+        // Record the start time.
+        let start_time = Instant::now();
+
+        // Collect the backend request started metrics.
+        collect_backend_request_started_metrics(
+            backend.scheme().as_str(),
+            http::Method::HEAD.as_str(),
+        );
         let response = backend
             .head(HeadRequest {
                 task_id: id.to_string(),
@@ -145,10 +155,24 @@ impl Task {
                 client_certs: None,
                 object_storage: request.object_storage,
             })
-            .await?;
+            .await
+            .map_err(|err| {
+                // Collect the backend request failure metrics.
+                collect_backend_request_failure_metrics(
+                    backend.scheme().as_str(),
+                    http::Method::HEAD.as_str(),
+                );
+                err
+            })?;
 
         // Check if the status code is success.
         if !response.success {
+            // Collect the backend request failure metrics.
+            collect_backend_request_failure_metrics(
+                backend.scheme().as_str(),
+                http::Method::HEAD.as_str(),
+            );
+
             return Err(Error::BackendError(BackendError {
                 message: response.error_message.unwrap_or_default(),
                 status_code: Some(response.http_status_code.unwrap_or_default()),
@@ -156,10 +180,27 @@ impl Task {
             }));
         }
 
+        // Collect the backend request finished metrics.
+        collect_backend_request_finished_metrics(
+            backend.scheme().as_str(),
+            http::Method::HEAD.as_str(),
+            start_time.elapsed(),
+        );
+
+        let content_length = match response.content_length {
+            Some(content_length) => content_length,
+            None => return Err(Error::InvalidContentLength),
+        };
+
+        let piece_length = self.piece.calculate_piece_length(
+            piece::PieceLengthStrategy::OptimizeByFileLength,
+            content_length,
+        );
+
         self.storage.download_task_started(
             id,
-            request.piece_length,
-            response.content_length,
+            Some(piece_length),
+            Some(content_length),
             response.http_header,
         )
     }
@@ -171,8 +212,7 @@ impl Task {
 
     // download_failed updates the metadata of the task when the task downloads failed.
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
-        let _ = self.storage.download_task_failed(id).await?;
-        Ok(())
+        self.storage.download_task_failed(id).await.map(|_| ())
     }
 
     // prefetch_task_started updates the metadata of the task when the task prefetch started.
@@ -202,7 +242,7 @@ impl Task {
         task: metadata::Task,
         host_id: &str,
         peer_id: &str,
-        request: Download,
+        mut request: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<()> {
         // Get the content length from the task.
@@ -211,18 +251,27 @@ impl Task {
             return Err(Error::InvalidContentLength);
         };
 
-        // Calculate the interested pieces to download.
-        let interested_pieces = match self.piece.calculate_interested(
-            request.piece_length,
-            content_length,
-            request.range,
-        ) {
-            Ok(interested_pieces) => interested_pieces,
-            Err(err) => {
-                error!("calculate interested pieces error: {:?}", err);
-                return Err(err);
-            }
+        // Get the piece length from the task.
+        let Some(piece_length) = task.piece_length() else {
+            error!("piece length not found");
+            return Err(Error::InvalidPieceLength);
         };
+
+        // Add the piece length to the request for register task.
+        request.piece_length = Some(piece_length);
+
+        // Calculate the interested pieces to download.
+        let interested_pieces =
+            match self
+                .piece
+                .calculate_interested(piece_length, content_length, request.range)
+            {
+                Ok(interested_pieces) => interested_pieces,
+                Err(err) => {
+                    error!("calculate interested pieces error: {:?}", err);
+                    return Err(err);
+                }
+            };
         info!(
             "interested pieces: {:?}",
             interested_pieces
@@ -1599,7 +1648,7 @@ impl Task {
     }
 
     // Delete a task and reclaim local storage.
-    pub async fn delete(&self, task_id: &str) -> ClientResult<()> {
+    pub async fn delete(&self, task_id: &str, host_id: &str) -> ClientResult<()> {
         let task = self.storage.get_task(task_id).map_err(|err| {
             error!("get task {} from local storage error: {:?}", task_id, err);
             err
@@ -1607,14 +1656,20 @@ impl Task {
 
         match task {
             Some(task) => {
-                // Check current task is valid to be deleted.
-                if task.is_uploading() {
-                    return Err(Error::InvalidState("current task is uploading".to_string()));
-                }
-
                 self.storage.delete_task(task.id.as_str()).await;
-                info!("delete task {} from local storage", task.id);
 
+                self.scheduler_client
+                    .delete_task(DeleteTaskRequest {
+                        host_id: host_id.to_string(),
+                        task_id: task_id.to_string(),
+                    })
+                    .await
+                    .map_err(|err| {
+                        error!("delete task {} failed from scheudler: {:?}", task_id, err);
+                        err
+                    })?;
+
+                info!("delete task {} from local storage", task.id);
                 Ok(())
             }
             None => {

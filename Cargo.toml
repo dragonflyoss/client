@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.97"
+version = "0.1.101"
 authors = ["The Dragonfly Developers"]
 homepage = "https://d7y.io/"
 repository = "https://github.com/dragonflyoss/client.git"
@@ -22,15 +22,15 @@ readme = "README.md"
 edition = "2021"
 
 [workspace.dependencies]
-dragonfly-client = { path = "dragonfly-client", version = "0.1.97" }
-dragonfly-client-core = { path = "dragonfly-client-core", version = "0.1.97" }
-dragonfly-client-config = { path = "dragonfly-client-config", version = "0.1.97" }
-dragonfly-client-storage = { path = "dragonfly-client-storage", version = "0.1.97" }
-dragonfly-client-backend = { path = "dragonfly-client-backend", version = "0.1.97" }
-dragonfly-client-util = { path = "dragonfly-client-util", version = "0.1.97" }
-dragonfly-client-init = { path = "dragonfly-client-init", version = "0.1.97" }
+dragonfly-client = { path = "dragonfly-client", version = "0.1.101" }
+dragonfly-client-core = { path = "dragonfly-client-core", version = "0.1.101" }
+dragonfly-client-config = { path = "dragonfly-client-config", version = "0.1.101" }
+dragonfly-client-storage = { path = "dragonfly-client-storage", version = "0.1.101" }
+dragonfly-client-backend = { path = "dragonfly-client-backend", version = "0.1.101" }
+dragonfly-client-util = { path = "dragonfly-client-util", version = "0.1.101" }
+dragonfly-client-init = { path = "dragonfly-client-init", version = "0.1.101" }
 thiserror = "1.0"
-dragonfly-api = "2.0.143"
+dragonfly-api = "2.0.148"
 reqwest = { version = "0.12.4", features = ["stream", "native-tls", "default-tls", "rustls-tls"] }
 rcgen = { version = "0.12.1", features = ["x509-parser"] }
 hyper = { version = "1.4", features = ["full"] }
@@ -57,7 +57,6 @@ hex = "0.4"
 rocksdb = "0.22.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
-serde_json = "1.0"
 http = "1"
 tonic = { version = "0.12.1", features = ["zstd"] }
 tokio = { version = "1.39.2", features = ["full"] }
@@ -66,7 +65,7 @@ tokio-stream = "0.1.15"
 validator = { version = "0.16", features = ["derive"] }
 warp = "0.3.5"
 headers = "0.4.0"
-regex = "1.10.5"
+regex = "1.10.6"
 humantime = "2.1.0"
 prost-wkt-types = "0.6"
 chrono = { version = "0.4.35", features = ["serde", "clock"] }
@@ -79,7 +78,7 @@ opendal = { version = "0.47.3", features = [
     "services-obs",
     "services-cos",
 ] }
-clap = { version = "4.5.11", features = ["derive"] }
+clap = { version = "4.5.15", features = ["derive"] }
 anyhow = "1.0.86"
 toml_edit = "0.22.14"
 toml = "0.8.19"

@@ -201,7 +201,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 download.digest.as_deref(),
                 download.tag.as_deref(),
                 download.application.as_deref(),
-                download.piece_length,
                 download.filtered_query_params.clone(),
             )
             .map_err(|e| {
@@ -291,7 +290,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             error!("missing content length in the response");
             return Err(Status::internal("missing content length in the response"));
         };
-        info!("content length: {}", content_length);
+        info!(
+            "content length {}, piece length {}",
+            content_length,
+            task.piece_length().unwrap_or_default()
+        );
 
         // Download's range priority is higher than the request header's range.
         // If download protocol is http, use the range of the request header.
@@ -600,13 +603,16 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         collect_delete_task_started_metrics(TaskType::Dfdaemon as i32);
 
         // Delete the task from the scheduler.
-        self.task.delete(task_id.as_str()).await.map_err(|err| {
-            // Collect the delete task failure metrics.
-            collect_delete_task_failure_metrics(TaskType::Dfdaemon as i32);
+        self.task
+            .delete(task_id.as_str(), host_id.as_str())
+            .await
+            .map_err(|err| {
+                // Collect the delete task failure metrics.
+                collect_delete_task_failure_metrics(TaskType::Dfdaemon as i32);
 
-            error!("delete task: {}", err);
-            Status::internal(err.to_string())
-        })?;
+                error!("delete task: {}", err);
+                Status::internal(err.to_string())
+            })?;
 
         Ok(Response::new(()))
     }
@@ -721,6 +727,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 task
             }
         };
+        info!(
+            "content length {}, piece length {}",
+            task.content_length(),
+            task.piece_length()
+        );
 
         // Clone the cache task.
         let task_manager = self.cache_task.clone();
@@ -834,7 +845,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 &path.to_path_buf(),
                 request.tag.as_deref(),
                 request.application.as_deref(),
-                request.piece_length,
             )
             .map_err(|err| {
                 error!("generate task id: {}", err);
