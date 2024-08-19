@@ -705,13 +705,13 @@ impl SchedulerClient {
 mod tests {
     use super::*;
     use mockall::mock;
-    use tonic::transport::{Channel};
-    use tokio::time::Duration;
     use mockall::predicate;
     use mockall::predicate::always;
+    use tokio::time::Duration;
+    use tonic::transport::Channel;
 
     // Only mock the methods used in the client function.
-    mock!{        
+    mock! {
         pub SchedulerClient {
             async fn check_scheduler(&self, scheduler_addr: &SocketAddr) -> Result<Channel>;
             async fn update_available_scheduler_addrs(&self) -> Result<()>;
@@ -719,7 +719,7 @@ mod tests {
         }
     }
 
-    mock!{
+    mock! {
         pub Dynconfig {
             pub async fn get_config(&self) -> Arc<SchedulerConfig>;
         }
@@ -734,18 +734,18 @@ mod tests {
 
     // Reuse the Client logic in the Scheduler, retaining only the structural fields necessary for testing.
     #[derive(Clone)]
-    pub struct MiniSchedulerClient {        
+    pub struct SchedulerClient {
         // available_scheduler_addrs is the addresses of available schedulers.
         available_scheduler_addrs: Arc<RwLock<Vec<SocketAddr>>>,
-    
+
         // hashring is the hashring of the scheduler.
         hashring: Arc<RwLock<HashRing<VNode>>>,
-    
+
         // unavailable_scheduler_addrs is a map of unavailable scheduler addrs and the time they were marked as unavailable.
         unavailable_scheduler_addrs: Arc<RwLock<HashMap<SocketAddr, Instant>>>,
     }
-    
-    impl MiniSchedulerClient {
+
+    impl SchedulerClient {
         // client gets the grpc client of the scheduler.
         async fn client(
             &self,
@@ -755,7 +755,9 @@ mod tests {
             mock_dynconfig: &MockDynconfig,
         ) -> Result<SchedulerGRPCClient<Channel>> {
             // Update scheduler addresses of the client.
-            mock_scheduler_client.update_available_scheduler_addrs().await?;
+            mock_scheduler_client
+                .update_available_scheduler_addrs()
+                .await?;
 
             // First try to get the address from the task_id.
             let addrs = self.hashring.read().await;
@@ -833,7 +835,10 @@ mod tests {
                         refresh_count += 1;
 
                         if refresh_count >= refresh_threshold {
-                            if let Err(err) = mock_scheduler_client.refresh_available_scheduler_addrs().await {
+                            if let Err(err) = mock_scheduler_client
+                                .refresh_available_scheduler_addrs()
+                                .await
+                            {
                                 error!("failed to refresh scheduler client: {}", err);
                             };
                             refresh_count = 0;
@@ -847,12 +852,9 @@ mod tests {
             }
             return Err(Error::AvailableSchedulersNotFound);
         }
-
     }
 
-
-    async fn setup() -> (MiniSchedulerClient, MockSchedulerClient, MockDynconfig) {
-
+    async fn setup() -> (SchedulerClient, MockSchedulerClient, MockDynconfig) {
         // Mock the SchedulerClient::check_scheduler().
         let mock_scheduler_client = MockSchedulerClient::new();
 
@@ -873,13 +875,16 @@ mod tests {
             "127.0.0.1:8080".parse().unwrap(),
         ];
         let mut ring: HashRing<VNode> = HashRing::new();
-        let nodes: Vec<VNode> = available_scheduler_addrs.iter().map(|&addr| VNode { addr }).collect();
+        let nodes: Vec<VNode> = available_scheduler_addrs
+            .iter()
+            .map(|&addr| VNode { addr })
+            .collect();
         for node in nodes {
             ring.add(node);
         }
         let unavailable_scheduler_addrs: HashMap<SocketAddr, Instant> = HashMap::new();
-        
-        let scheduler_client = MiniSchedulerClient {
+
+        let scheduler_client = SchedulerClient {
             available_scheduler_addrs: Arc::new(RwLock::new(available_scheduler_addrs)),
             hashring: Arc::new(RwLock::new(ring)),
             unavailable_scheduler_addrs: Arc::new(RwLock::new(unavailable_scheduler_addrs)),
@@ -888,60 +893,64 @@ mod tests {
         (scheduler_client, mock_scheduler_client, mock_dynconfig)
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_client_exceeds_max_attempts() {
         let (scheduler_client, mut mock_scheduler_client, mut mock_dynconfig) = setup().await;
 
-        mock_scheduler_client.expect_check_scheduler()
-                .with(predicate::eq("127.0.0.1:8080".parse::<SocketAddr>().unwrap()))
-                .returning(|_| {
-                    let channel = Channel::from_static("").connect_lazy();
-                    Ok(channel)
-                });
+        mock_scheduler_client
+            .expect_check_scheduler()
+            .with(predicate::eq(
+                "127.0.0.1:8080".parse::<SocketAddr>().unwrap(),
+            ))
+            .returning(|_| {
+                let channel = Channel::from_static("").connect_lazy();
+                Ok(channel)
+            });
 
-        mock_scheduler_client.expect_check_scheduler()
-                .with(predicate::function(|addr: &SocketAddr| {
-                    addr.ip().to_string().starts_with("192.168")
-                }))
-                .returning(|_| {
-                    Err(Error::SchedulerNotServing)
-                });
-        
-        mock_dynconfig
-            .expect_get_config()
-            .returning(|| Arc::new(SchedulerConfig {
-                    cooldown_interval: Duration::from_secs(60),
-                    max_attempts: 3,
-                    refresh_threshold: 10,
-            }));
+        mock_scheduler_client
+            .expect_check_scheduler()
+            .with(predicate::function(|addr: &SocketAddr| {
+                addr.ip().to_string().starts_with("192.168")
+            }))
+            .returning(|_| Err(Error::SchedulerNotServing));
+
+        mock_dynconfig.expect_get_config().returning(|| {
+            Arc::new(SchedulerConfig {
+                cooldown_interval: Duration::from_secs(60),
+                max_attempts: 3,
+                refresh_threshold: 10,
+            })
+        });
 
         // Mock the SchedulerClient::update_available_scheduler_addrs().
-        mock_scheduler_client.expect_update_available_scheduler_addrs()
-                .returning(|| Ok(()));
+        mock_scheduler_client
+            .expect_update_available_scheduler_addrs()
+            .returning(|| Ok(()));
 
         // Mock the SchedulerClient::refresh_available_scheduler_addrs().
-        mock_scheduler_client.expect_refresh_available_scheduler_addrs()
-                .times(0)
-                .returning(|| Ok(()));
+        mock_scheduler_client
+            .expect_refresh_available_scheduler_addrs()
+            .times(0)
+            .returning(|| Ok(()));
 
         let task_id = "task12345";
         let peer_id = Some("peer12345");
-        match scheduler_client.client(task_id, peer_id, &mock_scheduler_client, &mock_dynconfig).await {
+        match scheduler_client
+            .client(task_id, peer_id, &mock_scheduler_client, &mock_dynconfig)
+            .await
+        {
             Ok(_) => {
                 assert!(false, "Client should not connect successfully.");
-            },
-            Err(e) => {
-                match e {
-                    Error::ExceededMaxAttempts => {
-                        assert!(true, "Expected ExceededMaxAttempts error.");
-                    },
-                    _ => {
-                        assert!(false, "Unexpected error type.");
-                    },
-                }
             }
+            Err(e) => match e {
+                Error::ExceededMaxAttempts => {
+                    assert!(true, "Expected ExceededMaxAttempts error.");
+                }
+                _ => {
+                    assert!(false, "Unexpected error type.");
+                }
+            },
         }
-        
     }
 
     #[tokio::test]
@@ -949,57 +958,66 @@ mod tests {
         let (scheduler_client, mut mock_scheduler_client, mut mock_dynconfig) = setup().await;
 
         let mut call_count = 0;
-        mock_scheduler_client.expect_check_scheduler()
-                .with(always())
-                .returning_st(move |_| {
-                    call_count += 1;
-                    if call_count <= 12 {
-                        Err(Error::SchedulerNotServing)
-                    } else {
-                        Ok(Channel::from_static("http://localhost:8080").connect_lazy())
-                    }
-                });
+        mock_scheduler_client
+            .expect_check_scheduler()
+            .with(always())
+            .returning_st(move |_| {
+                call_count += 1;
+                if call_count <= 12 {
+                    Err(Error::SchedulerNotServing)
+                } else {
+                    Ok(Channel::from_static("http://localhost:8080").connect_lazy())
+                }
+            });
 
-        mock_dynconfig.expect_get_config()
-                .returning(|| Arc::new(SchedulerConfig {
-                    cooldown_interval: Duration::from_secs(60),
-                    max_attempts: 100,
-                    refresh_threshold: 10,
-                }));
+        mock_dynconfig.expect_get_config().returning(|| {
+            Arc::new(SchedulerConfig {
+                cooldown_interval: Duration::from_secs(60),
+                max_attempts: 100,
+                refresh_threshold: 10,
+            })
+        });
 
         // Mock the SchedulerClient::update_available_scheduler_addrs().
-        mock_scheduler_client.expect_update_available_scheduler_addrs()
-                .returning(|| Ok(()));
+        mock_scheduler_client
+            .expect_update_available_scheduler_addrs()
+            .returning(|| Ok(()));
 
         // Mock the SchedulerClient::refresh_available_scheduler_addrs().
-        mock_scheduler_client.expect_refresh_available_scheduler_addrs()
-                .returning(|| Ok(()));
+        mock_scheduler_client
+            .expect_refresh_available_scheduler_addrs()
+            .returning(|| Ok(()));
 
         let task_id = "task12345";
         let peer_id = Some("peer12345");
 
         // Step 1: Simulate a situation where all schedulers are unavailable.
-        match scheduler_client.client(task_id, peer_id, &mock_scheduler_client, &mock_dynconfig).await {
+        match scheduler_client
+            .client(task_id, peer_id, &mock_scheduler_client, &mock_dynconfig)
+            .await
+        {
             Ok(_) => {
                 assert!(false, "Client should not connect successfully.");
-            },
-            Err(e) => {
-                match e {
-                    Error::AvailableSchedulersNotFound => {
-                        assert!(true, "Available schedulers not found error.");
-                    },
-                    _ => {
-                        assert!(false, "Unexpected error type.");
-                    }
-                }
             }
+            Err(e) => match e {
+                Error::AvailableSchedulersNotFound => {
+                    assert!(true, "Available schedulers not found error.");
+                }
+                _ => {
+                    assert!(false, "Unexpected error type.");
+                }
+            },
         }
 
         // Step 2: Verify if unavailable scheduler_addrs have stored content.
         let available_addrs = scheduler_client.available_scheduler_addrs.read().await;
         let unavailable_addrs = scheduler_client.unavailable_scheduler_addrs.read().await;
         for addr in available_addrs.iter() {
-            assert!(unavailable_addrs.contains_key(addr), "Address {:?} is not in unavailable_scheduler_addrs", addr);
+            assert!(
+                unavailable_addrs.contains_key(addr),
+                "Address {:?} is not in unavailable_scheduler_addrs",
+                addr
+            );
         }
         drop(available_addrs);
         drop(unavailable_addrs);
@@ -1010,46 +1028,52 @@ mod tests {
         drop(unavailable_addrs);
 
         // Step: 4: Verify that the scheduler is available.
-        match scheduler_client.client(task_id, peer_id, &mock_scheduler_client, &mock_dynconfig).await {
+        match scheduler_client
+            .client(task_id, peer_id, &mock_scheduler_client, &mock_dynconfig)
+            .await
+        {
             Ok(_) => {
                 assert!(true, "Client should connect successfully.");
-            },
+            }
             Err(_e) => {
                 assert!(false, "Client should connect successfully.")
             }
         }
     }
 
-
     #[tokio::test]
     async fn test_available_schedulers_concurrent() {
         let (scheduler_client, mut mock_scheduler_client, mut mock_dynconfig) = setup().await;
 
-        mock_dynconfig.expect_get_config()
-            .returning(|| Arc::new(SchedulerConfig {
+        mock_dynconfig.expect_get_config().returning(|| {
+            Arc::new(SchedulerConfig {
                 cooldown_interval: Duration::from_secs(60),
                 max_attempts: 100,
                 refresh_threshold: 10,
-            }));
+            })
+        });
 
-        mock_scheduler_client.expect_update_available_scheduler_addrs()
+        mock_scheduler_client
+            .expect_update_available_scheduler_addrs()
             .returning(|| Ok(()));
 
-        mock_scheduler_client.expect_refresh_available_scheduler_addrs()
+        mock_scheduler_client
+            .expect_refresh_available_scheduler_addrs()
             .returning(|| Ok(()));
 
         let mut call_count = 0;
-        mock_scheduler_client.expect_check_scheduler()
-                .with(always())
-                .times(110)
-                .returning_st(move |_| {
-                    call_count += 1;
-                    if call_count <= 100 {
-                        Err(Error::SchedulerNotServing)
-                    } else {
-                        Ok(Channel::from_static("http://localhost:8080").connect_lazy())
-                    }
-                });
+        mock_scheduler_client
+            .expect_check_scheduler()
+            .with(always())
+            .times(1100)
+            .returning_st(move |_| {
+                call_count += 1;
+                if call_count <= 1000 {
+                    Err(Error::SchedulerNotServing)
+                } else {
+                    Ok(Channel::from_static("http://localhost:8080").connect_lazy())
+                }
+            });
 
         let mock_dynconfig = Arc::new(mock_dynconfig);
         let scheduler_client = Arc::new(scheduler_client);
@@ -1058,54 +1082,78 @@ mod tests {
         let task_id = "12345";
         let peer_id = Some("peer12345");
 
-        let handles: Vec<_> = (0..10).map(|_| {
-            let scheduler_client = Arc::clone(&scheduler_client);
-            let mock_scheduler_client = Arc::clone(&mock_scheduler_client);
-            let mock_dynconfig = Arc::clone(&mock_dynconfig);
-            let task_id = task_id.to_string();
-            let peer_id = peer_id.map(|id| id.to_string());
+        let handles: Vec<_> = (0..100)
+            .map(|_| {
+                let scheduler_client = Arc::clone(&scheduler_client);
+                let mock_scheduler_client = Arc::clone(&mock_scheduler_client);
+                let mock_dynconfig = Arc::clone(&mock_dynconfig);
+                let task_id = task_id.to_string();
+                let peer_id = peer_id.map(|id| id.to_string());
 
-            tokio::spawn(async move {
-                // Step 1: Simulate a situation where all schedulers are unavailable.
-                match scheduler_client.client(&task_id, peer_id.as_deref(), &mock_scheduler_client, &mock_dynconfig).await {
-                    Ok(_) => {
-                        assert!(false, "Client should not connect successfully.");
-                    },
-                    Err(e) => match e {
-                        Error::AvailableSchedulersNotFound => {
-                            assert!(true, "Available schedulers not found error.");
+                tokio::spawn(async move {
+                    // Step 1: Simulate a situation where all schedulers are unavailable.
+                    match scheduler_client
+                        .client(
+                            &task_id,
+                            peer_id.as_deref(),
+                            &mock_scheduler_client,
+                            &mock_dynconfig,
+                        )
+                        .await
+                    {
+                        Ok(_) => {
+                            assert!(false, "Client should not connect successfully.");
+                        }
+                        Err(e) => match e {
+                            Error::AvailableSchedulersNotFound => {
+                                assert!(true, "Available schedulers not found error.");
+                            }
+                            _ => {
+                                assert!(false, "Unexpected error type.");
+                            }
                         },
-                        _ => {
-                            assert!(false, "Unexpected error type.");
+                    }
+
+                    // Step 2: Verify if unavailable scheduler_addrs have stored content.
+                    let available_addrs = scheduler_client.available_scheduler_addrs.read().await;
+                    let unavailable_addrs =
+                        scheduler_client.unavailable_scheduler_addrs.read().await;
+                    for addr in available_addrs.iter() {
+                        assert!(
+                            unavailable_addrs.contains_key(addr),
+                            "Address {:?} is not in unavailable_scheduler_addrs.",
+                            addr
+                        );
+                    }
+                    drop(available_addrs);
+                    drop(unavailable_addrs);
+
+                    // Step 3: Simulate an update operation to clear unavailable scheduler_addrs.
+                    let mut unavailable_addrs =
+                        scheduler_client.unavailable_scheduler_addrs.write().await;
+                    unavailable_addrs.clear();
+                    drop(unavailable_addrs);
+
+                    // Step 4: Verify that all tasks can connect to the scheduler.
+                    match scheduler_client
+                        .client(
+                            &task_id,
+                            peer_id.as_deref(),
+                            &mock_scheduler_client,
+                            &mock_dynconfig,
+                        )
+                        .await
+                    {
+                        Ok(_) => {
+                            assert!(true, "Client should connect successfully.");
+                        }
+                        Err(_e) => {
+                            assert!(false, "Client should connect successfully.")
                         }
                     }
-                }
-
-                // Step 2: Verify if unavailable scheduler_addrs have stored content.
-                let available_addrs = scheduler_client.available_scheduler_addrs.read().await;
-                let unavailable_addrs = scheduler_client.unavailable_scheduler_addrs.read().await;
-                for addr in available_addrs.iter() {
-                    assert!(unavailable_addrs.contains_key(addr), "Address {:?} is not in unavailable_scheduler_addrs.", addr);
-                }
-                drop(available_addrs);
-                drop(unavailable_addrs);
-
-                // Step 3: Simulate an update operation to clear unavailable scheduler_addrs.
-                let mut unavailable_addrs = scheduler_client.unavailable_scheduler_addrs.write().await;
-                unavailable_addrs.clear();
-                drop(unavailable_addrs);
-
-                // Step 4: Verify that all tasks can connect to the scheduler.
-                match scheduler_client.client(&task_id, peer_id.as_deref(), &mock_scheduler_client, &mock_dynconfig).await {
-                    Ok(_) => {
-                        assert!(true, "Client should connect successfully.");
-                    },
-                    Err(_e) => {
-                        assert!(false, "Client should connect successfully.")
-                    }
-                }
+                })
             })
-        }).collect();
+            .collect();
 
         for handle in handles {
             if let Err(_e) = handle.await {
@@ -1113,6 +1161,4 @@ mod tests {
             }
         }
     }
-
 }
-
