@@ -373,9 +373,16 @@ impl ObjectStorage {
             .http_client(HttpClient::with(client))
             .bucket(&parsed_url.bucket);
 
-        // Configure the endpoint if provided.
+        // Configure the endpoint, and return an error if it is not provided.
         if let Some(endpoint) = object_storage.endpoint {
             builder.endpoint(&endpoint);
+        } else {
+            error!("need endpoint");
+            return Err(ClientError::BackendError(BackendError {
+                message: "need endpoint".to_string(),
+                status_code: None,
+                header: None,
+            }));
         }
 
         Ok(Operator::new(builder)?.finish())
