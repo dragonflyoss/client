@@ -205,10 +205,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Initialize metrics server.
     let metrics = Metrics::new(
-        SocketAddr::new(
-            config.metrics.server.ip.unwrap(),
-            config.metrics.server.port,
-        ),
+        config.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
