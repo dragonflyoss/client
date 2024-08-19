@@ -78,7 +78,7 @@ opendal = { version = "0.47.3", features = [
     "services-obs",
     "services-cos",
 ] }
-clap = { version = "4.5.15", features = ["derive"] }
+clap = { version = "4.5.16", features = ["derive"] }
 anyhow = "1.0.86"
 toml_edit = "0.22.14"
 toml = "0.8.19"
