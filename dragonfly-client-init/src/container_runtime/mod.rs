@@ -98,13 +98,9 @@ mod test {
     fn should_get_engine_from_config() {
         let runtime = ContainerRuntime::new(&Config {
             container_runtime: dragonfly_client_config::dfinit::ContainerRuntime {
-                config: Some(
-                    dragonfly_client_config::dfinit::ContainerRuntimeConfig::Containerd(
-                        Containerd {
-                            ..Default::default()
-                        },
-                    ),
-                ),
+                config: Some(ContainerRuntimeConfig::Containerd(Containerd {
+                    ..Default::default()
+                })),
             },
             ..Default::default()
         });
@@ -112,11 +108,7 @@ mod test {
 
         let runtime = ContainerRuntime::new(&Config {
             container_runtime: dragonfly_client_config::dfinit::ContainerRuntime {
-                config: Some(
-                    dragonfly_client_config::dfinit::ContainerRuntimeConfig::CRIO(
-                        Default::default(),
-                    ),
-                ),
+                config: Some(ContainerRuntimeConfig::CRIO(Default::default())),
             },
             ..Default::default()
         });

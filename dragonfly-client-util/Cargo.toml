@@ -28,3 +28,4 @@ openssl.workspace = true
 blake3.workspace = true
 crc32fast.workspace = true
 base16ct.workspace = true
+tempfile = "3.9.0"
