@@ -134,7 +134,7 @@ pub fn calculate_file_hash(algorithm: Algorithm, path: &Path) -> ClientResult<Di
     match algorithm {
         Algorithm::Crc32 => {
             let mut hasher = crc32fast::Hasher::new();
-            let mut buffer = [0; 1024]; // Set buffer size
+            let mut buffer = [0; 4096];
             loop {
                 let count = reader.read(&mut buffer)?;
                 if count == 0 {
@@ -142,8 +142,10 @@ pub fn calculate_file_hash(algorithm: Algorithm, path: &Path) -> ClientResult<Di
                 }
                 hasher.update(&buffer[..count]);
             }
-            let checksum = hasher.finalize();
-            Ok(Digest::new(algorithm, format!("{:x}", checksum)))
+            Ok(Digest::new(
+                algorithm,
+                base16ct::lower::encode_string(&hasher.finalize().to_be_bytes()),
+            ))
         }
         Algorithm::Blake3 => {
             let mut hasher = blake3::Hasher::new();
@@ -171,7 +173,6 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
     fn test_algorithm_display() {
@@ -199,30 +200,29 @@ mod tests {
     #[test]
     fn test_calculate_file_hash() {
         let content = b"test content";
-        let temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        let temp_file = tempfile::NamedTempFile::new().expect("failed to create temp file");
         let path = temp_file.path();
-        let mut file = File::create(path).expect("Failed to create file");
-        file.write_all(content).expect("Failed to write to file");
+        let mut file = File::create(path).expect("failed to create file");
+        file.write_all(content).expect("failed to write to file");
 
         let expected_blake3 = "ead3df8af4aece7792496936f83b6b6d191a7f256585ce6b6028db161278017e";
-        let expected_sha256 = "6ae8a75555209fd6c44157c0aed8016e763ff435a19cf186f76863140143ff72";
-        let expected_sha512 = "0cbf4caef38047bba9a24e621a961484e5d2a92176a859e7eb27df343dd34eb98d538a6c5f4da1ce302ec250b821cc001e46cc97a704988297185a4df7e99602";
-        let expected_crc32 = "57f4675d";
-
         let digest =
-            calculate_file_hash(Algorithm::Blake3, path).expect("Failed to calculate Blake3 hash");
+            calculate_file_hash(Algorithm::Blake3, path).expect("failed to calculate Blake3 hash");
         assert_eq!(digest.encoded(), expected_blake3);
 
+        let expected_sha256 = "6ae8a75555209fd6c44157c0aed8016e763ff435a19cf186f76863140143ff72";
         let digest =
-            calculate_file_hash(Algorithm::Sha256, path).expect("Failed to calculate Sha256 hash");
+            calculate_file_hash(Algorithm::Sha256, path).expect("failed to calculate Sha256 hash");
         assert_eq!(digest.encoded(), expected_sha256);
 
+        let expected_sha512 = "0cbf4caef38047bba9a24e621a961484e5d2a92176a859e7eb27df343dd34eb98d538a6c5f4da1ce302ec250b821cc001e46cc97a704988297185a4df7e99602";
         let digest =
-            calculate_file_hash(Algorithm::Sha512, path).expect("Failed to calculate Sha512 hash");
+            calculate_file_hash(Algorithm::Sha512, path).expect("failed to calculate Sha512 hash");
         assert_eq!(digest.encoded(), expected_sha512);
 
+        let expected_crc32 = "57f4675d";
         let digest =
-            calculate_file_hash(Algorithm::Crc32, path).expect("Failed to calculate Sha512 hash");
+            calculate_file_hash(Algorithm::Crc32, path).expect("failed to calculate Sha512 hash");
         assert_eq!(digest.encoded(), expected_crc32);
     }
 }
