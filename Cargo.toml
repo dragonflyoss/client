@@ -8,7 +8,7 @@ members = [
     "dragonfly-client-init",
     "dragonfly-client-storage",
     "dragonfly-client-util",
-    "dragonfly-client-backend/examples/plugin"
+    "dragonfly-client-backend/examples/plugin",
 ]
 
 [workspace.package]
@@ -70,10 +70,10 @@ humantime = "2.1.0"
 prost-wkt-types = "0.6"
 chrono = { version = "0.4.35", features = ["serde", "clock"] }
 openssl = { version = "0.10", features = ["vendored"] }
-opendal = { version = "0.47.3", features = [
-    "services-s3", 
+opendal = { version = "0.48.0", features = [
+    "services-s3",
     "services-azblob",
-    "services-gcs", 
+    "services-gcs",
     "services-oss",
     "services-obs",
     "services-cos",
@@ -83,7 +83,7 @@ anyhow = "1.0.86"
 toml_edit = "0.22.14"
 toml = "0.8.19"
 base16ct = { version = "0.2", features = ["alloc"] }
-bytesize = {version = "1.2.0", features = ["serde"]}
+bytesize = { version = "1.2.0", features = ["serde"] }
 bytesize-serde = "0.2.1"
 percent-encoding = "2.3.1"
 
