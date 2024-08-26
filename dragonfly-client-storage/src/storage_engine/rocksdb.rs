@@ -73,7 +73,6 @@ impl RocksdbStorageEngine {
         let mut options = rocksdb::Options::default();
         options.create_if_missing(true);
         options.create_missing_column_families(true);
-        options.optimize_level_style_compaction(Self::DEFAULT_MEMTABLE_MEMORY_BUDGET);
         options.increase_parallelism(num_cpus::get() as i32);
         options.set_compression_type(rocksdb::DBCompressionType::Lz4);
         options.set_max_background_jobs(std::cmp::max(
@@ -93,6 +92,19 @@ impl RocksdbStorageEngine {
         block_options.set_block_size(Self::DEFAULT_BLOCK_SIZE);
         options.set_block_based_table_factory(&block_options);
 
+        // Initialize column family options.
+        let mut cf_options = rocksdb::Options::default();
+        cf_options.set_prefix_extractor(rocksdb::SliceTransform::create_fixed_prefix(64));
+        cf_options.set_memtable_prefix_bloom_ratio(0.2);
+        cf_options.optimize_level_style_compaction(Self::DEFAULT_MEMTABLE_MEMORY_BUDGET);
+
+        // Initialize column families.
+        let cfs = cf_names
+            .iter()
+            .map(|name| (name.to_string(), cf_options.clone()))
+            .collect::<Vec<_>>();
+
+        // Initialize rocksdb directory.
         let dir = dir.join(Self::DEFAULT_DIR_NAME);
 
         // If the storage is not kept, remove the db.
@@ -103,7 +115,8 @@ impl RocksdbStorageEngine {
         }
 
         // Open rocksdb.
-        let db = rocksdb::DB::open_cf(&options, &dir, cf_names).or_err(ErrorType::StorageError)?;
+        let db =
+            rocksdb::DB::open_cf_with_opts(&options, &dir, cfs).or_err(ErrorType::StorageError)?;
         info!("metadata initialized directory: {:?}", dir);
 
         Ok(Self { inner: db })
