@@ -600,8 +600,6 @@ impl crate::Backend for ObjectStorage {
 mod tests {
     use super::*;
 
-    use dragonfly_client_core::Error;
-
     #[test]
     fn should_get_parsed_url() {
         let file_key = "test-bucket/file";
@@ -618,22 +616,18 @@ mod tests {
         // Test each scheme for both file and directory URLs.
         for scheme in schemes {
             let file_url = format!("{}://{}", scheme, file_key);
-
             let url: Url = file_url.parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            // Assert that the file URL is parsed correctly.
             assert!(!parsed_url.is_dir());
             assert_eq!(parsed_url.bucket, "test-bucket");
             assert_eq!(parsed_url.key, "file");
             assert_eq!(parsed_url.scheme, scheme);
 
             let dir_url = format!("{}://{}", scheme, dir_key);
-
             let url: Url = dir_url.parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            // Assert that the directory URL is parsed correctly.
             assert!(parsed_url.is_dir());
             assert_eq!(parsed_url.bucket, "test-bucket");
             assert_eq!(parsed_url.key, "path/to/dir/");
@@ -644,12 +638,10 @@ mod tests {
     #[test]
     fn should_return_error_when_scheme_not_valid() {
         let url: Url = "github://test-bucket/file".parse().unwrap();
-
         let result = TryInto::<ParsedURL>::try_into(url);
 
-        // Assert that an invalid scheme returns an error.
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), Error::InvalidURI(..)));
+        assert!(matches!(result.unwrap_err(), ClientError::InvalidURI(..)));
     }
 
     #[test]
@@ -665,12 +657,10 @@ mod tests {
 
         for scheme in schemes {
             let url: Url = format!("{}:///file", scheme).parse().unwrap();
-
             let result = TryInto::<ParsedURL>::try_into(url);
 
-            // Assert that an invalid bucket returns an error.
             assert!(result.is_err());
-            assert!(matches!(result.unwrap_err(), Error::InvalidURI(..)));
+            assert!(matches!(result.unwrap_err(), ClientError::InvalidURI(..)));
         }
     }
 
@@ -692,7 +682,6 @@ mod tests {
             Duration::from_secs(3),
         );
 
-        // Assert that the OSS operator is successfully created.
         assert!(result.is_ok());
     }
 
@@ -704,9 +693,8 @@ mod tests {
         let result =
             ObjectStorage::new(Scheme::OSS).oss_operator(&parsed_url, None, Duration::from_secs(3));
 
-        // Assert that missing access keys return an error.
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), Error::BackendError(..)));
+        assert!(matches!(result.unwrap_err(), ClientError::BackendError(..)));
     }
 
     #[test]
@@ -726,8 +714,7 @@ mod tests {
             Duration::from_secs(3),
         );
 
-        // Assert that missing endpoint returns an error.
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), Error::BackendError(..)));
+        assert!(matches!(result.unwrap_err(), ClientError::BackendError(..)));
     }
 }
