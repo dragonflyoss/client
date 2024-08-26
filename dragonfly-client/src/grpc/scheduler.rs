@@ -997,7 +997,7 @@ mod tests {
             .await
         {
             Ok(_) => {
-                assert!(false, "Client should not connect successfully.");
+                panic!("Client should not connect successfully.");
             }
             Err(e) => match e {
                 Error::AvailableSchedulersNotFound => {}
