@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 // use crate::dynconfig::Dynconfig;
 use crate::dynconfig::Dynconfig;
 use crate::grpc::health::HealthClient;
@@ -39,6 +40,7 @@ use tokio::task::JoinSet;
 use tonic::transport::Channel;
 use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{error, info, instrument, Instrument};
+
 // VNode is the virtual node of the hashring.
 #[derive(Debug, Copy, Clone, Hash, PartialEq)]
 struct VNode {
@@ -481,7 +483,7 @@ impl SchedulerClient {
                     self.unavailable_scheduler_addrs.write().await;
                 unavailable_scheduler_addrs
                     .entry(addr.addr)
-                    .or_insert_with(std::time::Instant::now);
+                    .or_insert_with(Instant::now);
                 drop(unavailable_scheduler_addrs);
             }
         }
@@ -523,7 +525,7 @@ impl SchedulerClient {
                         self.unavailable_scheduler_addrs.write().await;
                     unavailable_scheduler_addrs
                         .entry(scheduler_addr)
-                        .or_insert_with(std::time::Instant::now);
+                        .or_insert_with(Instant::now);
                     drop(unavailable_scheduler_addrs);
 
                     attempts += 1;
@@ -543,7 +545,7 @@ impl SchedulerClient {
             }
         }
 
-        return Err(Error::AvailableSchedulersNotFound);
+        Err(Error::AvailableSchedulersNotFound)
     }
 
     // Check the health of the scheduler.
@@ -788,7 +790,7 @@ mod tests {
                         self.unavailable_scheduler_addrs.write().await;
                     unavailable_scheduler_addrs
                         .entry(addr.addr)
-                        .or_insert_with(std::time::Instant::now);
+                        .or_insert_with(Instant::now);
                     drop(unavailable_scheduler_addrs);
                 }
             }
@@ -828,7 +830,7 @@ mod tests {
                             self.unavailable_scheduler_addrs.write().await;
                         unavailable_scheduler_addrs
                             .entry(scheduler_addr)
-                            .or_insert_with(std::time::Instant::now);
+                            .or_insert_with(Instant::now);
                         drop(unavailable_scheduler_addrs);
 
                         attempts += 1;
@@ -850,7 +852,7 @@ mod tests {
                     }
                 }
             }
-            return Err(Error::AvailableSchedulersNotFound);
+            Err(Error::AvailableSchedulersNotFound)
         }
     }
 
@@ -940,14 +942,12 @@ mod tests {
             .await
         {
             Ok(_) => {
-                assert!(false, "Client should not connect successfully.");
+                panic!("Client should not connect successfully.");
             }
             Err(e) => match e {
-                Error::ExceededMaxAttempts => {
-                    assert!(true, "Expected ExceededMaxAttempts error.");
-                }
+                Error::ExceededMaxAttempts => {}
                 _ => {
-                    assert!(false, "Unexpected error type.");
+                    panic!("Unexpected error type.");
                 }
             },
         }
@@ -1000,11 +1000,9 @@ mod tests {
                 assert!(false, "Client should not connect successfully.");
             }
             Err(e) => match e {
-                Error::AvailableSchedulersNotFound => {
-                    assert!(true, "Available schedulers not found error.");
-                }
+                Error::AvailableSchedulersNotFound => {}
                 _ => {
-                    assert!(false, "Unexpected error type.");
+                    panic!("Unexpected error type.");
                 }
             },
         }
@@ -1032,11 +1030,9 @@ mod tests {
             .client(task_id, peer_id, &mock_scheduler_client, &mock_dynconfig)
             .await
         {
-            Ok(_) => {
-                assert!(true, "Client should connect successfully.");
-            }
+            Ok(_) => {}
             Err(_e) => {
-                assert!(false, "Client should connect successfully.")
+                panic!("Client should connect successfully.")
             }
         }
     }
@@ -1102,14 +1098,12 @@ mod tests {
                         .await
                     {
                         Ok(_) => {
-                            assert!(false, "Client should not connect successfully.");
+                            panic!("Client should not connect successfully.");
                         }
                         Err(e) => match e {
-                            Error::AvailableSchedulersNotFound => {
-                                assert!(true, "Available schedulers not found error.");
-                            }
+                            Error::AvailableSchedulersNotFound => {}
                             _ => {
-                                assert!(false, "Unexpected error type.");
+                                panic!("Unexpected error type.");
                             }
                         },
                     }
@@ -1144,11 +1138,9 @@ mod tests {
                         )
                         .await
                     {
-                        Ok(_) => {
-                            assert!(true, "Client should connect successfully.");
-                        }
+                        Ok(_) => {}
                         Err(_e) => {
-                            assert!(false, "Client should connect successfully.")
+                            panic!("Client should connect successfully.")
                         }
                     }
                 })
@@ -1157,7 +1149,7 @@ mod tests {
 
         for handle in handles {
             if let Err(_e) = handle.await {
-                assert!(false, "One of the tasks panicked.");
+                panic!("One of the tasks panicked.");
             }
         }
     }
