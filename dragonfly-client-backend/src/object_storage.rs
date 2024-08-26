@@ -202,7 +202,7 @@ impl ObjectStorage {
 
         // Initialize the S3 operator with the object storage.
         let mut builder = opendal::services::S3::default();
-        builder
+        builder = builder
             .access_key_id(&object_storage.access_key_id)
             .secret_access_key(&object_storage.access_key_secret)
             .http_client(HttpClient::with(client))
@@ -210,17 +210,17 @@ impl ObjectStorage {
 
         // Configure the region and endpoint if they are provided.
         if let Some(region) = object_storage.region.as_deref() {
-            builder.region(region);
+            builder = builder.region(region);
         }
 
         // Configure the endpoint if it is provided.
         if let Some(endpoint) = object_storage.endpoint.as_deref() {
-            builder.endpoint(endpoint);
+            builder = builder.endpoint(endpoint);
         }
 
         // Configure the session token if it is provided.
         if let Some(session_token) = object_storage.session_token.as_deref() {
-            builder.security_token(session_token);
+            builder = builder.session_token(session_token);
         }
 
         Ok(Operator::new(builder)?.finish())
@@ -248,13 +248,13 @@ impl ObjectStorage {
 
         // Initialize the GCS operator with the object storage.
         let mut builder = opendal::services::Gcs::default();
-        builder
+        builder = builder
             .http_client(HttpClient::with(client))
             .bucket(&parsed_url.bucket);
 
         // Configure the region and endpoint if they are provided.
         if let Some(credential) = object_storage.credential.as_deref() {
-            builder.credential(credential);
+            builder = builder.credential(credential);
         } else {
             error!("need credential");
             return Err(ClientError::BackendError(BackendError {
@@ -266,7 +266,7 @@ impl ObjectStorage {
 
         // Configure the predefined ACL if it is provided.
         if let Some(predefined_acl) = object_storage.predefined_acl.as_deref() {
-            builder.predefined_acl(predefined_acl);
+            builder = builder.predefined_acl(predefined_acl);
         }
 
         Ok(Operator::new(builder)?.finish())
@@ -294,7 +294,7 @@ impl ObjectStorage {
 
         // Initialize the ABS operator with the object storage.
         let mut builder = opendal::services::Azblob::default();
-        builder
+        builder = builder
             .account_name(&object_storage.access_key_id)
             .account_key(&object_storage.access_key_secret)
             .http_client(HttpClient::with(client))
@@ -302,7 +302,7 @@ impl ObjectStorage {
 
         // Configure the endpoint if it is provided.
         if let Some(endpoint) = object_storage.endpoint.as_deref() {
-            builder.endpoint(endpoint);
+            builder = builder.endpoint(endpoint);
         }
 
         Ok(Operator::new(builder)?.finish())
@@ -330,7 +330,7 @@ impl ObjectStorage {
 
         // Initialize the OSS operator with the object storage.
         let mut builder = opendal::services::Oss::default();
-        builder
+        builder = builder
             .access_key_id(&object_storage.access_key_id)
             .access_key_secret(&object_storage.access_key_secret)
             .http_client(HttpClient::with(client))
@@ -339,7 +339,14 @@ impl ObjectStorage {
 
         // Configure the endpoint if provided.
         if let Some(endpoint) = object_storage.endpoint {
-            builder.endpoint(&endpoint);
+            builder = builder.endpoint(&endpoint);
+        } else {
+            error!("need endpoint");
+            return Err(ClientError::BackendError(BackendError {
+                message: "need endpoint".to_string(),
+                status_code: None,
+                header: None,
+            }));
         }
 
         Ok(Operator::new(builder)?.finish())
@@ -367,7 +374,7 @@ impl ObjectStorage {
 
         // Initialize the OBS operator with the object storage.
         let mut builder = opendal::services::Obs::default();
-        builder
+        builder = builder
             .access_key_id(&object_storage.access_key_id)
             .secret_access_key(&object_storage.access_key_secret)
             .http_client(HttpClient::with(client))
@@ -375,7 +382,7 @@ impl ObjectStorage {
 
         // Configure the endpoint if provided.
         if let Some(endpoint) = object_storage.endpoint {
-            builder.endpoint(&endpoint);
+            builder = builder.endpoint(&endpoint);
         }
 
         Ok(Operator::new(builder)?.finish())
@@ -403,7 +410,7 @@ impl ObjectStorage {
 
         // Initialize the COS operator with the object storage.
         let mut builder = opendal::services::Cos::default();
-        builder
+        builder = builder
             .secret_id(&object_storage.access_key_id)
             .secret_key(&object_storage.access_key_secret)
             .http_client(HttpClient::with(client))
@@ -411,7 +418,7 @@ impl ObjectStorage {
 
         // Configure the endpoint if provided.
         if let Some(endpoint) = object_storage.endpoint {
-            builder.endpoint(&endpoint);
+            builder = builder.endpoint(&endpoint);
         }
 
         Ok(Operator::new(builder)?.finish())
@@ -586,5 +593,128 @@ impl crate::Backend for ObjectStorage {
             reader: Box::new(StreamReader::new(stream)),
             error_message: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_get_parsed_url() {
+        let file_key = "test-bucket/file";
+        let dir_key = "test-bucket/path/to/dir/";
+        let schemes = vec![
+            Scheme::OBS,
+            Scheme::S3,
+            Scheme::ABS,
+            Scheme::OSS,
+            Scheme::COS,
+            Scheme::GCS,
+        ];
+
+        // Test each scheme for both file and directory URLs.
+        for scheme in schemes {
+            let file_url = format!("{}://{}", scheme, file_key);
+            let url: Url = file_url.parse().unwrap();
+            let parsed_url: ParsedURL = url.try_into().unwrap();
+
+            assert!(!parsed_url.is_dir());
+            assert_eq!(parsed_url.bucket, "test-bucket");
+            assert_eq!(parsed_url.key, "file");
+            assert_eq!(parsed_url.scheme, scheme);
+
+            let dir_url = format!("{}://{}", scheme, dir_key);
+            let url: Url = dir_url.parse().unwrap();
+            let parsed_url: ParsedURL = url.try_into().unwrap();
+
+            assert!(parsed_url.is_dir());
+            assert_eq!(parsed_url.bucket, "test-bucket");
+            assert_eq!(parsed_url.key, "path/to/dir/");
+            assert_eq!(parsed_url.scheme, scheme);
+        }
+    }
+
+    #[test]
+    fn should_return_error_when_scheme_not_valid() {
+        let url: Url = "github://test-bucket/file".parse().unwrap();
+        let result = TryInto::<ParsedURL>::try_into(url);
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ClientError::InvalidURI(..)));
+    }
+
+    #[test]
+    fn should_return_error_when_bucket_not_valid() {
+        let schemes = vec![
+            Scheme::OBS,
+            Scheme::S3,
+            Scheme::ABS,
+            Scheme::OSS,
+            Scheme::COS,
+            Scheme::GCS,
+        ];
+
+        for scheme in schemes {
+            let url: Url = format!("{}:///file", scheme).parse().unwrap();
+            let result = TryInto::<ParsedURL>::try_into(url);
+
+            assert!(result.is_err());
+            assert!(matches!(result.unwrap_err(), ClientError::InvalidURI(..)));
+        }
+    }
+
+    #[test]
+    fn should_get_oss_operator() {
+        let url: Url = "oss://test-bucket/file".parse().unwrap();
+        let parsed_url: ParsedURL = url.try_into().unwrap();
+
+        let object_storage = dragonfly_api::common::v2::ObjectStorage {
+            endpoint: Some("test-endpoint.local".into()),
+            access_key_id: "access-key-id".into(),
+            access_key_secret: "access-key-secret".into(),
+            ..Default::default()
+        };
+
+        let result = ObjectStorage::new(Scheme::OSS).oss_operator(
+            &parsed_url,
+            Some(object_storage),
+            Duration::from_secs(3),
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn should_return_error_when_oss_aksk_not_provided() {
+        let url: Url = "oss://test-bucket/file".parse().unwrap();
+        let parsed_url: ParsedURL = url.try_into().unwrap();
+
+        let result =
+            ObjectStorage::new(Scheme::OSS).oss_operator(&parsed_url, None, Duration::from_secs(3));
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ClientError::BackendError(..)));
+    }
+
+    #[test]
+    fn should_return_error_when_oss_endpoint_not_provided() {
+        let url: Url = "oss://test-bucket/file".parse().unwrap();
+        let parsed_url: ParsedURL = url.try_into().unwrap();
+
+        let object_storage = dragonfly_api::common::v2::ObjectStorage {
+            access_key_id: "access-key-id".into(),
+            access_key_secret: "access-key-secret".into(),
+            ..Default::default()
+        };
+
+        let result = ObjectStorage::new(Scheme::OSS).oss_operator(
+            &parsed_url,
+            Some(object_storage),
+            Duration::from_secs(3),
+        );
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ClientError::BackendError(..)));
     }
 }
