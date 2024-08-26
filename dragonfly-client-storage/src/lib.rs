@@ -126,17 +126,14 @@ impl Storage {
 
     // delete_task deletes the task metadatas, task content and piece metadatas.
     pub async fn delete_task(&self, id: &str) {
-        info!("start to delete task: {}", id);
         self.metadata
             .delete_task(id)
             .unwrap_or_else(|err| error!("delete task metadata failed: {}", err));
 
-        info!("start to delete pieces of task: {}", id);
         self.metadata.delete_pieces(id).unwrap_or_else(|err| {
             error!("delete piece metadatas failed: {}", err);
         });
 
-        info!("start to delete content of task: {}", id);
         self.content.delete_task(id).await.unwrap_or_else(|err| {
             error!("delete task content failed: {}", err);
         });
