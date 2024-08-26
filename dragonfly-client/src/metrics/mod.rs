@@ -17,12 +17,15 @@
 use crate::shutdown;
 use chrono::DateTime;
 use dragonfly_api::common::v2::{Range, TrafficType};
+use dragonfly_client_config::dfdaemon::Config;
 use lazy_static::lazy_static;
 use prometheus::{
     exponential_buckets, gather, Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGaugeVec,
     Opts, Registry, TextEncoder,
 };
 use std::net::SocketAddr;
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
@@ -212,6 +215,20 @@ lazy_static! {
     pub static ref DELETE_HOST_FAILURE_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("delete_host_failure_total", "Counter of the number of failed of the delete host.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &[]
+        ).expect("metric can be created");
+
+    // DISK_SPACE is used to count of the disk space.
+    pub static ref DISK_SPACE: IntGaugeVec =
+        IntGaugeVec::new(
+            Opts::new("disk_space_total", "Gauge of the disk space in bytes").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &[]
+        ).expect("metric can be created");
+
+    // DISK_USAGE_SPACE is used to count of the disk usage space.
+    pub static ref DISK_USAGE_SPACE: IntGaugeVec =
+        IntGaugeVec::new(
+            Opts::new("disk_usage_space_total", "Gauge of the disk usage space in bytes").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
             &[]
         ).expect("metric can be created");
 }
@@ -563,11 +580,30 @@ pub fn collect_delete_host_failure_metrics() {
     DELETE_HOST_FAILURE_COUNT.with_label_values(&[]).inc();
 }
 
+// collect_disk_space_metrics collects the disk space metrics.
+pub fn collect_disk_space_metrics(path: &Path) {
+    let stats = match fs2::statvfs(path) {
+        Ok(stats) => stats,
+        Err(err) => {
+            error!("failed to get disk space: {}", err);
+            return;
+        }
+    };
+
+    let total_space = stats.total_space();
+    let available_space = stats.available_space();
+    let usage_space = total_space - available_space;
+    DISK_SPACE.with_label_values(&[]).set(total_space as i64);
+    DISK_USAGE_SPACE
+        .with_label_values(&[])
+        .set(usage_space as i64);
+}
+
 // Metrics is the metrics server.
 #[derive(Debug)]
 pub struct Metrics {
-    // addr is the address of the metrics server.
-    addr: SocketAddr,
+    // config is the configuration of the dfdaemon.
+    config: Arc<Config>,
 
     // shutdown is used to shutdown the metrics server.
     shutdown: shutdown::Shutdown,
@@ -580,12 +616,12 @@ pub struct Metrics {
 impl Metrics {
     // new creates a new Metrics.
     pub fn new(
-        addr: SocketAddr,
+        config: Arc<Config>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
         Self {
-            addr,
+            config,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -613,16 +649,25 @@ impl Metrics {
             .unwrap()
             .set(1);
 
+        // Clone the config.
+        let config = self.config.clone();
+
+        // Create the metrics server address.
+        let addr = SocketAddr::new(
+            self.config.metrics.server.ip.unwrap(),
+            self.config.metrics.server.port,
+        );
+
         // Create the metrics route.
         let metrics_route = warp::path!("metrics")
             .and(warp::get())
             .and(warp::path::end())
-            .and_then(Self::metrics_handler);
+            .and_then(move || Self::metrics_handler(config.clone()));
 
         // Start the metrics server and wait for it to finish.
-        info!("metrics server listening on {}", self.addr);
+        info!("metrics server listening on {}", addr);
         tokio::select! {
-            _ = warp::serve(metrics_route).run(self.addr) => {
+            _ = warp::serve(metrics_route).run(addr) => {
                 // Metrics server ended.
                 info!("metrics server ended");
             }
@@ -718,13 +763,23 @@ impl Metrics {
         REGISTRY
             .register(Box::new(DELETE_HOST_FAILURE_COUNT.clone()))
             .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(DISK_SPACE.clone()))
+            .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(DISK_USAGE_SPACE.clone()))
+            .expect("metric can be registered");
     }
 
     // metrics_handler handles the metrics request.
-    async fn metrics_handler() -> Result<impl Reply, Rejection> {
-        let encoder = TextEncoder::new();
+    async fn metrics_handler(config: Arc<Config>) -> Result<impl Reply, Rejection> {
+        // Collect the disk space metrics.
+        collect_disk_space_metrics(config.storage.dir.as_path());
 
         // Encode custom metrics.
+        let encoder = TextEncoder::new();
         let mut buf = Vec::new();
         if let Err(err) = encoder.encode(&REGISTRY.gather(), &mut buf) {
             error!("could not encode custom metrics: {}", err);

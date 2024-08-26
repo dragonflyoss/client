@@ -177,24 +177,29 @@ impl Default for HTTP {
 #[cfg(test)]
 mod tests {
     use crate::{http, Backend, GetRequest, HeadRequest};
-    use httpmock::{Method, MockServer};
     use reqwest::{header::HeaderMap, StatusCode};
+    use wiremock::{
+        matchers::{method, path},
+        Mock, ResponseTemplate,
+    };
 
     #[tokio::test]
     async fn should_get_head_response() {
-        let server = MockServer::start();
-        server.mock(|when, then| {
-            when.method(Method::GET).path("/head");
-            then.status(200)
-                .header("content-type", "text/html; charset=UTF-8")
-                .body("");
-        });
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/head"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Type", "text/html; charset=UTF-8"),
+            )
+            .mount(&server)
+            .await;
 
         let http_backend = http::HTTP::new("http");
         let resp = http_backend
             .head(HeadRequest {
                 task_id: "test".to_string(),
-                url: server.url("/head"),
+                url: format!("{}/head", server.uri()),
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),
                 client_certs: None,
@@ -208,19 +213,21 @@ mod tests {
 
     #[tokio::test]
     async fn should_return_error_response_when_head_notexists() {
-        let server = MockServer::start();
-        server.mock(|when, then| {
-            when.method(Method::GET).path("/head");
-            then.status(200)
-                .header("content-type", "text/html; charset=UTF-8")
-                .body("");
-        });
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/head"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Type", "text/html; charset=UTF-8"),
+            )
+            .mount(&server)
+            .await;
 
         let http_backend = http::HTTP::new("http");
         let resp = http_backend
             .head(HeadRequest {
                 task_id: "test".to_string(),
-                url: server.url("/head"),
+                url: format!("{}/head", server.uri()),
                 http_header: None,
                 timeout: std::time::Duration::from_secs(5),
                 client_certs: None,
@@ -233,20 +240,23 @@ mod tests {
 
     #[tokio::test]
     async fn should_get_response() {
-        let server = MockServer::start();
-        server.mock(|when, then| {
-            when.method(Method::GET).path("/get");
-            then.status(200)
-                .header("content-type", "text/html; charset=UTF-8")
-                .body("OK");
-        });
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/get"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Type", "text/html; charset=UTF-8")
+                    .set_body_string("OK"),
+            )
+            .mount(&server)
+            .await;
 
         let http_backend = http::HTTP::new("http");
         let mut resp = http_backend
             .get(GetRequest {
                 task_id: "test".to_string(),
                 piece_id: "test".to_string(),
-                url: server.url("/get"),
+                url: format!("{}/get", server.uri()),
                 range: None,
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),

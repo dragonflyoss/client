@@ -1,4 +1,4 @@
-FROM rust:1.75.0 as builder
+FROM rust:1.75.0 AS builder
 
 WORKDIR /app/client
 
@@ -34,9 +34,9 @@ COPY dragonfly-client-init/src ./dragonfly-client-init/src
 
 RUN cargo build --release --verbose --bin dfget --bin dfdaemon --bin dfstore --bin dfcache
 
-FROM alpine:3.17 as health
+FROM alpine:3.17 AS health
 
-ENV GRPC_HEALTH_PROBE_VERSION v0.4.24
+ENV GRPC_HEALTH_PROBE_VERSION=v0.4.24
 
 RUN if [ "$(uname -m)" = "ppc64le" ]; then \
     wget -qO/bin/grpc_health_probe https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/${GRPC_HEALTH_PROBE_VERSION}/grpc_health_probe-linux-ppc64le; \
@@ -47,7 +47,7 @@ RUN if [ "$(uname -m)" = "ppc64le" ]; then \
     fi && \
     chmod +x /bin/grpc_health_probe
 
-FROM golang:1.21.1-alpine3.17 as pprof
+FROM golang:1.21.1-alpine3.17 AS pprof
 
 RUN go install github.com/google/pprof@latest
 

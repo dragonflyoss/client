@@ -28,3 +28,6 @@ openssl.workspace = true
 blake3.workspace = true
 crc32fast.workspace = true
 base16ct.workspace = true
+
+[dev-dependencies]
+tempfile = "3.12.0"
