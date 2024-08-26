@@ -186,7 +186,6 @@ mod tests {
     #[tokio::test]
     async fn should_get_head_response() {
         let server = wiremock::MockServer::start().await;
-
         Mock::given(method("GET"))
             .and(path("/head"))
             .respond_with(
@@ -215,7 +214,6 @@ mod tests {
     #[tokio::test]
     async fn should_return_error_response_when_head_notexists() {
         let server = wiremock::MockServer::start().await;
-
         Mock::given(method("GET"))
             .and(path("/head"))
             .respond_with(
@@ -243,7 +241,6 @@ mod tests {
     #[tokio::test]
     async fn should_get_response() {
         let server = wiremock::MockServer::start().await;
-
         Mock::given(method("GET"))
             .and(path("/get"))
             .respond_with(
