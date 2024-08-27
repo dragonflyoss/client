@@ -22,9 +22,9 @@ use dragonfly_client_core::{
 use libloading::Library;
 use reqwest::header::HeaderMap;
 use rustls_pki_types::CertificateDer;
-use std::fs;
 use std::path::Path;
 use std::{collections::HashMap, pin::Pin, time::Duration};
+use std::{fmt::Debug, fs};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{error, info, instrument, warn};
 use url::Url;
@@ -175,6 +175,9 @@ pub struct BackendFactory {
     // backends is the backends of the factory, including the plugin backends and
     // the builtin backends.
     backends: HashMap<String, Box<dyn Backend + Send + Sync>>,
+    // libraries is used to store the plugin's dynamic library, because when not saving the `Library`,
+    // it will drop when out of scope, resulting in the null pointer error.
+    libraries: Vec<Library>,
 }
 
 // BackendFactory implements the factory of the backend. It supports loading builtin
@@ -308,7 +311,10 @@ impl BackendFactory {
             // Load shared libraries by register_plugin function,
             // file name is the scheme of the backend.
             unsafe {
-                let lib = Library::new(path.as_os_str()).or_err(ErrorType::PluginError)?;
+                self.libraries
+                    .push(Library::new(path.as_os_str()).or_err(ErrorType::PluginError)?);
+                let lib = &self.libraries[self.libraries.len() - 1];
+
                 let register_plugin: libloading::Symbol<
                     unsafe extern "C" fn() -> Box<dyn Backend + Send + Sync>,
                 > = lib.get(b"register_plugin").or_err(ErrorType::PluginError)?;
@@ -332,20 +338,151 @@ impl BackendFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
-    fn should_return_http_backend() {
-        let backend_factory =
-            BackendFactory::new(Some(Path::new("/var/lib/dragonfly/plugins/backend/"))).unwrap();
-        let backend = backend_factory.build("http://example.com");
-        assert!(backend.is_ok());
+    fn should_create_backend_factory_without_plugin_dir() {
+        let factory = BackendFactory::new(None);
+        assert!(
+            factory.is_ok(),
+            "Expected BackendFactory to be created successfully."
+        );
     }
 
     #[test]
-    fn should_return_s3_backend() {
-        let backend_factory =
-            BackendFactory::new(Some(Path::new("/var/lib/dragonfly/plugins/backend/"))).unwrap();
-        let backend = backend_factory.build("s3://example.com");
-        assert!(backend.is_ok());
+    fn should_load_builtin_backends() {
+        let factory = BackendFactory::new(None).unwrap();
+        let expected_backends = vec!["http", "https", "s3", "gs", "abs", "oss", "obs", "cos"];
+        for backend in expected_backends {
+            assert!(
+                factory.backends.contains_key(backend),
+                "Expected '{}' backend to be loaded.",
+                backend
+            );
+        }
+    }
+
+    #[test]
+    fn should_load_plugin_backends() {
+        // Create plugin directory.
+        let dir = tempdir().unwrap();
+        let plugin_dir = dir.path().join("plugin");
+        std::fs::create_dir(&plugin_dir).unwrap();
+        let backend_dir = plugin_dir.join(NAME);
+        std::fs::create_dir(&backend_dir).unwrap();
+
+        build_example_plugin(&backend_dir);
+
+        let result = BackendFactory::new(Some(&plugin_dir));
+        assert!(
+            result.is_ok(),
+            "Expected BackendFactory to be created successfully."
+        );
+        let factory = result.unwrap();
+        assert!(
+            factory.backends.contains_key("hdfs"),
+            "Expected to get plugin backend."
+        );
+    }
+
+    #[test]
+    fn should_skip_loading_plugins_when_plugin_dir_is_invalid() {
+        let dir = tempdir().unwrap();
+        let plugin_dir = dir.path().join("non_existent_plugin_dir");
+
+        let factory = BackendFactory::new(Some(&plugin_dir)).unwrap();
+        assert_eq!(factory.backends.len(), 8);
+    }
+
+    #[test]
+    fn should_return_error_when_plugin_loading_fails() {
+        let dir = tempdir().unwrap();
+        let plugin_dir = dir.path().join("plugin");
+        std::fs::create_dir(&plugin_dir).unwrap();
+        let backend_dir = plugin_dir.join(NAME);
+        std::fs::create_dir(&backend_dir).unwrap();
+
+        // Invalid plugin that cannot be loaded.
+        let lib_path = backend_dir.join("libinvalid_plugin.so");
+        std::fs::write(&lib_path, b"invalid content").unwrap();
+
+        let result = BackendFactory::new(Some(&plugin_dir));
+        assert!(
+            result.is_err(),
+            "Expected an error when plugin loading fails."
+        );
+        let error = result.err().unwrap();
+        assert_eq!(
+            format!("{}", error),
+            format!("PluginError cause: {}: file too short", lib_path.display()),
+        );
+    }
+
+    #[test]
+    fn should_build_correct_backend() {
+        // Create plugin directory.
+        let dir = tempdir().unwrap();
+        let plugin_dir = dir.path().join("plugin");
+        std::fs::create_dir(&plugin_dir).unwrap();
+        let backend_dir = plugin_dir.join(NAME);
+        std::fs::create_dir(&backend_dir).unwrap();
+
+        build_example_plugin(&backend_dir);
+
+        let factory = BackendFactory::new(Some(&plugin_dir)).unwrap();
+        let schemes = vec![
+            "http", "https", "s3", "gs", "abs", "oss", "obs", "cos", "hdfs",
+        ];
+
+        for scheme in schemes {
+            let result = factory.build(&format!("{}://example.com/key", scheme));
+            assert!(
+                result.is_ok(),
+                "Expected `{}` backend to be built successfully.",
+                scheme
+            );
+            let backend = result.unwrap();
+            assert_eq!(backend.scheme(), scheme);
+        }
+    }
+
+    #[test]
+    fn should_return_error_when_backend_scheme_is_not_support() {
+        let factory = BackendFactory::new(None).unwrap();
+        let result = factory.build("github://example.com");
+        assert!(
+            result.is_err(),
+            "Expected an error when backend scheme is invalid."
+        );
+        let error = result.err().unwrap();
+        assert_eq!(format!("{}", error), "invalid parameter");
+    }
+
+    #[test]
+    fn should_return_error_when_backend_scheme_is_invalid() {
+        let factory = BackendFactory::new(None).unwrap();
+        let result = factory.build("invalid_scheme://example.com");
+        assert!(
+            result.is_err(),
+            "Expected an error when backend scheme is invalid."
+        );
+        let error = result.err().unwrap();
+        assert_eq!(
+            format!("{}", error),
+            "ParseError cause: relative URL without a base",
+        );
+    }
+
+    fn build_example_plugin(backend_dir: &Path) {
+        // Build example plugin.
+        let status = std::process::Command::new("cargo")
+            .arg("build")
+            .current_dir("./examples/plugin")
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        // Move example plugin to temporary plugin directory.
+        std::fs::rename("../target/debug/libhdfs.so", backend_dir.join("libhdfs.so")).unwrap();
     }
 }
