@@ -23,7 +23,7 @@ use dragonfly_client_core::{
 use std::path::PathBuf;
 use tokio::{self, fs};
 use toml_edit::{value, Array, DocumentMut, Item, Table, Value};
-use tracing::info;
+use tracing::{info, instrument};
 
 // Containerd represents the containerd runtime manager.
 #[derive(Debug, Clone)]
@@ -39,6 +39,7 @@ pub struct Containerd {
 // Containerd implements the containerd runtime manager.
 impl Containerd {
     // new creates a new containerd runtime manager.
+    #[instrument(skip_all)]
     pub fn new(config: dfinit::Containerd, proxy_config: dfinit::Proxy) -> Self {
         Self {
             config,
@@ -48,6 +49,7 @@ impl Containerd {
 
     // run runs the containerd runtime to initialize
     // runtime environment for the dfdaemon.
+    #[instrument(skip_all)]
     pub async fn run(&self) -> Result<()> {
         let content = fs::read_to_string(&self.config.config_path).await?;
         let mut containerd_config = content
@@ -143,6 +145,7 @@ impl Containerd {
 
     // add_registries adds registries to the containerd configuration, when containerd supports
     // config_path mode and config_path is not empty.
+    #[instrument(skip_all)]
     pub async fn add_registries(
         &self,
         config_path: &str,
@@ -190,6 +193,7 @@ impl Containerd {
 
     // add_registries_by_mirrors adds registries to the containerd configuration, when containerd
     // supports mirror mode with old version.
+    #[instrument(skip_all)]
     pub fn add_registries_by_mirrors(
         &self,
         registries: Vec<ContainerdRegistry>,

@@ -28,7 +28,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{error, info, instrument, warn};
 use warp::{Filter, Rejection, Reply};
 
 // DOWNLOAD_TASK_LEVEL1_DURATION_THRESHOLD is the threshold of download task level1 duration for
@@ -615,6 +615,7 @@ pub struct Metrics {
 // Metrics implements the metrics server.
 impl Metrics {
     // new creates a new Metrics.
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         shutdown: shutdown::Shutdown,
@@ -628,6 +629,7 @@ impl Metrics {
     }
 
     // run starts the metrics server.
+    #[instrument(skip_all)]
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -679,6 +681,7 @@ impl Metrics {
     }
 
     // register_custom_metrics registers all custom metrics.
+    #[instrument(skip_all)]
     fn register_custom_metrics(&self) {
         REGISTRY
             .register(Box::new(VERSION_GAUGE.clone()))
@@ -774,6 +777,7 @@ impl Metrics {
     }
 
     // metrics_handler handles the metrics request.
+    #[instrument(skip_all)]
     async fn metrics_handler(config: Arc<Config>) -> Result<impl Reply, Rejection> {
         // Collect the disk space metrics.
         collect_disk_space_metrics(config.storage.dir.as_path());

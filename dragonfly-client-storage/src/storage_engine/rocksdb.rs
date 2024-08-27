@@ -24,7 +24,7 @@ use std::{
     ops::Deref,
     path::{Path, PathBuf},
 };
-use tracing::{info, warn};
+use tracing::{info, instrument, warn};
 
 /// RocksdbStorageEngine is a storage engine based on rocksdb.
 pub struct RocksdbStorageEngine {
@@ -67,6 +67,7 @@ impl RocksdbStorageEngine {
     const DEFAULT_LOG_MAX_FILES: usize = 10;
 
     /// open opens a rocksdb storage engine with the given directory and column families.
+    #[instrument(skip_all)]
     pub fn open(dir: &Path, log_dir: &PathBuf, cf_names: &[&str], keep: bool) -> Result<Self> {
         info!("initializing metadata directory: {:?} {:?}", dir, cf_names);
         // Initialize rocksdb options.
@@ -126,6 +127,7 @@ impl RocksdbStorageEngine {
 // RocksdbStorageEngine implements the storage engine operations.
 impl Operations for RocksdbStorageEngine {
     // get gets the object by key.
+    #[instrument(skip_all)]
     fn get<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>> {
         let cf = cf_handle::<O>(self)?;
         let mut options = ReadOptions::default();
@@ -141,6 +143,7 @@ impl Operations for RocksdbStorageEngine {
     }
 
     // put puts the object by key.
+    #[instrument(skip_all)]
     fn put<O: DatabaseObject>(&self, key: &[u8], value: &O) -> Result<()> {
         let cf = cf_handle::<O>(self)?;
         let serialized = value.serialized()?;
@@ -153,6 +156,7 @@ impl Operations for RocksdbStorageEngine {
     }
 
     // delete deletes the object by key.
+    #[instrument(skip_all)]
     fn delete<O: DatabaseObject>(&self, key: &[u8]) -> Result<()> {
         let cf = cf_handle::<O>(self)?;
         let mut options = WriteOptions::default();
@@ -164,6 +168,7 @@ impl Operations for RocksdbStorageEngine {
     }
 
     // iter iterates all objects.
+    #[instrument(skip_all)]
     fn iter<O: DatabaseObject>(&self) -> Result<impl Iterator<Item = Result<(Box<[u8]>, O)>>> {
         let cf = cf_handle::<O>(self)?;
         let iter = self.iterator_cf(cf, rocksdb::IteratorMode::Start);
@@ -174,6 +179,7 @@ impl Operations for RocksdbStorageEngine {
     }
 
     // iter_raw iterates all objects without serialization.
+    #[instrument(skip_all)]
     fn iter_raw<O: DatabaseObject>(
         &self,
     ) -> Result<impl Iterator<Item = Result<(Box<[u8]>, Box<[u8]>)>>> {
@@ -187,6 +193,7 @@ impl Operations for RocksdbStorageEngine {
     }
 
     // prefix_iter iterates all objects with prefix.
+    #[instrument(skip_all)]
     fn prefix_iter<O: DatabaseObject>(
         &self,
         prefix: &[u8],
@@ -200,6 +207,7 @@ impl Operations for RocksdbStorageEngine {
     }
 
     // prefix_iter_raw iterates all objects with prefix without serialization.
+    #[instrument(skip_all)]
     fn prefix_iter_raw<O: DatabaseObject>(
         &self,
         prefix: &[u8],
@@ -211,6 +219,8 @@ impl Operations for RocksdbStorageEngine {
         }))
     }
 
+    // batch_delete deletes objects by keys.
+    #[instrument(skip_all)]
     fn batch_delete<O: DatabaseObject>(&self, keys: Vec<&[u8]>) -> Result<()> {
         let cf = cf_handle::<O>(self)?;
         let mut batch = rocksdb::WriteBatch::default();

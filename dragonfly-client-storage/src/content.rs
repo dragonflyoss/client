@@ -23,7 +23,7 @@ use std::sync::Arc;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom};
 use tokio_util::io::InspectReader;
-use tracing::{error, info, warn};
+use tracing::{error, info, instrument, warn};
 
 // DEFAULT_DIR_NAME is the default directory name to store content.
 const DEFAULT_DIR_NAME: &str = "content";
@@ -58,6 +58,7 @@ pub struct WriteCacheTaskResponse {
 // Content implements the content storage.
 impl Content {
     // new returns a new content.
+    #[instrument(skip_all)]
     pub async fn new(config: Arc<Config>, dir: &Path) -> Result<Content> {
         let dir = dir.join(DEFAULT_DIR_NAME);
 
@@ -75,6 +76,7 @@ impl Content {
     }
 
     // hard_link_or_copy_task hard links or copies the task content to the destination.
+    #[instrument(skip_all)]
     pub async fn hard_link_or_copy_task(
         &self,
         task: crate::metadata::Task,
@@ -143,18 +145,21 @@ impl Content {
     }
 
     // hard_link_task hard links the task content.
+    #[instrument(skip_all)]
     async fn hard_link_task(&self, task_id: &str, link: &Path) -> Result<()> {
         fs::hard_link(self.dir.join(task_id), link).await?;
         Ok(())
     }
 
     // copy_task copies the task content to the destination.
+    #[instrument(skip_all)]
     async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
         fs::copy(self.dir.join(task_id), to).await?;
         Ok(())
     }
 
     // copy_task_by_range copies the task content to the destination by range.
+    #[instrument(skip_all)]
     async fn copy_task_by_range(&self, task_id: &str, to: &Path, range: Range) -> Result<()> {
         let mut from_f = File::open(self.dir.join(task_id)).await?;
         from_f.seek(SeekFrom::Start(range.start)).await?;
@@ -176,6 +181,7 @@ impl Content {
     }
 
     // read_task reads the task content by range.
+    #[instrument(skip_all)]
     pub async fn read_task_by_range(&self, task_id: &str, range: Range) -> Result<impl AsyncRead> {
         let task_path = self.dir.join(task_id);
 
@@ -197,6 +203,7 @@ impl Content {
     }
 
     // delete_task deletes the task content.
+    #[instrument(skip_all)]
     pub async fn delete_task(&self, task_id: &str) -> Result<()> {
         let task_path = self.dir.join(task_id);
         fs::remove_file(task_path.as_path()).await.map_err(|err| {
@@ -207,6 +214,7 @@ impl Content {
     }
 
     // read_piece reads the piece from the content.
+    #[instrument(skip_all)]
     pub async fn read_piece(
         &self,
         task_id: &str,
@@ -248,6 +256,7 @@ impl Content {
     }
 
     // write_piece writes the piece to the content.
+    #[instrument(skip_all)]
     pub async fn write_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
@@ -299,6 +308,7 @@ impl Content {
     }
 
     // hard_link_or_copy_cache_task hard links or copies the task content to the destination.
+    #[instrument(skip_all)]
     pub async fn hard_link_or_copy_cache_task(
         &self,
         task: crate::metadata::CacheTask,
@@ -340,6 +350,7 @@ impl Content {
     }
 
     // copy_cache_task copies the cache task content to the destination.
+    #[instrument(skip_all)]
     pub async fn write_cache_task(
         &self,
         task_id: &str,
@@ -386,6 +397,7 @@ impl Content {
     }
 
     // delete_task deletes the cache task content.
+    #[instrument(skip_all)]
     pub async fn delete_cache_task(&self, cache_task_id: &str) -> Result<()> {
         let cache_task_path = self.dir.join(cache_task_id);
         fs::remove_file(cache_task_path.as_path())

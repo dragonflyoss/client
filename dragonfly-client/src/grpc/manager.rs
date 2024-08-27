@@ -37,6 +37,7 @@ pub struct ManagerClient {
 // ManagerClient implements the grpc client of the manager.
 impl ManagerClient {
     // new creates a new ManagerClient.
+    #[instrument(skip_all)]
     pub async fn new(addrs: Vec<String>) -> Result<Self> {
         // Find the available manager address.
         let mut available_addr = String::new();
@@ -118,6 +119,7 @@ impl ManagerClient {
     }
 
     // make_request creates a new request with timeout.
+    #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);

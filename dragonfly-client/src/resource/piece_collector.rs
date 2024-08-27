@@ -74,6 +74,7 @@ pub struct PieceCollector {
 
 impl PieceCollector {
     // new creates a new PieceCollector.
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         host_id: &str,
@@ -100,6 +101,7 @@ impl PieceCollector {
     }
 
     // run runs the piece collector.
+    #[instrument(skip_all)]
     pub async fn run(&self) -> Receiver<CollectedPiece> {
         let host_id = self.host_id.clone();
         let task_id = self.task_id.clone();
