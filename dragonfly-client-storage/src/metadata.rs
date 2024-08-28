@@ -910,25 +910,24 @@ mod tests {
     use super::*;
     use tempdir::TempDir;
 
-    const MOCK_TASK_ID_1: &str = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
-    const MOCK_TASK_ID_2: &str = "a535b115f18d96870f0422ac891f91dd162f2f391e4778fb84279701fcd02dd1";
-
     #[test]
-    fn should_create_metadata_db() {
-        let dir = TempDir::new("metadata_db").unwrap();
+    fn should_create_metadata() {
+        let dir = TempDir::new("metadata").unwrap();
         let log_dir = dir.path().join("log");
         let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
         assert!(metadata.get_tasks().unwrap().is_empty());
-        assert!(metadata.get_pieces(MOCK_TASK_ID_1).unwrap().is_empty());
+        assert!(metadata
+            .get_pieces("d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
     fn test_task_lifecycle() {
-        let dir = TempDir::new("metadata_db").unwrap();
+        let dir = TempDir::new("metadata").unwrap();
         let log_dir = dir.path().join("log");
         let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
-
-        let task_id = MOCK_TASK_ID_1;
+        let task_id = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
 
         // Test download_task_started.
         metadata
@@ -987,8 +986,7 @@ mod tests {
         );
 
         // Test get_tasks.
-        let task_id = MOCK_TASK_ID_2;
-
+        let task_id = "a535b115f18d96870f0422ac891f91dd162f2f391e4778fb84279701fcd02dd1";
         metadata
             .download_task_started(task_id, Some(1024), None, None)
             .unwrap();
@@ -1003,10 +1001,10 @@ mod tests {
 
     #[test]
     fn test_piece_lifecycle() {
-        let dir = TempDir::new("metadata_db").unwrap();
+        let dir = TempDir::new("metadata").unwrap();
         let log_dir = dir.path().join("log");
         let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
-        let task_id = MOCK_TASK_ID_1;
+        let task_id = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
 
         // Test download_piece_started.
         metadata.download_piece_started(task_id, 1).unwrap();
