@@ -373,6 +373,11 @@ impl Storage {
         self.metadata.get_piece(task_id, number)
     }
 
+    // get_pieces returns the piece metadatas.
+    pub fn get_pieces(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
+        self.metadata.get_pieces(task_id)
+    }
+
     // piece_id returns the piece id.
     pub fn piece_id(&self, task_id: &str, number: u32) -> String {
         self.metadata.piece_id(task_id, number)
