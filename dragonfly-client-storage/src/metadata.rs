@@ -824,6 +824,23 @@ impl<E: StorageEngineOwned> Metadata<E> {
         self.db.get(self.piece_id(task_id, number).as_bytes())
     }
 
+    // get_pieces gets the piece metadatas.
+    pub fn get_pieces(&self, task_id: &str) -> Result<Vec<Piece>> {
+        let pieces = self
+            .db
+            .prefix_iter_raw::<Piece>(task_id.as_bytes())?
+            .map(|ele| {
+                let (_, value) = ele?;
+                Ok(value)
+            })
+            .collect::<Result<Vec<Box<[u8]>>>>()?;
+
+        pieces
+            .par_iter()
+            .map(|piece| Piece::deserialize_from(piece))
+            .collect()
+    }
+
     // delete_piece deletes the piece metadata.
     #[instrument(skip_all)]
     pub fn delete_piece(&self, task_id: &str, number: u32) -> Result<()> {
@@ -891,8 +908,10 @@ impl Metadata<RocksdbStorageEngine> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use tempdir::TempDir;
+
+    const MOCK_TASK_ID_1: &str = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
+    const MOCK_TASK_ID_2: &str = "a535b115f18d96870f0422ac891f91dd162f2f391e4778fb84279701fcd02dd1";
 
     #[test]
     fn should_create_metadata_db() {
@@ -900,6 +919,7 @@ mod tests {
         let log_dir = dir.path().join("log");
         let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
         assert!(metadata.get_tasks().unwrap().is_empty());
+        assert!(metadata.get_pieces(MOCK_TASK_ID_1).unwrap().is_empty());
     }
 
     #[test]
@@ -908,7 +928,7 @@ mod tests {
         let log_dir = dir.path().join("log");
         let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
 
-        let task_id = "task1";
+        let task_id = MOCK_TASK_ID_1;
 
         // Test download_task_started.
         metadata
@@ -967,7 +987,7 @@ mod tests {
         );
 
         // Test get_tasks.
-        let task_id = "task2";
+        let task_id = MOCK_TASK_ID_2;
 
         metadata
             .download_task_started(task_id, Some(1024), None, None)
@@ -986,7 +1006,7 @@ mod tests {
         let dir = TempDir::new("metadata_db").unwrap();
         let log_dir = dir.path().join("log");
         let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
-        let task_id = "task3";
+        let task_id = MOCK_TASK_ID_1;
 
         // Test download_piece_started.
         metadata.download_piece_started(task_id, 1).unwrap();
@@ -1009,6 +1029,12 @@ mod tests {
             piece.digest, "digest1",
             "piece should be updated after download_piece_finished"
         );
+
+        // Test get_pieces.
+        metadata.download_piece_started(task_id, 2).unwrap();
+        metadata.download_piece_started(task_id, 3).unwrap();
+        let pieces = metadata.get_pieces(task_id).unwrap();
+        assert_eq!(pieces.len(), 3, "should get 3 pieces in total");
 
         // Test download_piece_failed.
         metadata.download_piece_started(task_id, 2).unwrap();
@@ -1048,5 +1074,10 @@ mod tests {
             piece.uploading_count, 0,
             "piece should be updated after upload_piece_failed"
         );
+
+        // Test delete_pieces.
+        metadata.delete_pieces(task_id).unwrap();
+        let pieces = metadata.get_pieces(task_id).unwrap();
+        assert!(pieces.is_empty(), "should get 0 pieces after delete_pieces");
     }
 }
