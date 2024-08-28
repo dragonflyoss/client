@@ -26,7 +26,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::fs;
-use tracing::info;
+use tracing::{info, instrument};
 use validator::Validate;
 
 // NAME is the name of dfdaemon.
@@ -946,6 +946,9 @@ pub struct Stats {
 pub struct Tracing {
     // addr is the address to report tracing log.
     pub addr: Option<String>,
+
+    // flamegraph indicates whether enable flamegraph tracing.
+    pub flamegraph: bool,
 }
 
 // Config is the configuration for dfdaemon.
@@ -1024,6 +1027,7 @@ pub struct Config {
 // Config implements the config operation of dfdaemon.
 impl Config {
     // load loads configuration from file.
+    #[instrument(skip_all)]
     pub async fn load(path: &PathBuf) -> Result<Config> {
         // Load configuration from file.
         let content = fs::read_to_string(path).await?;
@@ -1039,6 +1043,7 @@ impl Config {
     }
 
     // convert converts the configuration.
+    #[instrument(skip_all)]
     fn convert(&mut self) {
         // Convert advertise ip.
         if self.host.ip.is_none() {

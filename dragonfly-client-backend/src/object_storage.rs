@@ -24,7 +24,7 @@ use std::result::Result;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio_util::io::StreamReader;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 use url::Url;
 
 // Scheme is the scheme of the object storage.
@@ -158,12 +158,14 @@ pub struct ObjectStorage {
 
 // ObjectStorage implements the ObjectStorage trait.
 impl ObjectStorage {
-    /// Returns ObjectStorage that implements the Backend trait.
+    // Returns ObjectStorage that implements the Backend trait.
+    #[instrument(skip_all)]
     pub fn new(scheme: Scheme) -> ObjectStorage {
         Self { scheme }
     }
 
     // operator initializes the operator with the parsed URL and object storage.
+    #[instrument(skip_all)]
     pub fn operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
@@ -181,6 +183,7 @@ impl ObjectStorage {
     }
 
     // s3_operator initializes the S3 operator with the parsed URL and object storage.
+    #[instrument(skip_all)]
     pub fn s3_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
@@ -227,6 +230,7 @@ impl ObjectStorage {
     }
 
     // gcs_operator initializes the GCS operator with the parsed URL and object storage.
+    #[instrument(skip_all)]
     pub fn gcs_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
@@ -273,6 +277,7 @@ impl ObjectStorage {
     }
 
     // abs_operator initializes the ABS operator with the parsed URL and object storage.
+    #[instrument(skip_all)]
     pub fn abs_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
@@ -309,6 +314,7 @@ impl ObjectStorage {
     }
 
     // oss_operator initializes the OSS operator with the parsed URL and object storage.
+    #[instrument(skip_all)]
     pub fn oss_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
@@ -353,6 +359,7 @@ impl ObjectStorage {
     }
 
     // obs_operator initializes the OBS operator with the parsed URL and object storage.
+    #[instrument(skip_all)]
     pub fn obs_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
@@ -389,6 +396,7 @@ impl ObjectStorage {
     }
 
     // cos_operator initializes the COS operator with the parsed URL and object storage.
+    #[instrument(skip_all)]
     pub fn cos_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
@@ -429,11 +437,13 @@ impl ObjectStorage {
 #[tonic::async_trait]
 impl crate::Backend for ObjectStorage {
     // scheme returns the scheme of the object storage.
+    #[instrument(skip_all)]
     fn scheme(&self) -> String {
         self.scheme.to_string()
     }
 
     //head gets the header of the request.
+    #[instrument(skip_all)]
     async fn head(&self, request: super::HeadRequest) -> ClientResult<super::HeadResponse> {
         info!(
             "head request {} {}: {:?}",
@@ -519,6 +529,7 @@ impl crate::Backend for ObjectStorage {
     }
 
     // Returns content of requested file.
+    #[instrument(skip_all)]
     async fn get(
         &self,
         request: super::GetRequest,

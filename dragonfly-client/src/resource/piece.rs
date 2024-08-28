@@ -80,6 +80,7 @@ pub struct Piece {
 // Piece implements the piece manager.
 impl Piece {
     // new returns a new Piece.
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,

@@ -72,6 +72,7 @@ pub struct DfdaemonUploadServer {
 // DfdaemonUploadServer implements the grpc server of the upload.
 impl DfdaemonUploadServer {
     // new creates a new DfdaemonUploadServer.
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         addr: SocketAddr,
@@ -1076,6 +1077,7 @@ pub struct DfdaemonUploadClient {
 // DfdaemonUploadClient implements the dfdaemon upload grpc client.
 impl DfdaemonUploadClient {
     // new creates a new DfdaemonUploadClient.
+    #[instrument(skip_all)]
     pub async fn new(addr: String) -> ClientResult<Self> {
         let channel = Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
             .buffer_size(super::BUFFER_SIZE)
@@ -1188,6 +1190,7 @@ impl DfdaemonUploadClient {
     }
 
     // make_request creates a new request with timeout.
+    #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);

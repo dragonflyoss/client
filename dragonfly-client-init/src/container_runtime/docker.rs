@@ -16,7 +16,7 @@
 
 use dragonfly_client_config::dfinit;
 use dragonfly_client_core::{Error, Result};
-use tracing::info;
+use tracing::{info, instrument};
 
 // Docker represents the docker runtime manager.
 #[derive(Debug, Clone)]
@@ -32,6 +32,7 @@ pub struct Docker {
 // Docker implements the docker runtime manager.
 impl Docker {
     // new creates a new docker runtime manager.
+    #[instrument(skip_all)]
     pub fn new(config: dfinit::Docker, proxy_config: dfinit::Proxy) -> Self {
         Self {
             config,
@@ -43,6 +44,7 @@ impl Docker {
     //
     // run runs the docker runtime to initialize
     // runtime environment for the dfdaemon.
+    #[instrument(skip_all)]
     pub async fn run(&self) -> Result<()> {
         info!(
             "docker feature is enabled, proxy_addr: {}, config_path: {:?}",

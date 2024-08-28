@@ -20,7 +20,7 @@ use futures::TryStreamExt;
 use rustls_pki_types::CertificateDer;
 use std::io::{Error as IOError, ErrorKind};
 use tokio_util::io::StreamReader;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
 // HTTP is the HTTP backend.
 pub struct HTTP {
@@ -31,6 +31,7 @@ pub struct HTTP {
 // HTTP implements the http interface.
 impl HTTP {
     // new returns a new HTTP.
+    #[instrument(skip_all)]
     pub fn new(scheme: &str) -> HTTP {
         Self {
             scheme: scheme.to_string(),
@@ -38,6 +39,7 @@ impl HTTP {
     }
 
     // client returns a new reqwest client.
+    #[instrument(skip_all)]
     fn client(
         &self,
         client_certs: Option<Vec<CertificateDer<'static>>>,
@@ -70,11 +72,13 @@ impl HTTP {
 #[tonic::async_trait]
 impl super::Backend for HTTP {
     // scheme returns the scheme of the HTTP backend.
+    #[instrument(skip_all)]
     fn scheme(&self) -> String {
         self.scheme.clone()
     }
 
     // head gets the header of the request.
+    #[instrument(skip_all)]
     async fn head(&self, request: super::HeadRequest) -> Result<super::HeadResponse> {
         info!(
             "head request {} {}: {:?}",
@@ -121,6 +125,7 @@ impl super::Backend for HTTP {
     }
 
     // get gets the content of the request.
+    #[instrument(skip_all)]
     async fn get(&self, request: super::GetRequest) -> Result<super::GetResponse<super::Body>> {
         info!(
             "get request {} {} {}: {:?}",

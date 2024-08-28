@@ -17,7 +17,7 @@
 use crate::shutdown;
 use std::net::SocketAddr;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, instrument};
 use warp::{Filter, Rejection, Reply};
 
 // Health is the health server.
@@ -36,6 +36,7 @@ pub struct Health {
 // Health implements the health server.
 impl Health {
     // new creates a new Health.
+    #[instrument(skip_all)]
     pub fn new(
         addr: SocketAddr,
         shutdown: shutdown::Shutdown,
@@ -49,6 +50,7 @@ impl Health {
     }
 
     // run starts the health server.
+    #[instrument(skip_all)]
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -74,6 +76,7 @@ impl Health {
     }
 
     // health_handler handles the health check request.
+    #[instrument(skip_all)]
     async fn health_handler() -> Result<impl Reply, Rejection> {
         Ok(warp::reply())
     }

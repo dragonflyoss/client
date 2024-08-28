@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::vec::Vec;
 use std::{fs, io};
+use tracing::instrument;
 
 // NoVerifier is a verifier that does not verify the server certificate.
 // It is used for testing and should not be used in production.
@@ -89,6 +90,7 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
 // Generate a CA certificate from PEM format files.
 // Generate CA by openssl with PEM format files:
 // openssl req -x509 -sha256 -days 36500 -nodes -newkey rsa:4096 -keyout ca.key -out ca.crt
+#[instrument(skip_all)]
 pub fn generate_ca_cert_from_pem(
     ca_cert_path: &PathBuf,
     ca_key_path: &PathBuf,
@@ -109,6 +111,7 @@ pub fn generate_ca_cert_from_pem(
 }
 
 // Generate certificates from PEM format files.
+#[instrument(skip_all)]
 pub fn generate_certs_from_pem(cert_path: &PathBuf) -> ClientResult<Vec<CertificateDer<'static>>> {
     let f = fs::File::open(cert_path)?;
     let mut certs_pem_reader = io::BufReader::new(f);
@@ -118,6 +121,7 @@ pub fn generate_certs_from_pem(cert_path: &PathBuf) -> ClientResult<Vec<Certific
 
 // generate_self_signed_certs_by_ca_cert generates a self-signed certificates
 // by given subject alternative names with CA certificate.
+#[instrument(skip_all)]
 pub fn generate_self_signed_certs_by_ca_cert(
     ca_cert: &Certificate,
     subject_alt_names: Vec<String>,
@@ -143,6 +147,7 @@ pub fn generate_self_signed_certs_by_ca_cert(
 }
 
 // generate_simple_self_signed_certs generates a simple self-signed certificates
+#[instrument(skip_all)]
 pub fn generate_simple_self_signed_certs(
     subject_alt_names: impl Into<Vec<String>>,
 ) -> ClientResult<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
@@ -158,6 +163,7 @@ pub fn generate_simple_self_signed_certs(
 }
 
 // certs_to_raw_certs converts DER format of the certificates to raw certificates.
+#[instrument(skip_all)]
 pub fn certs_to_raw_certs(certs: Vec<CertificateDer<'static>>) -> Vec<Vec<u8>> {
     certs
         .into_iter()
@@ -166,6 +172,7 @@ pub fn certs_to_raw_certs(certs: Vec<CertificateDer<'static>>) -> Vec<Vec<u8>> {
 }
 
 // raw_certs_to_certs converts raw certificates to DER format of certificates.
+#[instrument(skip_all)]
 pub fn raw_certs_to_certs(raw_certs: Vec<Vec<u8>>) -> Vec<CertificateDer<'static>> {
     raw_certs.into_iter().map(|cert| cert.into()).collect()
 }

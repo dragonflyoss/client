@@ -145,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
         args.log_max_files,
         None,
         false,
+        false,
         args.verbose,
     );
 

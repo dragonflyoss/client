@@ -59,7 +59,7 @@ use tokio::task::JoinSet;
 use tokio::time::sleep;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Status};
-use tracing::{error, info, Instrument};
+use tracing::{error, info, instrument, Instrument};
 
 use super::*;
 
@@ -87,6 +87,7 @@ pub struct Task {
 // Task implements the task manager.
 impl Task {
     // new returns a new Task.
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
@@ -113,6 +114,7 @@ impl Task {
     }
 
     // download_started updates the metadata of the task when the task downloads started.
+    #[instrument(skip_all)]
     pub async fn download_started(
         &self,
         id: &str,
@@ -206,26 +208,31 @@ impl Task {
     }
 
     // download_finished updates the metadata of the task when the task downloads finished.
+    #[instrument(skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.download_task_finished(id)
     }
 
     // download_failed updates the metadata of the task when the task downloads failed.
+    #[instrument(skip_all)]
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
         self.storage.download_task_failed(id).await.map(|_| ())
     }
 
     // prefetch_task_started updates the metadata of the task when the task prefetch started.
+    #[instrument(skip_all)]
     pub async fn prefetch_task_started(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.prefetch_task_started(id).await
     }
 
     // prefetch_task_failed updates the metadata of the task when the task prefetch failed.
+    #[instrument(skip_all)]
     pub async fn prefetch_task_failed(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.prefetch_task_failed(id).await
     }
 
     // hard_link_or_copy hard links or copies the task content to the destination.
+    #[instrument(skip_all)]
     pub async fn hard_link_or_copy(
         &self,
         task: metadata::Task,
@@ -237,6 +244,7 @@ impl Task {
 
     // download downloads a task.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
     pub async fn download(
         &self,
         task: metadata::Task,
@@ -455,6 +463,7 @@ impl Task {
 
     // download_partial_with_scheduler downloads a partial task with scheduler.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
     async fn download_partial_with_scheduler(
         &self,
         task: metadata::Task,
@@ -886,6 +895,7 @@ impl Task {
 
     // download_partial_with_scheduler_from_remote_peer downloads a partial task with scheduler from a remote peer.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
     async fn download_partial_with_scheduler_from_remote_peer(
         &self,
         task: metadata::Task,
@@ -1132,6 +1142,7 @@ impl Task {
 
     // download_partial_with_scheduler_from_source downloads a partial task with scheduler from the source.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
     async fn download_partial_with_scheduler_from_source(
         &self,
         task: metadata::Task,
@@ -1378,6 +1389,7 @@ impl Task {
 
     // download_partial_from_local_peer downloads a partial task from a local peer.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
     async fn download_partial_from_local_peer(
         &self,
         task: metadata::Task,
@@ -1470,6 +1482,7 @@ impl Task {
 
     // download_partial_from_source downloads a partial task from the source.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
     async fn download_partial_from_source(
         &self,
         task: metadata::Task,
@@ -1631,6 +1644,7 @@ impl Task {
     }
 
     // stat_task returns the task metadata.
+    #[instrument(skip_all)]
     pub async fn stat(&self, task_id: &str, host_id: &str) -> ClientResult<CommonTask> {
         let task = self
             .scheduler_client
@@ -1648,6 +1662,7 @@ impl Task {
     }
 
     // Delete a task and reclaim local storage.
+    #[instrument(skip_all)]
     pub async fn delete(&self, task_id: &str, host_id: &str) -> ClientResult<()> {
         let task = self.storage.get_task(task_id).map_err(|err| {
             error!("get task {} from local storage error: {:?}", task_id, err);

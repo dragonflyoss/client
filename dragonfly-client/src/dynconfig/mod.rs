@@ -25,7 +25,7 @@ use dragonfly_client_core::{Error, Result};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tonic_health::pb::health_check_response::ServingStatus;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
 // Data is the dynamic configuration of the dfdaemon.
 #[derive(Default)]
@@ -64,6 +64,7 @@ pub struct Dynconfig {
 // Dynconfig is the implementation of Dynconfig.
 impl Dynconfig {
     // new creates a new Dynconfig.
+    #[instrument(skip_all)]
     pub async fn new(
         config: Arc<Config>,
         manager_client: Arc<ManagerClient>,
@@ -86,6 +87,7 @@ impl Dynconfig {
     }
 
     // run starts the dynconfig server.
+    #[instrument(skip_all)]
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -109,6 +111,7 @@ impl Dynconfig {
     }
 
     // refresh refreshes the dynamic configuration of the dfdaemon.
+    #[instrument(skip_all)]
     pub async fn refresh(&self) -> Result<()> {
         // Only one refresh can be running at a time.
         let Ok(_guard) = self.mutex.try_lock() else {
@@ -140,6 +143,7 @@ impl Dynconfig {
     }
 
     // list_schedulers lists the schedulers from the manager.
+    #[instrument(skip_all)]
     async fn list_schedulers(&self) -> Result<ListSchedulersResponse> {
         // Get the source type.
         let source_type = if self.config.seed_peer.enable {
@@ -163,6 +167,7 @@ impl Dynconfig {
     }
 
     // get_available_schedulers gets the available schedulers.
+    #[instrument(skip_all)]
     async fn get_available_schedulers(&self, schedulers: &[Scheduler]) -> Result<Vec<Scheduler>> {
         let mut available_schedulers: Vec<Scheduler> = Vec::new();
         let mut available_scheduler_cluster_id: Option<u64> = None;

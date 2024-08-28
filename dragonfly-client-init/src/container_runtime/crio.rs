@@ -21,7 +21,7 @@ use dragonfly_client_core::{
 };
 use tokio::{self, fs};
 use toml_edit::{value, Array, ArrayOfTables, Item, Table, Value};
-use tracing::info;
+use tracing::{info, instrument};
 use url::Url;
 
 // CRIO represents the cri-o runtime manager.
@@ -38,6 +38,7 @@ pub struct CRIO {
 // CRIO implements the cri-o runtime manager.
 impl CRIO {
     // new creates a new cri-o runtime manager.
+    #[instrument(skip_all)]
     pub fn new(config: dfinit::CRIO, proxy_config: dfinit::Proxy) -> Self {
         Self {
             config,
@@ -47,6 +48,7 @@ impl CRIO {
 
     // run runs the cri-o runtime to initialize
     // runtime environment for the dfdaemon.
+    #[instrument(skip_all)]
     pub async fn run(&self) -> Result<()> {
         let mut registries_config_table = toml_edit::DocumentMut::new();
         registries_config_table.set_implicit(true);

@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 use warp::{Filter, Rejection, Reply};
 
 // DEFAULT_PROFILER_SECONDS is the default seconds to start profiling.
@@ -67,6 +67,7 @@ pub struct Stats {
 // Stats implements the stats server.
 impl Stats {
     // new creates a new Stats.
+    #[instrument(skip_all)]
     pub fn new(
         addr: SocketAddr,
         shutdown: shutdown::Shutdown,
@@ -80,6 +81,7 @@ impl Stats {
     }
 
     // run starts the stats server.
+    #[instrument(skip_all)]
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -113,6 +115,7 @@ impl Stats {
     }
 
     // stats_handler handles the stats request.
+    #[instrument(skip_all)]
     async fn pprof_profile_handler(
         query_params: PProfProfileQueryParams,
     ) -> Result<impl Reply, Rejection> {
@@ -147,6 +150,7 @@ impl Stats {
     }
 
     // pprof_heap_handler handles the pprof heap request.
+    #[instrument(skip_all)]
     async fn pprof_heap_handler() -> Result<impl Reply, Rejection> {
         info!("start heap profiling");
         #[cfg(target_os = "linux")]

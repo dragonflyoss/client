@@ -38,6 +38,7 @@ pub struct HealthClient {
 // HealthClient implements the grpc client of the health.
 impl HealthClient {
     // new creates a new HealthClient.
+    #[instrument(skip_all)]
     pub async fn new(addr: &str) -> Result<Self> {
         let channel = Channel::from_shared(addr.to_string())
             .map_err(|_| Error::InvalidURI(addr.into()))?
@@ -96,6 +97,7 @@ impl HealthClient {
     }
 
     // check_service checks the health of the grpc service with service name.
+    #[instrument(skip_all)]
     pub async fn check_service(&self, service: String) -> Result<HealthCheckResponse> {
         let request = Self::make_request(HealthCheckRequest { service });
         let response = self.client.clone().check(request).await?;
@@ -117,6 +119,7 @@ impl HealthClient {
     }
 
     // make_request creates a new request with timeout.
+    #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
