@@ -98,6 +98,7 @@ pub struct Proxy {
 // Proxy implements the proxy server.
 impl Proxy {
     // new creates a new Proxy.
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         task: Arc<Task>,

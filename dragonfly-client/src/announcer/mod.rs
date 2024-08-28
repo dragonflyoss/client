@@ -29,7 +29,7 @@ use std::env;
 use std::sync::Arc;
 use sysinfo::System;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
 // ManagerAnnouncer is used to announce the dfdaemon information to the manager.
 pub struct ManagerAnnouncer {
@@ -49,6 +49,7 @@ pub struct ManagerAnnouncer {
 // ManagerAnnouncer implements the manager announcer of the dfdaemon.
 impl ManagerAnnouncer {
     // new creates a new manager announcer.
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         manager_client: Arc<ManagerClient>,
@@ -64,6 +65,7 @@ impl ManagerAnnouncer {
     }
 
     // run announces the dfdaemon information to the manager.
+    #[instrument(skip_all)]
     pub async fn run(&self) -> Result<()> {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -129,6 +131,7 @@ pub struct SchedulerAnnouncer {
 // SchedulerAnnouncer implements the scheduler announcer of the dfdaemon.
 impl SchedulerAnnouncer {
     // new creates a new scheduler announcer.
+    #[instrument(skip_all)]
     pub async fn new(
         config: Arc<Config>,
         host_id: String,
@@ -153,6 +156,7 @@ impl SchedulerAnnouncer {
     }
 
     // run announces the dfdaemon information to the scheduler.
+    #[instrument(skip_all)]
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -190,6 +194,7 @@ impl SchedulerAnnouncer {
     }
 
     // make_announce_host_request makes the announce host request.
+    #[instrument(skip_all)]
     fn make_announce_host_request(&self) -> Result<AnnounceHostRequest> {
         // If the seed peer is enabled, we should announce the seed peer to the scheduler.
         let host_type = if self.config.seed_peer.enable {

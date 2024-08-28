@@ -22,7 +22,7 @@ use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use std::path::PathBuf;
 use std::time::Duration;
 use tonic::Request;
-use tracing::{error, info, Instrument};
+use tracing::{error, info, instrument, Instrument};
 
 pub mod dfdaemon_download;
 pub mod dfdaemon_upload;
@@ -56,6 +56,7 @@ pub const MAX_FRAME_SIZE: u32 = 12 * 1024 * 1024;
 pub const BUFFER_SIZE: usize = 16 * 1024;
 
 // prefetch_task prefetches the task if prefetch flag is true.
+#[instrument(skip_all)]
 pub async fn prefetch_task(
     socket_path: PathBuf,
     request: Request<DownloadTaskRequest>,

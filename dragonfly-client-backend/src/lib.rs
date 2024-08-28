@@ -26,7 +26,7 @@ use std::fs;
 use std::path::Path;
 use std::{collections::HashMap, pin::Pin, time::Duration};
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tracing::{error, info, warn};
+use tracing::{error, info, instrument, warn};
 use url::Url;
 
 pub mod http;
@@ -201,6 +201,7 @@ pub struct BackendFactory {
 // https://github.com/dragonflyoss/client/tree/main/dragonfly-client-backend/examples/plugin/.
 impl BackendFactory {
     // new returns a new BackendFactory.
+    #[instrument(skip_all)]
     pub fn new(plugin_dir: Option<&Path>) -> Result<Self> {
         let mut backend_factory = Self::default();
 
@@ -219,6 +220,7 @@ impl BackendFactory {
     }
 
     // build returns the backend by the scheme of the url.
+    #[instrument(skip_all)]
     pub fn build(&self, url: &str) -> Result<&(dyn Backend + Send + Sync)> {
         let url = Url::parse(url).or_err(ErrorType::ParseError)?;
         let scheme = url.scheme();
@@ -229,6 +231,7 @@ impl BackendFactory {
     }
 
     // load_builtin_backends loads the builtin backends.
+    #[instrument(skip_all)]
     fn load_builtin_backends(&mut self) {
         self.backends
             .insert("http".to_string(), Box::new(http::HTTP::new("http")));
@@ -288,6 +291,7 @@ impl BackendFactory {
     }
 
     // load_plugin_backends loads the plugin backends.
+    #[instrument(skip_all)]
     fn load_plugin_backends(&mut self, plugin_dir: &Path) -> Result<()> {
         let backend_plugin_dir = plugin_dir.join(NAME);
         if !backend_plugin_dir.exists() {

@@ -78,6 +78,7 @@ pub struct DfdaemonDownloadServer {
 // DfdaemonDownloadServer implements the grpc server of the download.
 impl DfdaemonDownloadServer {
     // new creates a new DfdaemonServer.
+    #[instrument(skip_all)]
     pub fn new(
         socket_path: PathBuf,
         task: Arc<task::Task>,
@@ -994,6 +995,7 @@ pub struct DfdaemonDownloadClient {
 // DfdaemonDownloadClient implements the grpc client of the dfdaemon download.
 impl DfdaemonDownloadClient {
     // new_unix creates a new DfdaemonDownloadClient with unix domain socket.
+    #[instrument(skip_all)]
     pub async fn new_unix(socket_path: PathBuf) -> ClientResult<Self> {
         // Ignore the uri because it is not used.
         let channel = Endpoint::try_from("http://[::]:50051")
@@ -1130,6 +1132,7 @@ impl DfdaemonDownloadClient {
     }
 
     // make_request creates a new request with timeout.
+    #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
