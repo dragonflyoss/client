@@ -2,7 +2,7 @@ FROM rust:1.80.0 AS builder
 
 WORKDIR /app/client
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y \
       openssl libclang-dev pkg-config protobuf-compiler git \
       && rm -rf /var/lib/apt/lists/*
 
