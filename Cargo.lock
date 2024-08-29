@@ -944,6 +944,7 @@ dependencies = [
  "reqwest",
  "rustls",
  "rustls-pki-types",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tonic",
