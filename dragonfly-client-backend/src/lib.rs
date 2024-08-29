@@ -337,15 +337,64 @@ mod tests {
     fn should_return_http_backend() {
         let backend_factory =
             BackendFactory::new(Some(Path::new("/var/lib/dragonfly/plugins/backend/"))).unwrap();
-        let backend = backend_factory.build("http://example.com");
-        assert!(backend.is_ok());
+        let result = backend_factory.build("http://example.com");
+        assert!(result.is_ok());
     }
 
     #[test]
     fn should_return_s3_backend() {
         let backend_factory =
             BackendFactory::new(Some(Path::new("/var/lib/dragonfly/plugins/backend/"))).unwrap();
-        let backend = backend_factory.build("s3://example.com");
-        assert!(backend.is_ok());
+        let result = backend_factory.build("s3://example.com");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn should_return_gcs_backend() {
+        let backend_factory =
+            BackendFactory::new(Some(Path::new("/var/lib/dragonfly/plugins/backend/"))).unwrap();
+        let result = backend_factory.build("gs://example.com");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn should_return_abs_backend() {
+        let backend_factory =
+            BackendFactory::new(Some(Path::new("/var/lib/dragonfly/plugins/backend/"))).unwrap();
+        let result = backend_factory.build("abs://example.com");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn should_return_oss_backend() {
+        let backend_factory =
+            BackendFactory::new(Some(Path::new("/var/lib/dragonfly/plugins/backend/"))).unwrap();
+        let result = backend_factory.build("oss://example.com");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn should_return_obs_backend() {
+        let backend_factory =
+            BackendFactory::new(Some(Path::new("/var/lib/dragonfly/plugins/backend/"))).unwrap();
+        let result = backend_factory.build("obs://example.com");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn should_return_cos_backend() {
+        let backend_factory =
+            BackendFactory::new(Some(Path::new("/var/lib/dragonfly/plugins/backend/"))).unwrap();
+        let result = backend_factory.build("cos://example.com");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn should_return_error_with_incorrect_url() {
+        let backend_factory =
+            BackendFactory::new(Some(Path::new("/var/lib/dragonfly/plugins/backend/"))).unwrap();
+        let result = backend_factory.build("github://example.com");
+        assert!(result.is_err());
+        assert!(matches!(result, Err(Error::InvalidParameter)));
     }
 }
