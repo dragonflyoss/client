@@ -846,9 +846,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.0.148"
+version = "2.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "963b51f522733563d04a567cc7f21f3e5dd2ae4cb7457e17a6b22f013b6dba37"
+checksum = "8e193cc3ec9d13fd3871a54679951349a34a3e64020ceef41d483f95ecb77839"
 dependencies = [
  "prost 0.13.1",
  "prost-types",
@@ -4116,9 +4116,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.39.2"
+version = "1.39.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "daa4fb1bc778bd6f04cbfc4bb2d06a7396a8f299dc33ea1900cedaa316f467b1"
+checksum = "9babc99b9923bfa4804bd74722ff02c0381021eafa4db9949217e3be8e84fff5"
 dependencies = [
  "backtrace",
  "bytes",

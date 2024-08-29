@@ -250,7 +250,7 @@ impl BackendFactory {
         info!("load [s3] builtin backend");
 
         self.backends.insert(
-            "gcs".to_string(),
+            "gs".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::GCS,
             )),
