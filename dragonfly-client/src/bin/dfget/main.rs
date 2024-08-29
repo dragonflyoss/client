@@ -59,7 +59,7 @@ Examples:
   $ dfget s3://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret>
   
   # Download a file from Google Cloud Storage Service(GCS).
-  $ dfget gs://<bucket>/<path> -O /tmp/file.txt --storage-credential_path=<credential_path>
+  $ dfget gs://<bucket>/<path> -O /tmp/file.txt --storage-credential-path=<credential_path>
   
   # Download a file from Azure Blob Storage Service(ABS).
   $ dfget abs://<container>/<path> -O /tmp/file.txt --storage-access-key-id=<account_name> --storage-access-key-secret=<account_key>
