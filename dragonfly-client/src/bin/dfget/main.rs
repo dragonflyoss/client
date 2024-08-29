@@ -59,10 +59,10 @@ Examples:
   $ dfget s3://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret>
   
   # Download a file from Google Cloud Storage Service(GCS).
-  $ dfget gs://<bucket>/<path> -O /tmp/file.txt --storage-credential_path=<credential_path> --storage-endpoint=<endpoint>
+  $ dfget gs://<bucket>/<path> -O /tmp/file.txt --storage-credential_path=<credential_path>
   
   # Download a file from Azure Blob Storage Service(ABS).
-  $ dfget abs://<container>/<path> -O /tmp/file.txt --storage-access-key-id=<account_name> --storage-access-key-secret=<account_key> --storage-endpoint=<endpoint>
+  $ dfget abs://<container>/<path> -O /tmp/file.txt --storage-access-key-id=<account_name> --storage-access-key-secret=<account_key>
   
   # Download a file from Aliyun Object Storage Service(OSS).
   $ dfget oss://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret> --storage-endpoint=<endpoint>
@@ -664,10 +664,8 @@ async fn download(
     download_client: DfdaemonDownloadClient,
 ) -> Result<()> {
     // Only initialize object storage when the scheme is an object storage protocol.
-    let mut object_storage = None;
-    let scheme = args.url.scheme();
-    if object_storage::Scheme::from_str(scheme).is_ok() {
-        object_storage = Some(ObjectStorage {
+    let object_storage = match object_storage::Scheme::from_str(args.url.scheme()) {
+        Ok(_) => Some(ObjectStorage {
             access_key_id: args.storage_access_key_id.clone(),
             access_key_secret: args.storage_access_key_secret.clone(),
             session_token: args.storage_session_token.clone(),
@@ -675,8 +673,9 @@ async fn download(
             endpoint: args.storage_endpoint.clone(),
             credential_path: args.storage_credential_path.clone(),
             predefined_acl: args.storage_predefined_acl.clone(),
-        });
-    }
+        }),
+        Err(_) => None,
+    };
 
     // If the `filtered_query_params` is not provided, then use the default value.
     let filtered_query_params = match args.filtered_query_params {

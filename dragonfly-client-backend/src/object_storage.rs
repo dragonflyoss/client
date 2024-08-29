@@ -172,14 +172,16 @@ impl ObjectStorage {
         object_storage: Option<common::v2::ObjectStorage>,
         timeout: Duration,
     ) -> ClientResult<Operator> {
+        // If download backend is object storage, object_storage parameter is required.
         let Some(object_storage) = object_storage else {
-            error!("requires object_storage configuration");
+            error!("need object_storage parameter");
             return Err(ClientError::BackendError(BackendError {
-                message: "requires object_storage configuration".to_string(),
+                message: "need object_storage parameter".to_string(),
                 status_code: None,
                 header: None,
             }));
         };
+
         match self.scheme {
             Scheme::S3 => self.s3_operator(parsed_url, object_storage, timeout),
             Scheme::GCS => self.gcs_operator(parsed_url, object_storage, timeout),
@@ -198,6 +200,9 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
+        // Create a reqwest http client.
+        let client = reqwest::Client::builder().timeout(timeout).build()?;
+
         // S3 requires the access key id and the secret access key.
         let (Some(access_key_id), Some(access_key_secret)) = (
             object_storage.access_key_id,
@@ -211,12 +216,8 @@ impl ObjectStorage {
             }));
         };
 
-        // Create a reqwest http client.
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
-
         // Initialize the S3 operator with the object storage.
         let mut builder = opendal::services::S3::default();
-
         builder = builder
             .access_key_id(&access_key_id)
             .secret_access_key(&access_key_secret)
@@ -285,6 +286,9 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
+        // Create a reqwest http client.
+        let client = reqwest::Client::builder().timeout(timeout).build()?;
+
         // ABS requires the account name and the account key.
         let (Some(access_key_id), Some(access_key_secret)) = (
             object_storage.access_key_id,
@@ -297,9 +301,6 @@ impl ObjectStorage {
                 header: None,
             }));
         };
-
-        // Create a reqwest http client.
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
 
         // Initialize the ABS operator with the object storage.
         let mut builder = opendal::services::Azblob::default();
@@ -325,22 +326,22 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
+        // Create a reqwest http client.
+        let client = reqwest::Client::builder().timeout(timeout).build()?;
+
         // OSS requires the access key id, access key secret, and endpoint.
         let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
             object_storage.access_key_id,
             object_storage.access_key_secret,
             object_storage.endpoint,
         ) else {
-            error!("need access_key_id, access_key_secret, and endpoint");
+            error!("need access_key_id, access_key_secret and endpoint");
             return Err(ClientError::BackendError(BackendError {
-                message: "need access_key_id, access_key_secret, and endpoint".to_string(),
+                message: "need access_key_id, access_key_secret and endpoint".to_string(),
                 status_code: None,
                 header: None,
             }));
         };
-
-        // Create a reqwest http client.
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
 
         // Initialize the OSS operator with the object storage.
         let mut builder = opendal::services::Oss::default();
@@ -363,6 +364,9 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
+        // Create a reqwest http client.
+        let client = reqwest::Client::builder().timeout(timeout).build()?;
+
         // OBS requires the endpoint, access key id, and access key secret.
         let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
             object_storage.access_key_id,
@@ -376,9 +380,6 @@ impl ObjectStorage {
                 header: None,
             }));
         };
-
-        // Create a reqwest http client.
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
 
         // Initialize the OBS operator with the object storage.
         let mut builder = opendal::services::Obs::default();
@@ -399,6 +400,9 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
+        // Create a reqwest http client.
+        let client = reqwest::Client::builder().timeout(timeout).build()?;
+
         // COS requires the access key id, the access key secret, and the endpoint.
         let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
             object_storage.access_key_id,
@@ -412,9 +416,6 @@ impl ObjectStorage {
                 header: None,
             }));
         };
-
-        // Create a reqwest http client.
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
 
         // Initialize the COS operator with the object storage.
         let mut builder = opendal::services::Cos::default();
