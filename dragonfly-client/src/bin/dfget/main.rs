@@ -59,7 +59,7 @@ Examples:
   $ dfget s3://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret>
   
   # Download a file from Google Cloud Storage Service(GCS).
-  $ dfget gcs://<bucket>/<path> -O /tmp/file.txt --storage-credential=<credential> --storage-endpoint=<endpoint>
+  $ dfget gs://<bucket>/<path> -O /tmp/file.txt --storage-credential_path=<credential_path> --storage-endpoint=<endpoint>
   
   # Download a file from Azure Blob Storage Service(ABS).
   $ dfget abs://<container>/<path> -O /tmp/file.txt --storage-access-key-id=<account_name> --storage-access-key-secret=<account_key> --storage-endpoint=<endpoint>
@@ -187,9 +187,9 @@ struct Args {
 
     #[arg(
         long,
-        help = "Specify the credential for Google Cloud Storage Service(GCS)"
+        help = "Specify the local path to the credential file which is used for OAuth2 authentication for Google Cloud Storage Service(GCS)"
     )]
-    storage_credential: Option<String>,
+    storage_credential_path: Option<String>,
 
     #[arg(
         long,
@@ -569,23 +569,17 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
 
 // download_dir downloads all files in the directory.
 async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Result<()> {
-    // Only when the `access_key_id` and `access_key_secret` are provided at the same time,
-    // they will be passed to the `DownloadTaskRequest`.
-    let mut object_storage = None;
-    if let (Some(access_key_id), Some(access_key_secret)) = (
-        args.storage_access_key_id.clone(),
-        args.storage_access_key_secret.clone(),
-    ) {
-        object_storage = Some(ObjectStorage {
+    let mut object_storage = None; 
+    // Initialize object storage.
+    let mut object_storage = Some(ObjectStorage {
             access_key_id,
             access_key_secret,
             session_token: args.storage_session_token.clone(),
             region: args.storage_region.clone(),
             endpoint: args.storage_endpoint.clone(),
-            credential: args.storage_credential.clone(),
+            credential_path: args.storage_credential_path.clone(),
             predefined_acl: args.storage_predefined_acl.clone(),
         });
-    }
 
     // Get all entries in the directory. If the directory is empty, then return directly.
     let entries = get_entries(args.clone(), object_storage.clone()).await?;
@@ -670,23 +664,16 @@ async fn download(
     progress_bar: ProgressBar,
     download_client: DfdaemonDownloadClient,
 ) -> Result<()> {
-    // Only when the `access_key_id` and `access_key_secret` are provided at the same time,
-    // they will be passed to the `DownloadTaskRequest`.
-    let mut object_storage = None;
-    if let (Some(access_key_id), Some(access_key_secret)) = (
-        args.storage_access_key_id.clone(),
-        args.storage_access_key_secret.clone(),
-    ) {
-        object_storage = Some(ObjectStorage {
+    // Initialize object storage.
+    let mut object_storage = ObjectStorage {
             access_key_id,
             access_key_secret,
             session_token: args.storage_session_token.clone(),
             region: args.storage_region.clone(),
             endpoint: args.storage_endpoint.clone(),
-            credential: args.storage_credential.clone(),
+            credential_path: args.storage_credential_path.clone(),
             predefined_acl: args.storage_predefined_acl.clone(),
-        });
-    }
+        };
 
     // If the `filtered_query_params` is not provided, then use the default value.
     let filtered_query_params = match args.filtered_query_params {

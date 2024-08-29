@@ -56,7 +56,7 @@ pub struct HeadRequest {
     pub client_certs: Option<Vec<CertificateDer<'static>>>,
 
     // object_storage is the object storage related information.
-    pub object_storage: Option<ObjectStorage>,
+    pub object_storage: ObjectStorage,
 }
 
 // HeadResponse is the head response for backend.
@@ -105,7 +105,7 @@ pub struct GetRequest {
     pub client_certs: Option<Vec<CertificateDer<'static>>>,
 
     // the object storage related information.
-    pub object_storage: Option<ObjectStorage>,
+    pub object_storage: ObjectStorage,
 }
 
 // GetResponse is the get response for backend.
@@ -250,7 +250,7 @@ impl BackendFactory {
         info!("load [s3] builtin backend");
 
         self.backends.insert(
-            "gcs".to_string(),
+            "gs".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::GCS,
             )),

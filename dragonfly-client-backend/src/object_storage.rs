@@ -72,7 +72,7 @@ impl FromStr for Scheme {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "s3" => Ok(Scheme::S3),
-            "gcs" => Ok(Scheme::GCS),
+            "gs" => Ok(Scheme::GCS),
             "abs" => Ok(Scheme::ABS),
             "oss" => Ok(Scheme::OSS),
             "obs" => Ok(Scheme::OBS),
@@ -169,7 +169,7 @@ impl ObjectStorage {
     pub fn operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
-        object_storage: Option<common::v2::ObjectStorage>,
+        object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
         match self.scheme {
@@ -187,11 +187,14 @@ impl ObjectStorage {
     pub fn s3_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
-        object_storage: Option<common::v2::ObjectStorage>,
+        object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Check if the object storage is provided.
-        let Some(object_storage) = object_storage else {
+        // S3 requires the access key id and the secret access key. 
+        let (Some(access_key_id), Some(access_key_secret)) = (
+            object_storage.access_key_id,
+            object_storage.access_key_secret,
+        ) else {
             error!("need access_key_id and access_key_secret");
             return Err(ClientError::BackendError(BackendError {
                 message: "need access_key_id and access_key_secret".to_string(),
@@ -202,12 +205,13 @@ impl ObjectStorage {
 
         // Create a reqwest http client.
         let client = reqwest::Client::builder().timeout(timeout).build()?;
-
+    
         // Initialize the S3 operator with the object storage.
         let mut builder = opendal::services::S3::default();
-        builder = builder
-            .access_key_id(&object_storage.access_key_id)
-            .secret_access_key(&object_storage.access_key_secret)
+        
+        builder = builder 
+            .access_key_id(&access_key_id)
+            .secret_access_key(&access_key_secret)
             .http_client(HttpClient::with(client))
             .bucket(&parsed_url.bucket);
 
@@ -234,19 +238,9 @@ impl ObjectStorage {
     pub fn gcs_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
-        object_storage: Option<common::v2::ObjectStorage>,
+        object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Check if the object storage is provided.
-        let Some(object_storage) = object_storage else {
-            error!("need credential");
-            return Err(ClientError::BackendError(BackendError {
-                message: "need credential".to_string(),
-                status_code: None,
-                header: None,
-            }));
-        };
-
         // Create a reqwest http client.
         let client = reqwest::Client::builder().timeout(timeout).build()?;
 
@@ -256,16 +250,15 @@ impl ObjectStorage {
             .http_client(HttpClient::with(client))
             .bucket(&parsed_url.bucket);
 
-        // Configure the region and endpoint if they are provided.
-        if let Some(credential) = object_storage.credential.as_deref() {
-            builder = builder.credential(credential);
-        } else {
-            error!("need credential");
-            return Err(ClientError::BackendError(BackendError {
-                message: "need credential".to_string(),
-                status_code: None,
-                header: None,
-            }));
+        // Configure the credentials using the local path to the crendential file if provided. 
+        // Otherwise, configure using the Application Default Credentials (ADC).
+        if let Some(credential_path) = object_storage.credential_path.as_deref() {
+            builder = builder.credential_path(credential_path);
+        } 
+
+        // Configure the endpoint if it is provided.
+        if let Some(endpoint) = object_storage.endpoint.as_deref() {
+            builder = builder.endpoint(endpoint);
         }
 
         // Configure the predefined ACL if it is provided.
@@ -281,11 +274,14 @@ impl ObjectStorage {
     pub fn abs_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
-        object_storage: Option<common::v2::ObjectStorage>,
+        object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Check if the object storage is provided.
-        let Some(object_storage) = object_storage else {
+        // ABS requires the account name and the account key.
+        let (Some(access_key_id), Some(access_key_secret)) = (
+            object_storage.access_key_id,
+            object_storage.access_key_secret,
+        ) else {
             error!("need access_key_id and access_key_secret");
             return Err(ClientError::BackendError(BackendError {
                 message: "need access_key_id and access_key_secret".to_string(),
@@ -293,15 +289,15 @@ impl ObjectStorage {
                 header: None,
             }));
         };
-
+        
         // Create a reqwest http client.
         let client = reqwest::Client::builder().timeout(timeout).build()?;
 
         // Initialize the ABS operator with the object storage.
         let mut builder = opendal::services::Azblob::default();
         builder = builder
-            .account_name(&object_storage.access_key_id)
-            .account_key(&object_storage.access_key_secret)
+            .account_name(&access_key_id)
+            .account_key(&access_key_secret)
             .http_client(HttpClient::with(client))
             .container(&parsed_url.bucket);
 
@@ -318,14 +314,18 @@ impl ObjectStorage {
     pub fn oss_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
-        object_storage: Option<common::v2::ObjectStorage>,
+        object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Check if the object storage is provided.
-        let Some(object_storage) = object_storage else {
-            error!("need endpoint, access_key_id and access_key_secret");
+        // OSS requires the access key id, access key secret, and endpoint. 
+        let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
+            object_storage.access_key_id,
+            object_storage.access_key_secret,
+            object_storage.endpoint
+        ) else {
+            error!("need access_key_id, access_key_secret, and endpoint");
             return Err(ClientError::BackendError(BackendError {
-                message: "need endpoint, access_key_id and access_key_secret".to_string(),
+                message: "need access_key_id, access_key_secret, and endpoint".to_string(),
                 status_code: None,
                 header: None,
             }));
@@ -337,23 +337,12 @@ impl ObjectStorage {
         // Initialize the OSS operator with the object storage.
         let mut builder = opendal::services::Oss::default();
         builder = builder
-            .access_key_id(&object_storage.access_key_id)
-            .access_key_secret(&object_storage.access_key_secret)
+            .access_key_id(&access_key_id)
+            .access_key_secret(&access_key_secret)
+            .endpoint(&endpoint)
             .http_client(HttpClient::with(client))
             .root("/")
             .bucket(&parsed_url.bucket);
-
-        // Configure the endpoint if provided.
-        if let Some(endpoint) = object_storage.endpoint {
-            builder = builder.endpoint(&endpoint);
-        } else {
-            error!("need endpoint");
-            return Err(ClientError::BackendError(BackendError {
-                message: "need endpoint".to_string(),
-                status_code: None,
-                header: None,
-            }));
-        }
 
         Ok(Operator::new(builder)?.finish())
     }
@@ -363,14 +352,18 @@ impl ObjectStorage {
     pub fn obs_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
-        object_storage: Option<common::v2::ObjectStorage>,
+        object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Check if the object storage is provided.
-        let Some(object_storage) = object_storage else {
-            error!("need endpoint, access_key_id and access_key_secret");
+        // OBS requires the endpoint, access key id, and access key secret.
+        let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
+            object_storage.access_key_id,
+            object_storage.access_key_secret,
+            object_storage.endpoint
+        ) else {
+            error!("need access_key_id, access_key_secret, and endpoint");
             return Err(ClientError::BackendError(BackendError {
-                message: "need endpoint, access_key_id and access_key_secret".to_string(),
+                message: "need access_key_id, access_key_secret, and endpoint".to_string(),
                 status_code: None,
                 header: None,
             }));
@@ -382,52 +375,47 @@ impl ObjectStorage {
         // Initialize the OBS operator with the object storage.
         let mut builder = opendal::services::Obs::default();
         builder = builder
-            .access_key_id(&object_storage.access_key_id)
-            .secret_access_key(&object_storage.access_key_secret)
+            .access_key_id(&access_key_id)
+            .secret_access_key(&access_key_secret)
+            .endpoint(&endpoint)
             .http_client(HttpClient::with(client))
             .bucket(&parsed_url.bucket);
-
-        // Configure the endpoint if provided.
-        if let Some(endpoint) = object_storage.endpoint {
-            builder = builder.endpoint(&endpoint);
-        }
 
         Ok(Operator::new(builder)?.finish())
     }
 
     // cos_operator initializes the COS operator with the parsed URL and object storage.
-    #[instrument(skip_all)]
     pub fn cos_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
-        object_storage: Option<common::v2::ObjectStorage>,
+        object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Check if the object storage is provided.
-        let Some(object_storage) = object_storage else {
-            error!("need endpoint, access_key_id and access_key_secret");
+        // COS requires the access key id, the access key secret, and the endpoint. 
+        let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
+            object_storage.access_key_id,
+            object_storage.access_key_secret,
+            object_storage.endpoint
+        ) else {
+            error!("need access_key_id, access_key_secret, and endpoint");
             return Err(ClientError::BackendError(BackendError {
-                message: "need endpoint, access_key_id and access_key_secret".to_string(),
+                message: "need access_key_id, access_key_secret, and endpoint".to_string(),
                 status_code: None,
                 header: None,
             }));
         };
-
+        
         // Create a reqwest http client.
         let client = reqwest::Client::builder().timeout(timeout).build()?;
 
         // Initialize the COS operator with the object storage.
         let mut builder = opendal::services::Cos::default();
         builder = builder
-            .secret_id(&object_storage.access_key_id)
-            .secret_key(&object_storage.access_key_secret)
+            .secret_id(&access_key_id)
+            .secret_key(&access_key_secret)
+            .endpoint(&endpoint)
             .http_client(HttpClient::with(client))
             .bucket(&parsed_url.bucket);
-
-        // Configure the endpoint if provided.
-        if let Some(endpoint) = object_storage.endpoint {
-            builder = builder.endpoint(&endpoint);
-        }
 
         Ok(Operator::new(builder)?.finish())
     }
@@ -546,7 +534,7 @@ impl crate::Backend for ObjectStorage {
             .map_err(|_| ClientError::InvalidURI(request.url.clone()))?;
         let parsed_url: super::object_storage::ParsedURL = url.try_into().map_err(|err| {
             error!(
-                "parse head request url failed {} {}: {}",
+                "parse get request url failed {} {}: {}",
                 request.piece_id, request.url, err
             );
             err
