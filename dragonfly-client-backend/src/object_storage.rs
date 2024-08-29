@@ -55,7 +55,7 @@ impl fmt::Display for Scheme {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Scheme::S3 => write!(f, "s3"),
-            Scheme::GCS => write!(f, "gcs"),
+            Scheme::GCS => write!(f, "gs"),
             Scheme::ABS => write!(f, "abs"),
             Scheme::OSS => write!(f, "oss"),
             Scheme::OBS => write!(f, "obs"),
@@ -678,14 +678,14 @@ mod tests {
 
         let object_storage = dragonfly_api::common::v2::ObjectStorage {
             endpoint: Some("test-endpoint.local".into()),
-            access_key_id: "access-key-id".into(),
-            access_key_secret: "access-key-secret".into(),
+            access_key_id: Some("access-key-id".into()),
+            access_key_secret: Some("access-key-secret".into()),
             ..Default::default()
         };
 
         let result = ObjectStorage::new(Scheme::OSS).oss_operator(
             &parsed_url,
-            Some(object_storage),
+            object_storage,
             Duration::from_secs(3),
         );
 
@@ -693,12 +693,42 @@ mod tests {
     }
 
     #[test]
-    fn should_return_error_when_oss_aksk_not_provided() {
+    fn should_return_error_when_oss_access_key_id_not_provided() {
         let url: Url = "oss://test-bucket/file".parse().unwrap();
         let parsed_url: ParsedURL = url.try_into().unwrap();
 
-        let result =
-            ObjectStorage::new(Scheme::OSS).oss_operator(&parsed_url, None, Duration::from_secs(3));
+        let object_storage = dragonfly_api::common::v2::ObjectStorage {
+            endpoint: Some("test-endpoint.local".into()),
+            access_key_secret: Some("access-key-secret".into()),
+            ..Default::default()
+        };
+
+        let result = ObjectStorage::new(Scheme::OSS).oss_operator(
+            &parsed_url,
+            object_storage,
+            Duration::from_secs(3),
+        );
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ClientError::BackendError(..)));
+    }
+
+    #[test]
+    fn should_return_error_when_oss_access_key_sceret_not_provided() {
+        let url: Url = "oss://test-bucket/file".parse().unwrap();
+        let parsed_url: ParsedURL = url.try_into().unwrap();
+
+        let object_storage = dragonfly_api::common::v2::ObjectStorage {
+            endpoint: Some("test-endpoint.local".into()),
+            access_key_id: Some("access-key-id".into()),
+            ..Default::default()
+        };
+
+        let result = ObjectStorage::new(Scheme::OSS).oss_operator(
+            &parsed_url,
+            object_storage,
+            Duration::from_secs(3),
+        );
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ClientError::BackendError(..)));
@@ -710,14 +740,14 @@ mod tests {
         let parsed_url: ParsedURL = url.try_into().unwrap();
 
         let object_storage = dragonfly_api::common::v2::ObjectStorage {
-            access_key_id: "access-key-id".into(),
-            access_key_secret: "access-key-secret".into(),
+            access_key_id: Some("access-key-id".into()),
+            access_key_secret: Some("access-key-secret".into()),
             ..Default::default()
         };
 
         let result = ObjectStorage::new(Scheme::OSS).oss_operator(
             &parsed_url,
-            Some(object_storage),
+            object_storage,
             Duration::from_secs(3),
         );
 
