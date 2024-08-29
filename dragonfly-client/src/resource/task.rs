@@ -120,7 +120,9 @@ impl Task {
         id: &str,
         request: Download,
     ) -> ClientResult<metadata::Task> {
-        let task = self.storage.download_task_started(id, None, None, None)?;
+        let task =
+            self.storage
+                .download_task_started(id, None, None, None, request.url.as_str())?;
         if task.content_length.is_some() && task.piece_length.is_some() {
             return Ok(task);
         }
@@ -151,7 +153,7 @@ impl Task {
         let response = backend
             .head(HeadRequest {
                 task_id: id.to_string(),
-                url: request.url,
+                url: request.url.clone(),
                 http_header: Some(request_header),
                 timeout: self.config.download.piece_timeout,
                 client_certs: None,
@@ -204,6 +206,7 @@ impl Task {
             Some(piece_length),
             Some(content_length),
             response.http_header,
+            request.url.as_str(),
         )
     }
 

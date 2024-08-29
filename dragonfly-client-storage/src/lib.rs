@@ -88,9 +88,10 @@ impl Storage {
         piece_length: Option<u64>,
         content_length: Option<u64>,
         response_header: Option<HeaderMap>,
+        url: &str,
     ) -> Result<metadata::Task> {
         self.metadata
-            .download_task_started(id, piece_length, content_length, response_header)
+            .download_task_started(id, piece_length, content_length, response_header, url)
     }
 
     // download_task_finished updates the metadata of the task when the task downloads finished.

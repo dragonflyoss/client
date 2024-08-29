@@ -168,14 +168,14 @@ impl SchedulerAnnouncer {
             .await?;
 
         // Announce peers to different schedulers after host announcement.
-        for request in announcer
+        let requests = announcer
             .make_announce_peers_request(
                 id_generator.clone(),
                 storage.clone(),
                 announcer.scheduler_client.clone(),
             )
-            .await?
-        {
+            .await?;
+        for request in requests {
             announcer.announce_peers(request).await?;
         }
 
@@ -428,7 +428,11 @@ impl SchedulerAnnouncer {
     ) -> Result<Vec<AnnouncePeersRequest>> {
         let mut peers = HashMap::new();
 
-        for task in storage.get_tasks()? {
+        let tasks = storage.get_tasks().map_err(|err| {
+            error!("failed to get tasks from storage: {}", err);
+            err
+        })?;
+        for task in tasks {
             // If the task is expired or not finished, evict the task in scheduler.
             if task.is_expired(self.config.gc.policy.task_ttl) || !task.is_finished() {
                 scheduler_client
@@ -469,7 +473,7 @@ impl SchedulerAnnouncer {
 
                 task: Some(Task {
                     id: task.id.clone(),
-                    url: "http://example.org/fake_url.txt".to_string(),
+                    url: task.url.clone(),
                     piece_length: task.piece_length.unwrap_or_default(),
                     content_length: task.content_length.unwrap_or_default(),
                     state: "Running".to_string(),

@@ -51,6 +51,9 @@ pub struct Task {
     // uploaded_count is the count of the task has been uploaded by other peers.
     pub uploaded_count: u64,
 
+    // url is the download url.
+    pub url: String,
+
     // updated_at is the time when the task metadata is updated. If the task is downloaded
     // by other peers, it will also update updated_at.
     pub updated_at: NaiveDateTime,
@@ -335,6 +338,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         piece_length: Option<u64>,
         content_length: Option<u64>,
         response_header: Option<HeaderMap>,
+        url: &str,
     ) -> Result<Task> {
         // Convert the response header to hashmap.
         let response_header = response_header
@@ -371,6 +375,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
                 piece_length,
                 content_length,
                 response_header,
+                url: url.to_string(),
                 updated_at: Utc::now().naive_utc(),
                 created_at: Utc::now().naive_utc(),
                 ..Default::default()
@@ -932,7 +937,7 @@ mod tests {
 
         // Test download_task_started.
         metadata
-            .download_task_started(task_id, Some(1024), Some(1024), None)
+            .download_task_started(task_id, Some(1024), Some(1024), None, "url")
             .unwrap();
         let task = metadata
             .get_task(task_id)
@@ -942,6 +947,7 @@ mod tests {
         assert_eq!(task.piece_length, Some(1024));
         assert_eq!(task.content_length, Some(1024));
         assert!(task.response_header.is_empty());
+        assert_eq!(task.url, "url");
         assert_eq!(task.uploading_count, 0);
         assert_eq!(task.uploaded_count, 0);
 
@@ -989,7 +995,7 @@ mod tests {
         // Test get_tasks.
         let task_id = "a535b115f18d96870f0422ac891f91dd162f2f391e4778fb84279701fcd02dd1";
         metadata
-            .download_task_started(task_id, Some(1024), None, None)
+            .download_task_started(task_id, Some(1024), None, None, "url")
             .unwrap();
         let tasks = metadata.get_tasks().unwrap();
         assert_eq!(tasks.len(), 2, "should get 2 tasks in total");
