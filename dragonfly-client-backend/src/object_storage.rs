@@ -169,9 +169,17 @@ impl ObjectStorage {
     pub fn operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
-        object_storage: common::v2::ObjectStorage,
+        object_storage: Option<common::v2::ObjectStorage>,
         timeout: Duration,
     ) -> ClientResult<Operator> {
+        let Some(object_storage) = object_storage else {
+            error!("requires object_storage configuration");
+            return Err(ClientError::BackendError(BackendError {
+                message: "requires object_storage configuration".to_string(),
+                status_code: None,
+                header: None,
+            }));
+        };
         match self.scheme {
             Scheme::S3 => self.s3_operator(parsed_url, object_storage, timeout),
             Scheme::GCS => self.gcs_operator(parsed_url, object_storage, timeout),
@@ -190,7 +198,7 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // S3 requires the access key id and the secret access key. 
+        // S3 requires the access key id and the secret access key.
         let (Some(access_key_id), Some(access_key_secret)) = (
             object_storage.access_key_id,
             object_storage.access_key_secret,
@@ -205,11 +213,11 @@ impl ObjectStorage {
 
         // Create a reqwest http client.
         let client = reqwest::Client::builder().timeout(timeout).build()?;
-    
+
         // Initialize the S3 operator with the object storage.
         let mut builder = opendal::services::S3::default();
-        
-        builder = builder 
+
+        builder = builder
             .access_key_id(&access_key_id)
             .secret_access_key(&access_key_secret)
             .http_client(HttpClient::with(client))
@@ -250,11 +258,11 @@ impl ObjectStorage {
             .http_client(HttpClient::with(client))
             .bucket(&parsed_url.bucket);
 
-        // Configure the credentials using the local path to the crendential file if provided. 
+        // Configure the credentials using the local path to the crendential file if provided.
         // Otherwise, configure using the Application Default Credentials (ADC).
         if let Some(credential_path) = object_storage.credential_path.as_deref() {
             builder = builder.credential_path(credential_path);
-        } 
+        }
 
         // Configure the endpoint if it is provided.
         if let Some(endpoint) = object_storage.endpoint.as_deref() {
@@ -289,7 +297,7 @@ impl ObjectStorage {
                 header: None,
             }));
         };
-        
+
         // Create a reqwest http client.
         let client = reqwest::Client::builder().timeout(timeout).build()?;
 
@@ -317,11 +325,11 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // OSS requires the access key id, access key secret, and endpoint. 
+        // OSS requires the access key id, access key secret, and endpoint.
         let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
             object_storage.access_key_id,
             object_storage.access_key_secret,
-            object_storage.endpoint
+            object_storage.endpoint,
         ) else {
             error!("need access_key_id, access_key_secret, and endpoint");
             return Err(ClientError::BackendError(BackendError {
@@ -359,7 +367,7 @@ impl ObjectStorage {
         let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
             object_storage.access_key_id,
             object_storage.access_key_secret,
-            object_storage.endpoint
+            object_storage.endpoint,
         ) else {
             error!("need access_key_id, access_key_secret, and endpoint");
             return Err(ClientError::BackendError(BackendError {
@@ -391,11 +399,11 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // COS requires the access key id, the access key secret, and the endpoint. 
+        // COS requires the access key id, the access key secret, and the endpoint.
         let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
             object_storage.access_key_id,
             object_storage.access_key_secret,
-            object_storage.endpoint
+            object_storage.endpoint,
         ) else {
             error!("need access_key_id, access_key_secret, and endpoint");
             return Err(ClientError::BackendError(BackendError {
@@ -404,7 +412,7 @@ impl ObjectStorage {
                 header: None,
             }));
         };
-        
+
         // Create a reqwest http client.
         let client = reqwest::Client::builder().timeout(timeout).build()?;
 

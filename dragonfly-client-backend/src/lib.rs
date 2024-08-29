@@ -56,7 +56,7 @@ pub struct HeadRequest {
     pub client_certs: Option<Vec<CertificateDer<'static>>>,
 
     // object_storage is the object storage related information.
-    pub object_storage: ObjectStorage,
+    pub object_storage: Option<ObjectStorage>,
 }
 
 // HeadResponse is the head response for backend.
@@ -105,7 +105,7 @@ pub struct GetRequest {
     pub client_certs: Option<Vec<CertificateDer<'static>>>,
 
     // the object storage related information.
-    pub object_storage: ObjectStorage,
+    pub object_storage: Option<ObjectStorage>,
 }
 
 // GetResponse is the get response for backend.

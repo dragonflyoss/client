@@ -569,17 +569,16 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
 
 // download_dir downloads all files in the directory.
 async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Result<()> {
-    let mut object_storage = None; 
-    // Initialize object storage.
-    let mut object_storage = Some(ObjectStorage {
-            access_key_id,
-            access_key_secret,
-            session_token: args.storage_session_token.clone(),
-            region: args.storage_region.clone(),
-            endpoint: args.storage_endpoint.clone(),
-            credential_path: args.storage_credential_path.clone(),
-            predefined_acl: args.storage_predefined_acl.clone(),
-        });
+    // Initalize the object storage.
+    let object_storage = Some(ObjectStorage {
+        access_key_id: args.storage_access_key_id.clone(),
+        access_key_secret: args.storage_access_key_secret.clone(),
+        session_token: args.storage_session_token.clone(),
+        region: args.storage_region.clone(),
+        endpoint: args.storage_endpoint.clone(),
+        credential_path: args.storage_credential_path.clone(),
+        predefined_acl: args.storage_predefined_acl.clone(),
+    });
 
     // Get all entries in the directory. If the directory is empty, then return directly.
     let entries = get_entries(args.clone(), object_storage.clone()).await?;
@@ -664,16 +663,20 @@ async fn download(
     progress_bar: ProgressBar,
     download_client: DfdaemonDownloadClient,
 ) -> Result<()> {
-    // Initialize object storage.
-    let mut object_storage = ObjectStorage {
-            access_key_id,
-            access_key_secret,
+    // Only initialize object storage when the scheme is an object storage protocol.
+    let mut object_storage = None;
+    let scheme = args.url.scheme();
+    if object_storage::Scheme::from_str(scheme).is_ok() {
+        object_storage = Some(ObjectStorage {
+            access_key_id: args.storage_access_key_id.clone(),
+            access_key_secret: args.storage_access_key_secret.clone(),
             session_token: args.storage_session_token.clone(),
             region: args.storage_region.clone(),
             endpoint: args.storage_endpoint.clone(),
             credential_path: args.storage_credential_path.clone(),
             predefined_acl: args.storage_predefined_acl.clone(),
-        };
+        });
+    }
 
     // If the `filtered_query_params` is not provided, then use the default value.
     let filtered_query_params = match args.filtered_query_params {
