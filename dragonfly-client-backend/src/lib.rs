@@ -207,9 +207,7 @@ impl BackendFactory {
     #[instrument(skip_all)]
     pub fn new(plugin_dir: Option<&Path>) -> Result<Self> {
         let mut backend_factory = Self::default();
-
         backend_factory.load_builtin_backends();
-
         if let Some(plugin_dir) = plugin_dir {
             backend_factory
                 .load_plugin_backends(plugin_dir)
@@ -342,11 +340,8 @@ mod tests {
 
     #[test]
     fn should_create_backend_factory_without_plugin_dir() {
-        let factory = BackendFactory::new(None);
-        assert!(
-            factory.is_ok(),
-            "Expected BackendFactory to be created successfully."
-        );
+        let result = BackendFactory::new(None);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -354,11 +349,7 @@ mod tests {
         let factory = BackendFactory::new(None).unwrap();
         let expected_backends = vec!["http", "https", "s3", "gs", "abs", "oss", "obs", "cos"];
         for backend in expected_backends {
-            assert!(
-                factory.backends.contains_key(backend),
-                "Expected '{}' backend to be loaded.",
-                backend
-            );
+            assert!(factory.backends.contains_key(backend));
         }
     }
 
@@ -368,21 +359,17 @@ mod tests {
         let dir = tempdir().unwrap();
         let plugin_dir = dir.path().join("plugin");
         std::fs::create_dir(&plugin_dir).unwrap();
+
         let backend_dir = plugin_dir.join(NAME);
         std::fs::create_dir(&backend_dir).unwrap();
 
         build_example_plugin(&backend_dir);
 
         let result = BackendFactory::new(Some(&plugin_dir));
-        assert!(
-            result.is_ok(),
-            "Expected BackendFactory to be created successfully."
-        );
+        assert!(result.is_ok());
+
         let factory = result.unwrap();
-        assert!(
-            factory.backends.contains_key("hdfs"),
-            "Expected to get plugin backend."
-        );
+        assert!(factory.backends.contains_key("hdfs"));
     }
 
     #[test]
@@ -399,6 +386,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let plugin_dir = dir.path().join("plugin");
         std::fs::create_dir(&plugin_dir).unwrap();
+
         let backend_dir = plugin_dir.join(NAME);
         std::fs::create_dir(&backend_dir).unwrap();
 
@@ -407,13 +395,9 @@ mod tests {
         std::fs::write(&lib_path, b"invalid content").unwrap();
 
         let result = BackendFactory::new(Some(&plugin_dir));
-        assert!(
-            result.is_err(),
-            "Expected an error when plugin loading fails."
-        );
-        let error = result.err().unwrap();
+        assert!(result.is_err());
         assert_eq!(
-            format!("{}", error),
+            format!("{}", result.err().unwrap()),
             format!("PluginError cause: {}: file too short", lib_path.display()),
         );
     }
@@ -424,6 +408,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let plugin_dir = dir.path().join("plugin");
         std::fs::create_dir(&plugin_dir).unwrap();
+
         let backend_dir = plugin_dir.join(NAME);
         std::fs::create_dir(&backend_dir).unwrap();
 
@@ -436,11 +421,8 @@ mod tests {
 
         for scheme in schemes {
             let result = factory.build(&format!("{}://example.com/key", scheme));
-            assert!(
-                result.is_ok(),
-                "Expected `{}` backend to be built successfully.",
-                scheme
-            );
+            assert!(result.is_ok());
+
             let backend = result.unwrap();
             assert_eq!(backend.scheme(), scheme);
         }
@@ -450,29 +432,22 @@ mod tests {
     fn should_return_error_when_backend_scheme_is_not_support() {
         let factory = BackendFactory::new(None).unwrap();
         let result = factory.build("github://example.com");
-        assert!(
-            result.is_err(),
-            "Expected an error when backend scheme is invalid."
-        );
-        let error = result.err().unwrap();
-        assert_eq!(format!("{}", error), "invalid parameter");
+        assert!(result.is_err());
+        assert_eq!(format!("{}", result.err().unwrap()), "invalid parameter");
     }
 
     #[test]
     fn should_return_error_when_backend_scheme_is_invalid() {
         let factory = BackendFactory::new(None).unwrap();
         let result = factory.build("invalid_scheme://example.com");
-        assert!(
-            result.is_err(),
-            "Expected an error when backend scheme is invalid."
-        );
-        let error = result.err().unwrap();
+        assert!(result.is_err());
         assert_eq!(
-            format!("{}", error),
+            format!("{}", result.err().unwrap()),
             "ParseError cause: relative URL without a base",
         );
     }
 
+    // build_example_plugin builds the example plugin.
     fn build_example_plugin(backend_dir: &Path) {
         // Build example plugin.
         let status = std::process::Command::new("cargo")
