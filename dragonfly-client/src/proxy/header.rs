@@ -16,7 +16,7 @@
 
 use dragonfly_api::common::v2::Priority;
 use reqwest::header::HeaderMap;
-use tracing::error;
+use tracing::{error, instrument};
 
 // DRAGONFLY_TAG_HEADER is the header key of tag in http request.
 pub const DRAGONFLY_TAG_HEADER: &str = "X-Dragonfly-Tag";
@@ -39,11 +39,8 @@ pub const DRAGONFLY_REGISTRY_HEADER: &str = "X-Dragonfly-Registry";
 // Default value includes the filtered query params of s3, gcs, oss, obs, cos.
 pub const DRAGONFLY_FILTERED_QUERY_PARAMS_HEADER: &str = "X-Dragonfly-Filtered-Query-Params";
 
-// DRAGONFLY_PIECE_LENGTH_HEADER is the header key of piece length in http request,
-// it specifies the piece length of the task.
-pub const DRAGONFLY_PIECE_LENGTH_HEADER: &str = "X-Dragonfly-Piece-Length";
-
 // get_tag gets the tag from http header.
+#[instrument(skip_all)]
 pub fn get_tag(header: &HeaderMap) -> Option<String> {
     match header.get(DRAGONFLY_TAG_HEADER) {
         Some(tag) => match tag.to_str() {
@@ -58,6 +55,7 @@ pub fn get_tag(header: &HeaderMap) -> Option<String> {
 }
 
 // get_application gets the application from http header.
+#[instrument(skip_all)]
 pub fn get_application(header: &HeaderMap) -> Option<String> {
     match header.get(DRAGONFLY_APPLICATION_HEADER) {
         Some(application) => match application.to_str() {
@@ -72,6 +70,7 @@ pub fn get_application(header: &HeaderMap) -> Option<String> {
 }
 
 // get_priority gets the priority from http header.
+#[instrument(skip_all)]
 pub fn get_priority(header: &HeaderMap) -> i32 {
     let default_priority = Priority::Level6 as i32;
     match header.get(DRAGONFLY_PRIORITY_HEADER) {
@@ -93,6 +92,7 @@ pub fn get_priority(header: &HeaderMap) -> i32 {
 }
 
 // get_registry gets the custom address of container registry from http header.
+#[instrument(skip_all)]
 pub fn get_registry(header: &HeaderMap) -> Option<String> {
     match header.get(DRAGONFLY_REGISTRY_HEADER) {
         Some(registry) => match registry.to_str() {
@@ -107,6 +107,7 @@ pub fn get_registry(header: &HeaderMap) -> Option<String> {
 }
 
 // get_filters gets the filters from http header.
+#[instrument(skip_all)]
 pub fn get_filtered_query_params(
     header: &HeaderMap,
     default_filtered_query_params: Vec<String>,
@@ -120,25 +121,5 @@ pub fn get_filtered_query_params(
             }
         },
         None => default_filtered_query_params,
-    }
-}
-
-// get_piece_length gets the piece length from http header.
-pub fn get_piece_length(header: &HeaderMap) -> u64 {
-    match header.get(DRAGONFLY_PIECE_LENGTH_HEADER) {
-        Some(piece_length) => match piece_length.to_str() {
-            Ok(piece_length) => match piece_length.parse::<u64>() {
-                Ok(piece_length) => piece_length,
-                Err(err) => {
-                    error!("parse piece length from header failed: {}", err);
-                    dragonfly_client_config::default_piece_length()
-                }
-            },
-            Err(err) => {
-                error!("get piece length from header failed: {}", err);
-                dragonfly_client_config::default_piece_length()
-            }
-        },
-        None => dragonfly_client_config::default_piece_length(),
     }
 }

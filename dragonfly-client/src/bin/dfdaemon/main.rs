@@ -112,6 +112,7 @@ async fn main() -> Result<(), anyhow::Error> {
         args.log_level,
         args.log_max_files,
         config.tracing.addr.to_owned(),
+        config.tracing.flamegraph,
         true,
         args.verbose,
     );
@@ -205,10 +206,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Initialize metrics server.
     let metrics = Metrics::new(
-        SocketAddr::new(
-            config.metrics.server.ip.unwrap(),
-            config.metrics.server.port,
-        ),
+        config.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );

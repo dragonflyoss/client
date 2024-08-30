@@ -15,6 +15,10 @@
  */
 
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
+use crate::metrics::{
+    collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
+    collect_backend_request_started_metrics,
+};
 use dragonfly_api::common::v2::{
     Download, ObjectStorage, Peer, Piece, Range, Task as CommonTask, TrafficType,
 };
@@ -25,7 +29,7 @@ use dragonfly_api::dfdaemon::{
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::{
     announce_peer_request, announce_peer_response, download_piece_back_to_source_failed_request,
-    AnnouncePeerRequest, DownloadPeerBackToSourceFailedRequest,
+    AnnouncePeerRequest, DeleteTaskRequest, DownloadPeerBackToSourceFailedRequest,
     DownloadPeerBackToSourceFinishedRequest, DownloadPeerBackToSourceStartedRequest,
     DownloadPeerFailedRequest, DownloadPeerFinishedRequest, DownloadPeerStartedRequest,
     DownloadPieceBackToSourceFailedRequest, DownloadPieceBackToSourceFinishedRequest,
@@ -46,7 +50,7 @@ use dragonfly_client_util::{
 use reqwest::header::HeaderMap;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{
     mpsc::{self, Sender},
     Semaphore,
@@ -55,7 +59,7 @@ use tokio::task::JoinSet;
 use tokio::time::sleep;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Status};
-use tracing::{error, info, Instrument};
+use tracing::{error, info, instrument, Instrument};
 
 use super::*;
 
@@ -83,6 +87,7 @@ pub struct Task {
 // Task implements the task manager.
 impl Task {
     // new returns a new Task.
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
@@ -109,14 +114,16 @@ impl Task {
     }
 
     // download_started updates the metadata of the task when the task downloads started.
+    #[instrument(skip_all)]
     pub async fn download_started(
         &self,
         id: &str,
         request: Download,
     ) -> ClientResult<metadata::Task> {
-        let task = self
-            .storage
-            .download_task_started(id, request.piece_length, None, None)?;
+        let task = self.storage.download_task_started(id, None, None, None)?;
+        if task.content_length.is_some() && task.piece_length.is_some() {
+            return Ok(task);
+        }
 
         // Handle the request header.
         let mut request_header =
@@ -125,10 +132,6 @@ impl Task {
                 err
             })?;
 
-        if task.content_length.is_some() {
-            return Ok(task);
-        }
-
         // Remove the range header to prevent the server from
         // returning a 206 partial content and returning
         // a 200 full content.
@@ -136,6 +139,15 @@ impl Task {
 
         // Head the url to get the content length.
         let backend = self.backend_factory.build(request.url.as_str())?;
+
+        // Record the start time.
+        let start_time = Instant::now();
+
+        // Collect the backend request started metrics.
+        collect_backend_request_started_metrics(
+            backend.scheme().as_str(),
+            http::Method::HEAD.as_str(),
+        );
         let response = backend
             .head(HeadRequest {
                 task_id: id.to_string(),
@@ -145,10 +157,24 @@ impl Task {
                 client_certs: None,
                 object_storage: request.object_storage,
             })
-            .await?;
+            .await
+            .map_err(|err| {
+                // Collect the backend request failure metrics.
+                collect_backend_request_failure_metrics(
+                    backend.scheme().as_str(),
+                    http::Method::HEAD.as_str(),
+                );
+                err
+            })?;
 
         // Check if the status code is success.
         if !response.success {
+            // Collect the backend request failure metrics.
+            collect_backend_request_failure_metrics(
+                backend.scheme().as_str(),
+                http::Method::HEAD.as_str(),
+            );
+
             return Err(Error::BackendError(BackendError {
                 message: response.error_message.unwrap_or_default(),
                 status_code: Some(response.http_status_code.unwrap_or_default()),
@@ -156,36 +182,57 @@ impl Task {
             }));
         }
 
+        // Collect the backend request finished metrics.
+        collect_backend_request_finished_metrics(
+            backend.scheme().as_str(),
+            http::Method::HEAD.as_str(),
+            start_time.elapsed(),
+        );
+
+        let content_length = match response.content_length {
+            Some(content_length) => content_length,
+            None => return Err(Error::InvalidContentLength),
+        };
+
+        let piece_length = self.piece.calculate_piece_length(
+            piece::PieceLengthStrategy::OptimizeByFileLength,
+            content_length,
+        );
+
         self.storage.download_task_started(
             id,
-            request.piece_length,
-            response.content_length,
+            Some(piece_length),
+            Some(content_length),
             response.http_header,
         )
     }
 
     // download_finished updates the metadata of the task when the task downloads finished.
+    #[instrument(skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.download_task_finished(id)
     }
 
     // download_failed updates the metadata of the task when the task downloads failed.
+    #[instrument(skip_all)]
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
-        let _ = self.storage.download_task_failed(id).await?;
-        Ok(())
+        self.storage.download_task_failed(id).await.map(|_| ())
     }
 
     // prefetch_task_started updates the metadata of the task when the task prefetch started.
+    #[instrument(skip_all)]
     pub async fn prefetch_task_started(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.prefetch_task_started(id).await
     }
 
     // prefetch_task_failed updates the metadata of the task when the task prefetch failed.
+    #[instrument(skip_all)]
     pub async fn prefetch_task_failed(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.prefetch_task_failed(id).await
     }
 
     // hard_link_or_copy hard links or copies the task content to the destination.
+    #[instrument(skip_all)]
     pub async fn hard_link_or_copy(
         &self,
         task: metadata::Task,
@@ -197,12 +244,13 @@ impl Task {
 
     // download downloads a task.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
     pub async fn download(
         &self,
         task: metadata::Task,
         host_id: &str,
         peer_id: &str,
-        request: Download,
+        mut request: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<()> {
         // Get the content length from the task.
@@ -211,18 +259,27 @@ impl Task {
             return Err(Error::InvalidContentLength);
         };
 
-        // Calculate the interested pieces to download.
-        let interested_pieces = match self.piece.calculate_interested(
-            request.piece_length,
-            content_length,
-            request.range,
-        ) {
-            Ok(interested_pieces) => interested_pieces,
-            Err(err) => {
-                error!("calculate interested pieces error: {:?}", err);
-                return Err(err);
-            }
+        // Get the piece length from the task.
+        let Some(piece_length) = task.piece_length() else {
+            error!("piece length not found");
+            return Err(Error::InvalidPieceLength);
         };
+
+        // Add the piece length to the request for register task.
+        request.piece_length = Some(piece_length);
+
+        // Calculate the interested pieces to download.
+        let interested_pieces =
+            match self
+                .piece
+                .calculate_interested(piece_length, content_length, request.range)
+            {
+                Ok(interested_pieces) => interested_pieces,
+                Err(err) => {
+                    error!("calculate interested pieces error: {:?}", err);
+                    return Err(err);
+                }
+            };
         info!(
             "interested pieces: {:?}",
             interested_pieces
@@ -406,6 +463,7 @@ impl Task {
 
     // download_partial_with_scheduler downloads a partial task with scheduler.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
     async fn download_partial_with_scheduler(
         &self,
         task: metadata::Task,
@@ -837,6 +895,7 @@ impl Task {
 
     // download_partial_with_scheduler_from_remote_peer downloads a partial task with scheduler from a remote peer.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
     async fn download_partial_with_scheduler_from_remote_peer(
         &self,
         task: metadata::Task,
@@ -948,7 +1007,11 @@ impl Task {
                     )
                     .await
                     .map_err(|err| {
-                        error!("send DownloadPieceFinishedRequest failed: {:?}", err);
+                        error!(
+                            "send DownloadPieceFinishedRequest for piece {} failed: {:?}",
+                            storage.piece_id(task_id.as_str(), number),
+                            err
+                        );
                         err
                     })?;
 
@@ -971,7 +1034,11 @@ impl Task {
                     )
                     .await
                     .map_err(|err| {
-                        error!("send DownloadPieceFinishedResponse failed: {:?}", err);
+                        error!(
+                            "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                            storage.piece_id(task_id.as_str(), number),
+                            err
+                        );
                         err
                     })?;
 
@@ -1018,12 +1085,7 @@ impl Task {
                     finished_pieces.push(metadata.clone());
                 }
                 Err(Error::DownloadFromRemotePeerFailed(err)) => {
-                    error!(
-                        "download piece {} from remote peer {} error: {:?}",
-                        self.storage.piece_id(task.id.as_str(), err.piece_number),
-                        err.parent_id,
-                        err
-                    );
+                    let (piece_number, parent_id) = (err.piece_number, err.parent_id);
 
                     // Send the download piece failed request.
                     in_stream_tx
@@ -1036,7 +1098,7 @@ impl Task {
                                     announce_peer_request::Request::DownloadPieceFailedRequest(
                                         DownloadPieceFailedRequest {
                                             piece_number: Some(err.piece_number),
-                                            parent_id: err.parent_id,
+                                            parent_id,
                                             temporary: true,
                                         },
                                     ),
@@ -1046,22 +1108,41 @@ impl Task {
                         )
                         .await
                         .unwrap_or_else(|err| {
-                            error!("send DownloadPieceFailedRequest failed: {:?}", err)
+                            error!(
+                                "send DownloadPieceFailedRequest for piece {} failed: {:?}",
+                                self.storage.piece_id(task.id.as_str(), piece_number),
+                                err
+                            )
                         });
 
+                    // If the download failed from the remote peer, continue to download the next
+                    // piece and ignore the error.
                     continue;
+                }
+                Err(Error::SendTimeout) => {
+                    join_set.detach_all();
+
+                    // If the send timeout with scheduler or download progress, return the finished pieces.
+                    // It will stop the download from the remote peer with scheduler
+                    // and download from the source directly from middle.
+                    return Ok(finished_pieces);
                 }
                 Err(err) => {
                     error!("download from remote peer error: {:?}", err);
+
+                    // If the unknown error occurred, continue to download the next piece and
+                    // ignore the error.
                     continue;
                 }
             }
         }
+
         Ok(finished_pieces)
     }
 
     // download_partial_with_scheduler_from_source downloads a partial task with scheduler from the source.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
     async fn download_partial_with_scheduler_from_source(
         &self,
         task: metadata::Task,
@@ -1154,7 +1235,11 @@ impl Task {
                     )
                     .await
                     .map_err(|err| {
-                        error!("send DownloadPieceFinishedResponse failed: {:?}", err);
+                        error!(
+                            "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                            storage.piece_id(task_id.as_str(), number),
+                            err
+                        );
                         err
                     })?;
 
@@ -1176,7 +1261,7 @@ impl Task {
                             REQUEST_TIMEOUT,
                         )
                         .await.map_err(|err| {
-                            error!("send DownloadPieceBackToSourceFinishedRequest failed: {:?}", err);
+                            error!("send DownloadPieceBackToSourceFinishedRequest for piece {} failed: {:?}", storage.piece_id(task_id.as_str(), number), err);
                             err
                         })?;
 
@@ -1222,6 +1307,8 @@ impl Task {
                     finished_pieces.push(metadata.clone());
                 }
                 Err(Error::BackendError(err)) => {
+                    join_set.detach_all();
+
                     // Send the download piece http failed request.
                     in_stream_tx.send_timeout(AnnouncePeerRequest {
                                     host_id: host_id.to_string(),
@@ -1243,10 +1330,14 @@ impl Task {
                                 .await
                                 .unwrap_or_else(|err| error!("send DownloadPieceBackToSourceFailedRequest error: {:?}", err));
 
-                    join_set.abort_all();
+                    // If the backend error with source, return the error.
+                    // It will stop the download from the source with scheduler
+                    // and download from the source directly from beginning.
                     return Err(Error::BackendError(err));
                 }
-                Err(err) => {
+                Err(Error::SendTimeout) => {
+                    join_set.detach_all();
+
                     // Send the download piece failed request.
                     in_stream_tx.send_timeout(AnnouncePeerRequest {
                                     host_id: host_id.to_string(),
@@ -1262,7 +1353,32 @@ impl Task {
                                 .await
                                 .unwrap_or_else(|err| error!("send DownloadPieceBackToSourceFailedRequest error: {:?}", err));
 
-                    join_set.abort_all();
+                    // If the send timeout with scheduler or download progress, return
+                    // the finished pieces. It will stop the download from the source with
+                    // scheduler and download from the source directly from middle.
+                    return Ok(finished_pieces);
+                }
+                Err(err) => {
+                    join_set.detach_all();
+
+                    // Send the download piece failed request.
+                    in_stream_tx.send_timeout(AnnouncePeerRequest {
+                                    host_id: host_id.to_string(),
+                                    task_id: task.id,
+                                    peer_id: peer_id.to_string(),
+                                    request: Some(announce_peer_request::Request::DownloadPieceBackToSourceFailedRequest(
+                                            DownloadPieceBackToSourceFailedRequest{
+                                                piece_number: None,
+                                                response: None,
+                                            }
+                                    )),
+                                }, REQUEST_TIMEOUT)
+                                .await
+                                .unwrap_or_else(|err| error!("send DownloadPieceBackToSourceFailedRequest error: {:?}", err));
+
+                    // If the unknown error, return the error.
+                    // It will stop the download from the source with scheduler
+                    // and download from the source directly from beginning.
                     return Err(err);
                 }
             }
@@ -1273,6 +1389,7 @@ impl Task {
 
     // download_partial_from_local_peer downloads a partial task from a local peer.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
     async fn download_partial_from_local_peer(
         &self,
         task: metadata::Task,
@@ -1348,7 +1465,11 @@ impl Task {
                 )
                 .await
                 .map_err(|err| {
-                    error!("send DownloadPieceFinishedResponse failed: {:?}", err);
+                    error!(
+                        "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                        self.storage.piece_id(task.id.as_str(), piece.number),
+                        err
+                    );
                     err
                 })?;
 
@@ -1361,6 +1482,7 @@ impl Task {
 
     // download_partial_from_source downloads a partial task from the source.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
     async fn download_partial_from_source(
         &self,
         task: metadata::Task,
@@ -1452,7 +1574,11 @@ impl Task {
                     )
                     .await
                     .map_err(|err| {
-                        error!("send DownloadPieceFinishedResponse failed: {:?}", err);
+                        error!(
+                            "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                            storage.piece_id(task_id.as_str(), metadata.number),
+                            err
+                        );
                         err
                     })?;
 
@@ -1497,7 +1623,10 @@ impl Task {
                     finished_pieces.push(metadata.clone());
                 }
                 Err(err) => {
-                    join_set.abort_all();
+                    join_set.detach_all();
+
+                    // If the download failed from the source, return the error.
+                    // It will stop the download from the source.
                     return Err(err);
                 }
             }
@@ -1515,6 +1644,7 @@ impl Task {
     }
 
     // stat_task returns the task metadata.
+    #[instrument(skip_all)]
     pub async fn stat(&self, task_id: &str, host_id: &str) -> ClientResult<CommonTask> {
         let task = self
             .scheduler_client
@@ -1532,7 +1662,8 @@ impl Task {
     }
 
     // Delete a task and reclaim local storage.
-    pub async fn delete(&self, task_id: &str) -> ClientResult<()> {
+    #[instrument(skip_all)]
+    pub async fn delete(&self, task_id: &str, host_id: &str) -> ClientResult<()> {
         let task = self.storage.get_task(task_id).map_err(|err| {
             error!("get task {} from local storage error: {:?}", task_id, err);
             err
@@ -1540,14 +1671,20 @@ impl Task {
 
         match task {
             Some(task) => {
-                // Check current task is valid to be deleted.
-                if task.is_uploading() {
-                    return Err(Error::InvalidState("current task is uploading".to_string()));
-                }
-
                 self.storage.delete_task(task.id.as_str()).await;
-                info!("delete task {} from local storage", task.id);
 
+                self.scheduler_client
+                    .delete_task(DeleteTaskRequest {
+                        host_id: host_id.to_string(),
+                        task_id: task_id.to_string(),
+                    })
+                    .await
+                    .map_err(|err| {
+                        error!("delete task {} failed from scheudler: {:?}", task_id, err);
+                        err
+                    })?;
+
+                info!("delete task {} from local storage", task.id);
                 Ok(())
             }
             None => {

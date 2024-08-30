@@ -21,6 +21,7 @@ use dragonfly_client_core::{
 };
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+use tracing::instrument;
 use url::Url;
 use uuid::Uuid;
 
@@ -49,6 +50,7 @@ pub struct IDGenerator {
 // IDGenerator implements the IDGenerator.
 impl IDGenerator {
     // new creates a new IDGenerator.
+    #[instrument(skip_all)]
     pub fn new(ip: String, hostname: String, is_seed_peer: bool) -> Self {
         IDGenerator {
             ip,
@@ -58,6 +60,7 @@ impl IDGenerator {
     }
 
     // host_id generates the host id.
+    #[instrument(skip_all)]
     pub fn host_id(&self) -> String {
         if self.is_seed_peer {
             return format!("{}-{}-{}", self.ip, self.hostname, "seed");
@@ -67,20 +70,21 @@ impl IDGenerator {
     }
 
     // task_id generates the task id.
+    #[instrument(skip_all)]
     pub fn task_id(
         &self,
         url: &str,
         digest: Option<&str>,
         tag: Option<&str>,
         application: Option<&str>,
-        piece_length: u64,
         filtered_query_params: Vec<String>,
     ) -> Result<String> {
         // Filter the query parameters.
         let url = Url::parse(url).or_err(ErrorType::ParseError)?;
         let query = url
             .query_pairs()
-            .filter(|(k, _)| filtered_query_params.contains(&k.to_string()));
+            .filter(|(k, _)| !filtered_query_params.contains(&k.to_string()));
+
         let mut artifact_url = url.clone();
         artifact_url.query_pairs_mut().clear().extend_pairs(query);
 
@@ -105,20 +109,17 @@ impl IDGenerator {
             hasher.update(application);
         }
 
-        // Add the piece length to generate the task id.
-        hasher.update(piece_length.to_string());
-
         // Generate the task id.
         Ok(hex::encode(hasher.finalize()))
     }
 
     // cache_task_id generates the cache task id.
+    #[instrument(skip_all)]
     pub fn cache_task_id(
         &self,
         path: &PathBuf,
         tag: Option<&str>,
         application: Option<&str>,
-        piece_length: u64,
     ) -> Result<String> {
         // Initialize the hasher.
         let mut hasher = blake3::Hasher::new();
@@ -137,14 +138,12 @@ impl IDGenerator {
             hasher.update(application.as_bytes());
         }
 
-        // Add the piece length to generate the cache task id.
-        hasher.update(piece_length.to_string().as_bytes());
-
         // Generate the cache task id.
         Ok(hasher.finalize().to_hex().to_string())
     }
 
     // peer_id generates the peer id.
+    #[instrument(skip_all)]
     pub fn peer_id(&self) -> String {
         if self.is_seed_peer {
             return format!(
@@ -160,6 +159,7 @@ impl IDGenerator {
     }
 
     // cache_peer_id generates the cache peer id.
+    #[instrument(skip_all)]
     pub fn cache_peer_id(&self, persistent: bool) -> String {
         if persistent {
             return format!(
@@ -182,6 +182,7 @@ impl IDGenerator {
     }
 
     // task_type generates the task type by the task id.
+    #[instrument(skip_all)]
     pub fn task_type(&self, id: &str) -> TaskType {
         if id.contains(CACHE_KEY) {
             return TaskType::Dfcache;

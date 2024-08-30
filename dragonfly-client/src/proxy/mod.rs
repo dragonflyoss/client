@@ -98,6 +98,7 @@ pub struct Proxy {
 // Proxy implements the proxy server.
 impl Proxy {
     // new creates a new Proxy.
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         task: Arc<Task>,
@@ -859,7 +860,7 @@ fn make_download_task_request(
                 rule.filtered_query_params.clone(),
             ),
             request_header: reqwest_headermap_to_hashmap(&reqwest_request_header),
-            piece_length: header::get_piece_length(&reqwest_request_header),
+            piece_length: None,
             output_path: None,
             timeout: None,
             need_back_to_source: false,

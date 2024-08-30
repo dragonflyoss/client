@@ -42,7 +42,6 @@ tracing.workspace = true
 validator.workspace = true
 humantime.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 chrono.workspace = true
 prost-wkt-types.workspace = true
 tokio.workspace = true
@@ -62,11 +61,13 @@ blake3.workspace = true
 bytesize.workspace = true
 uuid.workspace = true
 percent-encoding.workspace = true
+serde_json = "1.0"
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
 tracing-appender = "0.2.3"
 rolling-file = "0.2.0"
 tracing-opentelemetry = "0.18.0"
+tracing-flame = "0.2.0"
 opentelemetry = { version = "0.18.0", default-features = false, features = ["trace", "rt-tokio"] }
 opentelemetry-jaeger = { version = "0.17.0", features = ["rt-tokio"] }
 pprof = { version = "0.13", features = ["flamegraph", "protobuf-codec"] }
@@ -80,7 +81,7 @@ tower = "0.4.13"
 indicatif = "0.17.8"
 dashmap = "6.0.1"
 fs2 = "0.4.3"
-hashring = "0.3.5"
+hashring = "0.3.6"
 libc = "0.2"
 fslock = "0.2.1"
 leaky-bucket = "1.0.1"
@@ -88,7 +89,7 @@ tokio-rustls = "0.25.0-alpha.4"
 http-body-util = "0.1.2"
 futures-util = "0.3.30"
 termion = "4.0.2"
-tabled = "0.15.0"
+tabled = "0.16.0"
 path-absolutize = "3.1.1"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]

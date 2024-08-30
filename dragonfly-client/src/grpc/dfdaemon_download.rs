@@ -78,6 +78,7 @@ pub struct DfdaemonDownloadServer {
 // DfdaemonDownloadServer implements the grpc server of the download.
 impl DfdaemonDownloadServer {
     // new creates a new DfdaemonServer.
+    #[instrument(skip_all)]
     pub fn new(
         socket_path: PathBuf,
         task: Arc<task::Task>,
@@ -136,6 +137,8 @@ impl DfdaemonDownloadServer {
         let uds_stream = UnixListenerStream::new(uds);
         Server::builder()
             .max_frame_size(super::MAX_FRAME_SIZE)
+            .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
+            .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
             .concurrency_limit_per_connection(super::CONCURRENCY_LIMIT_PER_CONNECTION)
             .add_service(reflection.clone())
             .add_service(health_service)
@@ -201,7 +204,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 download.digest.as_deref(),
                 download.tag.as_deref(),
                 download.application.as_deref(),
-                download.piece_length,
                 download.filtered_query_params.clone(),
             )
             .map_err(|e| {
@@ -291,7 +293,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             error!("missing content length in the response");
             return Err(Status::internal("missing content length in the response"));
         };
-        info!("content length: {}", content_length);
+        info!(
+            "content length {}, piece length {}",
+            content_length,
+            task.piece_length().unwrap_or_default()
+        );
 
         // Download's range priority is higher than the request header's range.
         // If download protocol is http, use the range of the request header.
@@ -600,13 +606,16 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         collect_delete_task_started_metrics(TaskType::Dfdaemon as i32);
 
         // Delete the task from the scheduler.
-        self.task.delete(task_id.as_str()).await.map_err(|err| {
-            // Collect the delete task failure metrics.
-            collect_delete_task_failure_metrics(TaskType::Dfdaemon as i32);
+        self.task
+            .delete(task_id.as_str(), host_id.as_str())
+            .await
+            .map_err(|err| {
+                // Collect the delete task failure metrics.
+                collect_delete_task_failure_metrics(TaskType::Dfdaemon as i32);
 
-            error!("delete task: {}", err);
-            Status::internal(err.to_string())
-        })?;
+                error!("delete task: {}", err);
+                Status::internal(err.to_string())
+            })?;
 
         Ok(Response::new(()))
     }
@@ -721,6 +730,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 task
             }
         };
+        info!(
+            "content length {}, piece length {}",
+            task.content_length(),
+            task.piece_length()
+        );
 
         // Clone the cache task.
         let task_manager = self.cache_task.clone();
@@ -834,7 +848,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 &path.to_path_buf(),
                 request.tag.as_deref(),
                 request.application.as_deref(),
-                request.piece_length,
             )
             .map_err(|err| {
                 error!("generate task id: {}", err);
@@ -984,6 +997,7 @@ pub struct DfdaemonDownloadClient {
 // DfdaemonDownloadClient implements the grpc client of the dfdaemon download.
 impl DfdaemonDownloadClient {
     // new_unix creates a new DfdaemonDownloadClient with unix domain socket.
+    #[instrument(skip_all)]
     pub async fn new_unix(socket_path: PathBuf) -> ClientResult<Self> {
         // Ignore the uri because it is not used.
         let channel = Endpoint::try_from("http://[::]:50051")
@@ -1120,6 +1134,7 @@ impl DfdaemonDownloadClient {
     }
 
     // make_request creates a new request with timeout.
+    #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);

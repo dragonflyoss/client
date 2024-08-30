@@ -20,9 +20,13 @@ use dragonfly_api::dfdaemon::v2::{download_task_response, DownloadTaskRequest};
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
+use dragonfly_client::metrics::{
+    collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
+    collect_backend_request_started_metrics,
+};
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::{object_storage, BackendFactory, DirEntry, HeadRequest};
-use dragonfly_client_config::{self, default_piece_length, dfdaemon, dfget};
+use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{BackendError, ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::http::{header_vec_to_hashmap, header_vec_to_reqwest_headermap};
@@ -32,7 +36,7 @@ use percent_encoding::percent_decode_str;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{cmp::min, fmt::Write};
 use termion::{color, style};
 use tokio::fs;
@@ -55,10 +59,10 @@ Examples:
   $ dfget s3://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret>
   
   # Download a file from Google Cloud Storage Service(GCS).
-  $ dfget gcs://<bucket>/<path> -O /tmp/file.txt --storage-credential=<credential> --storage-endpoint=<endpoint>
+  $ dfget gs://<bucket>/<path> -O /tmp/file.txt --storage-credential-path=<credential_path>
   
   # Download a file from Azure Blob Storage Service(ABS).
-  $ dfget abs://<container>/<path> -O /tmp/file.txt --storage-access-key-id=<account_name> --storage-access-key-secret=<account_key> --storage-endpoint=<endpoint>
+  $ dfget abs://<container>/<path> -O /tmp/file.txt --storage-access-key-id=<account_name> --storage-access-key-secret=<account_key>
   
   # Download a file from Aliyun Object Storage Service(OSS).
   $ dfget oss://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret> --storage-endpoint=<endpoint>
@@ -104,13 +108,6 @@ struct Args {
         help = "Specify the timeout for downloading a file"
     )]
     timeout: Duration,
-
-    #[arg(
-        long = "piece-length",
-        default_value_t = default_piece_length(),
-        help = "Specify the byte length of the piece"
-    )]
-    piece_length: u64,
 
     #[arg(
         short = 'd',
@@ -190,9 +187,9 @@ struct Args {
 
     #[arg(
         long,
-        help = "Specify the credential for Google Cloud Storage Service(GCS)"
+        help = "Specify the local path to the credential file which is used for OAuth2 authentication for Google Cloud Storage Service(GCS)"
     )]
-    storage_credential: Option<String>,
+    storage_credential_path: Option<String>,
 
     #[arg(
         long,
@@ -258,6 +255,7 @@ async fn main() -> anyhow::Result<()> {
         args.log_max_files,
         None,
         false,
+        false,
         args.verbose,
     );
 
@@ -321,7 +319,7 @@ async fn main() -> anyhow::Result<()> {
                 );
 
                 eprintln!(
-                    "{}{}{}Message:{}, can not connect {}, please check the unix socket.{}",
+                    "{}{}{}Message:{}, can not connect {}, please check the unix socket {}",
                     color::Fg(color::Cyan),
                     style::Italic,
                     style::Bold,
@@ -571,23 +569,16 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
 
 // download_dir downloads all files in the directory.
 async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Result<()> {
-    // Only when the `access_key_id` and `access_key_secret` are provided at the same time,
-    // they will be passed to the `DownloadTaskRequest`.
-    let mut object_storage = None;
-    if let (Some(access_key_id), Some(access_key_secret)) = (
-        args.storage_access_key_id.clone(),
-        args.storage_access_key_secret.clone(),
-    ) {
-        object_storage = Some(ObjectStorage {
-            access_key_id,
-            access_key_secret,
-            session_token: args.storage_session_token.clone(),
-            region: args.storage_region.clone(),
-            endpoint: args.storage_endpoint.clone(),
-            credential: args.storage_credential.clone(),
-            predefined_acl: args.storage_predefined_acl.clone(),
-        });
-    }
+    // Initalize the object storage.
+    let object_storage = Some(ObjectStorage {
+        access_key_id: args.storage_access_key_id.clone(),
+        access_key_secret: args.storage_access_key_secret.clone(),
+        session_token: args.storage_session_token.clone(),
+        region: args.storage_region.clone(),
+        endpoint: args.storage_endpoint.clone(),
+        credential_path: args.storage_credential_path.clone(),
+        predefined_acl: args.storage_predefined_acl.clone(),
+    });
 
     // Get all entries in the directory. If the directory is empty, then return directly.
     let entries = get_entries(args.clone(), object_storage.clone()).await?;
@@ -672,23 +663,25 @@ async fn download(
     progress_bar: ProgressBar,
     download_client: DfdaemonDownloadClient,
 ) -> Result<()> {
-    // Only when the `access_key_id` and `access_key_secret` are provided at the same time,
-    // they will be passed to the `DownloadTaskRequest`.
-    let mut object_storage = None;
-    if let (Some(access_key_id), Some(access_key_secret)) = (
-        args.storage_access_key_id.clone(),
-        args.storage_access_key_secret.clone(),
-    ) {
-        object_storage = Some(ObjectStorage {
-            access_key_id,
-            access_key_secret,
+    // Only initialize object storage when the scheme is an object storage protocol.
+    let object_storage = match object_storage::Scheme::from_str(args.url.scheme()) {
+        Ok(_) => Some(ObjectStorage {
+            access_key_id: args.storage_access_key_id.clone(),
+            access_key_secret: args.storage_access_key_secret.clone(),
             session_token: args.storage_session_token.clone(),
             region: args.storage_region.clone(),
             endpoint: args.storage_endpoint.clone(),
-            credential: args.storage_credential.clone(),
+            credential_path: args.storage_credential_path.clone(),
             predefined_acl: args.storage_predefined_acl.clone(),
-        });
-    }
+        }),
+        Err(_) => None,
+    };
+
+    // If the `filtered_query_params` is not provided, then use the default value.
+    let filtered_query_params = match args.filtered_query_params {
+        Some(params) => params,
+        None => dfdaemon::default_proxy_rule_filtered_query_params(),
+    };
 
     // Create dfdaemon client.
     let response = download_client
@@ -702,9 +695,9 @@ async fn download(
                 tag: Some(args.tag),
                 application: Some(args.application),
                 priority: args.priority,
-                filtered_query_params: args.filtered_query_params.unwrap_or_default(),
+                filtered_query_params,
                 request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
-                piece_length: args.piece_length,
+                piece_length: None,
                 output_path: Some(args.output.to_string_lossy().to_string()),
                 timeout: Some(
                     prost_wkt_types::Duration::try_from(args.timeout)
@@ -772,7 +765,11 @@ async fn get_entries(args: Args, object_storage: Option<ObjectStorage>) -> Resul
     let backend_factory = BackendFactory::new(None)?;
     let backend = backend_factory.build(args.url.as_str())?;
 
-    // Send head request.
+    // Collect backend request started metrics.
+    collect_backend_request_started_metrics(backend.scheme().as_str(), http::Method::HEAD.as_str());
+
+    // Record the start time.
+    let start_time = Instant::now();
     let response = backend
         .head(HeadRequest {
             // NOTE: Mock a task id for head request.
@@ -785,16 +782,38 @@ async fn get_entries(args: Args, object_storage: Option<ObjectStorage>) -> Resul
             client_certs: None,
             object_storage,
         })
-        .await?;
+        .await
+        .map_err(|err| {
+            // Collect backend request failure metrics.
+            collect_backend_request_failure_metrics(
+                backend.scheme().as_str(),
+                http::Method::HEAD.as_str(),
+            );
+
+            err
+        })?;
 
     // Return error when response is failed.
     if !response.success {
+        // Collect backend request failure metrics.
+        collect_backend_request_failure_metrics(
+            backend.scheme().as_str(),
+            http::Method::HEAD.as_str(),
+        );
+
         return Err(Error::BackendError(BackendError {
             message: response.error_message.unwrap_or_default(),
             status_code: Some(response.http_status_code.unwrap_or_default()),
             header: Some(response.http_header.unwrap_or_default()),
         }));
     }
+
+    // Collect backend request finished metrics.
+    collect_backend_request_finished_metrics(
+        backend.scheme().as_str(),
+        http::Method::HEAD.as_str(),
+        start_time.elapsed(),
+    );
 
     Ok(response.entries)
 }

@@ -35,6 +35,7 @@ pub struct CertificateClient {
 // CertificateClient implements the grpc client of the certificate.
 impl CertificateClient {
     // new creates a new CertificateClient.
+    #[instrument(skip_all)]
     pub async fn new(addr: String) -> Result<Self> {
         let channel = Channel::from_static(Box::leak(addr.into_boxed_str()))
             .connect_timeout(super::CONNECT_TIMEOUT)
@@ -60,6 +61,7 @@ impl CertificateClient {
     }
 
     // make_request creates a new request with timeout.
+    #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);

@@ -20,19 +20,26 @@ use futures::TryStreamExt;
 use rustls_pki_types::CertificateDer;
 use std::io::{Error as IOError, ErrorKind};
 use tokio_util::io::StreamReader;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
 // HTTP is the HTTP backend.
-pub struct HTTP;
+pub struct HTTP {
+    // scheme is the scheme of the HTTP backend.
+    scheme: String,
+}
 
 // HTTP implements the http interface.
 impl HTTP {
     // new returns a new HTTP.
-    pub fn new() -> HTTP {
-        Self
+    #[instrument(skip_all)]
+    pub fn new(scheme: &str) -> HTTP {
+        Self {
+            scheme: scheme.to_string(),
+        }
     }
 
     // client returns a new reqwest client.
+    #[instrument(skip_all)]
     fn client(
         &self,
         client_certs: Option<Vec<CertificateDer<'static>>>,
@@ -64,7 +71,14 @@ impl HTTP {
 // Backend implements the Backend trait.
 #[tonic::async_trait]
 impl super::Backend for HTTP {
+    // scheme returns the scheme of the HTTP backend.
+    #[instrument(skip_all)]
+    fn scheme(&self) -> String {
+        self.scheme.clone()
+    }
+
     // head gets the header of the request.
+    #[instrument(skip_all)]
     async fn head(&self, request: super::HeadRequest) -> Result<super::HeadResponse> {
         info!(
             "head request {} {}: {:?}",
@@ -111,10 +125,11 @@ impl super::Backend for HTTP {
     }
 
     // get gets the content of the request.
+    #[instrument(skip_all)]
     async fn get(&self, request: super::GetRequest) -> Result<super::GetResponse<super::Body>> {
         info!(
-            "get request {} {}: {:?}",
-            request.piece_id, request.url, request.http_header
+            "get request {} {} {}: {:?}",
+            request.task_id, request.piece_id, request.url, request.http_header
         );
 
         // The header of the request is required.
@@ -128,8 +143,8 @@ impl super::Backend for HTTP {
             .await
             .map_err(|err| {
                 error!(
-                    "get request failed {} {}: {}",
-                    request.piece_id, request.url, err
+                    "get request failed {} {} {}: {}",
+                    request.task_id, request.piece_id, request.url, err
                 );
                 err
             })?;
@@ -141,6 +156,10 @@ impl super::Backend for HTTP {
                 .bytes_stream()
                 .map_err(|err| IOError::new(ErrorKind::Other, err)),
         ));
+        info!(
+            "get response {} {}: {:?} {:?}",
+            request.task_id, request.piece_id, status_code, header
+        );
 
         Ok(super::GetResponse {
             success: status_code.is_success(),
@@ -156,31 +175,36 @@ impl super::Backend for HTTP {
 impl Default for HTTP {
     // default returns a new default HTTP.
     fn default() -> Self {
-        Self::new()
+        Self::new("http")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{http, Backend, GetRequest, HeadRequest};
-    use httpmock::{Method, MockServer};
     use reqwest::{header::HeaderMap, StatusCode};
+    use wiremock::{
+        matchers::{method, path},
+        Mock, ResponseTemplate,
+    };
 
     #[tokio::test]
     async fn should_get_head_response() {
-        let server = MockServer::start();
-        server.mock(|when, then| {
-            when.method(Method::GET).path("/head");
-            then.status(200)
-                .header("content-type", "text/html; charset=UTF-8")
-                .body("");
-        });
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/head"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Type", "text/html; charset=UTF-8"),
+            )
+            .mount(&server)
+            .await;
 
-        let http_backend = http::HTTP::new();
+        let http_backend = http::HTTP::new("http");
         let resp = http_backend
             .head(HeadRequest {
                 task_id: "test".to_string(),
-                url: server.url("/head"),
+                url: format!("{}/head", server.uri()),
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),
                 client_certs: None,
@@ -194,19 +218,21 @@ mod tests {
 
     #[tokio::test]
     async fn should_return_error_response_when_head_notexists() {
-        let server = MockServer::start();
-        server.mock(|when, then| {
-            when.method(Method::GET).path("/head");
-            then.status(200)
-                .header("content-type", "text/html; charset=UTF-8")
-                .body("");
-        });
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/head"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Type", "text/html; charset=UTF-8"),
+            )
+            .mount(&server)
+            .await;
 
-        let http_backend = http::HTTP::new();
+        let http_backend = http::HTTP::new("http");
         let resp = http_backend
             .head(HeadRequest {
                 task_id: "test".to_string(),
-                url: server.url("/head"),
+                url: format!("{}/head", server.uri()),
                 http_header: None,
                 timeout: std::time::Duration::from_secs(5),
                 client_certs: None,
@@ -219,19 +245,23 @@ mod tests {
 
     #[tokio::test]
     async fn should_get_response() {
-        let server = MockServer::start();
-        server.mock(|when, then| {
-            when.method(Method::GET).path("/get");
-            then.status(200)
-                .header("content-type", "text/html; charset=UTF-8")
-                .body("OK");
-        });
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/get"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Type", "text/html; charset=UTF-8")
+                    .set_body_string("OK"),
+            )
+            .mount(&server)
+            .await;
 
-        let http_backend = http::HTTP::new();
+        let http_backend = http::HTTP::new("http");
         let mut resp = http_backend
             .get(GetRequest {
+                task_id: "test".to_string(),
                 piece_id: "test".to_string(),
-                url: server.url("/get"),
+                url: format!("{}/get", server.uri()),
                 range: None,
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),

@@ -71,6 +71,7 @@ pub struct SchedulerClient {
 // SchedulerClient implements the grpc client of the scheduler.
 impl SchedulerClient {
     // new creates a new SchedulerClient.
+    #[instrument(skip_all)]
     pub async fn new(dynconfig: Arc<Dynconfig>) -> Result<Self> {
         let client = Self {
             dynconfig,
@@ -377,6 +378,7 @@ impl SchedulerClient {
     }
 
     // upload_cache_task_finished uploads the metadata of the cache task finished.
+    #[instrument(skip_all)]
     pub async fn upload_cache_task_finished(
         &self,
         request: UploadCacheTaskFinishedRequest,
@@ -392,6 +394,7 @@ impl SchedulerClient {
     }
 
     // upload_cache_task_failed uploads the metadata of the cache task failed.
+    #[instrument(skip_all)]
     pub async fn upload_cache_task_failed(
         &self,
         request: UploadCacheTaskFailedRequest,
@@ -574,6 +577,7 @@ impl SchedulerClient {
     }
 
     // make_request creates a new request with timeout.
+    #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);

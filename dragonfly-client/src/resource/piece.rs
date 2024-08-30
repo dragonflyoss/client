@@ -16,7 +16,9 @@
 
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::metrics::{
-    collect_download_piece_traffic_metrics, collect_upload_piece_traffic_metrics,
+    collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
+    collect_backend_request_started_metrics, collect_download_piece_traffic_metrics,
+    collect_upload_piece_traffic_metrics,
 };
 use chrono::Utc;
 use dragonfly_api::common::v2::{ObjectStorage, Range, TrafficType};
@@ -30,11 +32,29 @@ use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{error, info, instrument, Span};
 
 use super::*;
+
+// MAX_PIECE_COUNT is the maximum piece count. If the piece count is upper
+// than MAX_PIECE_COUNT, the piece length will be optimized by the file length.
+// When piece length becames the MAX_PIECE_LENGTH, the piece piece count
+// probably will be upper than MAX_PIECE_COUNT.
+const MAX_PIECE_COUNT: u64 = 500;
+
+// MIN_PIECE_LENGTH is the minimum piece length.
+const MIN_PIECE_LENGTH: u64 = 4 * 1024 * 1024;
+
+// MAX_PIECE_LENGTH is the maximum piece length.
+const MAX_PIECE_LENGTH: u64 = 16 * 1024 * 1024;
+
+// PieceLengthStrategy sets the optimization strategy of piece length.
+pub enum PieceLengthStrategy {
+    // OptimizeByFileLength optimizes the piece length by the file length.
+    OptimizeByFileLength,
+}
 
 // Piece represents a piece manager.
 pub struct Piece {
@@ -60,6 +80,7 @@ pub struct Piece {
 // Piece implements the piece manager.
 impl Piece {
     // new returns a new Piece.
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
@@ -93,12 +114,6 @@ impl Piece {
     #[instrument(skip_all)]
     pub fn get(&self, task_id: &str, number: u32) -> Result<Option<metadata::Piece>> {
         self.storage.get_piece(task_id, number)
-    }
-
-    // get_all gets all pieces from the local storage.
-    #[instrument(skip_all)]
-    pub fn get_all(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
-        self.storage.get_pieces(task_id)
     }
 
     // calculate_interested calculates the interested pieces by content_length and range.
@@ -254,6 +269,29 @@ impl Piece {
         pieces.into_values().collect()
     }
 
+    // calculate_piece_size calculates the piece size by content_length.
+    pub fn calculate_piece_length(
+        &self,
+        strategy: PieceLengthStrategy,
+        content_length: u64,
+    ) -> u64 {
+        match strategy {
+            PieceLengthStrategy::OptimizeByFileLength => {
+                let piece_length = (content_length as f64 / MAX_PIECE_COUNT as f64) as u64;
+                let actual_piece_length = piece_length.next_power_of_two();
+
+                match (
+                    actual_piece_length > MIN_PIECE_LENGTH,
+                    actual_piece_length < MAX_PIECE_LENGTH,
+                ) {
+                    (true, true) => actual_piece_length,
+                    (_, false) => MAX_PIECE_LENGTH,
+                    (false, _) => MIN_PIECE_LENGTH,
+                }
+            }
+        }
+    }
+
     // upload_from_local_peer_into_async_read uploads a single piece from a local peer.
     #[instrument(skip_all, fields(piece_id))]
     pub async fn upload_from_local_peer_into_async_read(
@@ -335,7 +373,13 @@ impl Piece {
         self.download_rate_limiter.acquire(length as usize).await;
 
         // Record the start of downloading piece.
-        self.storage.download_piece_started(task_id, number).await?;
+        let piece = self.storage.download_piece_started(task_id, number).await?;
+
+        // If the piece is downloaded by the other thread,
+        // return the piece directly.
+        if piece.is_finished() {
+            return Ok(piece);
+        }
 
         // Create a dfdaemon client.
         let host = parent.host.clone().ok_or_else(|| {
@@ -458,7 +502,13 @@ impl Piece {
         self.download_rate_limiter.acquire(length as usize).await;
 
         // Record the start of downloading piece.
-        self.storage.download_piece_started(task_id, number).await?;
+        let piece = self.storage.download_piece_started(task_id, number).await?;
+
+        // If the piece is downloaded by the other thread,
+        // return the piece directly.
+        if piece.is_finished() {
+            return Ok(piece);
+        }
 
         // Add range header to the request by offset and length.
         let mut request_header = request_header.clone();
@@ -479,8 +529,17 @@ impl Piece {
             err
         })?;
 
+        // Record the start time.
+        let start_time = Instant::now();
+
+        // Collect the backend request started metrics.
+        collect_backend_request_started_metrics(
+            backend.scheme().as_str(),
+            http::Method::GET.as_str(),
+        );
         let mut response = backend
             .get(GetRequest {
+                task_id: task_id.to_string(),
                 piece_id: self.storage.piece_id(task_id, number),
                 url: url.to_string(),
                 range: Some(Range {
@@ -494,7 +553,12 @@ impl Piece {
             })
             .await
             .map_err(|err| {
-                // Record the failure of downloading piece,
+                // Collect the backend request failure metrics.
+                collect_backend_request_failure_metrics(
+                    backend.scheme().as_str(),
+                    http::Method::GET.as_str(),
+                );
+
                 // if the request is failed.
                 error!("backend get failed: {}", err);
                 if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
@@ -505,7 +569,12 @@ impl Piece {
             })?;
 
         if !response.success {
-            // Record the failure of downloading piece,
+            // Collect the backend request failure metrics.
+            collect_backend_request_failure_metrics(
+                backend.scheme().as_str(),
+                http::Method::GET.as_str(),
+            );
+
             // if the status code is not OK.
             let mut buffer = String::new();
             response
@@ -524,6 +593,13 @@ impl Piece {
                 header: Some(response.http_header.unwrap_or_default()),
             }));
         }
+
+        // Collect the backend request finished metrics.
+        collect_backend_request_finished_metrics(
+            backend.scheme().as_str(),
+            http::Method::GET.as_str(),
+            start_time.elapsed(),
+        );
 
         // Record the finish of downloading piece.
         self.storage
