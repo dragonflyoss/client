@@ -1,3 +1,5 @@
+# @format
+
 name: Release
 
 on:
@@ -93,21 +95,21 @@ jobs:
           mkdir -p target/release
           cp "$dfget" "$dfdaemon" "$dfstore" "$dfcache" "$dfinit" target/release
 
-      - name: Build archive client(DEB)
-        shell: bash
-        run: |
-          binary_name="client"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          cargo deb -p dragonfly-client --no-build --no-strip --target ${{ matrix.target }} --output $dirname.deb
-          echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
+      # - name: Build archive client(DEB)
+      #   shell: bash
+      #   run: |
+      #     binary_name="client"
+      #     dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+      #     cargo deb -p dragonfly-client --no-build --no-strip --target ${{ matrix.target }} --output $dirname.deb
+      #     echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
 
-      - name: Build archive client(RPM)
-        shell: bash
-        run: |
-          binary_name="client"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --output $dirname.rpm
-          echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
+      # - name: Build archive client(RPM)
+      #   shell: bash
+      #   run: |
+      #     binary_name="client"
+      #     dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+      #     cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --output $dirname.rpm
+      #     echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
 
       - name: Build archive client(TAR)
         shell: bash
@@ -131,8 +133,6 @@ jobs:
           generate_release_notes: true
           draft: true
           files: |
-            ${{ env.CLIENT_RPM_ASSET }}
-            ${{ env.CLIENT_DEB_ASSET }}            
             ${{ env.CLIENT_TAR_GZ_ASSET }}
 
   publish-crates:
