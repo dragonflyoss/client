@@ -118,6 +118,10 @@ pub enum DFError {
     #[error("invalid content length")]
     InvalidContentLength,
 
+    // InvalidPieceLength is the error when the piece length is invalid.
+    #[error("invalid piece length")]
+    InvalidPieceLength,
+
     // InvalidParameter is the error when the parameter is invalid.
     #[error("invalid parameter")]
     InvalidParameter,

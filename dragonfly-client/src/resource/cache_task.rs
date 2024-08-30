@@ -50,7 +50,7 @@ use tokio::task::JoinSet;
 use tokio::time::sleep;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Status};
-use tracing::{error, info, Instrument};
+use tracing::{error, info, instrument, Instrument};
 
 use super::*;
 
@@ -75,6 +75,7 @@ pub struct CacheTask {
 // CacheTask is the implementation of CacheTask.
 impl CacheTask {
     // new creates a new CacheTask.
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
@@ -100,6 +101,7 @@ impl CacheTask {
     }
 
     // create_persistent creates a persistent cache task from local.
+    #[instrument(skip_all)]
     pub async fn create_persistent(
         &self,
         task_id: &str,
@@ -109,6 +111,24 @@ impl CacheTask {
         digest: &str,
         request: UploadCacheTaskRequest,
     ) -> ClientResult<CommonCacheTask> {
+        // Convert prost_wkt_types::Duration to std::time::Duration.
+        let ttl = Duration::try_from(request.ttl.ok_or(Error::UnexpectedResponse)?)
+            .or_err(ErrorType::ParseError)?;
+
+        // Get the content length of the file.
+        let content_length = std::fs::metadata(path)
+            .map_err(|err| {
+                error!("get file metadata error: {}", err);
+                err
+            })?
+            .len();
+
+        // Get the piece length of the file.
+        let piece_length = self.piece.calculate_piece_length(
+            piece::PieceLengthStrategy::OptimizeByFileLength,
+            content_length,
+        );
+
         // Notify the scheduler that the cache task is started.
         self.scheduler_client
             .upload_cache_task_started(UploadCacheTaskStartedRequest {
@@ -118,7 +138,7 @@ impl CacheTask {
                 persistent_replica_count: request.persistent_replica_count,
                 tag: request.tag.clone(),
                 application: request.application.clone(),
-                piece_length: request.piece_length,
+                piece_length,
                 ttl: request.ttl,
                 timeout: request.timeout,
             })
@@ -128,14 +148,10 @@ impl CacheTask {
                 err
             })?;
 
-        // Convert prost_wkt_types::Duration to std::time::Duration.
-        let ttl = Duration::try_from(request.ttl.ok_or(Error::UnexpectedResponse)?)
-            .or_err(ErrorType::ParseError)?;
-
         // Create the persistent cache task.
         match self
             .storage
-            .create_persistent_cache_task(task_id, ttl, path, request.piece_length, digest)
+            .create_persistent_cache_task(task_id, ttl, path, piece_length, content_length, digest)
             .await
         {
             Ok(metadata) => {
@@ -177,7 +193,7 @@ impl CacheTask {
                     digest: digest.to_string(),
                     tag: request.tag,
                     application: request.application,
-                    piece_length: request.piece_length,
+                    piece_length: metadata.piece_length,
                     content_length: metadata.content_length,
                     piece_count: response.piece_count,
                     state: response.state,
@@ -209,6 +225,7 @@ impl CacheTask {
     }
 
     // download_started updates the metadata of the cache task when the cache task downloads started.
+    #[instrument(skip_all)]
     pub async fn download_started(
         &self,
         task_id: &str,
@@ -231,23 +248,26 @@ impl CacheTask {
             task_id,
             ttl,
             request.persistent,
-            request.piece_length,
+            response.piece_length,
             response.content_length,
         )
     }
 
     // download_finished updates the metadata of the cache task when the task downloads finished.
+    #[instrument(skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::CacheTask> {
         self.storage.download_cache_task_finished(id)
     }
 
     // download_failed updates the metadata of the cache task when the task downloads failed.
+    #[instrument(skip_all)]
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
         let _ = self.storage.download_cache_task_failed(id).await?;
         Ok(())
     }
 
     // hard_link_or_copy hard links or copies the cache task content to the destination.
+    #[instrument(skip_all)]
     pub async fn hard_link_or_copy(
         &self,
         task: metadata::CacheTask,
@@ -258,6 +278,7 @@ impl CacheTask {
 
     // download downloads a cache task.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
     pub async fn download(
         &self,
         task: metadata::CacheTask,
@@ -270,7 +291,7 @@ impl CacheTask {
         let interested_pieces =
             match self
                 .piece
-                .calculate_interested(request.piece_length, task.content_length, None)
+                .calculate_interested(task.piece_length, task.content_length, None)
             {
                 Ok(interested_pieces) => interested_pieces,
                 Err(err) => {
@@ -436,6 +457,7 @@ impl CacheTask {
 
     // download_partial_with_scheduler downloads a partial cache task with scheduler.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
     async fn download_partial_with_scheduler(
         &self,
         task: metadata::CacheTask,
@@ -738,6 +760,7 @@ impl CacheTask {
 
     // download_partial_with_scheduler_from_remote_peer downloads a partial cache task with scheduler from a remote peer.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
     async fn download_partial_with_scheduler_from_remote_peer(
         &self,
         task: metadata::CacheTask,
@@ -963,6 +986,7 @@ impl CacheTask {
 
     // download_partial_from_local_peer downloads a partial cache task from a local peer.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
     async fn download_partial_from_local_peer(
         &self,
         task: metadata::CacheTask,
@@ -1050,6 +1074,7 @@ impl CacheTask {
     }
 
     // stat stats the cache task from the scheduler.
+    #[instrument(skip_all)]
     pub async fn stat(&self, task_id: &str, host_id: &str) -> ClientResult<CommonCacheTask> {
         self.scheduler_client
             .stat_cache_task(StatCacheTaskRequest {
@@ -1060,6 +1085,7 @@ impl CacheTask {
     }
 
     // delete_cache_task deletes a cache task.
+    #[instrument(skip_all)]
     pub async fn delete(&self, task_id: &str, host_id: &str) -> ClientResult<()> {
         self.scheduler_client
             .delete_cache_task(DeleteCacheTaskRequest {

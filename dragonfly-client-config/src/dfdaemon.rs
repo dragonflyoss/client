@@ -26,7 +26,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::fs;
-use tracing::info;
+use tracing::{info, instrument};
 use validator::Validate;
 
 // NAME is the name of dfdaemon.
@@ -132,7 +132,7 @@ fn default_scheduler_announce_interval() -> Duration {
 // default_scheduler_schedule_timeout is the default timeout for scheduling.
 #[inline]
 fn default_scheduler_schedule_timeout() -> Duration {
-    Duration::from_secs(30)
+    Duration::from_secs(10)
 }
 
 // default_dynconfig_refresh_interval is the default interval to refresh dynamic configuration from manager.
@@ -275,7 +275,7 @@ fn cos_filtered_query_params() -> Vec<String> {
 
 // default_proxy_rule_filtered_query_params is the default filtered query params to generate the task id.
 #[inline]
-fn default_proxy_rule_filtered_query_params() -> Vec<String> {
+pub fn default_proxy_rule_filtered_query_params() -> Vec<String> {
     let mut visited = HashSet::new();
     for query_param in s3_filtered_query_params() {
         visited.insert(query_param);
@@ -946,6 +946,9 @@ pub struct Stats {
 pub struct Tracing {
     // addr is the address to report tracing log.
     pub addr: Option<String>,
+
+    // flamegraph indicates whether enable flamegraph tracing.
+    pub flamegraph: bool,
 }
 
 // Config is the configuration for dfdaemon.
@@ -1024,6 +1027,7 @@ pub struct Config {
 // Config implements the config operation of dfdaemon.
 impl Config {
     // load loads configuration from file.
+    #[instrument(skip_all)]
     pub async fn load(path: &PathBuf) -> Result<Config> {
         // Load configuration from file.
         let content = fs::read_to_string(path).await?;
@@ -1039,6 +1043,7 @@ impl Config {
     }
 
     // convert converts the configuration.
+    #[instrument(skip_all)]
     fn convert(&mut self) {
         // Convert advertise ip.
         if self.host.ip.is_none() {

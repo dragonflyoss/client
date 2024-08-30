@@ -23,13 +23,13 @@ use crate::metrics::{
 };
 use crate::resource::{cache_task, task};
 use crate::shutdown;
-use dragonfly_api::common::v2::{CacheTask, Piece, Priority, TaskType};
+use dragonfly_api::common::v2::{CacheTask, Piece, Priority, Task, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient,
     dfdaemon_upload_server::{DfdaemonUpload, DfdaemonUploadServer as DfdaemonUploadGRPCServer},
-    DeleteCacheTaskRequest, DownloadCacheTaskRequest, DownloadCacheTaskResponse,
+    DeleteCacheTaskRequest, DeleteTaskRequest, DownloadCacheTaskRequest, DownloadCacheTaskResponse,
     DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest, DownloadTaskResponse,
-    StatCacheTaskRequest, SyncPiecesRequest, SyncPiecesResponse,
+    StatCacheTaskRequest, StatTaskRequest, SyncPiecesRequest, SyncPiecesResponse,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_config::dfdaemon::Config;
@@ -72,6 +72,7 @@ pub struct DfdaemonUploadServer {
 // DfdaemonUploadServer implements the grpc server of the upload.
 impl DfdaemonUploadServer {
     // new creates a new DfdaemonUploadServer.
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         addr: SocketAddr,
@@ -123,6 +124,8 @@ impl DfdaemonUploadServer {
         info!("upload server listening on {}", self.addr);
         Server::builder()
             .max_frame_size(super::MAX_FRAME_SIZE)
+            .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
+            .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
             .concurrency_limit_per_connection(super::CONCURRENCY_LIMIT_PER_CONNECTION)
             .add_service(reflection.clone())
             .add_service(health_service)
@@ -184,7 +187,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 download.digest.as_deref(),
                 download.tag.as_deref(),
                 download.application.as_deref(),
-                download.piece_length,
                 download.filtered_query_params.clone(),
             )
             .map_err(|e| {
@@ -275,7 +277,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             return Err(Status::internal("missing content length in the response"));
         };
 
-        info!("content length: {}", content_length);
+        info!(
+            "content length {}, piece length {}",
+            content_length,
+            task.piece_length().unwrap_or_default()
+        );
 
         // Download's range priority is higher than the request header's range.
         // If download protocol is http, use the range of the request header.
@@ -525,6 +531,78 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
+    // stat_task stats the task.
+    #[instrument(skip_all, fields(host_id, task_id))]
+    async fn stat_task(&self, request: Request<StatTaskRequest>) -> Result<Response<Task>, Status> {
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+
+        // Collect the stat task metrics.
+        collect_stat_task_started_metrics(TaskType::Dfdaemon as i32);
+
+        // Get the task from the scheduler.
+        let task = self
+            .task
+            .stat(task_id.as_str(), host_id.as_str())
+            .await
+            .map_err(|err| {
+                // Collect the stat task failure metrics.
+                collect_stat_task_failure_metrics(TaskType::Dfdaemon as i32);
+
+                error!("stat task: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        Ok(Response::new(task))
+    }
+
+    // delete_task deletes the task.
+    #[instrument(skip_all, fields(host_id, task_id))]
+    async fn delete_task(
+        &self,
+        request: Request<DeleteTaskRequest>,
+    ) -> Result<Response<()>, Status> {
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+
+        // Collect the delete task started metrics.
+        collect_delete_task_started_metrics(TaskType::Dfdaemon as i32);
+
+        // Delete the task from the scheduler.
+        self.task
+            .delete(task_id.as_str(), host_id.as_str())
+            .await
+            .map_err(|err| {
+                // Collect the delete task failure metrics.
+                collect_delete_task_failure_metrics(TaskType::Dfdaemon as i32);
+
+                error!("delete task: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        Ok(Response::new(()))
+    }
+
     // SyncPiecesStream is the stream of the sync pieces response.
     type SyncPiecesStream = ReceiverStream<Result<SyncPiecesResponse, Status>>;
 
@@ -716,8 +794,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             })?;
 
         // Read the content of the piece.
-        let mut content = Vec::new();
-        reader.read_to_end(&mut content).await.map_err(|err| {
+        let mut content = vec![0; piece.length as usize];
+        reader.read_exact(&mut content).await.map_err(|err| {
             // Collect upload piece failure metrics.
             collect_upload_piece_failure_metrics();
 
@@ -828,6 +906,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 task
             }
         };
+        info!(
+            "content length {}, piece length {}",
+            task.content_length(),
+            task.piece_length()
+        );
 
         // Clone the cache task.
         let task_manager = self.cache_task.clone();
@@ -996,6 +1079,7 @@ pub struct DfdaemonUploadClient {
 // DfdaemonUploadClient implements the dfdaemon upload grpc client.
 impl DfdaemonUploadClient {
     // new creates a new DfdaemonUploadClient.
+    #[instrument(skip_all)]
     pub async fn new(addr: String) -> ClientResult<Self> {
         let channel = Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
             .buffer_size(super::BUFFER_SIZE)
@@ -1108,6 +1192,7 @@ impl DfdaemonUploadClient {
     }
 
     // make_request creates a new request with timeout.
+    #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);

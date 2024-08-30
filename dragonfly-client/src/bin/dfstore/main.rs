@@ -115,6 +115,7 @@ fn main() {
         args.log_max_files,
         None,
         false,
+        false,
         args.verbose,
     );
 }

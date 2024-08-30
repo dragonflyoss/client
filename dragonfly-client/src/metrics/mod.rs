@@ -17,15 +17,18 @@
 use crate::shutdown;
 use chrono::DateTime;
 use dragonfly_api::common::v2::{Range, TrafficType};
+use dragonfly_client_config::dfdaemon::Config;
 use lazy_static::lazy_static;
 use prometheus::{
     exponential_buckets, gather, Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGaugeVec,
     Opts, Registry, TextEncoder,
 };
 use std::net::SocketAddr;
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{error, info, instrument, warn};
 use warp::{Filter, Rejection, Reply};
 
 // DOWNLOAD_TASK_LEVEL1_DURATION_THRESHOLD is the threshold of download task level1 duration for
@@ -138,15 +141,36 @@ lazy_static! {
             &["task_type", "task_size_level"]
         ).expect("metric can be created");
 
-    // PROXY_REQUSET_COUNT is used to count the number of proxy requset.
-    pub static ref PROXY_REQUSET_COUNT: IntCounterVec =
+    // BACKEND_REQUEST_COUNT is used to count the number of backend requset.
+    pub static ref BACKEND_REQUEST_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("backend_request_total", "Counter of the number of the backend request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["scheme", "method"]
+        ).expect("metric can be created");
+
+    // BACKEND_REQUEST_FAILURE_COUNT is used to count the failed number of backend request.
+    pub static ref BACKEND_REQUEST_FAILURE_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("backend_request_failure_total", "Counter of the number of failed of the backend request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["scheme", "method"]
+        ).expect("metric can be created");
+
+    // BACKEND_REQUEST_DURATION is used to record the backend request duration.
+    pub static ref BACKEND_REQUEST_DURATION: HistogramVec =
+        HistogramVec::new(
+            HistogramOpts::new("backend_request_duration_milliseconds", "Histogram of the backend request duration.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME).buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
+            &["scheme", "method"]
+        ).expect("metric can be created");
+
+    // PROXY_REQUEST_COUNT is used to count the number of proxy requset.
+    pub static ref PROXY_REQUEST_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("proxy_request_total", "Counter of the number of the proxy request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
             &[]
         ).expect("metric can be created");
 
-    // PROXY_REQUSET_FAILURE_COUNT is used to count the failed number of proxy request.
-    pub static ref PROXY_REQUSET_FAILURE_COUNT: IntCounterVec =
+    // PROXY_REQUEST_FAILURE_COUNT is used to count the failed number of proxy request.
+    pub static ref PROXY_REQUEST_FAILURE_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("proxy_request_failure_total", "Counter of the number of failed of the proxy request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
             &[]
@@ -191,6 +215,20 @@ lazy_static! {
     pub static ref DELETE_HOST_FAILURE_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("delete_host_failure_total", "Counter of the number of failed of the delete host.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &[]
+        ).expect("metric can be created");
+
+    // DISK_SPACE is used to count of the disk space.
+    pub static ref DISK_SPACE: IntGaugeVec =
+        IntGaugeVec::new(
+            Opts::new("disk_space_total", "Gauge of the disk space in bytes").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &[]
+        ).expect("metric can be created");
+
+    // DISK_USAGE_SPACE is used to count of the disk usage space.
+    pub static ref DISK_USAGE_SPACE: IntGaugeVec =
+        IntGaugeVec::new(
+            Opts::new("disk_usage_space_total", "Gauge of the disk usage space in bytes").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
             &[]
         ).expect("metric can be created");
 }
@@ -473,14 +511,35 @@ pub fn collect_upload_piece_failure_metrics() {
     CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).dec();
 }
 
+// collect_backend_request_started_metrics collects the backend request started metrics.
+pub fn collect_backend_request_started_metrics(scheme: &str, method: &str) {
+    BACKEND_REQUEST_COUNT
+        .with_label_values(&[scheme, method])
+        .inc();
+}
+
+// collect_backend_request_failure_metrics collects the backend request failure metrics.
+pub fn collect_backend_request_failure_metrics(scheme: &str, method: &str) {
+    BACKEND_REQUEST_FAILURE_COUNT
+        .with_label_values(&[scheme, method])
+        .inc();
+}
+
+// collect_backend_request_finished_metrics collects the backend request finished metrics.
+pub fn collect_backend_request_finished_metrics(scheme: &str, method: &str, cost: Duration) {
+    BACKEND_REQUEST_DURATION
+        .with_label_values(&[scheme, method])
+        .observe(cost.as_millis() as f64);
+}
+
 // collect_proxy_request_started_metrics collects the proxy request started metrics.
 pub fn collect_proxy_request_started_metrics() {
-    PROXY_REQUSET_COUNT.with_label_values(&[]).inc();
+    PROXY_REQUEST_COUNT.with_label_values(&[]).inc();
 }
 
 // collect_proxy_request_failure_metrics collects the proxy request failure metrics.
 pub fn collect_proxy_request_failure_metrics() {
-    PROXY_REQUSET_FAILURE_COUNT.with_label_values(&[]).inc();
+    PROXY_REQUEST_FAILURE_COUNT.with_label_values(&[]).inc();
 }
 
 // collect_stat_task_started_metrics collects the stat task started metrics.
@@ -521,11 +580,30 @@ pub fn collect_delete_host_failure_metrics() {
     DELETE_HOST_FAILURE_COUNT.with_label_values(&[]).inc();
 }
 
+// collect_disk_space_metrics collects the disk space metrics.
+pub fn collect_disk_space_metrics(path: &Path) {
+    let stats = match fs2::statvfs(path) {
+        Ok(stats) => stats,
+        Err(err) => {
+            error!("failed to get disk space: {}", err);
+            return;
+        }
+    };
+
+    let total_space = stats.total_space();
+    let available_space = stats.available_space();
+    let usage_space = total_space - available_space;
+    DISK_SPACE.with_label_values(&[]).set(total_space as i64);
+    DISK_USAGE_SPACE
+        .with_label_values(&[])
+        .set(usage_space as i64);
+}
+
 // Metrics is the metrics server.
 #[derive(Debug)]
 pub struct Metrics {
-    // addr is the address of the metrics server.
-    addr: SocketAddr,
+    // config is the configuration of the dfdaemon.
+    config: Arc<Config>,
 
     // shutdown is used to shutdown the metrics server.
     shutdown: shutdown::Shutdown,
@@ -537,19 +615,21 @@ pub struct Metrics {
 // Metrics implements the metrics server.
 impl Metrics {
     // new creates a new Metrics.
+    #[instrument(skip_all)]
     pub fn new(
-        addr: SocketAddr,
+        config: Arc<Config>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
         Self {
-            addr,
+            config,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
     }
 
     // run starts the metrics server.
+    #[instrument(skip_all)]
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -571,16 +651,25 @@ impl Metrics {
             .unwrap()
             .set(1);
 
+        // Clone the config.
+        let config = self.config.clone();
+
+        // Create the metrics server address.
+        let addr = SocketAddr::new(
+            self.config.metrics.server.ip.unwrap(),
+            self.config.metrics.server.port,
+        );
+
         // Create the metrics route.
         let metrics_route = warp::path!("metrics")
             .and(warp::get())
             .and(warp::path::end())
-            .and_then(Self::metrics_handler);
+            .and_then(move || Self::metrics_handler(config.clone()));
 
         // Start the metrics server and wait for it to finish.
-        info!("metrics server listening on {}", self.addr);
+        info!("metrics server listening on {}", addr);
         tokio::select! {
-            _ = warp::serve(metrics_route).run(self.addr) => {
+            _ = warp::serve(metrics_route).run(addr) => {
                 // Metrics server ended.
                 info!("metrics server ended");
             }
@@ -592,6 +681,7 @@ impl Metrics {
     }
 
     // register_custom_metrics registers all custom metrics.
+    #[instrument(skip_all)]
     fn register_custom_metrics(&self) {
         REGISTRY
             .register(Box::new(VERSION_GAUGE.clone()))
@@ -634,11 +724,23 @@ impl Metrics {
             .expect("metric can be registered");
 
         REGISTRY
-            .register(Box::new(PROXY_REQUSET_COUNT.clone()))
+            .register(Box::new(BACKEND_REQUEST_COUNT.clone()))
             .expect("metric can be registered");
 
         REGISTRY
-            .register(Box::new(PROXY_REQUSET_FAILURE_COUNT.clone()))
+            .register(Box::new(BACKEND_REQUEST_FAILURE_COUNT.clone()))
+            .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(BACKEND_REQUEST_DURATION.clone()))
+            .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(PROXY_REQUEST_COUNT.clone()))
+            .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(PROXY_REQUEST_FAILURE_COUNT.clone()))
             .expect("metric can be registered");
 
         REGISTRY
@@ -664,13 +766,24 @@ impl Metrics {
         REGISTRY
             .register(Box::new(DELETE_HOST_FAILURE_COUNT.clone()))
             .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(DISK_SPACE.clone()))
+            .expect("metric can be registered");
+
+        REGISTRY
+            .register(Box::new(DISK_USAGE_SPACE.clone()))
+            .expect("metric can be registered");
     }
 
     // metrics_handler handles the metrics request.
-    async fn metrics_handler() -> Result<impl Reply, Rejection> {
-        let encoder = TextEncoder::new();
+    #[instrument(skip_all)]
+    async fn metrics_handler(config: Arc<Config>) -> Result<impl Reply, Rejection> {
+        // Collect the disk space metrics.
+        collect_disk_space_metrics(config.storage.dir.as_path());
 
         // Encode custom metrics.
+        let encoder = TextEncoder::new();
         let mut buf = Vec::new();
         if let Err(err) = encoder.encode(&REGISTRY.gather(), &mut buf) {
             error!("could not encode custom metrics: {}", err);
