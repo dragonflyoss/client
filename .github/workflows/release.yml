@@ -65,10 +65,10 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y protobuf-compiler libclang-dev
 
-      - name: Build binaries
-        shell: bash
-        run: |
-            cargo build --release --bins --target ${{ matrix.target }}
+      # - name: Build binaries
+      #   shell: bash
+      #   run: |
+      #       cargo build --release --bins --target ${{ matrix.target }}
 
       # - name: Build archive client(DEB)
       #   shell: bash
@@ -92,11 +92,6 @@ jobs:
           binary_name="client"
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
           mkdir -p "$dirname"
-          mv "target/${{ matrix.target }}/release/dfget" "$dirname"
-          mv "target/${{ matrix.target }}/release/dfdaemon" "$dirname"
-          mv "target/${{ matrix.target }}/release/dfstore" "$dirname"
-          mv "target/${{ matrix.target }}/release/dfcache" "$dirname"
-          mv "target/${{ matrix.target }}/release/dfinit" "$dirname"
           mv CONTRIBUTING.md LICENSE README.md "$dirname"
           tar -czf "$dirname.tar.gz" "$dirname"
           echo "CLIENT_TAR_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
