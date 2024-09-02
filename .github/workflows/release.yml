@@ -118,4 +118,5 @@ jobs:
           draft: true
           files: |
 
-            ${{ env.CLIENT_TAR_GZ_ASSET }}
+            ${{ env.CLIENT_TAR_ASSET }}
+            
