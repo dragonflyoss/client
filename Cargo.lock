@@ -4285,9 +4285,9 @@ dependencies = [
 
 [[package]]
 name = "tonic-health"
-version = "0.12.1"
+version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1e10e6a96ee08b6ce443487d4368442d328d0e746f3681f81127f7dc41b4955"
+checksum = "ec0a34e6f706bae26b2b490e1da5c3f6a6ff87cae442bcbc7c881bab9631b5a7"
 dependencies = [
  "async-stream",
  "prost 0.13.1",
