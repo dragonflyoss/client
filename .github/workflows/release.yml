@@ -101,12 +101,19 @@ jobs:
           tar -czf "$dirname.tar.gz" "$dirname"
           echo "CLIENT_TAR_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
 
+  release:
+    runs-on: ubuntu-latest
+    needs: [publish-crates, release-github]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           draft: true
-          files: |       
+          files: |      
             ${{ env.CLIENT_TAR_ASSET }}
 
   publish-crates:
