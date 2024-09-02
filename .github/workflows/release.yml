@@ -50,15 +50,15 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      - name: Install cargo-deb
-        uses: taiki-e/cache-cargo-install-action@v2
-        with:
-          tool: cargo-deb
+      # - name: Install cargo-deb
+      #   uses: taiki-e/cache-cargo-install-action@v2
+      #   with:
+      #     tool: cargo-deb
 
-      - name: Install cargo-generate-rpm
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-generate-rpm
+      # - name: Install cargo-generate-rpm
+      #   uses: taiki-e/install-action@v2
+      #   with:
+      #     tool: cargo-generate-rpm
           
       - name: Install dependencies
         run: |
@@ -70,21 +70,21 @@ jobs:
         run: |
             cargo build --release --bins --target ${{ matrix.target }}
 
-      - name: Build archive client(DEB)
-        shell: bash
-        run: |
-          binary_name="client"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          cargo deb -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.deb
-          echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
+      # - name: Build archive client(DEB)
+      #   shell: bash
+      #   run: |
+      #     binary_name="client"
+      #     dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+      #     cargo deb -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.deb
+      #     echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
 
-      - name: Build archive client(RPM)
-        shell: bash
-        run: |
-          binary_name="client"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
-          echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
+      # - name: Build archive client(RPM)
+      #   shell: bash
+      #   run: |
+      #     binary_name="client"
+      #     dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+      #     cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
+      #     echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
 
       - name: Build archive client(TAR)
         shell: bash
@@ -106,9 +106,7 @@ jobs:
         with:
           generate_release_notes: true
           draft: true
-          files: |
-            ${{ env.CLIENT_RPM_ASSET }}
-            ${{ env.CLIENT_DEB_ASSET }}            
+          files: |       
             ${{ env.CLIENT_TAR_ASSET }}
 
   publish-crates:
