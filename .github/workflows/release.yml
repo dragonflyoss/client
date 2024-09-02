@@ -33,8 +33,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
-          cache-on-failure: true
+            key: ${{ matrix.target }}
+            cache-on-failure: true
 
       - name: Get the release version from the tag
         shell: bash
@@ -59,7 +59,7 @@ jobs:
       #   uses: taiki-e/install-action@v2
       #   with:
       #     tool: cargo-generate-rpm
-
+          
       - name: Install dependencies
         run: |
           sudo apt-get update -y
@@ -108,7 +108,7 @@ jobs:
         with:
           generate_release_notes: true
           draft: true
-          files: |
+          files: |      
             ${{ env.CLIENT_TAR_ASSET }}
 
   publish-crates:
@@ -124,7 +124,7 @@ jobs:
           large-packages: true
           docker-images: true
           swap-storage: true
-
+            
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -138,5 +138,5 @@ jobs:
 
       - uses: katyo/publish-crates@v2
         with:
-          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          ignore-unpublished-changes: true
+           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+           ignore-unpublished-changes: true
