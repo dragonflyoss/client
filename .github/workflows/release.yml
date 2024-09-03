@@ -50,41 +50,41 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      # - name: Install cargo-deb
-      #   uses: taiki-e/cache-cargo-install-action@v2
-      #   with:
-      #     tool: cargo-deb
+      - name: Install cargo-deb
+        uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: cargo-deb
 
-      # - name: Install cargo-generate-rpm
-      #   uses: taiki-e/install-action@v2
-      #   with:
-      #     tool: cargo-generate-rpm
+      - name: Install cargo-generate-rpm
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-generate-rpm
           
       - name: Install dependencies
         run: |
           sudo apt-get update -y
           sudo apt-get install -y protobuf-compiler libclang-dev
 
-      # - name: Build binaries
-      #   shell: bash
-      #   run: |
-      #       cargo build --release --bins --target ${{ matrix.target }}
+      - name: Build binaries
+        shell: bash
+        run: |
+            cargo build --release --bins --target ${{ matrix.target }}
 
-      # - name: Build archive client(DEB)
-      #   shell: bash
-      #   run: |
-      #     binary_name="client"
-      #     dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-      #     cargo deb -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.deb
-      #     echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
+      - name: Build archive client(DEB)
+        shell: bash
+        run: |
+          binary_name="client"
+          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          cargo deb -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.deb
+          echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
 
-      # - name: Build archive client(RPM)
-      #   shell: bash
-      #   run: |
-      #     binary_name="client"
-      #     dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-      #     cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
-      #     echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
+      - name: Build archive client(RPM)
+        shell: bash
+        run: |
+          binary_name="client"
+          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
+          echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
 
       - name: Build archive client(TAR)
         shell: bash
@@ -92,23 +92,32 @@ jobs:
           binary_name="client"
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
           mkdir -p "$dirname"
+          mv "target/${{ matrix.target }}/release/dfget" "$dirname"
+          mv "target/${{ matrix.target }}/release/dfdaemon" "$dirname"
+          mv "target/${{ matrix.target }}/release/dfstore" "$dirname"
+          mv "target/${{ matrix.target }}/release/dfcache" "$dirname"
+          mv "target/${{ matrix.target }}/release/dfinit" "$dirname"
           mv CONTRIBUTING.md LICENSE README.md "$dirname"
           tar -czf "$dirname.tar.gz" "$dirname"
           echo "CLIENT_TAR_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
 
-  release:
-    runs-on: ubuntu-latest
-    needs: [release-github]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Upload Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-packages
+          path: |
+            ${{ env.CLIENT_RPM_ASSET }}
+            ${{ env.CLIENT_DEB_ASSET }}            
+            ${{ env.CLIENT_TAR_ASSET }}          
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           draft: true
-          files: |      
+          files: |
+            ${{ env.CLIENT_RPM_ASSET }}
+            ${{ env.CLIENT_DEB_ASSET }}            
             ${{ env.CLIENT_TAR_ASSET }}
 
   publish-crates:
