@@ -73,7 +73,7 @@ opentelemetry-jaeger = { version = "0.17.0", features = ["rt-tokio"] }
 pprof = { version = "0.13", features = ["flamegraph", "protobuf-codec"] }
 lazy_static = "1.5"
 prometheus = { version = "0.13", features = ["process"] }
-tonic-health = "0.12.1"
+tonic-health = "0.12.2"
 tonic-reflection = "0.12.1"
 bytes = "1.7"
 sysinfo = "0.30.13"
