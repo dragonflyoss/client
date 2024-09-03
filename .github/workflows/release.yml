@@ -123,9 +123,9 @@ jobs:
           generate_release_notes: true
           draft: true
           files: |
-            ${{ env.CLIENT_RPM_ASSET }}
-            ${{ env.CLIENT_DEB_ASSET }}            
-            ${{ env.CLIENT_TAR_ASSET }}
+            *.rpm
+            *.deb
+            *.tar.gz
 
   publish-crates:
     runs-on: ubuntu-latest
