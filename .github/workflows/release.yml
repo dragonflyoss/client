@@ -101,6 +101,15 @@ jobs:
           tar -czf "$dirname.tar.gz" "$dirname"
           echo "CLIENT_TAR_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
 
+      - name: Upload Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-packages
+          path: |
+            ${{ env.CLIENT_RPM_ASSET }}
+            ${{ env.CLIENT_DEB_ASSET }}            
+            ${{ env.CLIENT_TAR_ASSET }}          
+
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
