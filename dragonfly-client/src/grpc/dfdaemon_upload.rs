@@ -671,20 +671,27 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                         // Send the piece metadata to the stream.
                         if piece.is_finished() {
-                            out_stream_tx
+                            match out_stream_tx
                                 .send(Ok(SyncPiecesResponse {
                                     number: piece.number,
                                     offset: piece.offset,
                                     length: piece.length,
                                 }))
                                 .await
-                                .unwrap_or_else(|err| {
+                            {
+                                Ok(_) => {
+                                    info!("send piece metadata {}-{}", task_id, piece.number);
+                                }
+                                Err(err) => {
                                     error!(
-                                        "send finished piece {}-{} to stream: {}",
+                                        "send piece metadata {}-{} to stream: {}",
                                         task_id, interested_piece_number, err
                                     );
-                                });
-                            info!("send piece metadata {}-{}", task_id, piece.number);
+
+                                    drop(out_stream_tx);
+                                    return;
+                                }
+                            }
 
                             // Add the finished piece number to the finished piece numbers.
                             finished_piece_numbers.push(piece.number);
