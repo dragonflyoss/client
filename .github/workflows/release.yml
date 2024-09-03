@@ -6,7 +6,7 @@ on:
       - v*
 
 jobs:
-  release-github:
+  build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -109,6 +109,13 @@ jobs:
             ${{ env.CLIENT_RPM_ASSET }}
             ${{ env.CLIENT_DEB_ASSET }}            
             ${{ env.CLIENT_TAR_ASSET }}          
+
+  release-github:
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: Download Release Artifacts
+        uses: actions/download-artifact@v4
 
       - name: Release
         uses: softprops/action-gh-release@v2
