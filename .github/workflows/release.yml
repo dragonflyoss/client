@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 480
     strategy:
       matrix:
         target:
@@ -112,8 +113,10 @@ jobs:
 
   release-github:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 120
     needs: [build]
+    permissions:
+      contents: write
     steps:
       - name: Download Release Artifacts
         uses: actions/download-artifact@v4
@@ -125,15 +128,15 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+          allowUpdates: true
           draft: true
-          files: |
-            releases/*.rpm
-            releases/*.deb
-            releases/*.tar.gz
+          generateReleaseNotes: true
+          artifacts: "releases/*.rpm,releases/*.deb,releases/*.tar.gz"
 
   publish-crates:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
