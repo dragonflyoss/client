@@ -49,7 +49,8 @@ use dragonfly_client_util::{
 };
 use reqwest::header::HeaderMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{
     mpsc::{self, Sender},
@@ -923,6 +924,13 @@ impl Task {
         );
         let mut piece_collector_rx = piece_collector.run().await;
 
+        // Initialize the interrupt. If download from remote peer failed with scheduler or download
+        // progress, interrupt the collector and return the finished pieces.
+        let interrupt = Arc::new(AtomicBool::new(false));
+
+        // Initialize the finished pieces.
+        let finished_pieces = Arc::new(Mutex::new(Vec::new()));
+
         // Initialize the join set.
         let mut join_set = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(
@@ -931,6 +939,13 @@ impl Task {
 
         // Download the pieces from the remote peers.
         while let Some(collect_piece) = piece_collector_rx.recv().await {
+            if interrupt.load(Ordering::SeqCst) {
+                // If the interrupt is true, break the collector loop.
+                info!("interrupt the piece collector");
+                drop(piece_collector_rx);
+                break;
+            }
+
             async fn download_from_remote_peer(
                 task_id: String,
                 host_id: String,
@@ -943,6 +958,8 @@ impl Task {
                 semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnouncePeerRequest>,
+                interrupt: Arc<AtomicBool>,
+                finished_pieces: Arc<Mutex<Vec<metadata::Piece>>>,
             ) -> ClientResult<metadata::Piece> {
                 // Limit the concurrent piece count.
                 let _permit = semaphore.acquire().await.unwrap();
@@ -1012,6 +1029,7 @@ impl Task {
                             storage.piece_id(task_id.as_str(), number),
                             err
                         );
+                        interrupt.store(true, Ordering::SeqCst);
                         err
                     })?;
 
@@ -1039,6 +1057,7 @@ impl Task {
                             storage.piece_id(task_id.as_str(), number),
                             err
                         );
+                        interrupt.store(true, Ordering::SeqCst);
                         err
                     })?;
 
@@ -1047,6 +1066,9 @@ impl Task {
                     storage.piece_id(task_id.as_str(), metadata.number),
                     metadata.parent_id
                 );
+
+                let mut finished_pieces = finished_pieces.lock().unwrap();
+                finished_pieces.push(metadata.clone());
 
                 Ok(metadata)
             }
@@ -1064,13 +1086,12 @@ impl Task {
                     semaphore.clone(),
                     download_progress_tx.clone(),
                     in_stream_tx.clone(),
+                    interrupt.clone(),
+                    finished_pieces.clone(),
                 )
                 .in_current_span(),
             );
         }
-
-        // Initialize the finished pieces.
-        let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
         // Wait for the pieces to be downloaded.
         while let Some(message) = join_set
@@ -1080,10 +1101,7 @@ impl Task {
             .or_err(ErrorType::AsyncRuntimeError)?
         {
             match message {
-                Ok(metadata) => {
-                    // Store the finished piece.
-                    finished_pieces.push(metadata.clone());
-                }
+                Ok(_) => {}
                 Err(Error::DownloadFromRemotePeerFailed(err)) => {
                     let (piece_number, parent_id) = (err.piece_number, err.parent_id);
 
@@ -1125,6 +1143,7 @@ impl Task {
                     // If the send timeout with scheduler or download progress, return the finished pieces.
                     // It will stop the download from the remote peer with scheduler
                     // and download from the source directly from middle.
+                    let finished_pieces = finished_pieces.lock().unwrap().clone();
                     return Ok(finished_pieces);
                 }
                 Err(err) => {
@@ -1137,6 +1156,7 @@ impl Task {
             }
         }
 
+        let finished_pieces = finished_pieces.lock().unwrap().clone();
         Ok(finished_pieces)
     }
 
