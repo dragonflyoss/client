@@ -78,13 +78,13 @@ jobs:
           cargo deb -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.deb
           echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
 
-      - name: Build archive client(RPM)
-        shell: bash
-        run: |
-          binary_name="client"
-          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
-          echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
+      # - name: Build archive client(RPM)
+        # shell: bash
+        # run: |
+          # binary_name="client"
+          # dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          # cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
+          # echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
 
       - name: Build archive client(TAR)
         shell: bash
@@ -104,7 +104,7 @@ jobs:
       - name: Upload Release Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}-packages
+          name: release-${{ matrix.target }}
           path: |
             ${{ env.CLIENT_RPM_ASSET }}
             ${{ env.CLIENT_DEB_ASSET }}            
@@ -118,7 +118,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: releases
-          pattern: packages
+          pattern: release-*
           merge-multiple: true
 
       - name: Release
