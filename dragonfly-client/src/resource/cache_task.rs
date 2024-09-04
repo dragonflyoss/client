@@ -474,7 +474,7 @@ impl CacheTask {
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
         // Initialize stream channel.
-        let (in_stream_tx, in_stream_rx) = mpsc::channel(4096);
+        let (in_stream_tx, in_stream_rx) = mpsc::channel(1024 * 10);
 
         // Send the register peer request.
         in_stream_tx
