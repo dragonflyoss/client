@@ -79,13 +79,13 @@ jobs:
           cargo deb -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.deb
           echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
 
-      # - name: Build archive client(RPM)
-        # shell: bash
-        # run: |
-          # binary_name="client"
-          # dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          # cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
-          # echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
+      - name: Build archive client(RPM)
+        shell: bash
+        run: |
+          binary_name="client"
+          dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
+          cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
+          echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
 
       - name: Build archive client(TAR)
         shell: bash
@@ -128,11 +128,10 @@ jobs:
       - name: Release
         uses: ncipollo/release-action@v1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          artifacts: "releases/*"
+          generateReleaseNotes: true
           allowUpdates: true
           draft: true
-          generateReleaseNotes: true
-          artifacts: "releases/*.rpm,releases/*.deb,releases/*.tar.gz"
 
   publish-crates:
     runs-on: ubuntu-latest
