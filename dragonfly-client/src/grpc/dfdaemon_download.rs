@@ -139,7 +139,6 @@ impl DfdaemonDownloadServer {
             .max_frame_size(super::MAX_FRAME_SIZE)
             .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
             .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
-            .concurrency_limit_per_connection(super::CONCURRENCY_LIMIT_PER_CONNECTION)
             .add_service(reflection.clone())
             .add_service(health_service)
             .add_service(self.service.clone())
