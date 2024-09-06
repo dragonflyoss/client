@@ -27,20 +27,6 @@ use tokio_util::io::StreamReader;
 use tracing::{error, info, instrument};
 use url::Url;
 
-macro_rules! make_error_message_by_missed_field {
-    ($var: ident {$($field: ident), *}) => {{
-            let mut missed_info: Vec<&'static str> = vec![];
-
-            $(
-                if $var.$field.is_none() {
-                    missed_info.push(stringify!($field));
-                }
-            )*
-
-            missed_info.join(", ")
-       }};
-}
-
 // Scheme is the scheme of the object storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scheme {
@@ -164,6 +150,21 @@ impl TryFrom<Url> for ParsedURL {
     }
 }
 
+// make_need_fields_message makes a message for the need fields in the object storage.
+macro_rules! make_need_fields_message {
+    ($var:ident {$($field:ident),*}) => {{
+            let mut need_fields: Vec<&'static str> = vec![];
+
+            $(
+                if $var.$field.is_none() {
+                    need_fields.push(stringify!($field));
+                }
+            )*
+
+            format!("need {}", need_fields.join(", "))
+       }};
+}
+
 // ObjectStorage is a struct that implements the backend trait.
 pub struct ObjectStorage {
     // scheme is the scheme of the object storage.
@@ -188,9 +189,8 @@ impl ObjectStorage {
     ) -> ClientResult<Operator> {
         // If download backend is object storage, object_storage parameter is required.
         let Some(object_storage) = object_storage else {
-            error!("need object_storage parameter");
             return Err(ClientError::BackendError(BackendError {
-                message: "need object_storage parameter".to_string(),
+                message: format!("{} need object_storage parameter", self.scheme),
                 status_code: None,
                 header: None,
             }));
@@ -223,15 +223,16 @@ impl ObjectStorage {
             &object_storage.access_key_secret,
             &object_storage.region,
         ) else {
-            let error_message = make_error_message_by_missed_field!(object_storage {
-                access_key_id,
-                access_key_secret,
-                region
-            });
-
-            error!("need {}", error_message);
             return Err(ClientError::BackendError(BackendError {
-                message: format!("need {}", error_message),
+                message: format!(
+                    "{} {}",
+                    self.scheme,
+                    make_need_fields_message!(object_storage {
+                        access_key_id,
+                        access_key_secret,
+                        region
+                    })
+                ),
                 status_code: None,
                 header: None,
             }));
@@ -312,15 +313,16 @@ impl ObjectStorage {
             &object_storage.access_key_secret,
             &object_storage.endpoint,
         ) else {
-            let error_message = make_error_message_by_missed_field!(object_storage {
-                access_key_id,
-                access_key_secret,
-                endpoint
-            });
-
-            error!("need {}", error_message);
             return Err(ClientError::BackendError(BackendError {
-                message: format!("need {}", error_message),
+                message: format!(
+                    "{} {}",
+                    self.scheme,
+                    make_need_fields_message!(object_storage {
+                        access_key_id,
+                        access_key_secret,
+                        endpoint
+                    })
+                ),
                 status_code: None,
                 header: None,
             }));
@@ -355,15 +357,16 @@ impl ObjectStorage {
             &object_storage.access_key_secret,
             &object_storage.endpoint,
         ) else {
-            let error_message = make_error_message_by_missed_field!(object_storage {
-                access_key_id,
-                access_key_secret,
-                endpoint
-            });
-
-            error!("need {}", error_message);
             return Err(ClientError::BackendError(BackendError {
-                message: format!("need {}", error_message),
+                message: format!(
+                    "{} {}",
+                    self.scheme,
+                    make_need_fields_message!(object_storage {
+                        access_key_id,
+                        access_key_secret,
+                        endpoint
+                    })
+                ),
                 status_code: None,
                 header: None,
             }));
@@ -399,15 +402,16 @@ impl ObjectStorage {
             &object_storage.access_key_secret,
             &object_storage.endpoint,
         ) else {
-            let error_message = make_error_message_by_missed_field!(object_storage {
-                access_key_id,
-                access_key_secret,
-                endpoint
-            });
-
-            error!("need {}", error_message);
             return Err(ClientError::BackendError(BackendError {
-                message: format!("need {}", error_message),
+                message: format!(
+                    "{} {}",
+                    self.scheme,
+                    make_need_fields_message!(object_storage {
+                        access_key_id,
+                        access_key_secret,
+                        endpoint
+                    })
+                ),
                 status_code: None,
                 header: None,
             }));
@@ -441,15 +445,16 @@ impl ObjectStorage {
             &object_storage.access_key_secret,
             &object_storage.endpoint,
         ) else {
-            let error_message = make_error_message_by_missed_field!(object_storage {
-                access_key_id,
-                access_key_secret,
-                endpoint
-            });
-
-            error!("need {}", error_message);
             return Err(ClientError::BackendError(BackendError {
-                message: format!("need {}", error_message),
+                message: format!(
+                    "{} {}",
+                    self.scheme,
+                    make_need_fields_message!(object_storage {
+                        access_key_id,
+                        access_key_secret,
+                        endpoint
+                    })
+                ),
                 status_code: None,
                 header: None,
             }));
@@ -788,10 +793,9 @@ mod tests {
                 },
             ),
         ];
-        let test_key = "test-bucket/file";
 
         for (scheme, object_storage) in test_cases {
-            let url: Url = format!("{}://{}", scheme, test_key).parse().unwrap();
+            let url: Url = format!("{}://test-bucket/file", scheme).parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
             let result = ObjectStorage::new(scheme).operator(
@@ -918,7 +922,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "backend error need object_storage parameter"
+            "backend error s3 need object_storage parameter"
         )
     }
 
@@ -927,28 +931,28 @@ mod tests {
         let test_cases = vec![
             (
                 ObjectStorageInfo::default(),
-                "backend error need access_key_id, access_key_secret, region",
+                "backend error s3 need access_key_id, access_key_secret, region",
             ),
             (
                 ObjectStorageInfo {
                     access_key_id: Some("access_key_id".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_secret, region",
+                "backend error s3 need access_key_secret, region",
             ),
             (
                 ObjectStorageInfo {
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_id, region",
+                "backend error s3 need access_key_id, region",
             ),
             (
                 ObjectStorageInfo {
                     region: Some("test-region".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_id, access_key_secret",
+                "backend error s3 need access_key_id, access_key_secret",
             ),
             (
                 ObjectStorageInfo {
@@ -956,7 +960,7 @@ mod tests {
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
-                "backend error need region",
+                "backend error s3 need region",
             ),
             (
                 ObjectStorageInfo {
@@ -964,7 +968,7 @@ mod tests {
                     region: Some("test-region".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_secret",
+                "backend error s3 need access_key_secret",
             ),
             (
                 ObjectStorageInfo {
@@ -972,7 +976,7 @@ mod tests {
                     region: Some("test-region".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_id",
+                "backend error s3 need access_key_id",
             ),
         ];
 
@@ -996,28 +1000,28 @@ mod tests {
         let test_cases = vec![
             (
                 ObjectStorageInfo::default(),
-                "backend error need access_key_id, access_key_secret, endpoint",
+                "backend error abs need access_key_id, access_key_secret, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     access_key_id: Some("access_key_id".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_secret, endpoint",
+                "backend error abs need access_key_secret, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_id, endpoint",
+                "backend error abs need access_key_id, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_id, access_key_secret",
+                "backend error abs need access_key_id, access_key_secret",
             ),
             (
                 ObjectStorageInfo {
@@ -1025,7 +1029,7 @@ mod tests {
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
-                "backend error need endpoint",
+                "backend error abs need endpoint",
             ),
             (
                 ObjectStorageInfo {
@@ -1033,7 +1037,7 @@ mod tests {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_secret",
+                "backend error abs need access_key_secret",
             ),
             (
                 ObjectStorageInfo {
@@ -1041,7 +1045,7 @@ mod tests {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_id",
+                "backend error abs need access_key_id",
             ),
         ];
 
@@ -1065,28 +1069,28 @@ mod tests {
         let test_cases = vec![
             (
                 ObjectStorageInfo::default(),
-                "backend error need access_key_id, access_key_secret, endpoint",
+                "backend error oss need access_key_id, access_key_secret, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     access_key_id: Some("access_key_id".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_secret, endpoint",
+                "backend error oss need access_key_secret, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_id, endpoint",
+                "backend error oss need access_key_id, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_id, access_key_secret",
+                "backend error oss need access_key_id, access_key_secret",
             ),
             (
                 ObjectStorageInfo {
@@ -1094,7 +1098,7 @@ mod tests {
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
-                "backend error need endpoint",
+                "backend error oss need endpoint",
             ),
             (
                 ObjectStorageInfo {
@@ -1102,7 +1106,7 @@ mod tests {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_secret",
+                "backend error oss need access_key_secret",
             ),
             (
                 ObjectStorageInfo {
@@ -1110,7 +1114,7 @@ mod tests {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_id",
+                "backend error oss need access_key_id",
             ),
         ];
 
@@ -1134,28 +1138,28 @@ mod tests {
         let test_cases = vec![
             (
                 ObjectStorageInfo::default(),
-                "backend error need access_key_id, access_key_secret, endpoint",
+                "backend error obs need access_key_id, access_key_secret, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     access_key_id: Some("access_key_id".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_secret, endpoint",
+                "backend error obs need access_key_secret, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_id, endpoint",
+                "backend error obs need access_key_id, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_id, access_key_secret",
+                "backend error obs need access_key_id, access_key_secret",
             ),
             (
                 ObjectStorageInfo {
@@ -1163,7 +1167,7 @@ mod tests {
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
-                "backend error need endpoint",
+                "backend error obs need endpoint",
             ),
             (
                 ObjectStorageInfo {
@@ -1171,7 +1175,7 @@ mod tests {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_secret",
+                "backend error obs need access_key_secret",
             ),
             (
                 ObjectStorageInfo {
@@ -1179,7 +1183,7 @@ mod tests {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_id",
+                "backend error obs need access_key_id",
             ),
         ];
 
@@ -1203,28 +1207,28 @@ mod tests {
         let test_cases = vec![
             (
                 ObjectStorageInfo::default(),
-                "backend error need access_key_id, access_key_secret, endpoint",
+                "backend error cos need access_key_id, access_key_secret, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     access_key_id: Some("access_key_id".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_secret, endpoint",
+                "backend error cos need access_key_secret, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_id, endpoint",
+                "backend error cos need access_key_id, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_id, access_key_secret",
+                "backend error cos need access_key_id, access_key_secret",
             ),
             (
                 ObjectStorageInfo {
@@ -1232,7 +1236,7 @@ mod tests {
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
-                "backend error need endpoint",
+                "backend error cos need endpoint",
             ),
             (
                 ObjectStorageInfo {
@@ -1240,7 +1244,7 @@ mod tests {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_secret",
+                "backend error cos need access_key_secret",
             ),
             (
                 ObjectStorageInfo {
@@ -1248,7 +1252,7 @@ mod tests {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error need access_key_id",
+                "backend error cos need access_key_id",
             ),
         ];
 
