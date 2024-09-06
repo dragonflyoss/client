@@ -27,20 +27,6 @@ use tokio_util::io::StreamReader;
 use tracing::{error, info, instrument};
 use url::Url;
 
-macro_rules! make_error_message_by_missed_field {
-    ($var: ident {$($field: ident), *}) => {{
-            let mut missed_info: Vec<&'static str> = vec![];
-
-            $(
-                if $var.$field.is_none() {
-                    missed_info.push(stringify!($field));
-                }
-            )*
-
-            missed_info.join(", ")
-       }};
-}
-
 // Scheme is the scheme of the object storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scheme {
@@ -219,19 +205,13 @@ impl ObjectStorage {
 
         // S3 requires the access key id and the secret access key.
         let (Some(access_key_id), Some(access_key_secret), Some(region)) = (
-            &object_storage.access_key_id,
-            &object_storage.access_key_secret,
-            &object_storage.region,
+            object_storage.access_key_id,
+            object_storage.access_key_secret,
+            object_storage.region,
         ) else {
-            let error_message = make_error_message_by_missed_field!(object_storage {
-                access_key_id,
-                access_key_secret,
-                region
-            });
-
-            error!("need {}", error_message);
+            error!("need access_key_id and access_key_secret");
             return Err(ClientError::BackendError(BackendError {
-                message: format!("need {}", error_message),
+                message: "need access_key_id and access_key_secret".to_string(),
                 status_code: None,
                 header: None,
             }));
@@ -240,11 +220,11 @@ impl ObjectStorage {
         // Initialize the S3 operator with the object storage.
         let mut builder = opendal::services::S3::default();
         builder = builder
-            .access_key_id(access_key_id)
-            .secret_access_key(access_key_secret)
+            .access_key_id(&access_key_id)
+            .secret_access_key(&access_key_secret)
             .http_client(HttpClient::with(client))
             .bucket(&parsed_url.bucket)
-            .region(region);
+            .region(&region);
 
         // Configure the endpoint if it is provided.
         if let Some(endpoint) = object_storage.endpoint.as_deref() {
@@ -308,19 +288,13 @@ impl ObjectStorage {
 
         // ABS requires the account name and the account key.
         let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
-            &object_storage.access_key_id,
-            &object_storage.access_key_secret,
-            &object_storage.endpoint,
+            object_storage.access_key_id,
+            object_storage.access_key_secret,
+            object_storage.endpoint,
         ) else {
-            let error_message = make_error_message_by_missed_field!(object_storage {
-                access_key_id,
-                access_key_secret,
-                endpoint
-            });
-
-            error!("need {}", error_message);
+            error!("need access_key_id and access_key_secret");
             return Err(ClientError::BackendError(BackendError {
-                message: format!("need {}", error_message),
+                message: "need access_key_id and access_key_secret".to_string(),
                 status_code: None,
                 header: None,
             }));
@@ -329,11 +303,11 @@ impl ObjectStorage {
         // Initialize the ABS operator with the object storage.
         let mut builder = opendal::services::Azblob::default();
         builder = builder
-            .account_name(access_key_id)
-            .account_key(access_key_secret)
+            .account_name(&access_key_id)
+            .account_key(&access_key_secret)
             .http_client(HttpClient::with(client))
             .container(&parsed_url.bucket)
-            .endpoint(endpoint);
+            .endpoint(&endpoint);
 
         Ok(Operator::new(builder)?.finish())
     }
@@ -351,19 +325,13 @@ impl ObjectStorage {
 
         // OSS requires the access key id, access key secret, and endpoint.
         let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
-            &object_storage.access_key_id,
-            &object_storage.access_key_secret,
-            &object_storage.endpoint,
+            object_storage.access_key_id,
+            object_storage.access_key_secret,
+            object_storage.endpoint,
         ) else {
-            let error_message = make_error_message_by_missed_field!(object_storage {
-                access_key_id,
-                access_key_secret,
-                endpoint
-            });
-
-            error!("need {}", error_message);
+            error!("need access_key_id, access_key_secret and endpoint");
             return Err(ClientError::BackendError(BackendError {
-                message: format!("need {}", error_message),
+                message: "need access_key_id, access_key_secret and endpoint".to_string(),
                 status_code: None,
                 header: None,
             }));
@@ -372,9 +340,9 @@ impl ObjectStorage {
         // Initialize the OSS operator with the object storage.
         let mut builder = opendal::services::Oss::default();
         builder = builder
-            .access_key_id(access_key_id)
-            .access_key_secret(access_key_secret)
-            .endpoint(endpoint)
+            .access_key_id(&access_key_id)
+            .access_key_secret(&access_key_secret)
+            .endpoint(&endpoint)
             .http_client(HttpClient::with(client))
             .root("/")
             .bucket(&parsed_url.bucket);
@@ -395,19 +363,13 @@ impl ObjectStorage {
 
         // OBS requires the endpoint, access key id, and access key secret.
         let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
-            &object_storage.access_key_id,
-            &object_storage.access_key_secret,
-            &object_storage.endpoint,
+            object_storage.access_key_id,
+            object_storage.access_key_secret,
+            object_storage.endpoint,
         ) else {
-            let error_message = make_error_message_by_missed_field!(object_storage {
-                access_key_id,
-                access_key_secret,
-                endpoint
-            });
-
-            error!("need {}", error_message);
+            error!("need access_key_id, access_key_secret, and endpoint");
             return Err(ClientError::BackendError(BackendError {
-                message: format!("need {}", error_message),
+                message: "need access_key_id, access_key_secret, and endpoint".to_string(),
                 status_code: None,
                 header: None,
             }));
@@ -416,9 +378,9 @@ impl ObjectStorage {
         // Initialize the OBS operator with the object storage.
         let mut builder = opendal::services::Obs::default();
         builder = builder
-            .access_key_id(access_key_id)
-            .secret_access_key(access_key_secret)
-            .endpoint(endpoint)
+            .access_key_id(&access_key_id)
+            .secret_access_key(&access_key_secret)
+            .endpoint(&endpoint)
             .http_client(HttpClient::with(client))
             .bucket(&parsed_url.bucket);
 
@@ -437,19 +399,13 @@ impl ObjectStorage {
 
         // COS requires the access key id, the access key secret, and the endpoint.
         let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
-            &object_storage.access_key_id,
-            &object_storage.access_key_secret,
-            &object_storage.endpoint,
+            object_storage.access_key_id,
+            object_storage.access_key_secret,
+            object_storage.endpoint,
         ) else {
-            let error_message = make_error_message_by_missed_field!(object_storage {
-                access_key_id,
-                access_key_secret,
-                endpoint
-            });
-
-            error!("need {}", error_message);
+            error!("need access_key_id, access_key_secret, and endpoint");
             return Err(ClientError::BackendError(BackendError {
-                message: format!("need {}", error_message),
+                message: "need access_key_id, access_key_secret, and endpoint".to_string(),
                 status_code: None,
                 header: None,
             }));
@@ -458,9 +414,9 @@ impl ObjectStorage {
         // Initialize the COS operator with the object storage.
         let mut builder = opendal::services::Cos::default();
         builder = builder
-            .secret_id(access_key_id)
-            .secret_key(access_key_secret)
-            .endpoint(endpoint)
+            .secret_id(&access_key_id)
+            .secret_key(&access_key_secret)
+            .endpoint(&endpoint)
             .http_client(HttpClient::with(client))
             .bucket(&parsed_url.bucket);
 
@@ -788,10 +744,9 @@ mod tests {
                 },
             ),
         ];
-        let test_key = "test-bucket/file";
 
         for (scheme, object_storage) in test_cases {
-            let url: Url = format!("{}://{}", scheme, test_key).parse().unwrap();
+            let url: Url = format!("{}://test-bucket/file", scheme).parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
             let result = ObjectStorage::new(scheme).operator(
