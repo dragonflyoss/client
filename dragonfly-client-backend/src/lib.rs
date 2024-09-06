@@ -457,7 +457,16 @@ mod tests {
             .unwrap();
         assert!(status.success());
 
-        // Move example plugin to temporary plugin directory.
-        std::fs::rename("../target/debug/libhdfs.so", backend_dir.join("libhdfs.so")).unwrap();
+        let plugin_file = if cfg!(target_os = "macos") {
+            "libhdfs.dylib"
+        } else {
+            "libhdfs.so"
+        };
+
+        std::fs::rename(
+            format!("../target/debug/{}", plugin_file),
+            backend_dir.join(plugin_file),
+        )
+        .unwrap();
     }
 }
