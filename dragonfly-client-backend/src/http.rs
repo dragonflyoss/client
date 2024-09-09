@@ -35,7 +35,6 @@ impl HTTP {
     pub fn new(scheme: &str) -> HTTP {
         Self {
             scheme: scheme.to_string(),
-
         }
     }
 
