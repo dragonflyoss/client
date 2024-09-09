@@ -118,9 +118,19 @@ impl Proxy {
         // Load and generate the registry certificates from the PEM format file.
         proxy.registry_certs = match config.proxy.registry_mirror.certs.clone() {
             Some(certs_path) => match generate_certs_from_pem(&certs_path) {
-                Ok(certs) => Arc::new(Some(certs)),
+                Ok(certs) => {
+                    info!(
+                        "generate registry cert from {} pem success",
+                        certs_path.to_string_lossy()
+                    );
+                    Arc::new(Some(certs))
+                }
                 Err(err) => {
-                    error!("generate registry cert from pem failed: {}", err);
+                    error!(
+                        "generate registry cert from {} pem failed: {}",
+                        certs_path.to_string_lossy(),
+                        err
+                    );
                     Arc::new(None)
                 }
             },
@@ -142,7 +152,13 @@ impl Proxy {
         // Generate the CA certificate and key from the PEM format files.
         proxy.server_ca_cert =
             match generate_ca_cert_from_pem(&server_ca_cert_path, &server_ca_key_path) {
-                Ok(server_ca_cert) => Arc::new(Some(server_ca_cert)),
+                Ok(server_ca_cert) => {
+                    info!(
+                        "generate proxy ca cert and key from pem success: {}",
+                        server_ca_cert_path.to_string_lossy()
+                    );
+                    Arc::new(Some(server_ca_cert))
+                }
                 Err(err) => {
                     error!("generate ca cert and key from pem failed: {}", err);
                     Arc::new(None)
