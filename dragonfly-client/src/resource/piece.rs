@@ -64,7 +64,7 @@ pub struct Piece {
     // id_generator is the id generator.
     id_generator: Arc<IDGenerator>,
 
-    // manager_client is the grpc client of the manager.
+    // storage is the local storage.
     storage: Arc<Storage>,
 
     // backend_factory is the backend factory.
