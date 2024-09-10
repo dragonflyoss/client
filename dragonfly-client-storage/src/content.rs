@@ -157,9 +157,9 @@ impl Content {
         // Ensure the parent directory of the destination exists
         if let Some(parent) = to.parent() {
             if !parent.exists() {
-                fs::create_dir_all(parent).await.map_err(|e| {
-                    error!("Failed to create directory {:?}: {}", parent, e);
-                    e
+                fs::create_dir_all(parent).await.map_err(|err| {
+                    error!("Failed to create directory {:?}: {}", parent, err);
+                    err
                 })?;
             }
         }
