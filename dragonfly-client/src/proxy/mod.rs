@@ -857,11 +857,14 @@ async fn proxy_https(
         .with_tls_config(client_config_builder)
         .https_or_http()
         .enable_http1()
-        .enable_http2()
         .build();
 
-    let client = Client::builder(TokioExecutor::new()).build::<_, hyper::body::Incoming>(https);
-    let response = client.request(request).await?;
+    let client = Client::builder(TokioExecutor::new()).build(https);
+    let response = client.request(request).await.map_err(|err| {
+        error!("request failed: {:?}", err);
+        err
+    })?;
+
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }
 
