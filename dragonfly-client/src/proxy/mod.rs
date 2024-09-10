@@ -348,7 +348,7 @@ pub async fn http_handler(
         find_matching_rule(config.proxy.rules.clone(), request_uri.to_string().as_str())
     {
         info!(
-            "proxy HTTP request via dfdaemon for method: {}, uri: {}",
+            "proxy HTTP request via dfdaemon by rule config for method: {}, uri: {}",
             request.method(),
             request_uri
         );
@@ -356,6 +356,24 @@ pub async fn http_handler(
             config,
             task,
             rule.clone(),
+            request,
+            dfdaemon_download_client,
+        )
+        .await;
+    }
+
+    // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
+    // dfdaemon.
+    if header::get_use_p2p(request.headers()) {
+        info!(
+            "proxy HTTP request via dfdaemon by X-Dragonfly-Use-P2P header for method: {}, uri: {}",
+            request.method(),
+            request_uri
+        );
+        return proxy_by_dfdaemon(
+            config,
+            task,
+            Rule::default(),
             request,
             dfdaemon_download_client,
         )
@@ -512,7 +530,7 @@ pub async fn upgraded_handler(
         find_matching_rule(config.proxy.rules.clone(), request_uri.to_string().as_str())
     {
         info!(
-            "proxy HTTPS request via dfdaemon for method: {}, uri: {}",
+            "proxy HTTPS request via dfdaemon by rule config for method: {}, uri: {}",
             request.method(),
             request_uri
         );
@@ -520,6 +538,24 @@ pub async fn upgraded_handler(
             config,
             task,
             rule.clone(),
+            request,
+            dfdaemon_download_client,
+        )
+        .await;
+    }
+
+    // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
+    // dfdaemon.
+    if header::get_use_p2p(request.headers()) {
+        info!(
+            "proxy HTTP request via dfdaemon by X-Dragonfly-Use-P2P header for method: {}, uri: {}",
+            request.method(),
+            request_uri
+        );
+        return proxy_by_dfdaemon(
+            config,
+            task,
+            Rule::default(),
             request,
             dfdaemon_download_client,
         )

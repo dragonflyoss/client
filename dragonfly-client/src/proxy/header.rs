@@ -39,6 +39,12 @@ pub const DRAGONFLY_REGISTRY_HEADER: &str = "X-Dragonfly-Registry";
 // Default value includes the filtered query params of s3, gcs, oss, obs, cos.
 pub const DRAGONFLY_FILTERED_QUERY_PARAMS_HEADER: &str = "X-Dragonfly-Filtered-Query-Params";
 
+// DRAGONFLY_USE_P2P_HEADER is the header key of use p2p in http request.
+// If the value is "true", the request will use P2P technology to distribute
+// the content. If the value is "false", but url matches the regular expression in proxy config.
+// The request will also use P2P technology to distribute the content.
+pub const DRAGONFLY_USE_P2P_HEADER: &str = "X-Dragonfly-Use-P2P";
+
 // get_tag gets the tag from http header.
 #[instrument(skip_all)]
 pub fn get_tag(header: &HeaderMap) -> Option<String> {
@@ -121,5 +127,20 @@ pub fn get_filtered_query_params(
             }
         },
         None => default_filtered_query_params,
+    }
+}
+
+// get_use_p2p gets the use p2p from http header.
+#[instrument(skip_all)]
+pub fn get_use_p2p(header: &HeaderMap) -> bool {
+    match header.get(DRAGONFLY_USE_P2P_HEADER) {
+        Some(value) => match value.to_str() {
+            Ok(value) => value.eq_ignore_ascii_case("true"),
+            Err(err) => {
+                error!("get use p2p from header failed: {}", err);
+                false
+            }
+        },
+        None => false,
     }
 }
