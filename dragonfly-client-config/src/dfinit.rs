@@ -102,6 +102,15 @@ pub struct ContainerdRegistry {
     // https://github.com/containerd/containerd/blob/main/docs/hosts.md#capabilities-field.
     #[serde(default = "default_container_runtime_containerd_registry_capabilities")]
     pub capabilities: Vec<String>,
+
+    // skip_verify is the flag to skip verifying the server's certificate, refer to
+    // https://github.com/containerd/containerd/blob/main/docs/hosts.md#bypass-tls-verification-example.
+    pub skip_verify: Option<bool>,
+
+    // ca (Certificate Authority Certification) can be set to a path or an array of paths each pointing
+    // to a ca file for use in authenticating with the registry namespace, refer to
+    // https://github.com/containerd/containerd/blob/main/docs/hosts.md#ca-field.
+    pub ca: Option<Vec<String>>,
 }
 
 // Containerd is the containerd configuration for dfinit.
