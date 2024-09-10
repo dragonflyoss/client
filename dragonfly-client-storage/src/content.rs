@@ -158,11 +158,12 @@ impl Content {
         if let Some(parent) = to.parent() {
             if !parent.exists() {
                 fs::create_dir_all(parent).await.map_err(|err| {
-                    error!("Failed to create directory {:?}: {}", parent, err);
+                    error!("failed to create directory {:?}: {}", parent, err);
                     err
                 })?;
             }
         }
+
         fs::copy(self.dir.join(task_id), to).await?;
         Ok(())
     }
@@ -170,6 +171,16 @@ impl Content {
     // copy_task_by_range copies the task content to the destination by range.
     #[instrument(skip_all)]
     async fn copy_task_by_range(&self, task_id: &str, to: &Path, range: Range) -> Result<()> {
+        // Ensure the parent directory of the destination exists.
+        if let Some(parent) = to.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).await.map_err(|err| {
+                    error!("failed to create directory {:?}: {}", parent, err);
+                    err
+                })?;
+            }
+        }
+
         let mut from_f = File::open(self.dir.join(task_id)).await?;
         from_f.seek(SeekFrom::Start(range.start)).await?;
         let range_reader = from_f.take(range.length);
@@ -323,6 +334,17 @@ impl Content {
         task: crate::metadata::CacheTask,
         to: &Path,
     ) -> Result<()> {
+        // Ensure the parent directory of the destination exists.
+        if let Some(parent) = to.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).await.map_err(|err| {
+                    error!("failed to create directory {:?}: {}", parent, err);
+                    err
+                })?;
+            }
+        }
+
+        // Get the cache task path.
         let task_path = self.dir.join(task.id.as_str());
 
         // If the hard link fails, copy the task content to the destination.
