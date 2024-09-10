@@ -154,6 +154,15 @@ impl Content {
     // copy_task copies the task content to the destination.
     #[instrument(skip_all)]
     async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        // Ensure the parent directory of the destination exists.
+        if let Some(parent) = to.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).await.map_err(|err| {
+                    error!("Failed to create directory {:?}: {}", parent, err);
+                    err
+                })?;
+            }
+        }
         fs::copy(self.dir.join(task_id), to).await?;
         Ok(())
     }
