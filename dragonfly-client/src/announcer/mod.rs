@@ -292,6 +292,7 @@ impl SchedulerAnnouncer {
 
             // TODO: Get scheduler cluster id from dynconfig.
             scheduler_cluster_id: 0,
+            disable_shared: self.config.upload.disable_shared,
         };
 
         Ok(AnnounceHostRequest {
