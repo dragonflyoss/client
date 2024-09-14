@@ -439,6 +439,9 @@ pub struct Upload {
     // server is the upload server configuration for dfdaemon.
     pub server: UploadServer,
 
+    // disable_shared indicates whether disable to share data for other peers.
+    pub disable_shared: bool,
+
     // rate_limit is the rate limit of the upload speed in GiB/Mib/Kib per second.
     #[serde(with = "bytesize_serde", default = "default_upload_rate_limit")]
     pub rate_limit: ByteSize,
@@ -449,6 +452,7 @@ impl Default for Upload {
     fn default() -> Self {
         Upload {
             server: UploadServer::default(),
+            disable_shared: false,
             rate_limit: default_upload_rate_limit(),
         }
     }

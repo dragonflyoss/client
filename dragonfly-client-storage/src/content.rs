@@ -204,7 +204,6 @@ impl Content {
     #[instrument(skip_all)]
     pub async fn read_task_by_range(&self, task_id: &str, range: Range) -> Result<impl AsyncRead> {
         let task_path = self.dir.join(task_id);
-
         let mut from_f = File::open(task_path.as_path()).await.map_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
             err
@@ -243,7 +242,6 @@ impl Content {
         range: Option<Range>,
     ) -> Result<impl AsyncRead> {
         let task_path = self.dir.join(task_id);
-
         if let Some(range) = range {
             let target_offset = max(offset, range.start);
             let target_length =
