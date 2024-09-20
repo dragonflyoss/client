@@ -27,16 +27,16 @@ use tonic::transport::Channel;
 use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{error, info, instrument, warn};
 
-// ManagerClient is a wrapper of ManagerGRPCClient.
+/// ManagerClient is a wrapper of ManagerGRPCClient.
 #[derive(Clone)]
 pub struct ManagerClient {
-    // client is the grpc client of the manager.
+    /// client is the grpc client of the manager.
     pub client: ManagerGRPCClient<Channel>,
 }
 
-// ManagerClient implements the grpc client of the manager.
+/// ManagerClient implements the grpc client of the manager.
 impl ManagerClient {
-    // new creates a new ManagerClient.
+    /// new creates a new ManagerClient.
     #[instrument(skip_all)]
     pub async fn new(addrs: Vec<String>) -> Result<Self> {
         // Find the available manager address.
@@ -91,7 +91,7 @@ impl ManagerClient {
         Ok(Self { client })
     }
 
-    // list_schedulers lists all schedulers that best match the client.
+    /// list_schedulers lists all schedulers that best match the client.
     #[instrument(skip_all)]
     pub async fn list_schedulers(
         &self,
@@ -102,7 +102,7 @@ impl ManagerClient {
         Ok(response.into_inner())
     }
 
-    // update_seed_peer updates the seed peer information.
+    /// update_seed_peer updates the seed peer information.
     #[instrument(skip_all)]
     pub async fn update_seed_peer(&self, request: UpdateSeedPeerRequest) -> Result<SeedPeer> {
         let request = Self::make_request(request);
@@ -110,7 +110,7 @@ impl ManagerClient {
         Ok(response.into_inner())
     }
 
-    // delete_seed_peer deletes the seed peer information.
+    /// delete_seed_peer deletes the seed peer information.
     #[instrument(skip_all)]
     pub async fn delete_seed_peer(&self, request: DeleteSeedPeerRequest) -> Result<()> {
         let request = Self::make_request(request);
@@ -118,7 +118,7 @@ impl ManagerClient {
         Ok(())
     }
 
-    // make_request creates a new request with timeout.
+    /// make_request creates a new request with timeout.
     #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);

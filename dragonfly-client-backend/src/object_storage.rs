@@ -27,31 +27,31 @@ use tokio_util::io::StreamReader;
 use tracing::{error, info, instrument};
 use url::Url;
 
-// Scheme is the scheme of the object storage.
+/// Scheme is the scheme of the object storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scheme {
-    // S3 is the Amazon Simple Storage Service.
+    /// S3 is the Amazon Simple Storage Service.
     S3,
 
-    // GCS is the Google Cloud Storage Service.
+    /// GCS is the Google Cloud Storage Service.
     GCS,
 
-    // ABS is the Azure Blob Storage Service.
+    /// ABS is the Azure Blob Storage Service.
     ABS,
 
-    // OSS is the Aliyun Object Storage Service.
+    /// OSS is the Aliyun Object Storage Service.
     OSS,
 
-    // OBS is the Huawei Cloud Object Storage Service.
+    /// OBS is the Huawei Cloud Object Storage Service.
     OBS,
 
-    // COS is the Tencent Cloud Object Storage Service.
+    /// COS is the Tencent Cloud Object Storage Service.
     COS,
 }
 
-// Scheme implements the Display.
+/// Scheme implements the Display.
 impl fmt::Display for Scheme {
-    // fmt formats the value using the given formatter.
+    /// fmt formats the value using the given formatter.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Scheme::S3 => write!(f, "s3"),
@@ -64,11 +64,11 @@ impl fmt::Display for Scheme {
     }
 }
 
-// Scheme implements the FromStr.
+/// Scheme implements the FromStr.
 impl FromStr for Scheme {
     type Err = String;
 
-    // from_str parses an scheme string.
+    /// from_str parses an scheme string.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "s3" => Ok(Scheme::S3),
@@ -82,30 +82,30 @@ impl FromStr for Scheme {
     }
 }
 
-// ParsedURL is a struct that contains the parsed URL, bucket, and path.
+/// ParsedURL is a struct that contains the parsed URL, bucket, and path.
 #[derive(Debug)]
 pub struct ParsedURL {
-    // url is the requested URL of the object storage.
+    /// url is the requested URL of the object storage.
     pub url: Url,
 
-    // scheme is the scheme of the object storage.
+    /// scheme is the scheme of the object storage.
     pub scheme: Scheme,
 
-    // bucket is the bucket of the object storage.
+    /// bucket is the bucket of the object storage.
     pub bucket: String,
 
-    // key is the key of the object storage.
+    /// key is the key of the object storage.
     pub key: String,
 }
 
-// ParsedURL implements the ParsedURL trait.
+/// ParsedURL implements the ParsedURL trait.
 impl ParsedURL {
-    // is_dir returns true if the URL path ends with a slash.
+    /// is_dir returns true if the URL path ends with a slash.
     pub fn is_dir(&self) -> bool {
         self.url.path().ends_with('/')
     }
 
-    // make_url_by_entry_path makes a URL by the entry path when the URL is a directory.
+    /// make_url_by_entry_path makes a URL by the entry path when the URL is a directory.
     pub fn make_url_by_entry_path(&self, entry_path: &str) -> Url {
         let mut url = self.url.clone();
         url.set_path(entry_path);
@@ -113,13 +113,13 @@ impl ParsedURL {
     }
 }
 
-// ParsedURL implements the TryFrom trait for the URL.
-//
-// The object storage URL should be in the format of `scheme://<bucket>/<path>`.
+/// ParsedURL implements the TryFrom trait for the URL.
+///
+/// The object storage URL should be in the format of `scheme://<bucket>/<path>`.
 impl TryFrom<Url> for ParsedURL {
     type Error = ClientError;
 
-    // try_from parses the URL and returns a ParsedURL.
+    /// try_from parses the URL and returns a ParsedURL.
     fn try_from(url: Url) -> Result<Self, Self::Error> {
         // Get the bucket from the URL host.
         let bucket = url
@@ -150,7 +150,7 @@ impl TryFrom<Url> for ParsedURL {
     }
 }
 
-// make_need_fields_message makes a message for the need fields in the object storage.
+/// make_need_fields_message makes a message for the need fields in the object storage.
 macro_rules! make_need_fields_message {
     ($var:ident {$($field:ident),*}) => {{
             let mut need_fields: Vec<&'static str> = vec![];
@@ -165,21 +165,21 @@ macro_rules! make_need_fields_message {
        }};
 }
 
-// ObjectStorage is a struct that implements the backend trait.
+/// ObjectStorage is a struct that implements the backend trait.
 pub struct ObjectStorage {
-    // scheme is the scheme of the object storage.
+    /// scheme is the scheme of the object storage.
     scheme: Scheme,
 }
 
-// ObjectStorage implements the ObjectStorage trait.
+/// ObjectStorage implements the ObjectStorage trait.
 impl ObjectStorage {
-    // Returns ObjectStorage that implements the Backend trait.
+    /// Returns ObjectStorage that implements the Backend trait.
     #[instrument(skip_all)]
     pub fn new(scheme: Scheme) -> ObjectStorage {
         Self { scheme }
     }
 
-    // operator initializes the operator with the parsed URL and object storage.
+    /// operator initializes the operator with the parsed URL and object storage.
     #[instrument(skip_all)]
     pub fn operator(
         &self,
@@ -206,7 +206,7 @@ impl ObjectStorage {
         }
     }
 
-    // s3_operator initializes the S3 operator with the parsed URL and object storage.
+    /// s3_operator initializes the S3 operator with the parsed URL and object storage.
     #[instrument(skip_all)]
     pub fn s3_operator(
         &self,
@@ -260,7 +260,7 @@ impl ObjectStorage {
         Ok(Operator::new(builder)?.finish())
     }
 
-    // gcs_operator initializes the GCS operator with the parsed URL and object storage.
+    /// gcs_operator initializes the GCS operator with the parsed URL and object storage.
     #[instrument(skip_all)]
     pub fn gcs_operator(
         &self,
@@ -296,7 +296,7 @@ impl ObjectStorage {
         Ok(Operator::new(builder)?.finish())
     }
 
-    // abs_operator initializes the ABS operator with the parsed URL and object storage.
+    /// abs_operator initializes the ABS operator with the parsed URL and object storage.
     #[instrument(skip_all)]
     pub fn abs_operator(
         &self,
@@ -340,7 +340,7 @@ impl ObjectStorage {
         Ok(Operator::new(builder)?.finish())
     }
 
-    // oss_operator initializes the OSS operator with the parsed URL and object storage.
+    /// oss_operator initializes the OSS operator with the parsed URL and object storage.
     #[instrument(skip_all)]
     pub fn oss_operator(
         &self,
@@ -385,7 +385,7 @@ impl ObjectStorage {
         Ok(Operator::new(builder)?.finish())
     }
 
-    // obs_operator initializes the OBS operator with the parsed URL and object storage.
+    /// obs_operator initializes the OBS operator with the parsed URL and object storage.
     #[instrument(skip_all)]
     pub fn obs_operator(
         &self,
@@ -429,7 +429,7 @@ impl ObjectStorage {
         Ok(Operator::new(builder)?.finish())
     }
 
-    // cos_operator initializes the COS operator with the parsed URL and object storage.
+    /// cos_operator initializes the COS operator with the parsed URL and object storage.
     pub fn cos_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
@@ -473,16 +473,16 @@ impl ObjectStorage {
     }
 }
 
-// Backend implements the Backend trait.
+/// Backend implements the Backend trait.
 #[tonic::async_trait]
 impl crate::Backend for ObjectStorage {
-    // scheme returns the scheme of the object storage.
+    /// scheme returns the scheme of the object storage.
     #[instrument(skip_all)]
     fn scheme(&self) -> String {
         self.scheme.to_string()
     }
 
-    //head gets the header of the request.
+    /// head gets the header of the request.
     #[instrument(skip_all)]
     async fn head(&self, request: super::HeadRequest) -> ClientResult<super::HeadResponse> {
         info!(
@@ -568,7 +568,7 @@ impl crate::Backend for ObjectStorage {
         })
     }
 
-    // Returns content of requested file.
+    /// Returns content of requested file.
     #[instrument(skip_all)]
     async fn get(
         &self,
