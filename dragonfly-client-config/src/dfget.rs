@@ -16,10 +16,10 @@
 
 use std::path::PathBuf;
 
-// NAME is the name of dfget.
+/// NAME is the name of dfget.
 pub const NAME: &str = "dfget";
 
-// default_dfget_log_dir is the default log directory for dfget.
+/// default_dfget_log_dir is the default log directory for dfget.
 pub fn default_dfget_log_dir() -> PathBuf {
     crate::default_log_dir().join(NAME)
 }

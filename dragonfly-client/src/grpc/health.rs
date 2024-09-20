@@ -28,16 +28,16 @@ use tonic_health::pb::{
 use tower::service_fn;
 use tracing::{error, instrument};
 
-// HealthClient is a wrapper of HealthGRPCClient.
+/// HealthClient is a wrapper of HealthGRPCClient.
 #[derive(Clone)]
 pub struct HealthClient {
-    // client is the grpc client of the certificate.
+    /// client is the grpc client of the certificate.
     client: HealthGRPCClient<Channel>,
 }
 
-// HealthClient implements the grpc client of the health.
+/// HealthClient implements the grpc client of the health.
 impl HealthClient {
-    // new creates a new HealthClient.
+    /// new creates a new HealthClient.
     #[instrument(skip_all)]
     pub async fn new(addr: &str) -> Result<Self> {
         let channel = Channel::from_shared(addr.to_string())
@@ -60,7 +60,7 @@ impl HealthClient {
         Ok(Self { client })
     }
 
-    // new_unix creates a new HealthClient with unix domain socket.
+    /// new_unix creates a new HealthClient with unix domain socket.
     #[instrument(skip_all)]
     pub async fn new_unix(socket_path: PathBuf) -> Result<Self> {
         // Ignore the uri because it is not used.
@@ -86,7 +86,7 @@ impl HealthClient {
         Ok(Self { client })
     }
 
-    // check checks the health of the grpc service without service name.
+    /// check checks the health of the grpc service without service name.
     #[instrument(skip_all)]
     pub async fn check(&self) -> Result<HealthCheckResponse> {
         let request = Self::make_request(HealthCheckRequest {
@@ -96,7 +96,7 @@ impl HealthClient {
         Ok(response.into_inner())
     }
 
-    // check_service checks the health of the grpc service with service name.
+    /// check_service checks the health of the grpc service with service name.
     #[instrument(skip_all)]
     pub async fn check_service(&self, service: String) -> Result<HealthCheckResponse> {
         let request = Self::make_request(HealthCheckRequest { service });
@@ -104,21 +104,21 @@ impl HealthClient {
         Ok(response.into_inner())
     }
 
-    // check_dfdaemon_download checks the health of the dfdaemon download service.
+    /// check_dfdaemon_download checks the health of the dfdaemon download service.
     #[instrument(skip_all)]
     pub async fn check_dfdaemon_download(&self) -> Result<HealthCheckResponse> {
         self.check_service("dfdaemon.v2.DfdaemonDownload".to_string())
             .await
     }
 
-    // check_dfdaemon_upload checks the health of the dfdaemon upload service.
+    /// check_dfdaemon_upload checks the health of the dfdaemon upload service.
     #[instrument(skip_all)]
     pub async fn check_dfdaemon_upload(&self) -> Result<HealthCheckResponse> {
         self.check_service("dfdaemon.v2.DfdaemonUpload".to_string())
             .await
     }
 
-    // make_request creates a new request with timeout.
+    /// make_request creates a new request with timeout.
     #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);

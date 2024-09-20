@@ -54,27 +54,27 @@ use tracing::{error, info, instrument, Instrument};
 
 use super::*;
 
-// CacheTask represents a cache task manager.
+/// CacheTask represents a cache task manager.
 pub struct CacheTask {
-    // config is the configuration of the dfdaemon.
+    /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    // id_generator is the id generator.
+    /// id_generator is the id generator.
     pub id_generator: Arc<IDGenerator>,
 
-    // storage is the local storage.
+    /// storage is the local storage.
     storage: Arc<Storage>,
 
-    // scheduler_client is the grpc client of the scheduler.
+    /// scheduler_client is the grpc client of the scheduler.
     pub scheduler_client: Arc<SchedulerClient>,
 
-    // piece is the piece manager.
+    /// piece is the piece manager.
     pub piece: Arc<piece::Piece>,
 }
 
-// CacheTask is the implementation of CacheTask.
+/// CacheTask is the implementation of CacheTask.
 impl CacheTask {
-    // new creates a new CacheTask.
+    /// new creates a new CacheTask.
     #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
@@ -100,7 +100,7 @@ impl CacheTask {
         }
     }
 
-    // create_persistent creates a persistent cache task from local.
+    /// create_persistent creates a persistent cache task from local.
     #[instrument(skip_all)]
     pub async fn create_persistent(
         &self,
@@ -224,7 +224,7 @@ impl CacheTask {
         }
     }
 
-    // download_started updates the metadata of the cache task when the cache task downloads started.
+    /// download_started updates the metadata of the cache task when the cache task downloads started.
     #[instrument(skip_all)]
     pub async fn download_started(
         &self,
@@ -253,20 +253,20 @@ impl CacheTask {
         )
     }
 
-    // download_finished updates the metadata of the cache task when the task downloads finished.
+    /// download_finished updates the metadata of the cache task when the task downloads finished.
     #[instrument(skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::CacheTask> {
         self.storage.download_cache_task_finished(id)
     }
 
-    // download_failed updates the metadata of the cache task when the task downloads failed.
+    /// download_failed updates the metadata of the cache task when the task downloads failed.
     #[instrument(skip_all)]
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
         let _ = self.storage.download_cache_task_failed(id).await?;
         Ok(())
     }
 
-    // hard_link_or_copy hard links or copies the cache task content to the destination.
+    /// hard_link_or_copy hard links or copies the cache task content to the destination.
     #[instrument(skip_all)]
     pub async fn hard_link_or_copy(
         &self,
@@ -276,7 +276,7 @@ impl CacheTask {
         self.storage.hard_link_or_copy_cache_task(task, to).await
     }
 
-    // download downloads a cache task.
+    /// download downloads a cache task.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     pub async fn download(
@@ -455,7 +455,7 @@ impl CacheTask {
         Ok(())
     }
 
-    // download_partial_with_scheduler downloads a partial cache task with scheduler.
+    /// download_partial_with_scheduler downloads a partial cache task with scheduler.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler(
@@ -758,7 +758,7 @@ impl CacheTask {
         Ok(finished_pieces)
     }
 
-    // download_partial_with_scheduler_from_remote_peer downloads a partial cache task with scheduler from a remote peer.
+    /// download_partial_with_scheduler_from_remote_peer downloads a partial cache task with scheduler from a remote peer.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler_from_remote_peer(
@@ -984,7 +984,7 @@ impl CacheTask {
         Ok(finished_pieces)
     }
 
-    // download_partial_from_local_peer downloads a partial cache task from a local peer.
+    /// download_partial_from_local_peer downloads a partial cache task from a local peer.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_from_local_peer(
@@ -1073,7 +1073,7 @@ impl CacheTask {
         Ok(finished_pieces)
     }
 
-    // stat stats the cache task from the scheduler.
+    /// stat stats the cache task from the scheduler.
     #[instrument(skip_all)]
     pub async fn stat(&self, task_id: &str, host_id: &str) -> ClientResult<CommonCacheTask> {
         self.scheduler_client
@@ -1084,7 +1084,7 @@ impl CacheTask {
             .await
     }
 
-    // delete_cache_task deletes a cache task.
+    /// delete_cache_task deletes a cache task.
     #[instrument(skip_all)]
     pub async fn delete(&self, task_id: &str, host_id: &str) -> ClientResult<()> {
         self.scheduler_client

@@ -22,15 +22,15 @@ use std::io::{Error as IOError, ErrorKind};
 use tokio_util::io::StreamReader;
 use tracing::{error, info, instrument};
 
-// HTTP is the HTTP backend.
+/// HTTP is the HTTP backend.
 pub struct HTTP {
-    // scheme is the scheme of the HTTP backend.
+    /// scheme is the scheme of the HTTP backend.
     scheme: String,
 }
 
-// HTTP implements the http interface.
+/// HTTP implements the http interface.
 impl HTTP {
-    // new returns a new HTTP.
+    /// new returns a new HTTP.
     #[instrument(skip_all)]
     pub fn new(scheme: &str) -> HTTP {
         Self {
@@ -38,7 +38,7 @@ impl HTTP {
         }
     }
 
-    // client returns a new reqwest client.
+    /// client returns a new reqwest client.
     #[instrument(skip_all)]
     fn client(
         &self,
@@ -68,16 +68,16 @@ impl HTTP {
     }
 }
 
-// Backend implements the Backend trait.
+/// Backend implements the Backend trait.
 #[tonic::async_trait]
 impl super::Backend for HTTP {
-    // scheme returns the scheme of the HTTP backend.
+    /// scheme returns the scheme of the HTTP backend.
     #[instrument(skip_all)]
     fn scheme(&self) -> String {
         self.scheme.clone()
     }
 
-    // head gets the header of the request.
+    /// head gets the header of the request.
     #[instrument(skip_all)]
     async fn head(&self, request: super::HeadRequest) -> Result<super::HeadResponse> {
         info!(
@@ -124,7 +124,7 @@ impl super::Backend for HTTP {
         })
     }
 
-    // get gets the content of the request.
+    /// get gets the content of the request.
     #[instrument(skip_all)]
     async fn get(&self, request: super::GetRequest) -> Result<super::GetResponse<super::Body>> {
         info!(
@@ -171,9 +171,9 @@ impl super::Backend for HTTP {
     }
 }
 
-// Default implements the Default trait.
+/// Default implements the Default trait.
 impl Default for HTTP {
-    // default returns a new default HTTP.
+    /// default returns a new default HTTP.
     fn default() -> Self {
         Self::new("http")
     }
