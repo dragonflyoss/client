@@ -31,7 +31,7 @@ use tracing::{error, info};
 
 use super::*;
 
-// ExportCommand is the subcommand of export.
+/// ExportCommand is the subcommand of export.
 #[derive(Debug, Clone, Parser)]
 pub struct ExportCommand {
     #[arg(help = "Specify the cache task ID to export")]
@@ -67,9 +67,9 @@ pub struct ExportCommand {
     timeout: Duration,
 }
 
-// Implement the execute for ExportCommand.
+/// Implement the execute for ExportCommand.
 impl ExportCommand {
-    // execute executes the export command.
+    /// execute executes the export command.
     pub async fn execute(&self, endpoint: &Path) -> Result<()> {
         // Validate the command line arguments.
         if let Err(err) = self.validate_args() {
@@ -358,7 +358,7 @@ impl ExportCommand {
         Ok(())
     }
 
-    // run runs the export command.
+    /// run runs the export command.
     async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
         // Get the absolute path of the output file.
         let absolute_path = Path::new(&self.output).absolutize()?;
@@ -428,7 +428,7 @@ impl ExportCommand {
         Ok(())
     }
 
-    // validate_args validates the command line arguments.
+    /// validate_args validates the command line arguments.
     fn validate_args(&self) -> Result<()> {
         let absolute_path = Path::new(&self.output).absolutize()?;
         match absolute_path.parent() {

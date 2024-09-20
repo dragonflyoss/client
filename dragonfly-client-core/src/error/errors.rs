@@ -18,7 +18,7 @@ use std::{error::Error as ErrorTrait, fmt};
 
 use super::message::Message;
 
-// ErrorType is the type of the error.
+/// ErrorType is the type of the error.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ErrorType {
     StorageError,
@@ -34,9 +34,9 @@ pub enum ErrorType {
     PluginError,
 }
 
-// ErrorType implements the display for the error type.
+/// ErrorType implements the display for the error type.
 impl ErrorType {
-    // as_str returns the string of the error type.
+    /// as_str returns the string of the error type.
     pub fn as_str(&self) -> &'static str {
         match self {
             ErrorType::StorageError => "StorageError",
@@ -54,7 +54,7 @@ impl ErrorType {
     }
 }
 
-// ExternalError is the external error.
+/// ExternalError is the external error.
 #[derive(Debug)]
 pub struct ExternalError {
     pub etype: ErrorType,
@@ -62,9 +62,9 @@ pub struct ExternalError {
     pub context: Option<Message>,
 }
 
-// ExternalError implements the error trait.
+/// ExternalError implements the error trait.
 impl ExternalError {
-    // new returns a new ExternalError.
+    /// new returns a new ExternalError.
     pub fn new(etype: ErrorType) -> Self {
         ExternalError {
             etype,
@@ -73,19 +73,19 @@ impl ExternalError {
         }
     }
 
-    // with_context returns a new ExternalError with the context.
+    /// with_context returns a new ExternalError with the context.
     pub fn with_context(mut self, message: impl Into<Message>) -> Self {
         self.context = Some(message.into());
         self
     }
 
-    // with_cause returns a new ExternalError with the cause.
+    /// with_cause returns a new ExternalError with the cause.
     pub fn with_cause(mut self, cause: Box<dyn ErrorTrait + Send + Sync>) -> Self {
         self.cause = Some(cause);
         self
     }
 
-    // chain_display returns the display of the error with the previous error.
+    /// chain_display returns the display of the error with the previous error.
     fn chain_display(
         &self,
         previous: Option<&ExternalError>,
@@ -112,17 +112,17 @@ impl ExternalError {
     }
 }
 
-// ExternalError implements the display for the error.
+/// ExternalError implements the display for the error.
 impl fmt::Display for ExternalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.chain_display(None, f)
     }
 }
 
-// ExternalError implements the error trait.
+/// ExternalError implements the error trait.
 impl ErrorTrait for ExternalError {}
 
-// OrErr is the trait to extend the result with error.
+/// OrErr is the trait to extend the result with error.
 pub trait OrErr<T, E> {
     /// Wrap the E in [Result] with new [ErrorType] and context, the existing E will be the cause.
     ///
@@ -136,7 +136,7 @@ pub trait OrErr<T, E> {
         E: Into<Box<dyn ErrorTrait + Send + Sync>>;
 }
 
-// OrErr implements the OrErr for Result.
+/// OrErr implements the OrErr for Result.
 impl<T, E> OrErr<T, E> for Result<T, E> {
     fn or_err(self, et: ErrorType) -> Result<T, ExternalError>
     where
@@ -157,28 +157,28 @@ impl<T, E> OrErr<T, E> for Result<T, E> {
     }
 }
 
-// BackendError is the error for backend.
+/// BackendError is the error for backend.
 #[derive(Debug, thiserror::Error)]
 #[error("backend error {message}")]
 pub struct BackendError {
-    // message is the error message.
+    /// message is the error message.
     pub message: String,
 
-    // status_code is the status code of the response.
+    /// status_code is the status code of the response.
     pub status_code: Option<reqwest::StatusCode>,
 
-    // header is the headers of the response.
+    /// header is the headers of the response.
     pub header: Option<reqwest::header::HeaderMap>,
 }
 
-// DownloadFromRemotePeerFailed is the error when the download from remote peer is failed.
+/// DownloadFromRemotePeerFailed is the error when the download from remote peer is failed.
 #[derive(Debug, thiserror::Error)]
 #[error("download piece {piece_number} from remote peer {parent_id} failed")]
 pub struct DownloadFromRemotePeerFailed {
-    // piece_number is the number of the piece.
+    /// piece_number is the number of the piece.
     pub piece_number: u32,
 
-    // parent_id is the parent id of the piece.
+    /// parent_id is the parent id of the piece.
     pub parent_id: String,
 }
 

@@ -18,7 +18,7 @@ use std::env;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// git_commit_hash returns the short hash of the current git commit.
+/// git_commit_hash returns the short hash of the current git commit.
 fn git_commit_hash() -> String {
     if let Ok(output) = Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])

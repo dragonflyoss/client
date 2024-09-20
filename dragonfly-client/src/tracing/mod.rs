@@ -31,7 +31,7 @@ use tracing_subscriber::{
     EnvFilter, Registry,
 };
 
-// init_tracing initializes the tracing system.
+/// init_tracing initializes the tracing system.
 #[allow(clippy::too_many_arguments)]
 pub fn init_tracing(
     name: &str,
@@ -141,7 +141,7 @@ pub fn init_tracing(
     guards
 }
 
-// redirect_stderr_to_file redirects stderr to a file.
+/// redirect_stderr_to_file redirects stderr to a file.
 fn redirect_stderr_to_file(log_dir: PathBuf) {
     let log_path = log_dir.join("stderr.log");
     let file = OpenOptions::new()

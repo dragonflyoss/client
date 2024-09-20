@@ -23,7 +23,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use std::collections::HashMap;
 use tracing::{error, instrument};
 
-// reqwest_headermap_to_hashmap converts a reqwest headermap to a hashmap.
+/// reqwest_headermap_to_hashmap converts a reqwest headermap to a hashmap.
 #[instrument(skip_all)]
 pub fn reqwest_headermap_to_hashmap(header: &HeaderMap<HeaderValue>) -> HashMap<String, String> {
     let mut hashmap: HashMap<String, String> = HashMap::new();
@@ -38,7 +38,7 @@ pub fn reqwest_headermap_to_hashmap(header: &HeaderMap<HeaderValue>) -> HashMap<
     hashmap
 }
 
-// hashmap_to_reqwest_headermap converts a hashmap to a reqwest headermap.
+/// hashmap_to_reqwest_headermap converts a hashmap to a reqwest headermap.
 #[instrument(skip_all)]
 pub fn hashmap_to_reqwest_headermap(
     header: &HashMap<String, String>,
@@ -47,7 +47,7 @@ pub fn hashmap_to_reqwest_headermap(
     Ok(header)
 }
 
-// hashmap_to_hyper_header_map converts a hashmap to a hyper header map.
+/// hashmap_to_hyper_header_map converts a hashmap to a hyper header map.
 #[instrument(skip_all)]
 pub fn hashmap_to_hyper_header_map(
     header: &HashMap<String, String>,
@@ -56,10 +56,10 @@ pub fn hashmap_to_hyper_header_map(
     Ok(header)
 }
 
-// TODO: Remove the conversion after the http crate version is the same.
-// Convert the Reqwest header to the Hyper header, because of the http crate
-// version is different. Reqwest header depends on the http crate
-// version 0.2, but the Hyper header depends on the http crate version 0.1.
+/// TODO: Remove the conversion after the http crate version is the same.
+/// Convert the Reqwest header to the Hyper header, because of the http crate
+/// version is different. Reqwest header depends on the http crate
+/// version 0.2, but the Hyper header depends on the http crate version 0.1.
 #[instrument(skip_all)]
 pub fn hyper_headermap_to_reqwest_headermap(
     hyper_header: &hyper::header::HeaderMap,
@@ -95,7 +95,7 @@ pub fn hyper_headermap_to_reqwest_headermap(
     reqwest_header
 }
 
-// header_vec_to_hashmap converts a vector of header string to a hashmap.
+/// header_vec_to_hashmap converts a vector of header string to a hashmap.
 #[instrument(skip_all)]
 pub fn header_vec_to_hashmap(raw_header: Vec<String>) -> Result<HashMap<String, String>> {
     let mut header = HashMap::new();
@@ -109,7 +109,7 @@ pub fn header_vec_to_hashmap(raw_header: Vec<String>) -> Result<HashMap<String, 
     Ok(header)
 }
 
-// header_vec_to_reqwest_headermap converts a vector of header string to a reqwest headermap.
+/// header_vec_to_reqwest_headermap converts a vector of header string to a reqwest headermap.
 #[instrument(skip_all)]
 pub fn header_vec_to_reqwest_headermap(
     raw_header: Vec<String>,
@@ -117,7 +117,7 @@ pub fn header_vec_to_reqwest_headermap(
     hashmap_to_reqwest_headermap(&header_vec_to_hashmap(raw_header)?)
 }
 
-// get_range gets the range from http header.
+/// get_range gets the range from http header.
 #[instrument(skip_all)]
 pub fn get_range(header: &HeaderMap, content_length: u64) -> Result<Option<Range>> {
     match header.get(reqwest::header::RANGE) {
@@ -129,9 +129,9 @@ pub fn get_range(header: &HeaderMap, content_length: u64) -> Result<Option<Range
     }
 }
 
-// parse_range_header parses a Range header string as per RFC 7233,
-// supported Range Header: "Range": "bytes=100-200", "Range": "bytes=-50",
-// "Range": "bytes=150-", "Range": "bytes=0-0,-1".
+/// parse_range_header parses a Range header string as per RFC 7233,
+/// supported Range Header: "Range": "bytes=100-200", "Range": "bytes=-50",
+/// "Range": "bytes=150-", "Range": "bytes=0-0,-1".
 #[instrument(skip_all)]
 pub fn parse_range_header(range_header_value: &str, content_length: u64) -> Result<Range> {
     let parsed_ranges =

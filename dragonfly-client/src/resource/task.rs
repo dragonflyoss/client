@@ -64,30 +64,30 @@ use tracing::{error, info, instrument, Instrument};
 
 use super::*;
 
-// Task represents a task manager.
+/// Task represents a task manager.
 pub struct Task {
-    // config is the configuration of the dfdaemon.
+    /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    // id_generator is the id generator.
+    /// id_generator is the id generator.
     pub id_generator: Arc<IDGenerator>,
 
-    // storage is the local storage.
+    /// storage is the local storage.
     storage: Arc<Storage>,
 
-    // scheduler_client is the grpc client of the scheduler.
+    /// scheduler_client is the grpc client of the scheduler.
     pub scheduler_client: Arc<SchedulerClient>,
 
-    // backend_factory is the backend factory.
+    /// backend_factory is the backend factory.
     pub backend_factory: Arc<BackendFactory>,
 
-    // piece is the piece manager.
+    /// piece is the piece manager.
     pub piece: Arc<piece::Piece>,
 }
 
-// Task implements the task manager.
+/// Task implements the task manager.
 impl Task {
-    // new returns a new Task.
+    /// new returns a new Task.
     #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
@@ -114,7 +114,7 @@ impl Task {
         }
     }
 
-    // download_started updates the metadata of the task when the task downloads started.
+    /// download_started updates the metadata of the task when the task downloads started.
     #[instrument(skip_all)]
     pub async fn download_started(
         &self,
@@ -208,31 +208,31 @@ impl Task {
         )
     }
 
-    // download_finished updates the metadata of the task when the task downloads finished.
+    /// download_finished updates the metadata of the task when the task downloads finished.
     #[instrument(skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.download_task_finished(id)
     }
 
-    // download_failed updates the metadata of the task when the task downloads failed.
+    /// download_failed updates the metadata of the task when the task downloads failed.
     #[instrument(skip_all)]
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
         self.storage.download_task_failed(id).await.map(|_| ())
     }
 
-    // prefetch_task_started updates the metadata of the task when the task prefetch started.
+    /// prefetch_task_started updates the metadata of the task when the task prefetch started.
     #[instrument(skip_all)]
     pub async fn prefetch_task_started(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.prefetch_task_started(id).await
     }
 
-    // prefetch_task_failed updates the metadata of the task when the task prefetch failed.
+    /// prefetch_task_failed updates the metadata of the task when the task prefetch failed.
     #[instrument(skip_all)]
     pub async fn prefetch_task_failed(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.prefetch_task_failed(id).await
     }
 
-    // hard_link_or_copy hard links or copies the task content to the destination.
+    /// hard_link_or_copy hard links or copies the task content to the destination.
     #[instrument(skip_all)]
     pub async fn hard_link_or_copy(
         &self,
@@ -243,7 +243,7 @@ impl Task {
         self.storage.hard_link_or_copy_task(task, to, range).await
     }
 
-    // download downloads a task.
+    /// download downloads a task.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     pub async fn download(
@@ -462,7 +462,7 @@ impl Task {
         Ok(())
     }
 
-    // download_partial_with_scheduler downloads a partial task with scheduler.
+    /// download_partial_with_scheduler downloads a partial task with scheduler.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler(
@@ -894,7 +894,7 @@ impl Task {
         Ok(finished_pieces)
     }
 
-    // download_partial_with_scheduler_from_remote_peer downloads a partial task with scheduler from a remote peer.
+    /// download_partial_with_scheduler_from_remote_peer downloads a partial task with scheduler from a remote peer.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler_from_remote_peer(
@@ -1160,7 +1160,7 @@ impl Task {
         Ok(finished_pieces)
     }
 
-    // download_partial_with_scheduler_from_source downloads a partial task with scheduler from the source.
+    /// download_partial_with_scheduler_from_source downloads a partial task with scheduler from the source.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler_from_source(
@@ -1407,7 +1407,7 @@ impl Task {
         Ok(finished_pieces)
     }
 
-    // download_partial_from_local_peer downloads a partial task from a local peer.
+    /// download_partial_from_local_peer downloads a partial task from a local peer.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_from_local_peer(
@@ -1500,7 +1500,7 @@ impl Task {
         Ok(finished_pieces)
     }
 
-    // download_partial_from_source downloads a partial task from the source.
+    /// download_partial_from_source downloads a partial task from the source.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_from_source(
@@ -1663,7 +1663,7 @@ impl Task {
         ))
     }
 
-    // stat_task returns the task metadata.
+    /// stat_task returns the task metadata.
     #[instrument(skip_all)]
     pub async fn stat(&self, task_id: &str, host_id: &str) -> ClientResult<CommonTask> {
         let task = self
@@ -1681,7 +1681,7 @@ impl Task {
         Ok(task)
     }
 
-    // Delete a task and reclaim local storage.
+    /// Delete a task and reclaim local storage.
     #[instrument(skip_all)]
     pub async fn delete(&self, task_id: &str, host_id: &str) -> ClientResult<()> {
         let task = self.storage.get_task(task_id).map_err(|err| {

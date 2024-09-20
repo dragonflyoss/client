@@ -22,28 +22,28 @@ use std::path::Path;
 use std::str::FromStr;
 use tracing::instrument;
 
-// SEPARATOR is the separator of digest.
+/// SEPARATOR is the separator of digest.
 pub const SEPARATOR: &str = ":";
 
-// Algorithm is an enum of the algorithm that is used to generate digest.
+/// Algorithm is an enum of the algorithm that is used to generate digest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Algorithm {
-    // Crc32 is crc32 algorithm for generate digest.
+    /// Crc32 is crc32 algorithm for generate digest.
     Crc32,
 
-    // Blake3 is blake3 algorithm for generate digest.
+    /// Blake3 is blake3 algorithm for generate digest.
     Blake3,
 
-    // Sha256 is sha256 algorithm for generate digest.
+    /// Sha256 is sha256 algorithm for generate digest.
     Sha256,
 
-    // Sha512 is sha512 algorithm for generate digest.
+    /// Sha512 is sha512 algorithm for generate digest.
     Sha512,
 }
 
-// Algorithm implements the Display.
+/// Algorithm implements the Display.
 impl fmt::Display for Algorithm {
-    // fmt formats the value using the given formatter.
+    /// fmt formats the value using the given formatter.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Algorithm::Crc32 => write!(f, "crc32"),
@@ -54,11 +54,11 @@ impl fmt::Display for Algorithm {
     }
 }
 
-// Algorithm implements the FromStr.
+/// Algorithm implements the FromStr.
 impl FromStr for Algorithm {
     type Err = String;
 
-    // from_str parses an algorithm string.
+    /// from_str parses an algorithm string.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "crc32" => Ok(Algorithm::Crc32),
@@ -70,23 +70,23 @@ impl FromStr for Algorithm {
     }
 }
 
-// Digest is a struct that is used to generate digest.
+/// Digest is a struct that is used to generate digest.
 pub struct Digest {
-    // algorithm is the algorithm that is used to generate digest.
+    /// algorithm is the algorithm that is used to generate digest.
     algorithm: Algorithm,
 
-    // encoded is the encoded digest.
+    /// encoded is the encoded digest.
     encoded: String,
 }
 
-// Digest implements the Digest.
+/// Digest implements the Digest.
 impl Digest {
-    // new returns a new Digest.
+    /// new returns a new Digest.
     pub fn new(algorithm: Algorithm, encoded: String) -> Self {
         Self { algorithm, encoded }
     }
 
-    // algorithm returns the algorithm of the digest.
+    /// algorithm returns the algorithm of the digest.
     pub fn algorithm(&self) -> Algorithm {
         self.algorithm
     }
@@ -97,19 +97,19 @@ impl Digest {
     }
 }
 
-// Digest implements the Display.
+/// Digest implements the Display.
 impl fmt::Display for Digest {
-    // fmt formats the value using the given formatter.
+    /// fmt formats the value using the given formatter.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}{}{}", self.algorithm, SEPARATOR, self.encoded)
     }
 }
 
-// Digest implements the FromStr.
+/// Digest implements the FromStr.
 impl FromStr for Digest {
     type Err = String;
 
-    // from_str parses a digest string.
+    /// from_str parses a digest string.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.splitn(2, SEPARATOR).collect();
         if parts.len() != 2 {
@@ -128,7 +128,7 @@ impl FromStr for Digest {
     }
 }
 
-// calculate_file_hash calculates the hash of a file.
+/// calculate_file_hash calculates the hash of a file.
 #[instrument(skip_all)]
 pub fn calculate_file_hash(algorithm: Algorithm, path: &Path) -> ClientResult<Digest> {
     let f = std::fs::File::open(path)?;

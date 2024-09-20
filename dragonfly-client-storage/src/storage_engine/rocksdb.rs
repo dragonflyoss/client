@@ -32,18 +32,18 @@ pub struct RocksdbStorageEngine {
     inner: rocksdb::DB,
 }
 
-// RocksdbStorageEngine implements deref of the storage engine.
+/// RocksdbStorageEngine implements deref of the storage engine.
 impl Deref for RocksdbStorageEngine {
-    // Target is the inner rocksdb DB.
+    /// Target is the inner rocksdb DB.
     type Target = rocksdb::DB;
 
-    // deref returns the inner rocksdb DB.
+    /// deref returns the inner rocksdb DB.
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-// RocksdbStorageEngine implements the storage engine of the rocksdb.
+/// RocksdbStorageEngine implements the storage engine of the rocksdb.
 impl RocksdbStorageEngine {
     /// DEFAULT_DIR_NAME is the default directory name to store metadata.
     const DEFAULT_DIR_NAME: &'static str = "metadata";
@@ -60,10 +60,10 @@ impl RocksdbStorageEngine {
     /// DEFAULT_CACHE_SIZE is the default cache size for rocksdb, default is 512MB.
     const DEFAULT_CACHE_SIZE: usize = 512 * 1024 * 1024;
 
-    // DEFAULT_LOG_MAX_SIZE is the default max log size for rocksdb, default is 64MB.
+    /// DEFAULT_LOG_MAX_SIZE is the default max log size for rocksdb, default is 64MB.
     const DEFAULT_LOG_MAX_SIZE: usize = 64 * 1024 * 1024;
 
-    // DEFAULT_LOG_MAX_FILES is the default max log files for rocksdb.
+    /// DEFAULT_LOG_MAX_FILES is the default max log files for rocksdb.
     const DEFAULT_LOG_MAX_FILES: usize = 10;
 
     /// open opens a rocksdb storage engine with the given directory and column families.
@@ -124,9 +124,9 @@ impl RocksdbStorageEngine {
     }
 }
 
-// RocksdbStorageEngine implements the storage engine operations.
+/// RocksdbStorageEngine implements the storage engine operations.
 impl Operations for RocksdbStorageEngine {
-    // get gets the object by key.
+    /// get gets the object by key.
     #[instrument(skip_all)]
     fn get<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>> {
         let cf = cf_handle::<O>(self)?;
@@ -142,7 +142,7 @@ impl Operations for RocksdbStorageEngine {
         }
     }
 
-    // put puts the object by key.
+    /// put puts the object by key.
     #[instrument(skip_all)]
     fn put<O: DatabaseObject>(&self, key: &[u8], value: &O) -> Result<()> {
         let cf = cf_handle::<O>(self)?;
@@ -155,7 +155,7 @@ impl Operations for RocksdbStorageEngine {
         Ok(())
     }
 
-    // delete deletes the object by key.
+    /// delete deletes the object by key.
     #[instrument(skip_all)]
     fn delete<O: DatabaseObject>(&self, key: &[u8]) -> Result<()> {
         let cf = cf_handle::<O>(self)?;
@@ -167,7 +167,7 @@ impl Operations for RocksdbStorageEngine {
         Ok(())
     }
 
-    // iter iterates all objects.
+    /// iter iterates all objects.
     #[instrument(skip_all)]
     fn iter<O: DatabaseObject>(&self) -> Result<impl Iterator<Item = Result<(Box<[u8]>, O)>>> {
         let cf = cf_handle::<O>(self)?;
@@ -178,7 +178,7 @@ impl Operations for RocksdbStorageEngine {
         }))
     }
 
-    // iter_raw iterates all objects without serialization.
+    /// iter_raw iterates all objects without serialization.
     #[instrument(skip_all)]
     fn iter_raw<O: DatabaseObject>(
         &self,
@@ -192,7 +192,7 @@ impl Operations for RocksdbStorageEngine {
             }))
     }
 
-    // prefix_iter iterates all objects with prefix.
+    /// prefix_iter iterates all objects with prefix.
     #[instrument(skip_all)]
     fn prefix_iter<O: DatabaseObject>(
         &self,
@@ -206,7 +206,7 @@ impl Operations for RocksdbStorageEngine {
         }))
     }
 
-    // prefix_iter_raw iterates all objects with prefix without serialization.
+    /// prefix_iter_raw iterates all objects with prefix without serialization.
     #[instrument(skip_all)]
     fn prefix_iter_raw<O: DatabaseObject>(
         &self,
@@ -219,7 +219,7 @@ impl Operations for RocksdbStorageEngine {
         }))
     }
 
-    // batch_delete deletes objects by keys.
+    /// batch_delete deletes objects by keys.
     #[instrument(skip_all)]
     fn batch_delete<O: DatabaseObject>(&self, keys: Vec<&[u8]>) -> Result<()> {
         let cf = cf_handle::<O>(self)?;
@@ -236,7 +236,7 @@ impl Operations for RocksdbStorageEngine {
     }
 }
 
-// RocksdbStorageEngine implements the rocksdb of the storage engine.
+/// RocksdbStorageEngine implements the rocksdb of the storage engine.
 impl<'db> StorageEngine<'db> for RocksdbStorageEngine {}
 
 /// cf_handle returns the column family handle for the given object.

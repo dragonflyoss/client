@@ -38,48 +38,48 @@ use tracing::{error, info, instrument, Span};
 
 use super::*;
 
-// MAX_PIECE_COUNT is the maximum piece count. If the piece count is upper
-// than MAX_PIECE_COUNT, the piece length will be optimized by the file length.
-// When piece length becames the MAX_PIECE_LENGTH, the piece piece count
-// probably will be upper than MAX_PIECE_COUNT.
+/// MAX_PIECE_COUNT is the maximum piece count. If the piece count is upper
+/// than MAX_PIECE_COUNT, the piece length will be optimized by the file length.
+/// When piece length becames the MAX_PIECE_LENGTH, the piece piece count
+/// probably will be upper than MAX_PIECE_COUNT.
 const MAX_PIECE_COUNT: u64 = 500;
 
-// MIN_PIECE_LENGTH is the minimum piece length.
+/// MIN_PIECE_LENGTH is the minimum piece length.
 const MIN_PIECE_LENGTH: u64 = 4 * 1024 * 1024;
 
-// MAX_PIECE_LENGTH is the maximum piece length.
+/// MAX_PIECE_LENGTH is the maximum piece length.
 const MAX_PIECE_LENGTH: u64 = 16 * 1024 * 1024;
 
-// PieceLengthStrategy sets the optimization strategy of piece length.
+/// PieceLengthStrategy sets the optimization strategy of piece length.
 pub enum PieceLengthStrategy {
-    // OptimizeByFileLength optimizes the piece length by the file length.
+    /// OptimizeByFileLength optimizes the piece length by the file length.
     OptimizeByFileLength,
 }
 
-// Piece represents a piece manager.
+/// Piece represents a piece manager.
 pub struct Piece {
-    // config is the configuration of the dfdaemon.
+    /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    // id_generator is the id generator.
+    /// id_generator is the id generator.
     id_generator: Arc<IDGenerator>,
 
-    // storage is the local storage.
+    /// storage is the local storage.
     storage: Arc<Storage>,
 
-    // backend_factory is the backend factory.
+    /// backend_factory is the backend factory.
     backend_factory: Arc<BackendFactory>,
 
-    // download_rate_limiter is the rate limiter of the download speed in bps(bytes per second).
+    /// download_rate_limiter is the rate limiter of the download speed in bps(bytes per second).
     download_rate_limiter: Arc<RateLimiter>,
 
-    // upload_rate_limiter is the rate limiter of the upload speed in bps(bytes per second).
+    /// upload_rate_limiter is the rate limiter of the upload speed in bps(bytes per second).
     upload_rate_limiter: Arc<RateLimiter>,
 }
 
-// Piece implements the piece manager.
+/// Piece implements the piece manager.
 impl Piece {
-    // new returns a new Piece.
+    /// new returns a new Piece.
     #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
@@ -110,13 +110,13 @@ impl Piece {
         }
     }
 
-    // get gets a piece from the local storage.
+    /// get gets a piece from the local storage.
     #[instrument(skip_all)]
     pub fn get(&self, task_id: &str, number: u32) -> Result<Option<metadata::Piece>> {
         self.storage.get_piece(task_id, number)
     }
 
-    // calculate_interested calculates the interested pieces by content_length and range.
+    /// calculate_interested calculates the interested pieces by content_length and range.
     #[instrument(skip_all)]
     pub fn calculate_interested(
         &self,
@@ -230,7 +230,7 @@ impl Piece {
         Ok(pieces)
     }
 
-    // remove_finished_from_interested removes the finished pieces from interested pieces.
+    /// remove_finished_from_interested removes the finished pieces from interested pieces.
     #[instrument(skip_all)]
     pub fn remove_finished_from_interested(
         &self,
@@ -248,7 +248,7 @@ impl Piece {
             .collect::<Vec<metadata::Piece>>()
     }
 
-    // merge_finished_pieces merges the finished pieces and has finished pieces.
+    /// merge_finished_pieces merges the finished pieces and has finished pieces.
     #[instrument(skip_all)]
     pub fn merge_finished_pieces(
         &self,
@@ -269,7 +269,7 @@ impl Piece {
         pieces.into_values().collect()
     }
 
-    // calculate_piece_size calculates the piece size by content_length.
+    /// calculate_piece_size calculates the piece size by content_length.
     pub fn calculate_piece_length(
         &self,
         strategy: PieceLengthStrategy,
@@ -292,7 +292,7 @@ impl Piece {
         }
     }
 
-    // upload_from_local_peer_into_async_read uploads a single piece from a local peer.
+    /// upload_from_local_peer_into_async_read uploads a single piece from a local peer.
     #[instrument(skip_all, fields(piece_id))]
     pub async fn upload_from_local_peer_into_async_read(
         &self,
@@ -323,7 +323,7 @@ impl Piece {
             })
     }
 
-    // download_from_local_peer_into_async_read downloads a single piece from a local peer.
+    /// download_from_local_peer_into_async_read downloads a single piece from a local peer.
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_local_peer_into_async_read(
         &self,
@@ -345,8 +345,8 @@ impl Piece {
         self.storage.upload_piece(task_id, number, range).await
     }
 
-    // download_from_local_peer downloads a single piece from a local peer. Fake the download piece
-    // from the local peer, just collect the metrics.
+    /// download_from_local_peer downloads a single piece from a local peer. Fake the download piece
+    /// from the local peer, just collect the metrics.
     #[instrument(skip_all)]
     pub fn download_from_local_peer(&self, task_id: &str, length: u64) {
         collect_download_piece_traffic_metrics(
@@ -356,7 +356,7 @@ impl Piece {
         );
     }
 
-    // download_from_remote_peer downloads a single piece from a remote peer.
+    /// download_from_remote_peer downloads a single piece from a remote peer.
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_remote_peer(
         &self,
@@ -482,7 +482,7 @@ impl Piece {
             })
     }
 
-    // download_from_source downloads a single piece from the source.
+    /// download_from_source downloads a single piece from the source.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_source(

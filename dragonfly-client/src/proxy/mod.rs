@@ -67,37 +67,37 @@ use tracing::{error, info, instrument, Span};
 
 pub mod header;
 
-// Response is the response of the proxy server.
+/// Response is the response of the proxy server.
 pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
 
-// Proxy is the proxy server.
+/// Proxy is the proxy server.
 pub struct Proxy {
-    // config is the configuration of the dfdaemon.
+    /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    // task is the task manager.
+    /// task is the task manager.
     task: Arc<Task>,
 
-    // addr is the address of the proxy server.
+    /// addr is the address of the proxy server.
     addr: SocketAddr,
 
-    // registry_certs is the certificate of the client for the registry.
+    /// registry_certs is the certificate of the client for the registry.
     registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
 
-    // server_ca_cert is the CA certificate of the proxy server to
-    // sign the self-signed certificate.
+    /// server_ca_cert is the CA certificate of the proxy server to
+    /// sign the self-signed certificate.
     server_ca_cert: Arc<Option<Certificate>>,
 
-    // shutdown is used to shutdown the proxy server.
+    /// shutdown is used to shutdown the proxy server.
     shutdown: shutdown::Shutdown,
 
-    // _shutdown_complete is used to notify the proxy server is shutdown.
+    /// _shutdown_complete is used to notify the proxy server is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-// Proxy implements the proxy server.
+/// Proxy implements the proxy server.
 impl Proxy {
-    // new creates a new Proxy.
+    /// new creates a new Proxy.
     #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
@@ -168,7 +168,7 @@ impl Proxy {
         proxy
     }
 
-    // run starts the proxy server.
+    /// run starts the proxy server.
     #[instrument(skip_all)]
     pub async fn run(&self) -> ClientResult<()> {
         let listener = TcpListener::bind(self.addr).await?;
@@ -223,7 +223,7 @@ impl Proxy {
     }
 }
 
-// handler handles the request from the client.
+/// handler handles the request from the client.
 #[instrument(skip_all, fields(uri, method))]
 pub async fn handler(
     config: Arc<Config>,
@@ -289,7 +289,7 @@ pub async fn handler(
     .await
 }
 
-// registry_mirror_http_handler handles the http request for the registry mirror by client.
+/// registry_mirror_http_handler handles the http request for the registry mirror by client.
 #[instrument(skip_all)]
 pub async fn registry_mirror_http_handler(
     config: Arc<Config>,
@@ -309,7 +309,7 @@ pub async fn registry_mirror_http_handler(
     .await;
 }
 
-// registry_mirror_https_handler handles the https request for the registry mirror by client.
+/// registry_mirror_https_handler handles the https request for the registry mirror by client.
 #[instrument(skip_all)]
 pub async fn registry_mirror_https_handler(
     config: Arc<Config>,
@@ -331,7 +331,7 @@ pub async fn registry_mirror_https_handler(
     .await;
 }
 
-// http_handler handles the http request by client.
+/// http_handler handles the http request by client.
 #[instrument(skip_all)]
 pub async fn http_handler(
     config: Arc<Config>,
@@ -397,7 +397,7 @@ pub async fn http_handler(
     return proxy_http(request).await;
 }
 
-// https_handler handles the https request by client.
+/// https_handler handles the https request by client.
 #[instrument(skip_all)]
 pub async fn https_handler(
     config: Arc<Config>,
@@ -439,9 +439,9 @@ pub async fn https_handler(
     }
 }
 
-// upgraded_tunnel handles the upgraded connection. If the ca_cert is not set, use the
-// self-signed certificate. Otherwise, use the CA certificate to sign the
-// self-signed certificate.
+/// upgraded_tunnel handles the upgraded connection. If the ca_cert is not set, use the
+/// self-signed certificate. Otherwise, use the CA certificate to sign the
+/// self-signed certificate.
 #[instrument(skip_all)]
 async fn upgraded_tunnel(
     config: Arc<Config>,
@@ -503,7 +503,7 @@ async fn upgraded_tunnel(
     Ok(())
 }
 
-// upgraded_handler handles the upgraded https request from the client.
+/// upgraded_handler handles the upgraded https request from the client.
 #[instrument(skip_all, fields(uri, method))]
 pub async fn upgraded_handler(
     config: Arc<Config>,
@@ -579,7 +579,7 @@ pub async fn upgraded_handler(
     return proxy_http(request).await;
 }
 
-// proxy_by_dfdaemon proxies the request via the dfdaemon.
+/// proxy_by_dfdaemon proxies the request via the dfdaemon.
 #[instrument(skip_all)]
 async fn proxy_by_dfdaemon(
     config: Arc<Config>,
@@ -839,7 +839,7 @@ async fn proxy_by_dfdaemon(
     }
 }
 
-// proxy_http proxies the HTTP request directly to the remote server.
+/// proxy_http proxies the HTTP request directly to the remote server.
 #[instrument(skip_all)]
 async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
     let Some(host) = request.uri().host() else {
@@ -866,7 +866,7 @@ async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Res
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }
 
-// proxy_https proxies the HTTPS request directly to the remote server.
+/// proxy_https proxies the HTTPS request directly to the remote server.
 #[instrument(skip_all)]
 async fn proxy_https(
     request: Request<hyper::body::Incoming>,
@@ -904,7 +904,7 @@ async fn proxy_https(
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }
 
-// make_registry_mirror_request makes a registry mirror request by the request.
+/// make_registry_mirror_request makes a registry mirror request by the request.
 #[instrument(skip_all)]
 fn make_registry_mirror_request(
     config: Arc<Config>,
@@ -940,7 +940,7 @@ fn make_registry_mirror_request(
     Ok(request)
 }
 
-// make_download_task_request makes a download task request by the request.
+/// make_download_task_request makes a download task request by the request.
 #[instrument(skip_all)]
 fn make_download_task_request(
     config: Arc<Config>,
@@ -983,7 +983,7 @@ fn make_download_task_request(
     })
 }
 
-// make_download_url makes a download url by the given uri.
+/// make_download_url makes a download url by the given uri.
 #[instrument(skip_all)]
 fn make_download_url(
     uri: &hyper::Uri,
@@ -1009,7 +1009,7 @@ fn make_download_url(
         .to_string())
 }
 
-// make_response_headers makes the response headers.
+/// make_response_headers makes the response headers.
 #[instrument(skip_all)]
 fn make_response_headers(
     mut download_task_started_response: DownloadTaskStartedResponse,
@@ -1035,14 +1035,14 @@ fn make_response_headers(
     hashmap_to_hyper_header_map(&download_task_started_response.response_header)
 }
 
-// find_matching_rule returns whether the dfdaemon should be used to download the task.
-// If the dfdaemon should be used, return the matched rule.
+/// find_matching_rule returns whether the dfdaemon should be used to download the task.
+/// If the dfdaemon should be used, return the matched rule.
 #[instrument(skip_all)]
 fn find_matching_rule(rules: Option<Vec<Rule>>, url: &str) -> Option<Rule> {
     rules?.iter().find(|rule| rule.regex.is_match(url)).cloned()
 }
 
-// make_error_response makes an error response with the given status and message.
+/// make_error_response makes an error response with the given status and message.
 #[instrument(skip_all)]
 fn make_error_response(status: http::StatusCode, header: Option<http::HeaderMap>) -> Response {
     let mut response = Response::new(empty());
@@ -1056,7 +1056,7 @@ fn make_error_response(status: http::StatusCode, header: Option<http::HeaderMap>
     response
 }
 
-// empty returns an empty body.
+/// empty returns an empty body.
 #[instrument(skip_all)]
 fn empty() -> BoxBody<Bytes, ClientError> {
     Empty::<Bytes>::new()
