@@ -224,6 +224,7 @@ impl Content {
     // delete_task deletes the task content.
     #[instrument(skip_all)]
     pub async fn delete_task(&self, task_id: &str) -> Result<()> {
+        info!("delete task content: {}", task_id);
         let task_path = self.dir.join(task_id);
         fs::remove_file(task_path.as_path()).await.map_err(|err| {
             error!("remove {:?} failed: {}", task_path, err);
@@ -428,6 +429,7 @@ impl Content {
     // delete_task deletes the cache task content.
     #[instrument(skip_all)]
     pub async fn delete_cache_task(&self, cache_task_id: &str) -> Result<()> {
+        info!("delete cache task content: {}", cache_task_id);
         let cache_task_path = self.dir.join(cache_task_id);
         fs::remove_file(cache_task_path.as_path())
             .await
