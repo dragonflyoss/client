@@ -16,13 +16,13 @@
 
 use dragonfly_client_config::dfinit::{Config, ContainerRuntimeConfig};
 use dragonfly_client_core::Result;
-use tracing::info;
+use tracing::{info, instrument};
 
 pub mod containerd;
 pub mod crio;
 pub mod docker;
 
-// Engine represents config of the container runtime engine.
+/// Engine represents config of the container runtime engine.
 #[derive(Debug, Clone)]
 enum Engine {
     Containerd(containerd::Containerd),
@@ -30,21 +30,23 @@ enum Engine {
     Crio(crio::CRIO),
 }
 
-// ContainerRuntime represents the container runtime manager.
+/// ContainerRuntime represents the container runtime manager.
 pub struct ContainerRuntime {
     engine: Option<Engine>,
 }
 
-// ContainerRuntime implements the container runtime manager.
+/// ContainerRuntime implements the container runtime manager.
 impl ContainerRuntime {
-    // new creates a new container runtime manager.
+    /// new creates a new container runtime manager.
+    #[instrument(skip_all)]
     pub fn new(config: &Config) -> Self {
         Self {
             engine: Self::get_engine(config),
         }
     }
 
-    // run runs the container runtime to initialize runtime environment for the dfdaemon.
+    /// run runs the container runtime to initialize runtime environment for the dfdaemon.
+    #[instrument(skip_all)]
     pub async fn run(&self) -> Result<()> {
         // If containerd is enabled, override the default containerd
         // configuration.
@@ -56,7 +58,8 @@ impl ContainerRuntime {
         }
     }
 
-    // get_engine returns the runtime engine from the config.
+    /// get_engine returns the runtime engine from the config.
+    #[instrument(skip_all)]
     fn get_engine(config: &Config) -> Option<Engine> {
         if let Some(ref container_runtime_config) = config.container_runtime.config {
             let engine = match container_runtime_config {

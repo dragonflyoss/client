@@ -24,30 +24,31 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
 pub mod content;
 pub mod metadata;
 pub mod storage_engine;
 
-// DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.
+/// DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.
 pub const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(500);
 
-// Storage is the storage of the task.
+/// Storage is the storage of the task.
 pub struct Storage {
-    // config is the configuration of the dfdaemon.
+    /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    // metadata implements the metadata storage.
+    /// metadata implements the metadata storage.
     metadata: metadata::Metadata,
 
-    // content implements the content storage.
+    /// content implements the content storage.
     content: content::Content,
 }
 
-// Storage implements the storage.
+/// Storage implements the storage.
 impl Storage {
-    // new returns a new storage.
+    /// new returns a new storage.
+    #[instrument(skip_all)]
     pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf) -> Result<Self> {
         let metadata = metadata::Metadata::new(config.clone(), dir, &log_dir)?;
         let content = content::Content::new(config.clone(), dir).await?;
@@ -58,7 +59,8 @@ impl Storage {
         })
     }
 
-    // hard_link_or_copy_task hard links or copies the task content to the destination.
+    /// hard_link_or_copy_task hard links or copies the task content to the destination.
+    #[instrument(skip_all)]
     pub async fn hard_link_or_copy_task(
         &self,
         task: metadata::Task,
@@ -68,7 +70,8 @@ impl Storage {
         self.content.hard_link_or_copy_task(task, to, range).await
     }
 
-    // read_task_by_range returns the reader of the task by range.
+    /// read_task_by_range returns the reader of the task by range.
+    #[instrument(skip_all)]
     pub async fn read_task_by_range(
         &self,
         task_id: &str,
@@ -77,7 +80,8 @@ impl Storage {
         self.content.read_task_by_range(task_id, range).await
     }
 
-    // download_task_started updates the metadata of the task when the task downloads started.
+    /// download_task_started updates the metadata of the task when the task downloads started.
+    #[instrument(skip_all)]
     pub fn download_task_started(
         &self,
         id: &str,
@@ -89,60 +93,66 @@ impl Storage {
             .download_task_started(id, piece_length, content_length, response_header)
     }
 
-    // download_task_finished updates the metadata of the task when the task downloads finished.
+    /// download_task_finished updates the metadata of the task when the task downloads finished.
+    #[instrument(skip_all)]
     pub fn download_task_finished(&self, id: &str) -> Result<metadata::Task> {
         self.metadata.download_task_finished(id)
     }
 
-    // download_task_failed updates the metadata of the task when the task downloads failed.
+    /// download_task_failed updates the metadata of the task when the task downloads failed.
+    #[instrument(skip_all)]
     pub async fn download_task_failed(&self, id: &str) -> Result<metadata::Task> {
         self.metadata.download_task_failed(id)
     }
 
-    // prefetch_task_started updates the metadata of the task when the task prefetches started.
+    /// prefetch_task_started updates the metadata of the task when the task prefetches started.
+    #[instrument(skip_all)]
     pub async fn prefetch_task_started(&self, id: &str) -> Result<metadata::Task> {
         self.metadata.prefetch_task_started(id)
     }
 
-    // prefetch_task_failed updates the metadata of the task when the task prefetches failed.
+    /// prefetch_task_failed updates the metadata of the task when the task prefetches failed.
+    #[instrument(skip_all)]
     pub async fn prefetch_task_failed(&self, id: &str) -> Result<metadata::Task> {
         self.metadata.prefetch_task_failed(id)
     }
 
-    // upload_task_finished updates the metadata of the task when task uploads finished.
+    /// upload_task_finished updates the metadata of the task when task uploads finished.
+    #[instrument(skip_all)]
     pub fn upload_task_finished(&self, id: &str) -> Result<metadata::Task> {
         self.metadata.upload_task_finished(id)
     }
 
-    // get_task returns the task metadata.
+    /// get_task returns the task metadata.
+    #[instrument(skip_all)]
     pub fn get_task(&self, id: &str) -> Result<Option<metadata::Task>> {
         self.metadata.get_task(id)
     }
 
-    // get_tasks returns the task metadatas.
+    /// get_tasks returns the task metadatas.
+    #[instrument(skip_all)]
     pub fn get_tasks(&self) -> Result<Vec<metadata::Task>> {
         self.metadata.get_tasks()
     }
 
-    // delete_task deletes the task metadatas, task content and piece metadatas.
+    /// delete_task deletes the task metadatas, task content and piece metadatas.
+    #[instrument(skip_all)]
     pub async fn delete_task(&self, id: &str) {
-        info!("start to delete task: {}", id);
         self.metadata
             .delete_task(id)
             .unwrap_or_else(|err| error!("delete task metadata failed: {}", err));
 
-        info!("start to delete pieces of task: {}", id);
         self.metadata.delete_pieces(id).unwrap_or_else(|err| {
             error!("delete piece metadatas failed: {}", err);
         });
 
-        info!("start to delete content of task: {}", id);
         self.content.delete_task(id).await.unwrap_or_else(|err| {
             error!("delete task content failed: {}", err);
         });
     }
 
-    // hard_link_or_copy_cache_task hard links or copies the cache task content to the destination.
+    /// hard_link_or_copy_cache_task hard links or copies the cache task content to the destination.
+    #[instrument(skip_all)]
     pub async fn hard_link_or_copy_cache_task(
         &self,
         task: metadata::CacheTask,
@@ -151,7 +161,8 @@ impl Storage {
         self.content.hard_link_or_copy_cache_task(task, to).await
     }
 
-    // create_persistent_cache_task creates a new persistent cache task.
+    /// create_persistent_cache_task creates a new persistent cache task.
+    #[instrument(skip_all)]
     pub async fn create_persistent_cache_task(
         &self,
         id: &str,
@@ -179,7 +190,8 @@ impl Storage {
         )
     }
 
-    // download_cache_task_started updates the metadata of the cache task when the cache task downloads started.
+    /// download_cache_task_started updates the metadata of the cache task when the cache task downloads started.
+    #[instrument(skip_all)]
     pub fn download_cache_task_started(
         &self,
         id: &str,
@@ -192,32 +204,38 @@ impl Storage {
             .download_cache_task_started(id, ttl, persistent, piece_length, content_length)
     }
 
-    // download_cache_task_finished updates the metadata of the cache task when the cache task downloads finished.
+    /// download_cache_task_finished updates the metadata of the cache task when the cache task downloads finished.
+    #[instrument(skip_all)]
     pub fn download_cache_task_finished(&self, id: &str) -> Result<metadata::CacheTask> {
         self.metadata.download_cache_task_finished(id)
     }
 
-    // download_cache_task_failed updates the metadata of the cache task when the cache task downloads failed.
+    /// download_cache_task_failed updates the metadata of the cache task when the cache task downloads failed.
+    #[instrument(skip_all)]
     pub async fn download_cache_task_failed(&self, id: &str) -> Result<metadata::CacheTask> {
         self.metadata.download_cache_task_failed(id)
     }
 
-    // upload_cache_task_finished updates the metadata of the cahce task when cache task uploads finished.
+    /// upload_cache_task_finished updates the metadata of the cahce task when cache task uploads finished.
+    #[instrument(skip_all)]
     pub fn upload_cache_task_finished(&self, id: &str) -> Result<metadata::CacheTask> {
         self.metadata.upload_cache_task_finished(id)
     }
 
-    // get_cache_task returns the cache task metadata.
+    /// get_cache_task returns the cache task metadata.
+    #[instrument(skip_all)]
     pub fn get_cache_task(&self, id: &str) -> Result<Option<metadata::CacheTask>> {
         self.metadata.get_cache_task(id)
     }
 
-    // get_tasks returns the task metadatas.
+    /// get_tasks returns the task metadatas.
+    #[instrument(skip_all)]
     pub fn get_cache_tasks(&self) -> Result<Vec<metadata::CacheTask>> {
         self.metadata.get_cache_tasks()
     }
 
-    // delete_cache_task deletes the cache task metadatas, cache task content and piece metadatas.
+    /// delete_cache_task deletes the cache task metadatas, cache task content and piece metadatas.
+    #[instrument(skip_all)]
     pub async fn delete_cache_task(&self, id: &str) {
         self.metadata.delete_cache_task(id).unwrap_or_else(|err| {
             error!("delete cache task metadata failed: {}", err);
@@ -231,8 +249,9 @@ impl Storage {
             });
     }
 
-    // download_piece_started updates the metadata of the piece and writes
-    // the data of piece to file when the piece downloads started.
+    /// download_piece_started updates the metadata of the piece and writes
+    /// the data of piece to file when the piece downloads started.
+    #[instrument(skip_all)]
     pub async fn download_piece_started(
         &self,
         task_id: &str,
@@ -246,7 +265,8 @@ impl Storage {
         }
     }
 
-    // download_piece_from_source_finished is used for downloading piece from source.
+    /// download_piece_from_source_finished is used for downloading piece from source.
+    #[instrument(skip_all)]
     pub async fn download_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
@@ -268,7 +288,8 @@ impl Storage {
         )
     }
 
-    // download_piece_from_remote_peer_finished is used for downloading piece from remote peer.
+    /// download_piece_from_remote_peer_finished is used for downloading piece from remote peer.
+    #[instrument(skip_all)]
     pub async fn download_piece_from_remote_peer_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
@@ -300,13 +321,15 @@ impl Storage {
         )
     }
 
-    // download_piece_failed updates the metadata of the piece when the piece downloads failed.
+    /// download_piece_failed updates the metadata of the piece when the piece downloads failed.
+    #[instrument(skip_all)]
     pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
         self.metadata.download_piece_failed(task_id, number)
     }
 
-    // upload_piece updates the metadata of the piece and
-    // returns the data of the piece.
+    /// upload_piece updates the metadata of the piece and
+    /// returns the data of the piece.
+    #[instrument(skip_all)]
     pub async fn upload_piece(
         &self,
         task_id: &str,
@@ -371,17 +394,25 @@ impl Storage {
         }
     }
 
-    // get_piece returns the piece metadata.
+    /// get_piece returns the piece metadata.
+    #[instrument(skip_all)]
     pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<metadata::Piece>> {
         self.metadata.get_piece(task_id, number)
     }
 
-    // piece_id returns the piece id.
+    /// get_pieces returns the piece metadatas.
+    pub fn get_pieces(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
+        self.metadata.get_pieces(task_id)
+    }
+
+    /// piece_id returns the piece id.
+    #[instrument(skip_all)]
     pub fn piece_id(&self, task_id: &str, number: u32) -> String {
         self.metadata.piece_id(task_id, number)
     }
 
-    // wait_for_piece_finished waits for the piece to be finished.
+    /// wait_for_piece_finished waits for the piece to be finished.
+    #[instrument(skip_all)]
     async fn wait_for_piece_finished(&self, task_id: &str, number: u32) -> Result<metadata::Piece> {
         // Initialize the timeout of piece.
         let piece_timeout = tokio::time::sleep(self.config.download.piece_timeout);

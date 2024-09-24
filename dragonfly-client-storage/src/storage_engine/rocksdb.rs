@@ -24,7 +24,7 @@ use std::{
     ops::Deref,
     path::{Path, PathBuf},
 };
-use tracing::{info, warn};
+use tracing::{info, instrument, warn};
 
 /// RocksdbStorageEngine is a storage engine based on rocksdb.
 pub struct RocksdbStorageEngine {
@@ -32,18 +32,18 @@ pub struct RocksdbStorageEngine {
     inner: rocksdb::DB,
 }
 
-// RocksdbStorageEngine implements deref of the storage engine.
+/// RocksdbStorageEngine implements deref of the storage engine.
 impl Deref for RocksdbStorageEngine {
-    // Target is the inner rocksdb DB.
+    /// Target is the inner rocksdb DB.
     type Target = rocksdb::DB;
 
-    // deref returns the inner rocksdb DB.
+    /// deref returns the inner rocksdb DB.
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-// RocksdbStorageEngine implements the storage engine of the rocksdb.
+/// RocksdbStorageEngine implements the storage engine of the rocksdb.
 impl RocksdbStorageEngine {
     /// DEFAULT_DIR_NAME is the default directory name to store metadata.
     const DEFAULT_DIR_NAME: &'static str = "metadata";
@@ -60,20 +60,20 @@ impl RocksdbStorageEngine {
     /// DEFAULT_CACHE_SIZE is the default cache size for rocksdb, default is 512MB.
     const DEFAULT_CACHE_SIZE: usize = 512 * 1024 * 1024;
 
-    // DEFAULT_LOG_MAX_SIZE is the default max log size for rocksdb, default is 64MB.
+    /// DEFAULT_LOG_MAX_SIZE is the default max log size for rocksdb, default is 64MB.
     const DEFAULT_LOG_MAX_SIZE: usize = 64 * 1024 * 1024;
 
-    // DEFAULT_LOG_MAX_FILES is the default max log files for rocksdb.
+    /// DEFAULT_LOG_MAX_FILES is the default max log files for rocksdb.
     const DEFAULT_LOG_MAX_FILES: usize = 10;
 
     /// open opens a rocksdb storage engine with the given directory and column families.
+    #[instrument(skip_all)]
     pub fn open(dir: &Path, log_dir: &PathBuf, cf_names: &[&str], keep: bool) -> Result<Self> {
         info!("initializing metadata directory: {:?} {:?}", dir, cf_names);
         // Initialize rocksdb options.
         let mut options = rocksdb::Options::default();
         options.create_if_missing(true);
         options.create_missing_column_families(true);
-        options.optimize_level_style_compaction(Self::DEFAULT_MEMTABLE_MEMORY_BUDGET);
         options.increase_parallelism(num_cpus::get() as i32);
         options.set_compression_type(rocksdb::DBCompressionType::Lz4);
         options.set_max_background_jobs(std::cmp::max(
@@ -93,6 +93,19 @@ impl RocksdbStorageEngine {
         block_options.set_block_size(Self::DEFAULT_BLOCK_SIZE);
         options.set_block_based_table_factory(&block_options);
 
+        // Initialize column family options.
+        let mut cf_options = rocksdb::Options::default();
+        cf_options.set_prefix_extractor(rocksdb::SliceTransform::create_fixed_prefix(64));
+        cf_options.set_memtable_prefix_bloom_ratio(0.2);
+        cf_options.optimize_level_style_compaction(Self::DEFAULT_MEMTABLE_MEMORY_BUDGET);
+
+        // Initialize column families.
+        let cfs = cf_names
+            .iter()
+            .map(|name| (name.to_string(), cf_options.clone()))
+            .collect::<Vec<_>>();
+
+        // Initialize rocksdb directory.
         let dir = dir.join(Self::DEFAULT_DIR_NAME);
 
         // If the storage is not kept, remove the db.
@@ -103,16 +116,18 @@ impl RocksdbStorageEngine {
         }
 
         // Open rocksdb.
-        let db = rocksdb::DB::open_cf(&options, &dir, cf_names).or_err(ErrorType::StorageError)?;
+        let db =
+            rocksdb::DB::open_cf_with_opts(&options, &dir, cfs).or_err(ErrorType::StorageError)?;
         info!("metadata initialized directory: {:?}", dir);
 
         Ok(Self { inner: db })
     }
 }
 
-// RocksdbStorageEngine implements the storage engine operations.
+/// RocksdbStorageEngine implements the storage engine operations.
 impl Operations for RocksdbStorageEngine {
-    // get gets the object by key.
+    /// get gets the object by key.
+    #[instrument(skip_all)]
     fn get<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>> {
         let cf = cf_handle::<O>(self)?;
         let mut options = ReadOptions::default();
@@ -127,7 +142,8 @@ impl Operations for RocksdbStorageEngine {
         }
     }
 
-    // put puts the object by key.
+    /// put puts the object by key.
+    #[instrument(skip_all)]
     fn put<O: DatabaseObject>(&self, key: &[u8], value: &O) -> Result<()> {
         let cf = cf_handle::<O>(self)?;
         let serialized = value.serialized()?;
@@ -139,7 +155,8 @@ impl Operations for RocksdbStorageEngine {
         Ok(())
     }
 
-    // delete deletes the object by key.
+    /// delete deletes the object by key.
+    #[instrument(skip_all)]
     fn delete<O: DatabaseObject>(&self, key: &[u8]) -> Result<()> {
         let cf = cf_handle::<O>(self)?;
         let mut options = WriteOptions::default();
@@ -150,7 +167,8 @@ impl Operations for RocksdbStorageEngine {
         Ok(())
     }
 
-    // iter iterates all objects.
+    /// iter iterates all objects.
+    #[instrument(skip_all)]
     fn iter<O: DatabaseObject>(&self) -> Result<impl Iterator<Item = Result<(Box<[u8]>, O)>>> {
         let cf = cf_handle::<O>(self)?;
         let iter = self.iterator_cf(cf, rocksdb::IteratorMode::Start);
@@ -160,7 +178,8 @@ impl Operations for RocksdbStorageEngine {
         }))
     }
 
-    // iter_raw iterates all objects without serialization.
+    /// iter_raw iterates all objects without serialization.
+    #[instrument(skip_all)]
     fn iter_raw<O: DatabaseObject>(
         &self,
     ) -> Result<impl Iterator<Item = Result<(Box<[u8]>, Box<[u8]>)>>> {
@@ -173,7 +192,8 @@ impl Operations for RocksdbStorageEngine {
             }))
     }
 
-    // prefix_iter iterates all objects with prefix.
+    /// prefix_iter iterates all objects with prefix.
+    #[instrument(skip_all)]
     fn prefix_iter<O: DatabaseObject>(
         &self,
         prefix: &[u8],
@@ -186,7 +206,8 @@ impl Operations for RocksdbStorageEngine {
         }))
     }
 
-    // prefix_iter_raw iterates all objects with prefix without serialization.
+    /// prefix_iter_raw iterates all objects with prefix without serialization.
+    #[instrument(skip_all)]
     fn prefix_iter_raw<O: DatabaseObject>(
         &self,
         prefix: &[u8],
@@ -198,6 +219,8 @@ impl Operations for RocksdbStorageEngine {
         }))
     }
 
+    /// batch_delete deletes objects by keys.
+    #[instrument(skip_all)]
     fn batch_delete<O: DatabaseObject>(&self, keys: Vec<&[u8]>) -> Result<()> {
         let cf = cf_handle::<O>(self)?;
         let mut batch = rocksdb::WriteBatch::default();
@@ -213,7 +236,7 @@ impl Operations for RocksdbStorageEngine {
     }
 }
 
-// RocksdbStorageEngine implements the rocksdb of the storage engine.
+/// RocksdbStorageEngine implements the rocksdb of the storage engine.
 impl<'db> StorageEngine<'db> for RocksdbStorageEngine {}
 
 /// cf_handle returns the column family handle for the given object.

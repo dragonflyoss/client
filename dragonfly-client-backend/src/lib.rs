@@ -22,114 +22,114 @@ use dragonfly_client_core::{
 use libloading::Library;
 use reqwest::header::HeaderMap;
 use rustls_pki_types::CertificateDer;
-use std::fs;
 use std::path::Path;
 use std::{collections::HashMap, pin::Pin, time::Duration};
+use std::{fmt::Debug, fs};
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tracing::{error, info, warn};
+use tracing::{error, info, instrument, warn};
 use url::Url;
 
 pub mod http;
 pub mod object_storage;
 
-// NAME is the name of the package.
+/// NAME is the name of the package.
 pub const NAME: &str = "backend";
 
-// Body is the body of the response.
+/// Body is the body of the response.
 pub type Body = Box<dyn AsyncRead + Send + Unpin>;
 
-// HeadRequest is the head request for backend.
+/// HeadRequest is the head request for backend.
 pub struct HeadRequest {
-    // task_id is the id of the task.
+    /// task_id is the id of the task.
     pub task_id: String,
 
-    // url is the url of the request.
+    /// url is the url of the request.
     pub url: String,
 
-    // http_header is the headers of the request.
+    /// http_header is the headers of the request.
     pub http_header: Option<HeaderMap>,
 
-    // timeout is the timeout of the request.
+    /// timeout is the timeout of the request.
     pub timeout: Duration,
 
-    // client_certs is the client certificates for the request.
+    /// client_certs is the client certificates for the request.
     pub client_certs: Option<Vec<CertificateDer<'static>>>,
 
-    // object_storage is the object storage related information.
+    /// object_storage is the object storage related information.
     pub object_storage: Option<ObjectStorage>,
 }
 
-// HeadResponse is the head response for backend.
+/// HeadResponse is the head response for backend.
 #[derive(Debug)]
 pub struct HeadResponse {
-    // success is the success of the response.
+    /// success is the success of the response.
     pub success: bool,
 
-    // content_length is the content length of the response.
+    /// content_length is the content length of the response.
     pub content_length: Option<u64>,
 
-    // http_header is the headers of the response.
+    /// http_header is the headers of the response.
     pub http_header: Option<HeaderMap>,
 
-    // http_status_code is the status code of the response.
+    /// http_status_code is the status code of the response.
     pub http_status_code: Option<reqwest::StatusCode>,
 
-    // Entries is the information of the entries in the directory.
+    /// Entries is the information of the entries in the directory.
     pub entries: Vec<DirEntry>,
 
-    // error_message is the error message of the response.
+    /// error_message is the error message of the response.
     pub error_message: Option<String>,
 }
 
-// GetRequest is the get request for backend.
+/// GetRequest is the get request for backend.
 pub struct GetRequest {
-    // task_id is the id of the task.
+    /// task_id is the id of the task.
     pub task_id: String,
 
-    // piece_id is the id of the piece.
+    /// piece_id is the id of the piece.
     pub piece_id: String,
 
-    // url is the url of the request.
+    /// url is the url of the request.
     pub url: String,
 
-    // range is the range of the request.
+    /// range is the range of the request.
     pub range: Option<Range>,
 
-    // http_header is the headers of the request.
+    /// http_header is the headers of the request.
     pub http_header: Option<HeaderMap>,
 
-    // timeout is the timeout of the request.
+    /// timeout is the timeout of the request.
     pub timeout: Duration,
 
-    // client_certs is the client certificates for the request.
+    /// client_certs is the client certificates for the request.
     pub client_certs: Option<Vec<CertificateDer<'static>>>,
 
-    // the object storage related information.
+    /// the object storage related information.
     pub object_storage: Option<ObjectStorage>,
 }
 
-// GetResponse is the get response for backend.
+/// GetResponse is the get response for backend.
 pub struct GetResponse<R>
 where
     R: AsyncRead + Unpin,
 {
-    // success is the success of the response.
+    /// success is the success of the response.
     pub success: bool,
 
-    // http_header is the headers of the response.
+    /// http_header is the headers of the response.
     pub http_header: Option<HeaderMap>,
 
-    // http_status_code is the status code of the response.
+    /// http_status_code is the status code of the response.
     pub http_status_code: Option<reqwest::StatusCode>,
 
-    // body is the content of the response.
+    /// body is the content of the response.
     pub reader: R,
 
-    // error_message is the error message of the response.
+    /// error_message is the error message of the response.
     pub error_message: Option<String>,
 }
 
-// GetResponse implements the response functions.
+/// GetResponse implements the response functions.
 impl<R> GetResponse<R>
 where
     R: AsyncRead + Unpin,
@@ -146,66 +146,68 @@ where
 /// The File Entry of a directory, including some relevant file metadata.
 #[derive(Debug, PartialEq, Eq)]
 pub struct DirEntry {
-    // url is the url of the entry.
+    /// url is the url of the entry.
     pub url: String,
 
-    // content_length is the content length of the entry.
+    /// content_length is the content length of the entry.
     pub content_length: usize,
 
-    // is_dir is the flag of the entry is a directory.
+    /// is_dir is the flag of the entry is a directory.
     pub is_dir: bool,
 }
 
-// Backend is the interface of the backend.
+/// Backend is the interface of the backend.
 #[tonic::async_trait]
 pub trait Backend {
-    // scheme returns the scheme of the backend.
+    /// scheme returns the scheme of the backend.
     fn scheme(&self) -> String;
 
-    // head gets the header of the request.
+    /// head gets the header of the request.
     async fn head(&self, request: HeadRequest) -> Result<HeadResponse>;
 
-    // get gets the content of the request.
+    /// get gets the content of the request.
     async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>>;
 }
 
-// BackendFactory is the factory of the backend.
+/// BackendFactory is the factory of the backend.
 #[derive(Default)]
 pub struct BackendFactory {
-    // backends is the backends of the factory, including the plugin backends and
-    // the builtin backends.
+    /// backends is the backends of the factory, including the plugin backends and
+    /// the builtin backends.
     backends: HashMap<String, Box<dyn Backend + Send + Sync>>,
+    /// libraries is used to store the plugin's dynamic library, because when not saving the `Library`,
+    /// it will drop when out of scope, resulting in the null pointer error.
+    libraries: Vec<Library>,
 }
 
-// BackendFactory implements the factory of the backend. It supports loading builtin
-// backends and plugin backends.
-//
-// The builtin backends are http, https, etc, which are implemented
-// by the HTTP struct.
-//
-// The plugin backends are shared libraries, which are loaded
-// by the `register_plugin` function. The file name of the shared
-// library is the scheme of the backend. The shared library
-// should implement the Backend trait. Default plugin directory
-// is `/var/lib/dragonfly/plugins/` in linux and `~/.dragonfly/plugins`
-// in macos. The plugin directory can be set by the dfdaemon configuration.
-//
-// For example:
-// If implement a plugin backend named `hdfs`, the shared library
-// should be named `libhdfs.so` or `libhdfs.dylib` and move the file to the backend plugin directory
-// `/var/lib/dragonfly/plugins/backend/` in linux or `~/.dragonfly/plugins/backend/`
-// in macos. When the dfdaemon starts, it will load the `hdfs` plugin backend in the
-// backend plugin directory. So the dfdaemon or dfget can use the `hdfs` plugin backend
-// to download the file by the url `hdfs://example.com/file`.
-// The backend plugin implementation can refer to
-// https://github.com/dragonflyoss/client/tree/main/dragonfly-client-backend/examples/plugin/.
+/// BackendFactory implements the factory of the backend. It supports loading builtin
+/// backends and plugin backends.
+///
+/// The builtin backends are http, https, etc, which are implemented
+/// by the HTTP struct.
+///
+/// The plugin backends are shared libraries, which are loaded
+/// by the `register_plugin` function. The file name of the shared
+/// library is the scheme of the backend. The shared library
+/// should implement the Backend trait. Default plugin directory
+/// is `/var/lib/dragonfly/plugins/` in linux and `~/.dragonfly/plugins`
+/// in macos. The plugin directory can be set by the dfdaemon configuration.
+///
+/// For example:
+/// If implement a plugin backend named `hdfs`, the shared library
+/// should be named `libhdfs.so` or `libhdfs.dylib` and move the file to the backend plugin directory
+/// `/var/lib/dragonfly/plugins/backend/` in linux or `~/.dragonfly/plugins/backend/`
+/// in macos. When the dfdaemon starts, it will load the `hdfs` plugin backend in the
+/// backend plugin directory. So the dfdaemon or dfget can use the `hdfs` plugin backend
+/// to download the file by the url `hdfs://example.com/file`.
+/// The backend plugin implementation can refer to
+/// https://github.com/dragonflyoss/client/tree/main/dragonfly-client-backend/examples/plugin/.
 impl BackendFactory {
-    // new returns a new BackendFactory.
+    /// new returns a new BackendFactory.
+    #[instrument(skip_all)]
     pub fn new(plugin_dir: Option<&Path>) -> Result<Self> {
         let mut backend_factory = Self::default();
-
         backend_factory.load_builtin_backends();
-
         if let Some(plugin_dir) = plugin_dir {
             backend_factory
                 .load_plugin_backends(plugin_dir)
@@ -218,7 +220,8 @@ impl BackendFactory {
         Ok(backend_factory)
     }
 
-    // build returns the backend by the scheme of the url.
+    /// build returns the backend by the scheme of the url.
+    #[instrument(skip_all)]
     pub fn build(&self, url: &str) -> Result<&(dyn Backend + Send + Sync)> {
         let url = Url::parse(url).or_err(ErrorType::ParseError)?;
         let scheme = url.scheme();
@@ -228,7 +231,8 @@ impl BackendFactory {
             .ok_or(Error::InvalidParameter)
     }
 
-    // load_builtin_backends loads the builtin backends.
+    /// load_builtin_backends loads the builtin backends.
+    #[instrument(skip_all)]
     fn load_builtin_backends(&mut self) {
         self.backends
             .insert("http".to_string(), Box::new(http::HTTP::new("http")));
@@ -247,7 +251,7 @@ impl BackendFactory {
         info!("load [s3] builtin backend");
 
         self.backends.insert(
-            "gcs".to_string(),
+            "gs".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::GCS,
             )),
@@ -287,7 +291,8 @@ impl BackendFactory {
         info!("load [cos] builtin backend");
     }
 
-    // load_plugin_backends loads the plugin backends.
+    /// load_plugin_backends loads the plugin backends.
+    #[instrument(skip_all)]
     fn load_plugin_backends(&mut self, plugin_dir: &Path) -> Result<()> {
         let backend_plugin_dir = plugin_dir.join(NAME);
         if !backend_plugin_dir.exists() {
@@ -304,7 +309,10 @@ impl BackendFactory {
             // Load shared libraries by register_plugin function,
             // file name is the scheme of the backend.
             unsafe {
-                let lib = Library::new(path.as_os_str()).or_err(ErrorType::PluginError)?;
+                self.libraries
+                    .push(Library::new(path.as_os_str()).or_err(ErrorType::PluginError)?);
+                let lib = &self.libraries[self.libraries.len() - 1];
+
                 let register_plugin: libloading::Symbol<
                     unsafe extern "C" fn() -> Box<dyn Backend + Send + Sync>,
                 > = lib.get(b"register_plugin").or_err(ErrorType::PluginError)?;
@@ -328,20 +336,137 @@ impl BackendFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
-    fn should_return_http_backend() {
-        let backend_factory =
-            BackendFactory::new(Some(Path::new("/var/lib/dragonfly/plugins/backend/"))).unwrap();
-        let backend = backend_factory.build("http://example.com");
-        assert!(backend.is_ok());
+    fn should_create_backend_factory_without_plugin_dir() {
+        let result = BackendFactory::new(None);
+        assert!(result.is_ok());
     }
 
     #[test]
-    fn should_return_s3_backend() {
-        let backend_factory =
-            BackendFactory::new(Some(Path::new("/var/lib/dragonfly/plugins/backend/"))).unwrap();
-        let backend = backend_factory.build("s3://example.com");
-        assert!(backend.is_ok());
+    fn should_load_builtin_backends() {
+        let factory = BackendFactory::new(None).unwrap();
+        let expected_backends = vec!["http", "https", "s3", "gs", "abs", "oss", "obs", "cos"];
+        for backend in expected_backends {
+            assert!(factory.backends.contains_key(backend));
+        }
+    }
+
+    #[test]
+    fn should_load_plugin_backends() {
+        // Create plugin directory.
+        let dir = tempdir().unwrap();
+        let plugin_dir = dir.path().join("plugin");
+        std::fs::create_dir(&plugin_dir).unwrap();
+
+        let backend_dir = plugin_dir.join(NAME);
+        std::fs::create_dir(&backend_dir).unwrap();
+
+        build_example_plugin(&backend_dir);
+
+        let result = BackendFactory::new(Some(&plugin_dir));
+        assert!(result.is_ok());
+
+        let factory = result.unwrap();
+        assert!(factory.backends.contains_key("hdfs"));
+    }
+
+    #[test]
+    fn should_skip_loading_plugins_when_plugin_dir_is_invalid() {
+        let dir = tempdir().unwrap();
+        let plugin_dir = dir.path().join("non_existent_plugin_dir");
+
+        let factory = BackendFactory::new(Some(&plugin_dir)).unwrap();
+        assert_eq!(factory.backends.len(), 8);
+    }
+
+    #[test]
+    fn should_return_error_when_plugin_loading_fails() {
+        let dir = tempdir().unwrap();
+        let plugin_dir = dir.path().join("plugin");
+        std::fs::create_dir(&plugin_dir).unwrap();
+
+        let backend_dir = plugin_dir.join(NAME);
+        std::fs::create_dir(&backend_dir).unwrap();
+
+        // Invalid plugin that cannot be loaded.
+        let lib_path = backend_dir.join("libinvalid_plugin.so");
+        std::fs::write(&lib_path, b"invalid content").unwrap();
+
+        let result = BackendFactory::new(Some(&plugin_dir));
+        assert!(result.is_err());
+        assert_eq!(
+            format!("{}", result.err().unwrap()),
+            format!("PluginError cause: {}: file too short", lib_path.display()),
+        );
+    }
+
+    #[test]
+    fn should_build_correct_backend() {
+        // Create plugin directory.
+        let dir = tempdir().unwrap();
+        let plugin_dir = dir.path().join("plugin");
+        std::fs::create_dir(&plugin_dir).unwrap();
+
+        let backend_dir = plugin_dir.join(NAME);
+        std::fs::create_dir(&backend_dir).unwrap();
+
+        build_example_plugin(&backend_dir);
+
+        let factory = BackendFactory::new(Some(&plugin_dir)).unwrap();
+        let schemes = vec![
+            "http", "https", "s3", "gs", "abs", "oss", "obs", "cos", "hdfs",
+        ];
+
+        for scheme in schemes {
+            let result = factory.build(&format!("{}://example.com/key", scheme));
+            assert!(result.is_ok());
+
+            let backend = result.unwrap();
+            assert_eq!(backend.scheme(), scheme);
+        }
+    }
+
+    #[test]
+    fn should_return_error_when_backend_scheme_is_not_support() {
+        let factory = BackendFactory::new(None).unwrap();
+        let result = factory.build("github://example.com");
+        assert!(result.is_err());
+        assert_eq!(format!("{}", result.err().unwrap()), "invalid parameter");
+    }
+
+    #[test]
+    fn should_return_error_when_backend_scheme_is_invalid() {
+        let factory = BackendFactory::new(None).unwrap();
+        let result = factory.build("invalid_scheme://example.com");
+        assert!(result.is_err());
+        assert_eq!(
+            format!("{}", result.err().unwrap()),
+            "ParseError cause: relative URL without a base",
+        );
+    }
+
+    // build_example_plugin builds the example plugin.
+    fn build_example_plugin(backend_dir: &Path) {
+        // Build example plugin.
+        let status = std::process::Command::new("cargo")
+            .arg("build")
+            .current_dir("./examples/plugin")
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let plugin_file = if cfg!(target_os = "macos") {
+            "libhdfs.dylib"
+        } else {
+            "libhdfs.so"
+        };
+
+        std::fs::rename(
+            format!("../target/debug/{}", plugin_file),
+            backend_dir.join(plugin_file),
+        )
+        .unwrap();
     }
 }

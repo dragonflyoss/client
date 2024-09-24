@@ -22,22 +22,22 @@ pub mod dfget;
 pub mod dfinit;
 pub mod dfstore;
 
-// SERVICE_NAME is the name of the service.
+/// SERVICE_NAME is the name of the service.
 pub const SERVICE_NAME: &str = "dragonfly";
 
-// NAME is the name of the package.
+/// NAME is the name of the package.
 pub const NAME: &str = "client";
 
-// CARGO_PKG_VERSION is the version of the cargo package.
+/// CARGO_PKG_VERSION is the version of the cargo package.
 pub const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-// CARGO_PKG_RUSTC_VERSION is the minimum Rust version supported by the package, not the current Rust version.
+/// CARGO_PKG_RUSTC_VERSION is the minimum Rust version supported by the package, not the current Rust version.
 pub const CARGO_PKG_RUSTC_VERSION: &str = env!("CARGO_PKG_RUST_VERSION");
 
-// GIT_HASH is the git hash of the package.
+/// GIT_HASH is the git hash of the package.
 pub const GIT_HASH: Option<&str> = option_env!("GIT_HASH");
 
-// default_root_dir is the default root directory for client.
+/// default_root_dir is the default root directory for client.
 pub fn default_root_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/var/run/dragonfly/");
@@ -46,7 +46,7 @@ pub fn default_root_dir() -> PathBuf {
     return home::home_dir().unwrap().join(".dragonfly");
 }
 
-// default_config_dir is the default config directory for client.
+/// default_config_dir is the default config directory for client.
 pub fn default_config_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/etc/dragonfly/");
@@ -55,7 +55,7 @@ pub fn default_config_dir() -> PathBuf {
     return home::home_dir().unwrap().join(".dragonfly").join("config");
 }
 
-// default_log_dir is the default log directory for client.
+/// default_log_dir is the default log directory for client.
 pub fn default_log_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/var/log/dragonfly/");
@@ -64,7 +64,7 @@ pub fn default_log_dir() -> PathBuf {
     return home::home_dir().unwrap().join(".dragonfly").join("logs");
 }
 
-// default_storage_dir is the default storage directory for client.
+/// default_storage_dir is the default storage directory for client.
 pub fn default_storage_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/var/lib/dragonfly/");
@@ -73,7 +73,7 @@ pub fn default_storage_dir() -> PathBuf {
     return home::home_dir().unwrap().join(".dragonfly").join("storage");
 }
 
-// default_lock_dir is the default lock directory for client.
+/// default_lock_dir is the default lock directory for client.
 pub fn default_lock_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/var/lock/dragonfly/");
@@ -82,7 +82,7 @@ pub fn default_lock_dir() -> PathBuf {
     return home::home_dir().unwrap().join(".dragonfly");
 }
 
-// default_plugin_dir is the default plugin directory for client.
+/// default_plugin_dir is the default plugin directory for client.
 pub fn default_plugin_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/var/lib/dragonfly/plugins/");
@@ -91,7 +91,7 @@ pub fn default_plugin_dir() -> PathBuf {
     return home::home_dir().unwrap().join(".dragonfly").join("plugins");
 }
 
-// default_cache_dir is the default cache directory for client.
+/// default_cache_dir is the default cache directory for client.
 pub fn default_cache_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/var/cache/dragonfly/");

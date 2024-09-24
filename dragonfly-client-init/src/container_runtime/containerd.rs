@@ -23,22 +23,23 @@ use dragonfly_client_core::{
 use std::path::PathBuf;
 use tokio::{self, fs};
 use toml_edit::{value, Array, DocumentMut, Item, Table, Value};
-use tracing::info;
+use tracing::{info, instrument};
 
-// Containerd represents the containerd runtime manager.
+/// Containerd represents the containerd runtime manager.
 #[derive(Debug, Clone)]
 pub struct Containerd {
-    // config is the configuration for initializing
-    // runtime environment for the dfdaemon.
+    /// config is the configuration for initializing
+    /// runtime environment for the dfdaemon.
     config: dfinit::Containerd,
 
-    // proxy_config is the configuration for the dfdaemon's proxy server.
+    /// proxy_config is the configuration for the dfdaemon's proxy server.
     proxy_config: dfinit::Proxy,
 }
 
-// Containerd implements the containerd runtime manager.
+/// Containerd implements the containerd runtime manager.
 impl Containerd {
-    // new creates a new containerd runtime manager.
+    /// new creates a new containerd runtime manager.
+    #[instrument(skip_all)]
     pub fn new(config: dfinit::Containerd, proxy_config: dfinit::Proxy) -> Self {
         Self {
             config,
@@ -46,42 +47,14 @@ impl Containerd {
         }
     }
 
-    // run runs the containerd runtime to initialize
-    // runtime environment for the dfdaemon.
+    /// run runs the containerd runtime to initialize
+    /// runtime environment for the dfdaemon.
+    #[instrument(skip_all)]
     pub async fn run(&self) -> Result<()> {
         let content = fs::read_to_string(&self.config.config_path).await?;
         let mut containerd_config = content
             .parse::<DocumentMut>()
             .or_err(ErrorType::ParseError)?;
-
-        // If containerd is old version and supports mirror mode, add registries to the
-        // registry mirrors in containerd configuration.
-        if let Some(mirrors) = containerd_config
-            .get("plugins")
-            .and_then(|plugins| plugins.get("io.containerd.grpc.v1.cri"))
-            .and_then(|cri| cri.get("registry"))
-            .and_then(|registry| registry.get("mirrors"))
-            .and_then(|mirrors| mirrors.as_table())
-            .filter(|mirrors| !mirrors.is_empty())
-        {
-            info!("containerd supports mirror mode");
-            containerd_config = self.add_registries_by_mirrors(
-                self.config.registries.clone(),
-                self.proxy_config.clone(),
-                containerd_config.clone(),
-                mirrors.clone(),
-            )?;
-
-            // Override containerd configuration.
-            info!("override containerd configuration");
-            fs::write(
-                &self.config.config_path,
-                containerd_config.to_string().as_bytes(),
-            )
-            .await?;
-
-            return Ok(());
-        }
 
         // If containerd supports config_path mode and config_path is not empty,
         // add registries to the certs.d directory.
@@ -141,8 +114,9 @@ impl Containerd {
         Ok(())
     }
 
-    // add_registries adds registries to the containerd configuration, when containerd supports
-    // config_path mode and config_path is not empty.
+    /// add_registries adds registries to the containerd configuration, when containerd supports
+    /// config_path mode and config_path is not empty.
+    #[instrument(skip_all)]
     pub async fn add_registries(
         &self,
         config_path: &str,
@@ -165,6 +139,20 @@ impl Containerd {
             }
             host_config_table.insert("capabilities", value(capabilities));
 
+            // Add insecure to the host configuration.
+            if let Some(skip_verify) = registry.skip_verify {
+                host_config_table.insert("skip_verify", value(skip_verify));
+            }
+
+            // Add ca to the host configuration.
+            let mut certs = Array::default();
+            if let Some(ca) = registry.ca {
+                for cert in ca {
+                    certs.push(Value::from(cert));
+                }
+                host_config_table.insert("ca", Item::Value(Value::Array(certs)));
+            }
+
             // Add X-Dragonfly-Registry header to the host configuration.
             let mut headers_table = Table::new();
             headers_table.insert(DRAGONFLY_REGISTRY_HEADER, value(registry.server_addr));
@@ -186,34 +174,5 @@ impl Containerd {
         }
 
         Ok(())
-    }
-
-    // add_registries_by_mirrors adds registries to the containerd configuration, when containerd
-    // supports mirror mode with old version.
-    pub fn add_registries_by_mirrors(
-        &self,
-        registries: Vec<ContainerdRegistry>,
-        proxy_config: dfinit::Proxy,
-        mut containerd_config: DocumentMut,
-        mut mirrors_table: Table,
-    ) -> Result<DocumentMut> {
-        mirrors_table.set_implicit(true);
-        for registry in registries {
-            info!("add registry: {:?}", registry);
-
-            // Add endpoints to the mirror configuration.
-            let mut endpoints = Array::default();
-            endpoints.push(Value::from(proxy_config.addr.clone()));
-            endpoints.push(Value::from(registry.server_addr.clone()));
-
-            let mut mirror_table = Table::new();
-            mirror_table.insert("endpoint", value(endpoints));
-            mirrors_table.insert(&registry.host_namespace, Item::Table(mirror_table));
-        }
-
-        containerd_config["plugins"]["io.containerd.grpc.v1.cri"]["registry"]["mirrors"] =
-            Item::Table(mirrors_table);
-
-        Ok(containerd_config)
     }
 }

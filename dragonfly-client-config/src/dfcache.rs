@@ -16,16 +16,16 @@
 
 use std::path::PathBuf;
 
-// NAME is the name of dfcache.
+/// NAME is the name of dfcache.
 pub const NAME: &str = "dfcache";
 
-// default_dfcache_log_dir is the default log directory for dfcache.
+/// default_dfcache_log_dir is the default log directory for dfcache.
 #[inline]
 pub fn default_dfcache_log_dir() -> PathBuf {
     crate::default_log_dir().join(NAME)
 }
 
-// default_dfcache_persistent_replica_count is the default replica count of the persistent cache task.
+/// default_dfcache_persistent_replica_count is the default replica count of the persistent cache task.
 #[inline]
 pub fn default_dfcache_persistent_replica_count() -> u64 {
     2

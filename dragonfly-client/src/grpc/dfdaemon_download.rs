@@ -60,24 +60,25 @@ use tonic::{
 use tower::service_fn;
 use tracing::{error, info, instrument, Instrument, Span};
 
-// DfdaemonDownloadServer is the grpc unix server of the download.
+/// DfdaemonDownloadServer is the grpc unix server of the download.
 pub struct DfdaemonDownloadServer {
-    // socket_path is the path of the unix domain socket.
+    /// socket_path is the path of the unix domain socket.
     socket_path: PathBuf,
 
-    // service is the grpc service of the dfdaemon.
+    /// service is the grpc service of the dfdaemon.
     service: DfdaemonDownloadGRPCServer<DfdaemonDownloadServerHandler>,
 
-    // shutdown is used to shutdown the grpc server.
+    /// shutdown is used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
 
-    // _shutdown_complete is used to notify the grpc server is shutdown.
+    /// _shutdown_complete is used to notify the grpc server is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-// DfdaemonDownloadServer implements the grpc server of the download.
+/// DfdaemonDownloadServer implements the grpc server of the download.
 impl DfdaemonDownloadServer {
-    // new creates a new DfdaemonServer.
+    /// new creates a new DfdaemonServer.
+    #[instrument(skip_all)]
     pub fn new(
         socket_path: PathBuf,
         task: Arc<task::Task>,
@@ -104,7 +105,7 @@ impl DfdaemonDownloadServer {
         }
     }
 
-    // run starts the download server with unix domain socket.
+    /// run starts the download server with unix domain socket.
     #[instrument(skip_all)]
     pub async fn run(&mut self) {
         // Register the reflection service.
@@ -136,7 +137,8 @@ impl DfdaemonDownloadServer {
         let uds_stream = UnixListenerStream::new(uds);
         Server::builder()
             .max_frame_size(super::MAX_FRAME_SIZE)
-            .concurrency_limit_per_connection(super::CONCURRENCY_LIMIT_PER_CONNECTION)
+            .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
+            .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
             .add_service(reflection.clone())
             .add_service(health_service)
             .add_service(self.service.clone())
@@ -154,25 +156,25 @@ impl DfdaemonDownloadServer {
     }
 }
 
-// DfdaemonDownloadServerHandler is the handler of the dfdaemon download grpc service.
+/// DfdaemonDownloadServerHandler is the handler of the dfdaemon download grpc service.
 pub struct DfdaemonDownloadServerHandler {
-    // socket_path is the path of the unix domain socket.
+    /// socket_path is the path of the unix domain socket.
     socket_path: PathBuf,
 
-    // task is the task manager.
+    /// task is the task manager.
     task: Arc<task::Task>,
 
-    // cache_task is the cache task manager.
+    /// cache_task is the cache task manager.
     cache_task: Arc<cache_task::CacheTask>,
 }
 
-// DfdaemonDownloadServerHandler implements the dfdaemon download grpc service.
+/// DfdaemonDownloadServerHandler implements the dfdaemon download grpc service.
 #[tonic::async_trait]
 impl DfdaemonDownload for DfdaemonDownloadServerHandler {
-    // DownloadTaskStream is the stream of the download task response.
+    /// DownloadTaskStream is the stream of the download task response.
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
-    // download_task tells the dfdaemon to download the task.
+    /// download_task tells the dfdaemon to download the task.
     #[instrument(skip_all, fields(host_id, task_id, peer_id))]
     async fn download_task(
         &self,
@@ -350,7 +352,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let download_clone = download.clone();
         let task_manager_clone = task_manager.clone();
         let task_clone = task.clone();
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(1024);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(1024 * 10);
         tokio::spawn(
             async move {
                 match task_manager_clone
@@ -542,7 +544,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    // stat_task gets the status of the task.
+    /// stat_task gets the status of the task.
     #[instrument(skip_all, fields(host_id, task_id))]
     async fn stat_task(
         &self,
@@ -580,7 +582,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(task))
     }
 
-    // delete_task calls the dfdaemon to delete the task.
+    /// delete_task calls the dfdaemon to delete the task.
     #[instrument(skip_all, fields(host_id, task_id))]
     async fn delete_task(
         &self,
@@ -617,7 +619,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(()))
     }
 
-    // delete_host calls the scheduler to delete the host.
+    /// delete_host calls the scheduler to delete the host.
     #[instrument(skip_all, fields(host_id))]
     async fn delete_host(&self, _: Request<()>) -> Result<Response<()>, Status> {
         // Generate the host id.
@@ -644,10 +646,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(()))
     }
 
-    // DownloadCacheTaskStream is the stream of the download cache task response.
+    /// DownloadCacheTaskStream is the stream of the download cache task response.
     type DownloadCacheTaskStream = ReceiverStream<Result<DownloadCacheTaskResponse, Status>>;
 
-    // download_cache_task downloads the cache task.
+    /// download_cache_task downloads the cache task.
     #[instrument(skip_all, fields(host_id, task_id, peer_id))]
     async fn download_cache_task(
         &self,
@@ -740,7 +742,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let request_clone = request.clone();
         let task_manager_clone = task_manager.clone();
         let task_clone = task.clone();
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(1024);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(1024 * 10);
         tokio::spawn(
             async move {
                 match task_manager_clone
@@ -816,7 +818,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    // upload_cache_task uploads the cache task.
+    /// upload_cache_task uploads the cache task.
     #[instrument(skip_all, fields(host_id, task_id, peer_id))]
     async fn upload_cache_task(
         &self,
@@ -910,7 +912,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(task))
     }
 
-    // stat_cache_task stats the cache task.
+    /// stat_cache_task stats the cache task.
     #[instrument(skip_all, fields(host_id, task_id))]
     async fn stat_cache_task(
         &self,
@@ -947,7 +949,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(task))
     }
 
-    // delete_cache_task deletes the cache task.
+    /// delete_cache_task deletes the cache task.
     #[instrument(skip_all, fields(host_id, task_id))]
     async fn delete_cache_task(
         &self,
@@ -984,16 +986,17 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 }
 
-// DfdaemonDownloadClient is a wrapper of DfdaemonDownloadGRPCClient.
+/// DfdaemonDownloadClient is a wrapper of DfdaemonDownloadGRPCClient.
 #[derive(Clone)]
 pub struct DfdaemonDownloadClient {
-    // client is the grpc client of the dfdaemon.
+    /// client is the grpc client of the dfdaemon.
     pub client: DfdaemonDownloadGRPCClient<Channel>,
 }
 
-// DfdaemonDownloadClient implements the grpc client of the dfdaemon download.
+/// DfdaemonDownloadClient implements the grpc client of the dfdaemon download.
 impl DfdaemonDownloadClient {
-    // new_unix creates a new DfdaemonDownloadClient with unix domain socket.
+    /// new_unix creates a new DfdaemonDownloadClient with unix domain socket.
+    #[instrument(skip_all)]
     pub async fn new_unix(socket_path: PathBuf) -> ClientResult<Self> {
         // Ignore the uri because it is not used.
         let channel = Endpoint::try_from("http://[::]:50051")
@@ -1021,7 +1024,7 @@ impl DfdaemonDownloadClient {
         Ok(Self { client })
     }
 
-    // download_task tells the dfdaemon to download the task.
+    /// download_task tells the dfdaemon to download the task.
     #[instrument(skip_all)]
     pub async fn download_task(
         &self,
@@ -1047,7 +1050,7 @@ impl DfdaemonDownloadClient {
         Ok(response)
     }
 
-    // stat_task gets the status of the task.
+    /// stat_task gets the status of the task.
     #[instrument(skip_all)]
     pub async fn stat_task(&self, request: DfdaemonStatTaskRequest) -> ClientResult<Task> {
         let request = Self::make_request(request);
@@ -1055,7 +1058,7 @@ impl DfdaemonDownloadClient {
         Ok(response.into_inner())
     }
 
-    // delete_task tells the dfdaemon to delete the task.
+    /// delete_task tells the dfdaemon to delete the task.
     #[instrument(skip_all)]
     pub async fn delete_task(&self, request: DeleteTaskRequest) -> ClientResult<()> {
         let request = Self::make_request(request);
@@ -1063,7 +1066,7 @@ impl DfdaemonDownloadClient {
         Ok(())
     }
 
-    // download_cache_task downloads the cache task.
+    /// download_cache_task downloads the cache task.
     #[instrument(skip_all)]
     pub async fn download_cache_task(
         &self,
@@ -1087,7 +1090,7 @@ impl DfdaemonDownloadClient {
         Ok(response)
     }
 
-    // upload_cache_task uploads the cache task.
+    /// upload_cache_task uploads the cache task.
     #[instrument(skip_all)]
     pub async fn upload_cache_task(
         &self,
@@ -1111,7 +1114,7 @@ impl DfdaemonDownloadClient {
         Ok(response.into_inner())
     }
 
-    // stat_cache_task stats the cache task.
+    /// stat_cache_task stats the cache task.
     #[instrument(skip_all)]
     pub async fn stat_cache_task(&self, request: StatCacheTaskRequest) -> ClientResult<CacheTask> {
         let mut request = tonic::Request::new(request);
@@ -1121,7 +1124,7 @@ impl DfdaemonDownloadClient {
         Ok(response.into_inner())
     }
 
-    // delete_cache_task deletes the cache task.
+    /// delete_cache_task deletes the cache task.
     #[instrument(skip_all)]
     pub async fn delete_cache_task(&self, request: DeleteCacheTaskRequest) -> ClientResult<()> {
         let request = Self::make_request(request);
@@ -1129,7 +1132,8 @@ impl DfdaemonDownloadClient {
         Ok(())
     }
 
-    // make_request creates a new request with timeout.
+    /// make_request creates a new request with timeout.
+    #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);

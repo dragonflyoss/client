@@ -25,16 +25,17 @@ use dragonfly_client_core::{
 use tonic::transport::Channel;
 use tracing::instrument;
 
-// CertificateClient is a wrapper of CertificateGRPCClient.
+/// CertificateClient is a wrapper of CertificateGRPCClient.
 #[derive(Clone)]
 pub struct CertificateClient {
-    // client is the grpc client of the certificate.
+    /// client is the grpc client of the certificate.
     pub client: CertificateGRPCClient<Channel>,
 }
 
-// CertificateClient implements the grpc client of the certificate.
+/// CertificateClient implements the grpc client of the certificate.
 impl CertificateClient {
-    // new creates a new CertificateClient.
+    /// new creates a new CertificateClient.
+    #[instrument(skip_all)]
     pub async fn new(addr: String) -> Result<Self> {
         let channel = Channel::from_static(Box::leak(addr.into_boxed_str()))
             .connect_timeout(super::CONNECT_TIMEOUT)
@@ -48,7 +49,7 @@ impl CertificateClient {
         Ok(Self { client })
     }
 
-    // issue_certificate issues a certificate for the peer.
+    /// issue_certificate issues a certificate for the peer.
     #[instrument(skip_all)]
     pub async fn issue_certificate(
         &self,
@@ -59,7 +60,8 @@ impl CertificateClient {
         Ok(response.into_inner())
     }
 
-    // make_request creates a new request with timeout.
+    /// make_request creates a new request with timeout.
+    #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);

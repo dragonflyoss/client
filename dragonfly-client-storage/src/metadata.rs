@@ -26,87 +26,87 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
 use crate::storage_engine::{rocksdb::RocksdbStorageEngine, DatabaseObject, StorageEngineOwned};
 
-// Task is the metadata of the task.
+/// Task is the metadata of the task.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Task {
-    // id is the task id.
+    /// id is the task id.
     pub id: String,
 
-    // piece_length is the length of the piece.
+    /// piece_length is the length of the piece.
     pub piece_length: Option<u64>,
 
-    // content_length is the length of the content.
+    /// content_length is the length of the content.
     pub content_length: Option<u64>,
 
-    // header is the header of the response.
+    /// header is the header of the response.
     pub response_header: HashMap<String, String>,
 
-    // uploading_count is the count of the task being uploaded by other peers.
+    /// uploading_count is the count of the task being uploaded by other peers.
     pub uploading_count: u64,
 
-    // uploaded_count is the count of the task has been uploaded by other peers.
+    /// uploaded_count is the count of the task has been uploaded by other peers.
     pub uploaded_count: u64,
 
-    // updated_at is the time when the task metadata is updated. If the task is downloaded
-    // by other peers, it will also update updated_at.
+    /// updated_at is the time when the task metadata is updated. If the task is downloaded
+    /// by other peers, it will also update updated_at.
     pub updated_at: NaiveDateTime,
 
-    // created_at is the time when the task metadata is created.
+    /// created_at is the time when the task metadata is created.
     pub created_at: NaiveDateTime,
 
-    // prefetched_at is the time when the task prefetched.
+    /// prefetched_at is the time when the task prefetched.
     pub prefetched_at: Option<NaiveDateTime>,
 
-    // failed_at is the time when the task downloads failed.
+    /// failed_at is the time when the task downloads failed.
     pub failed_at: Option<NaiveDateTime>,
 
-    // finished_at is the time when the task downloads finished.
+    /// finished_at is the time when the task downloads finished.
     pub finished_at: Option<NaiveDateTime>,
 }
 
-// Task implements the task database object.
+/// Task implements the task database object.
 impl DatabaseObject for Task {
-    // NAMESPACE is the namespace of [Task] objects.
+    /// NAMESPACE is the namespace of [Task] objects.
     const NAMESPACE: &'static str = "task";
 }
 
-// Task implements the task metadata.
+/// Task implements the task metadata.
 impl Task {
-    // is_started returns whether the task downloads started.
+    /// is_started returns whether the task downloads started.
     pub fn is_started(&self) -> bool {
         self.finished_at.is_none()
     }
 
-    // is_downloading returns whether the task is downloading.
+    /// is_downloading returns whether the task is downloading.
     pub fn is_uploading(&self) -> bool {
         self.uploading_count > 0
     }
 
-    // is_expired returns whether the task is expired.
+    /// is_expired returns whether the task is expired.
     pub fn is_expired(&self, ttl: Duration) -> bool {
         self.updated_at + ttl < Utc::now().naive_utc()
     }
 
-    // is_prefetched returns whether the task is prefetched.
+    /// is_prefetched returns whether the task is prefetched.
     pub fn is_prefetched(&self) -> bool {
         self.prefetched_at.is_some()
     }
 
-    // is_failed returns whether the task downloads failed.
+    /// is_failed returns whether the task downloads failed.
     pub fn is_failed(&self) -> bool {
         self.failed_at.is_some()
     }
 
-    // is_finished returns whether the task downloads finished.
+    /// is_finished returns whether the task downloads finished.
     pub fn is_finished(&self) -> bool {
         self.finished_at.is_some()
     }
 
-    // is_empty returns whether the task is empty.
+    /// is_empty returns whether the task is empty.
     pub fn is_empty(&self) -> bool {
         if let Some(content_length) = self.content_length() {
             if content_length == 0 {
@@ -117,79 +117,79 @@ impl Task {
         false
     }
 
-    // piece_length returns the piece length of the task.
+    /// piece_length returns the piece length of the task.
     pub fn piece_length(&self) -> Option<u64> {
         self.piece_length
     }
 
-    // content_length returns the content length of the task.
+    /// content_length returns the content length of the task.
     pub fn content_length(&self) -> Option<u64> {
         self.content_length
     }
 }
 
-// CacheTask is the metadata of the cache task.
+/// CacheTask is the metadata of the cache task.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CacheTask {
-    // id is the task id.
+    /// id is the task id.
     pub id: String,
 
-    // persistent represents whether the cache task is persistent.
-    // If the cache task is persistent, the cache peer will
-    // not be deleted when dfdamon runs garbage collection.
+    /// persistent represents whether the cache task is persistent.
+    /// If the cache task is persistent, the cache peer will
+    /// not be deleted when dfdamon runs garbage collection.
     pub persistent: bool,
 
-    // ttl is the time to live of the cache task.
+    /// ttl is the time to live of the cache task.
     pub ttl: Duration,
 
-    // digests is the digests of the cache task.
+    /// digests is the digests of the cache task.
     pub digest: String,
 
-    // piece_length is the length of the piece.
+    /// piece_length is the length of the piece.
     pub piece_length: u64,
 
-    // content_length is the length of the content.
+    /// content_length is the length of the content.
     pub content_length: u64,
 
-    // uploading_count is the count of the task being uploaded by other peers.
+    /// uploading_count is the count of the task being uploaded by other peers.
     pub uploading_count: u64,
 
-    // uploaded_count is the count of the task has been uploaded by other peers.
+    /// uploaded_count is the count of the task has been uploaded by other peers.
     pub uploaded_count: u64,
 
-    // updated_at is the time when the task metadata is updated. If the task is downloaded
-    // by other peers, it will also update updated_at.
+    /// updated_at is the time when the task metadata is updated. If the task is downloaded
+    /// by other peers, it will also update updated_at.
     pub updated_at: NaiveDateTime,
 
-    // created_at is the time when the task metadata is created.
+    /// created_at is the time when the task metadata is created.
     pub created_at: NaiveDateTime,
 
-    // failed_at is the time when the task downloads failed.
+    /// failed_at is the time when the task downloads failed.
     pub failed_at: Option<NaiveDateTime>,
 
-    // finished_at is the time when the task downloads finished.
+    /// finished_at is the time when the task downloads finished.
     pub finished_at: Option<NaiveDateTime>,
 }
 
-// CacheTask implements the cache task database object.
+/// CacheTask implements the cache task database object.
 impl DatabaseObject for CacheTask {
-    // NAMESPACE is the namespace of [CacheTask] objects.
+    /// NAMESPACE is the namespace of [CacheTask] objects.
     const NAMESPACE: &'static str = "cache_task";
 }
 
-// CacheTask implements the cache task metadata.
+/// CacheTask implements the cache task metadata.
 impl CacheTask {
-    // is_started returns whether the cache task downloads started.
+    /// is_started returns whether the cache task downloads started.
     pub fn is_started(&self) -> bool {
         self.finished_at.is_none()
     }
 
-    // is_downloading returns whether the cache task is downloading.
+    /// is_downloading returns whether the cache task is downloading.
     pub fn is_uploading(&self) -> bool {
         self.uploading_count > 0
     }
 
-    // is_expired returns whether the cache task is expired.
+    /// is_expired returns whether the cache task is expired.
     pub fn is_expired(&self) -> bool {
         // When scheduler runs garbage collection, it will trigger dfdaemon to evict the cache task.
         // But sometimes the dfdaemon may not evict the cache task in time, so we select the ttl * 1.2
@@ -197,17 +197,17 @@ impl CacheTask {
         self.created_at + self.ttl * 2 < Utc::now().naive_utc()
     }
 
-    // is_failed returns whether the cache task downloads failed.
+    /// is_failed returns whether the cache task downloads failed.
     pub fn is_failed(&self) -> bool {
         self.failed_at.is_some()
     }
 
-    // is_finished returns whether the cache task downloads finished.
+    /// is_finished returns whether the cache task downloads finished.
     pub fn is_finished(&self) -> bool {
         self.finished_at.is_some()
     }
 
-    // is_empty returns whether the cache task is empty.
+    /// is_empty returns whether the cache task is empty.
     pub fn is_empty(&self) -> bool {
         if self.content_length == 0 {
             return true;
@@ -216,76 +216,76 @@ impl CacheTask {
         false
     }
 
-    // is_persistent returns whether the cache task is persistent.
+    /// is_persistent returns whether the cache task is persistent.
     pub fn is_persistent(&self) -> bool {
         self.persistent
     }
 
-    // piece_length returns the piece length of the cache task.
+    /// piece_length returns the piece length of the cache task.
     pub fn piece_length(&self) -> u64 {
         self.piece_length
     }
 
-    // content_length returns the content length of the cache task.
+    /// content_length returns the content length of the cache task.
     pub fn content_length(&self) -> u64 {
         self.content_length
     }
 }
 
-// Piece is the metadata of the piece.
+/// Piece is the metadata of the piece.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Piece {
-    // number is the piece number.
+    /// number is the piece number.
     pub number: u32,
 
-    // offset is the offset of the piece in the task.
+    /// offset is the offset of the piece in the task.
     pub offset: u64,
 
-    // length is the length of the piece.
+    /// length is the length of the piece.
     pub length: u64,
 
-    // digest is the digest of the piece.
+    /// digest is the digest of the piece.
     pub digest: String,
 
-    // parent_id is the parent id of the piece.
+    /// parent_id is the parent id of the piece.
     pub parent_id: Option<String>,
 
-    // uploading_count is the count of the piece being uploaded by other peers.
+    /// uploading_count is the count of the piece being uploaded by other peers.
     pub uploading_count: u64,
 
-    // uploaded_count is the count of the piece has been uploaded by other peers.
+    /// uploaded_count is the count of the piece has been uploaded by other peers.
     pub uploaded_count: u64,
 
-    // updated_at is the time when the piece metadata is updated. If the piece is downloaded
-    // by other peers, it will also update updated_at.
+    /// updated_at is the time when the piece metadata is updated. If the piece is downloaded
+    /// by other peers, it will also update updated_at.
     pub updated_at: NaiveDateTime,
 
-    // created_at is the time when the piece metadata is created.
+    /// created_at is the time when the piece metadata is created.
     pub created_at: NaiveDateTime,
 
-    // finished_at is the time when the piece downloads finished.
+    /// finished_at is the time when the piece downloads finished.
     pub finished_at: Option<NaiveDateTime>,
 }
 
-// Piece implements the piece database object.
+/// Piece implements the piece database object.
 impl DatabaseObject for Piece {
-    // NAMESPACE is the namespace of [Piece] objects.
+    /// NAMESPACE is the namespace of [Piece] objects.
     const NAMESPACE: &'static str = "piece";
 }
 
-// Piece implements the piece metadata.
+/// Piece implements the piece metadata.
 impl Piece {
-    // is_started returns whether the piece downloads started.
+    /// is_started returns whether the piece downloads started.
     pub fn is_started(&self) -> bool {
         self.finished_at.is_none()
     }
 
-    // is_finished returns whether the piece downloads finished.
+    /// is_finished returns whether the piece downloads finished.
     pub fn is_finished(&self) -> bool {
         self.finished_at.is_some()
     }
 
-    // cost returns the cost of the piece downloaded.
+    /// cost returns the cost of the piece downloaded.
     pub fn cost(&self) -> Option<Duration> {
         match self
             .finished_at
@@ -302,7 +302,7 @@ impl Piece {
         }
     }
 
-    // prost_cost returns the prost cost of the piece downloaded.
+    /// prost_cost returns the prost cost of the piece downloaded.
     pub fn prost_cost(&self) -> Option<prost_wkt_types::Duration> {
         match self.cost() {
             Some(cost) => match prost_wkt_types::Duration::try_from(cost) {
@@ -317,17 +317,18 @@ impl Piece {
     }
 }
 
-// Metadata manages the metadata of [Task], [Piece] and [CacheTask].
+/// Metadata manages the metadata of [Task], [Piece] and [CacheTask].
 pub struct Metadata<E = RocksdbStorageEngine>
 where
     E: StorageEngineOwned,
 {
-    // db is the underlying storage engine instance.
+    /// db is the underlying storage engine instance.
     db: E,
 }
 
 impl<E: StorageEngineOwned> Metadata<E> {
-    // download_task_started updates the metadata of the task when the task downloads started.
+    /// download_task_started updates the metadata of the task when the task downloads started.
+    #[instrument(skip_all)]
     pub fn download_task_started(
         &self,
         id: &str,
@@ -380,7 +381,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    // download_task_finished updates the metadata of the task when the task downloads finished.
+    /// download_task_finished updates the metadata of the task when the task downloads finished.
+    #[instrument(skip_all)]
     pub fn download_task_finished(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -396,7 +398,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    // download_task_failed updates the metadata of the task when the task downloads failed.
+    /// download_task_failed updates the metadata of the task when the task downloads failed.
+    #[instrument(skip_all)]
     pub fn download_task_failed(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -411,7 +414,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    // prefetch_task_started updates the metadata of the task when the task prefetch started.
+    /// prefetch_task_started updates the metadata of the task when the task prefetch started.
+    #[instrument(skip_all)]
     pub fn prefetch_task_started(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -432,7 +436,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    // prefetch_task_failed updates the metadata of the task when the task prefetch failed.
+    /// prefetch_task_failed updates the metadata of the task when the task prefetch failed.
+    #[instrument(skip_all)]
     pub fn prefetch_task_failed(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -448,7 +453,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    // upload_task_started updates the metadata of the task when task uploads started.
+    /// upload_task_started updates the metadata of the task when task uploads started.
+    #[instrument(skip_all)]
     pub fn upload_task_started(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -463,7 +469,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    // upload_task_finished updates the metadata of the task when task uploads finished.
+    /// upload_task_finished updates the metadata of the task when task uploads finished.
+    #[instrument(skip_all)]
     pub fn upload_task_finished(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -479,7 +486,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    // upload_task_failed updates the metadata of the task when the task uploads failed.
+    /// upload_task_failed updates the metadata of the task when the task uploads failed.
+    #[instrument(skip_all)]
     pub fn upload_task_failed(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -494,12 +502,14 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    // get_task gets the task metadata.
+    /// get_task gets the task metadata.
+    #[instrument(skip_all)]
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         self.db.get(id.as_bytes())
     }
 
-    // get_tasks gets the task metadatas.
+    /// get_tasks gets the task metadatas.
+    #[instrument(skip_all)]
     pub fn get_tasks(&self) -> Result<Vec<Task>> {
         let tasks = self
             .db
@@ -516,15 +526,17 @@ impl<E: StorageEngineOwned> Metadata<E> {
             .collect()
     }
 
-    // delete_task deletes the task metadata.
+    /// delete_task deletes the task metadata.
+    #[instrument(skip_all)]
     pub fn delete_task(&self, id: &str) -> Result<()> {
         info!("delete task metadata {}", id);
         self.db.delete::<Task>(id.as_bytes())
     }
 
-    // create_persistent_cache_task creates a new persistent cache task.
-    // If the cache task imports the content to the dfdaemon finished,
-    // the dfdaemon will create a persistent cache task metadata.
+    /// create_persistent_cache_task creates a new persistent cache task.
+    /// If the cache task imports the content to the dfdaemon finished,
+    /// the dfdaemon will create a persistent cache task metadata.
+    #[instrument(skip_all)]
     pub fn create_persistent_cache_task(
         &self,
         id: &str,
@@ -550,9 +562,10 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    // download_cache_task_started updates the metadata of the cache task when
-    // the cache task downloads started. If the cache task downloaded by scheduler
-    // to create persistent cache task, the persistent should be set to true.
+    /// download_cache_task_started updates the metadata of the cache task when
+    /// the cache task downloads started. If the cache task downloaded by scheduler
+    /// to create persistent cache task, the persistent should be set to true.
+    #[instrument(skip_all)]
     pub fn download_cache_task_started(
         &self,
         id: &str,
@@ -584,7 +597,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    // download_cache_task_finished updates the metadata of the cache task when the cache task downloads finished.
+    /// download_cache_task_finished updates the metadata of the cache task when the cache task downloads finished.
+    #[instrument(skip_all)]
     pub fn download_cache_task_finished(&self, id: &str) -> Result<CacheTask> {
         let task = match self.db.get::<CacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -605,7 +619,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    // download_cache_task_failed updates the metadata of the cache task when the cache task downloads failed.
+    /// download_cache_task_failed updates the metadata of the cache task when the cache task downloads failed.
+    #[instrument(skip_all)]
     pub fn download_cache_task_failed(&self, id: &str) -> Result<CacheTask> {
         let task = match self.db.get::<CacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -620,7 +635,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    // upload_cache_task_started updates the metadata of the cache task when cache task uploads started.
+    /// upload_cache_task_started updates the metadata of the cache task when cache task uploads started.
+    #[instrument(skip_all)]
     pub fn upload_cache_task_started(&self, id: &str) -> Result<CacheTask> {
         let task = match self.db.get::<CacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -635,7 +651,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    // upload_cache_task_finished updates the metadata of the cache task when cache task uploads finished.
+    /// upload_cache_task_finished updates the metadata of the cache task when cache task uploads finished.
+    #[instrument(skip_all)]
     pub fn upload_cache_task_finished(&self, id: &str) -> Result<CacheTask> {
         let task = match self.db.get::<CacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -651,7 +668,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    // upload_cache_task_failed updates the metadata of the cache task when the cache task uploads failed.
+    /// upload_cache_task_failed updates the metadata of the cache task when the cache task uploads failed.
+    #[instrument(skip_all)]
     pub fn upload_cache_task_failed(&self, id: &str) -> Result<CacheTask> {
         let task = match self.db.get::<CacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -666,24 +684,28 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    // get_cache_task gets the cache task metadata.
+    /// get_cache_task gets the cache task metadata.
+    #[instrument(skip_all)]
     pub fn get_cache_task(&self, id: &str) -> Result<Option<CacheTask>> {
         self.db.get(id.as_bytes())
     }
 
-    // get_cache_tasks gets the cache task metadatas.
+    /// get_cache_tasks gets the cache task metadatas.
+    #[instrument(skip_all)]
     pub fn get_cache_tasks(&self) -> Result<Vec<CacheTask>> {
         let iter = self.db.iter::<CacheTask>()?;
         iter.map(|ele| ele.map(|(_, task)| task)).collect()
     }
 
-    // delete_cache_task deletes the cache task metadata.
+    /// delete_cache_task deletes the cache task metadata.
+    #[instrument(skip_all)]
     pub fn delete_cache_task(&self, id: &str) -> Result<()> {
         info!("delete cache task metadata {}", id);
         self.db.delete::<CacheTask>(id.as_bytes())
     }
 
-    // download_piece_started updates the metadata of the piece when the piece downloads started.
+    /// download_piece_started updates the metadata of the piece when the piece downloads started.
+    #[instrument(skip_all)]
     pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Construct the piece metadata.
         let piece = Piece {
@@ -699,7 +721,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(piece)
     }
 
-    // download_piece_finished updates the metadata of the piece when the piece downloads finished.
+    /// download_piece_finished updates the metadata of the piece when the piece downloads finished.
+    #[instrument(skip_all)]
     pub fn download_piece_finished(
         &self,
         task_id: &str,
@@ -728,17 +751,20 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(piece)
     }
 
-    // download_piece_failed updates the metadata of the piece when the piece downloads failed.
+    /// download_piece_failed updates the metadata of the piece when the piece downloads failed.
+    #[instrument(skip_all)]
     pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
         self.delete_piece(task_id, number)
     }
 
-    // wait_for_piece_finished_failed waits for the piece to be finished or failed.
+    /// wait_for_piece_finished_failed waits for the piece to be finished or failed.
+    #[instrument(skip_all)]
     pub fn wait_for_piece_finished_failed(&self, task_id: &str, number: u32) -> Result<()> {
         self.delete_piece(task_id, number)
     }
 
-    // upload_piece_started updates the metadata of the piece when piece uploads started.
+    /// upload_piece_started updates the metadata of the piece when piece uploads started.
+    #[instrument(skip_all)]
     pub fn upload_piece_started(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Get the piece id.
         let id = self.piece_id(task_id, number);
@@ -755,7 +781,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(piece)
     }
 
-    // upload_piece_finished updates the metadata of the piece when piece uploads finished.
+    /// upload_piece_finished updates the metadata of the piece when piece uploads finished.
+    #[instrument(skip_all)]
     pub fn upload_piece_finished(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Get the piece id.
         let id = self.piece_id(task_id, number);
@@ -773,7 +800,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(piece)
     }
 
-    // upload_piece_failed updates the metadata of the piece when the piece uploads failed.
+    /// upload_piece_failed updates the metadata of the piece when the piece uploads failed.
+    #[instrument(skip_all)]
     pub fn upload_piece_failed(&self, task_id: &str, number: u32) -> Result<Piece> {
         // Get the piece id.
         let id = self.piece_id(task_id, number);
@@ -790,19 +818,39 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(piece)
     }
 
-    // get_piece gets the piece metadata.
+    /// get_piece gets the piece metadata.
+    #[instrument(skip_all)]
     pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<Piece>> {
         self.db.get(self.piece_id(task_id, number).as_bytes())
     }
 
-    // delete_piece deletes the piece metadata.
+    /// get_pieces gets the piece metadatas.
+    pub fn get_pieces(&self, task_id: &str) -> Result<Vec<Piece>> {
+        let pieces = self
+            .db
+            .prefix_iter_raw::<Piece>(task_id.as_bytes())?
+            .map(|ele| {
+                let (_, value) = ele?;
+                Ok(value)
+            })
+            .collect::<Result<Vec<Box<[u8]>>>>()?;
+
+        pieces
+            .par_iter()
+            .map(|piece| Piece::deserialize_from(piece))
+            .collect()
+    }
+
+    /// delete_piece deletes the piece metadata.
+    #[instrument(skip_all)]
     pub fn delete_piece(&self, task_id: &str, number: u32) -> Result<()> {
         info!("delete piece metadata {}", self.piece_id(task_id, number));
         self.db
             .delete::<Piece>(self.piece_id(task_id, number).as_bytes())
     }
 
-    // delete_pieces deletes the piece metadatas.
+    /// delete_pieces deletes the piece metadatas.
+    #[instrument(skip_all)]
     pub fn delete_pieces(&self, task_id: &str) -> Result<()> {
         let piece_ids = self
             .db
@@ -830,15 +878,17 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(())
     }
 
-    // piece_id returns the piece id.
+    /// piece_id returns the piece id.
+    #[instrument(skip_all)]
     pub fn piece_id(&self, task_id: &str, number: u32) -> String {
         format!("{}-{}", task_id, number)
     }
 }
 
-// Metadata implements the metadata of the storage engine.
+/// Metadata implements the metadata of the storage engine.
 impl Metadata<RocksdbStorageEngine> {
-    // new creates a new metadata instance.
+    /// new creates a new metadata instance.
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         dir: &Path,
@@ -858,24 +908,26 @@ impl Metadata<RocksdbStorageEngine> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use tempdir::TempDir;
 
     #[test]
-    fn should_create_metadata_db() {
-        let dir = TempDir::new("metadata_db").unwrap();
+    fn should_create_metadata() {
+        let dir = TempDir::new("metadata").unwrap();
         let log_dir = dir.path().join("log");
         let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
         assert!(metadata.get_tasks().unwrap().is_empty());
+        assert!(metadata
+            .get_pieces("d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
     fn test_task_lifecycle() {
-        let dir = TempDir::new("metadata_db").unwrap();
+        let dir = TempDir::new("metadata").unwrap();
         let log_dir = dir.path().join("log");
         let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
-
-        let task_id = "task1";
+        let task_id = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
 
         // Test download_task_started.
         metadata
@@ -934,8 +986,7 @@ mod tests {
         );
 
         // Test get_tasks.
-        let task_id = "task2";
-
+        let task_id = "a535b115f18d96870f0422ac891f91dd162f2f391e4778fb84279701fcd02dd1";
         metadata
             .download_task_started(task_id, Some(1024), None, None)
             .unwrap();
@@ -950,10 +1001,10 @@ mod tests {
 
     #[test]
     fn test_piece_lifecycle() {
-        let dir = TempDir::new("metadata_db").unwrap();
+        let dir = TempDir::new("metadata").unwrap();
         let log_dir = dir.path().join("log");
         let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
-        let task_id = "task3";
+        let task_id = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
 
         // Test download_piece_started.
         metadata.download_piece_started(task_id, 1).unwrap();
@@ -976,6 +1027,12 @@ mod tests {
             piece.digest, "digest1",
             "piece should be updated after download_piece_finished"
         );
+
+        // Test get_pieces.
+        metadata.download_piece_started(task_id, 2).unwrap();
+        metadata.download_piece_started(task_id, 3).unwrap();
+        let pieces = metadata.get_pieces(task_id).unwrap();
+        assert_eq!(pieces.len(), 3, "should get 3 pieces in total");
 
         // Test download_piece_failed.
         metadata.download_piece_started(task_id, 2).unwrap();
@@ -1015,5 +1072,10 @@ mod tests {
             piece.uploading_count, 0,
             "piece should be updated after upload_piece_failed"
         );
+
+        // Test delete_pieces.
+        metadata.delete_pieces(task_id).unwrap();
+        let pieces = metadata.get_pieces(task_id).unwrap();
+        assert!(pieces.is_empty(), "should get 0 pieces after delete_pieces");
     }
 }

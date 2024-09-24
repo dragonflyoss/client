@@ -22,7 +22,7 @@ use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use std::path::PathBuf;
 use std::time::Duration;
 use tonic::Request;
-use tracing::{error, info, Instrument};
+use tracing::{error, info, instrument, Instrument};
 
 pub mod dfdaemon_download;
 pub mod dfdaemon_upload;
@@ -31,31 +31,32 @@ pub mod manager;
 pub mod scheduler;
 pub mod security;
 
-// CONNECT_TIMEOUT is the timeout for GRPC connection.
+/// CONNECT_TIMEOUT is the timeout for GRPC connection.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
-// REQUEST_TIMEOUT is the timeout for GRPC requests.
+/// REQUEST_TIMEOUT is the timeout for GRPC requests.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-// CONCURRENCY_LIMIT_PER_CONNECTION is the limit of concurrency for each connection.
-pub const CONCURRENCY_LIMIT_PER_CONNECTION: usize = 8192;
-
-// TCP_KEEPALIVE is the keepalive duration for TCP connection.
+/// TCP_KEEPALIVE is the keepalive duration for TCP connection.
 pub const TCP_KEEPALIVE: Duration = Duration::from_secs(3600);
 
-// HTTP2_KEEP_ALIVE_INTERVAL is the interval for HTTP2 keep alive.
+/// HTTP2_KEEP_ALIVE_INTERVAL is the interval for HTTP2 keep alive.
 pub const HTTP2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(300);
 
-// HTTP2_KEEP_ALIVE_TIMEOUT is the timeout for HTTP2 keep alive.
+/// HTTP2_KEEP_ALIVE_TIMEOUT is the timeout for HTTP2 keep alive.
 pub const HTTP2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
 
-// MAX_FRAME_SIZE is the max frame size for GRPC, default is 12MB.
+/// MAX_FRAME_SIZE is the max frame size for GRPC, default is 12MB.
 pub const MAX_FRAME_SIZE: u32 = 12 * 1024 * 1024;
 
-// BUFFER_SIZE is the buffer size for GRPC, default is 16KB.
-pub const BUFFER_SIZE: usize = 16 * 1024;
+/// INITIAL_WINDOW_SIZE is the initial window size for GRPC, default is 12MB.
+pub const INITIAL_WINDOW_SIZE: u32 = 12 * 1024 * 1024;
 
-// prefetch_task prefetches the task if prefetch flag is true.
+/// BUFFER_SIZE is the buffer size for GRPC, default is 64KB.
+pub const BUFFER_SIZE: usize = 64 * 1024;
+
+/// prefetch_task prefetches the task if prefetch flag is true.
+#[instrument(skip_all)]
 pub async fn prefetch_task(
     socket_path: PathBuf,
     request: Request<DownloadTaskRequest>,

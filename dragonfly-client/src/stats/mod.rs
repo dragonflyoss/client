@@ -21,27 +21,27 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 use warp::{Filter, Rejection, Reply};
 
-// DEFAULT_PROFILER_SECONDS is the default seconds to start profiling.
+/// DEFAULT_PROFILER_SECONDS is the default seconds to start profiling.
 const DEFAULT_PROFILER_SECONDS: u64 = 10;
 
-// DEFAULT_PROFILER_FREQUENCY is the default frequency to start profiling.
+/// DEFAULT_PROFILER_FREQUENCY is the default frequency to start profiling.
 const DEFAULT_PROFILER_FREQUENCY: i32 = 1000;
 
-// PProfProfileQueryParams is the query params to start profiling.
+/// PProfProfileQueryParams is the query params to start profiling.
 #[derive(Deserialize, Serialize)]
 #[serde(default)]
 pub struct PProfProfileQueryParams {
-    // seconds is the seconds to start profiling.
+    /// seconds is the seconds to start profiling.
     pub seconds: u64,
 
-    // frequency is the frequency to start profiling.
+    /// frequency is the frequency to start profiling.
     pub frequency: i32,
 }
 
-// PProfProfileQueryParams implements the default.
+/// PProfProfileQueryParams implements the default.
 impl Default for PProfProfileQueryParams {
     fn default() -> Self {
         Self {
@@ -51,22 +51,23 @@ impl Default for PProfProfileQueryParams {
     }
 }
 
-// Stats is the stats server.
+/// Stats is the stats server.
 #[derive(Debug)]
 pub struct Stats {
-    // addr is the address of the stats server.
+    /// addr is the address of the stats server.
     addr: SocketAddr,
 
-    // shutdown is used to shutdown the stats server.
+    /// shutdown is used to shutdown the stats server.
     shutdown: shutdown::Shutdown,
 
-    // _shutdown_complete is used to notify the stats server is shutdown.
+    /// _shutdown_complete is used to notify the stats server is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-// Stats implements the stats server.
+/// Stats implements the stats server.
 impl Stats {
-    // new creates a new Stats.
+    /// new creates a new Stats.
+    #[instrument(skip_all)]
     pub fn new(
         addr: SocketAddr,
         shutdown: shutdown::Shutdown,
@@ -79,7 +80,8 @@ impl Stats {
         }
     }
 
-    // run starts the stats server.
+    /// run starts the stats server.
+    #[instrument(skip_all)]
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -112,7 +114,8 @@ impl Stats {
         }
     }
 
-    // stats_handler handles the stats request.
+    /// stats_handler handles the stats request.
+    #[instrument(skip_all)]
     async fn pprof_profile_handler(
         query_params: PProfProfileQueryParams,
     ) -> Result<impl Reply, Rejection> {
@@ -146,7 +149,8 @@ impl Stats {
         Ok(body)
     }
 
-    // pprof_heap_handler handles the pprof heap request.
+    /// pprof_heap_handler handles the pprof heap request.
+    #[instrument(skip_all)]
     async fn pprof_heap_handler() -> Result<impl Reply, Rejection> {
         info!("start heap profiling");
         #[cfg(target_os = "linux")]

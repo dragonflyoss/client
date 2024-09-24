@@ -1,11 +1,12 @@
-FROM rust:1.75.0 AS builder
+FROM rust:1.80.0 AS builder
 
 WORKDIR /app/client
 
-RUN apt-get update && apt-get install -y openssl libclang-dev pkg-config protobuf-compiler git
+RUN apt-get update && apt-get install -y \
+      openssl libclang-dev pkg-config protobuf-compiler git \
+      && rm -rf /var/lib/apt/lists/*
 
-COPY Cargo.toml ./
-COPY Cargo.lock ./
+COPY Cargo.toml Cargo.lock ./
 
 COPY dragonfly-client/Cargo.toml ./dragonfly-client/Cargo.toml
 COPY dragonfly-client/src ./dragonfly-client/src
@@ -34,7 +35,7 @@ COPY dragonfly-client-init/src ./dragonfly-client-init/src
 
 RUN cargo build --release --verbose --bin dfget --bin dfdaemon --bin dfstore --bin dfcache
 
-FROM alpine:3.17 AS health
+FROM alpine:3.20 AS health
 
 ENV GRPC_HEALTH_PROBE_VERSION=v0.4.24
 
@@ -47,7 +48,7 @@ RUN if [ "$(uname -m)" = "ppc64le" ]; then \
     fi && \
     chmod +x /bin/grpc_health_probe
 
-FROM golang:1.21.1-alpine3.17 AS pprof
+FROM golang:1.23.0-alpine3.20 AS pprof
 
 RUN go install github.com/google/pprof@latest
 

@@ -22,6 +22,7 @@ use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use tracing::{info, Level};
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_flame::FlameLayer;
 use tracing_log::LogTracer;
 use tracing_subscriber::{
     filter::LevelFilter,
@@ -30,12 +31,15 @@ use tracing_subscriber::{
     EnvFilter, Registry,
 };
 
+/// init_tracing initializes the tracing system.
+#[allow(clippy::too_many_arguments)]
 pub fn init_tracing(
     name: &str,
     log_dir: PathBuf,
     log_level: Level,
     log_max_files: usize,
     jaeger_addr: Option<String>,
+    flamegraph: bool,
     redirect_stderr: bool,
     verbose: bool,
 ) -> Vec<WorkerGuard> {
@@ -88,10 +92,20 @@ pub fn init_tracing(
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::default().add_directive(log_level.into()));
 
+    // Setup flame layer.
+    let flame_layer = if flamegraph {
+        let (flame_layer, _guard) = FlameLayer::with_file(log_dir.join("tracing.folded"))
+            .expect("failed to create flame layer");
+        Some(flame_layer)
+    } else {
+        None
+    };
+
     let subscriber = Registry::default()
         .with(env_filter)
         .with(file_logging_layer)
-        .with(stdout_logging_layer);
+        .with(stdout_logging_layer)
+        .with(flame_layer);
 
     // Setup jaeger layer.
     if let Some(jaeger_addr) = jaeger_addr {
@@ -127,7 +141,7 @@ pub fn init_tracing(
     guards
 }
 
-// Redirect stderr to file.
+/// redirect_stderr_to_file redirects stderr to a file.
 fn redirect_stderr_to_file(log_dir: PathBuf) {
     let log_path = log_dir.join("stderr.log");
     let file = OpenOptions::new()

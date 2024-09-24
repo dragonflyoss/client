@@ -24,19 +24,19 @@ use termion::{color, style};
 
 use super::*;
 
-// DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL is the default steady tick interval of progress bar.
+/// DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL is the default steady tick interval of progress bar.
 const DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL: Duration = Duration::from_millis(80);
 
-// RemoveCommand is the subcommand of remove.
+/// RemoveCommand is the subcommand of remove.
 #[derive(Debug, Clone, Parser)]
 pub struct RemoveCommand {
     #[arg(help = "Specify the cache task ID to remove")]
     id: String,
 }
 
-// Implement the execute for RemoveCommand.
+/// Implement the execute for RemoveCommand.
 impl RemoveCommand {
-    // execute executes the delete command.
+    /// execute executes the delete command.
     pub async fn execute(&self, endpoint: &Path) -> Result<()> {
         // Get dfdaemon download client.
         let dfdaemon_download_client =
@@ -178,7 +178,7 @@ impl RemoveCommand {
         Ok(())
     }
 
-    // run runs the delete command.
+    /// run runs the delete command.
     async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
         let pb = ProgressBar::new_spinner();
         pb.enable_steady_tick(DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL);

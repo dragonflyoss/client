@@ -22,31 +22,32 @@ use dragonfly_client_core::Result;
 use dragonfly_client_storage::{metadata, Storage};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
-// GC is the garbage collector of dfdaemon.
+/// GC is the garbage collector of dfdaemon.
 pub struct GC {
-    // config is the configuration of the dfdaemon.
+    /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    // host_id is the id of the host.
+    /// host_id is the id of the host.
     host_id: String,
 
-    // storage is the local storage.
+    /// storage is the local storage.
     storage: Arc<Storage>,
 
-    // scheduler_client is the grpc client of the scheduler.
+    /// scheduler_client is the grpc client of the scheduler.
     scheduler_client: Arc<SchedulerClient>,
 
-    // shutdown is used to shutdown the garbage collector.
+    /// shutdown is used to shutdown the garbage collector.
     shutdown: shutdown::Shutdown,
 
-    // _shutdown_complete is used to notify the garbage collector is shutdown.
+    /// _shutdown_complete is used to notify the garbage collector is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
 impl GC {
-    // new creates a new GC.
+    /// new creates a new GC.
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         host_id: String,
@@ -65,7 +66,8 @@ impl GC {
         }
     }
 
-    // run runs the garbage collector.
+    /// run runs the garbage collector.
+    #[instrument(skip_all)]
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -104,7 +106,8 @@ impl GC {
         }
     }
 
-    // evict_task_by_ttl evicts the task by ttl.
+    /// evict_task_by_ttl evicts the task by ttl.
+    #[instrument(skip_all)]
     async fn evict_task_by_ttl(&self) -> Result<()> {
         info!("start to evict by task ttl");
         for task in self.storage.get_tasks()? {
@@ -121,7 +124,8 @@ impl GC {
         Ok(())
     }
 
-    // evict_task_by_disk_usage evicts the task by disk usage.
+    /// evict_task_by_disk_usage evicts the task by disk usage.
+    #[instrument(skip_all)]
     async fn evict_task_by_disk_usage(&self) -> Result<()> {
         let stats = fs2::statvfs(self.config.storage.dir.as_path())?;
         let available_space = stats.available_space();
@@ -149,7 +153,8 @@ impl GC {
         Ok(())
     }
 
-    // evict_task_space evicts the task by the given space.
+    /// evict_task_space evicts the task by the given space.
+    #[instrument(skip_all)]
     async fn evict_task_space(&self, need_evict_space: u64) -> Result<()> {
         let mut tasks = self.storage.get_tasks()?;
         tasks.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
@@ -185,7 +190,8 @@ impl GC {
         Ok(())
     }
 
-    // delete_task_from_scheduler deletes the task from the scheduler.
+    /// delete_task_from_scheduler deletes the task from the scheduler.
+    #[instrument(skip_all)]
     async fn delete_task_from_scheduler(&self, task: metadata::Task) {
         self.scheduler_client
             .delete_task(DeleteTaskRequest {
@@ -198,7 +204,8 @@ impl GC {
             });
     }
 
-    // evict_cache_task_by_ttl evicts the cache task by ttl.
+    /// evict_cache_task_by_ttl evicts the cache task by ttl.
+    #[instrument(skip_all)]
     async fn evict_cache_task_by_ttl(&self) -> Result<()> {
         info!("start to evict by cache task ttl * 2");
         for task in self.storage.get_cache_tasks()? {
@@ -215,7 +222,8 @@ impl GC {
         Ok(())
     }
 
-    // evict_cache_task_by_disk_usage evicts the cache task by disk usage.
+    /// evict_cache_task_by_disk_usage evicts the cache task by disk usage.
+    #[instrument(skip_all)]
     async fn evict_cache_task_by_disk_usage(&self) -> Result<()> {
         let stats = fs2::statvfs(self.config.storage.dir.as_path())?;
         let available_space = stats.available_space();
@@ -243,7 +251,8 @@ impl GC {
         Ok(())
     }
 
-    // evict_cache_task_space evicts the cache task by the given space.
+    /// evict_cache_task_space evicts the cache task by the given space.
+    #[instrument(skip_all)]
     async fn evict_cache_task_space(&self, need_evict_space: u64) -> Result<()> {
         let mut tasks = self.storage.get_cache_tasks()?;
         tasks.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
@@ -277,7 +286,8 @@ impl GC {
         Ok(())
     }
 
-    // delete_cache_task_from_scheduler deletes the cache task from the scheduler.
+    /// delete_cache_task_from_scheduler deletes the cache task from the scheduler.
+    #[instrument(skip_all)]
     async fn delete_cache_task_from_scheduler(&self, task: metadata::CacheTask) {
         self.scheduler_client
             .delete_cache_task(DeleteCacheTaskRequest {
