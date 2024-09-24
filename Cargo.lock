@@ -903,6 +903,7 @@ dependencies = [
  "serde_json",
  "sysinfo",
  "tabled",
+ "tempfile",
  "termion",
  "tikv-jemallocator",
  "tokio",
