@@ -21,34 +21,36 @@ use dragonfly_client_core::{
 };
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+use tracing::instrument;
 use url::Url;
 use uuid::Uuid;
 
-// SEED_PEER_KEY is the key of the seed peer.
+/// SEED_PEER_KEY is the key of the seed peer.
 const SEED_PEER_KEY: &str = "seed";
 
-// CACHE_KEY is the key of the cache.
+/// CACHE_KEY is the key of the cache.
 const CACHE_KEY: &str = "cache";
 
-// PERSISTENT_CACHE_KEY is the key of the persistent cache.
+/// PERSISTENT_CACHE_KEY is the key of the persistent cache.
 const PERSISTENT_CACHE_KEY: &str = "persistent";
 
-// IDGenerator is used to generate the id for the resources.
+/// IDGenerator is used to generate the id for the resources.
 #[derive(Debug)]
 pub struct IDGenerator {
-    // ip is the ip of the host.
+    /// ip is the ip of the host.
     ip: String,
 
-    // hostname is the hostname of the host.
+    /// hostname is the hostname of the host.
     hostname: String,
 
-    // is_seed_peer indicates whether the host is a seed peer.
+    /// is_seed_peer indicates whether the host is a seed peer.
     is_seed_peer: bool,
 }
 
-// IDGenerator implements the IDGenerator.
+/// IDGenerator implements the IDGenerator.
 impl IDGenerator {
-    // new creates a new IDGenerator.
+    /// new creates a new IDGenerator.
+    #[instrument(skip_all)]
     pub fn new(ip: String, hostname: String, is_seed_peer: bool) -> Self {
         IDGenerator {
             ip,
@@ -57,7 +59,8 @@ impl IDGenerator {
         }
     }
 
-    // host_id generates the host id.
+    /// host_id generates the host id.
+    #[instrument(skip_all)]
     pub fn host_id(&self) -> String {
         if self.is_seed_peer {
             return format!("{}-{}-{}", self.ip, self.hostname, "seed");
@@ -66,7 +69,8 @@ impl IDGenerator {
         format!("{}-{}", self.ip, self.hostname)
     }
 
-    // task_id generates the task id.
+    /// task_id generates the task id.
+    #[instrument(skip_all)]
     pub fn task_id(
         &self,
         url: &str,
@@ -109,7 +113,8 @@ impl IDGenerator {
         Ok(hex::encode(hasher.finalize()))
     }
 
-    // cache_task_id generates the cache task id.
+    /// cache_task_id generates the cache task id.
+    #[instrument(skip_all)]
     pub fn cache_task_id(
         &self,
         path: &PathBuf,
@@ -137,7 +142,8 @@ impl IDGenerator {
         Ok(hasher.finalize().to_hex().to_string())
     }
 
-    // peer_id generates the peer id.
+    /// peer_id generates the peer id.
+    #[instrument(skip_all)]
     pub fn peer_id(&self) -> String {
         if self.is_seed_peer {
             return format!(
@@ -152,7 +158,8 @@ impl IDGenerator {
         format!("{}-{}-{}", self.ip, self.hostname, Uuid::new_v4())
     }
 
-    // cache_peer_id generates the cache peer id.
+    /// cache_peer_id generates the cache peer id.
+    #[instrument(skip_all)]
     pub fn cache_peer_id(&self, persistent: bool) -> String {
         if persistent {
             return format!(
@@ -174,7 +181,8 @@ impl IDGenerator {
         )
     }
 
-    // task_type generates the task type by the task id.
+    /// task_type generates the task type by the task id.
+    #[instrument(skip_all)]
     pub fn task_type(&self, id: &str) -> TaskType {
         if id.contains(CACHE_KEY) {
             return TaskType::Dfcache;

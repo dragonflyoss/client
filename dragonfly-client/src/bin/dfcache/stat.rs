@@ -32,16 +32,16 @@ use termion::{color, style};
 
 use super::*;
 
-// StatCommand is the subcommand of stat.
+/// StatCommand is the subcommand of stat.
 #[derive(Debug, Clone, Parser)]
 pub struct StatCommand {
     #[arg(help = "Specify the cache task ID to stat")]
     id: String,
 }
 
-// Implement the execute for StatCommand.
+/// Implement the execute for StatCommand.
 impl StatCommand {
-    // execute executes the stat command.
+    /// execute executes the stat command.
     pub async fn execute(&self, endpoint: &Path) -> Result<()> {
         // Get dfdaemon download client.
         let dfdaemon_download_client =
@@ -183,7 +183,7 @@ impl StatCommand {
         Ok(())
     }
 
-    // run runs the stat command.
+    /// run runs the stat command.
     async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
         let task = dfdaemon_download_client
             .stat_cache_task(StatCacheTaskRequest {

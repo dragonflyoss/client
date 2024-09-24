@@ -28,10 +28,10 @@ use termion::{color, style};
 
 use super::*;
 
-// DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL is the default steady tick interval of progress bar.
+/// DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL is the default steady tick interval of progress bar.
 const DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL: Duration = Duration::from_millis(80);
 
-// ImportCommand is the subcommand of import.
+/// ImportCommand is the subcommand of import.
 #[derive(Debug, Clone, Parser)]
 pub struct ImportCommand {
     #[arg(help = "Specify the path of the file to import")]
@@ -75,9 +75,9 @@ pub struct ImportCommand {
     timeout: Duration,
 }
 
-// Implement the execute for ImportCommand.
+/// Implement the execute for ImportCommand.
 impl ImportCommand {
-    // execute executes the import sub command.
+    /// execute executes the import sub command.
     pub async fn execute(&self, endpoint: &Path) -> Result<()> {
         // Validate the command line arguments.
         if let Err(err) = self.validate_args() {
@@ -257,7 +257,7 @@ impl ImportCommand {
         Ok(())
     }
 
-    // run runs the import sub command.
+    /// run runs the import sub command.
     async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
         let pb = ProgressBar::new_spinner();
         pb.enable_steady_tick(DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL);
@@ -288,7 +288,7 @@ impl ImportCommand {
         Ok(())
     }
 
-    // validate_args validates the command line arguments.
+    /// validate_args validates the command line arguments.
     fn validate_args(&self) -> Result<()> {
         if self.path.is_dir() {
             return Err(Error::ValidationError(format!(

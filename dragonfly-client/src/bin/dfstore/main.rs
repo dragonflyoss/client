@@ -95,11 +95,11 @@ pub enum Command {
     Remove(RemoveCommand),
 }
 
-// Download or upload files using object storage in Dragonfly.
+/// Download or upload files using object storage in Dragonfly.
 #[derive(Debug, Clone, Parser)]
 pub struct CopyCommand {}
 
-// Remove a file from Dragonfly object storage.
+/// Remove a file from Dragonfly object storage.
 #[derive(Debug, Clone, Parser)]
 pub struct RemoveCommand {}
 
@@ -114,6 +114,7 @@ fn main() {
         args.log_level,
         args.log_max_files,
         None,
+        false,
         false,
         args.verbose,
     );

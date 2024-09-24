@@ -37,40 +37,41 @@ use tokio::task::JoinSet;
 use tonic::transport::Channel;
 use tracing::{error, info, instrument, Instrument};
 
-// VNode is the virtual node of the hashring.
+/// VNode is the virtual node of the hashring.
 #[derive(Debug, Copy, Clone, Hash, PartialEq)]
 struct VNode {
-    // addr is the address of the virtual node.
+    /// addr is the address of the virtual node.
     addr: SocketAddr,
 }
 
-// VNode implements the Display trait.
+/// VNode implements the Display trait.
 impl std::fmt::Display for VNode {
-    // fmt formats the virtual node.
+    /// fmt formats the virtual node.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.addr)
     }
 }
 
-// SchedulerClient is a wrapper of SchedulerGRPCClient.
+/// SchedulerClient is a wrapper of SchedulerGRPCClient.
 #[derive(Clone)]
 pub struct SchedulerClient {
-    // dynconfig is the dynamic configuration of the dfdaemon.
+    /// dynconfig is the dynamic configuration of the dfdaemon.
     dynconfig: Arc<Dynconfig>,
 
-    // available_schedulers is the available schedulers.
+    /// available_schedulers is the available schedulers.
     available_schedulers: Arc<RwLock<Vec<Scheduler>>>,
 
-    // available_scheduler_addrs is the addresses of available schedulers.
+    /// available_scheduler_addrs is the addresses of available schedulers.
     available_scheduler_addrs: Arc<RwLock<Vec<SocketAddr>>>,
 
-    // hashring is the hashring of the scheduler.
+    /// hashring is the hashring of the scheduler.
     hashring: Arc<RwLock<HashRing<VNode>>>,
 }
 
-// SchedulerClient implements the grpc client of the scheduler.
+/// SchedulerClient implements the grpc client of the scheduler.
 impl SchedulerClient {
-    // new creates a new SchedulerClient.
+    /// new creates a new SchedulerClient.
+    #[instrument(skip_all)]
     pub async fn new(dynconfig: Arc<Dynconfig>) -> Result<Self> {
         let client = Self {
             dynconfig,
@@ -83,7 +84,7 @@ impl SchedulerClient {
         Ok(client)
     }
 
-    // announce_peer announces the peer to the scheduler.
+    /// announce_peer announces the peer to the scheduler.
     #[instrument(skip_all)]
     pub async fn announce_peer(
         &self,
@@ -99,7 +100,7 @@ impl SchedulerClient {
         Ok(response)
     }
 
-    // stat_peer gets the status of the peer.
+    /// stat_peer gets the status of the peer.
     #[instrument(skip(self))]
     pub async fn stat_peer(&self, request: StatPeerRequest) -> Result<Peer> {
         let task_id = request.task_id.clone();
@@ -112,7 +113,7 @@ impl SchedulerClient {
         Ok(response.into_inner())
     }
 
-    // delete_peer tells the scheduler that the peer is deleting.
+    /// delete_peer tells the scheduler that the peer is deleting.
     #[instrument(skip(self))]
     pub async fn delete_peer(&self, request: DeletePeerRequest) -> Result<()> {
         let task_id = request.task_id.clone();
@@ -124,7 +125,7 @@ impl SchedulerClient {
         Ok(())
     }
 
-    // stat_task gets the status of the task.
+    /// stat_task gets the status of the task.
     #[instrument(skip(self))]
     pub async fn stat_task(&self, request: StatTaskRequest) -> Result<Task> {
         let task_id = request.task_id.clone();
@@ -137,7 +138,7 @@ impl SchedulerClient {
         Ok(response.into_inner())
     }
 
-    // delete_task tells the scheduler that the task is deleting.
+    /// delete_task tells the scheduler that the task is deleting.
     #[instrument(skip(self))]
     pub async fn delete_task(&self, request: DeleteTaskRequest) -> Result<()> {
         let task_id = request.task_id.clone();
@@ -149,7 +150,7 @@ impl SchedulerClient {
         Ok(())
     }
 
-    // announce_host announces the host to the scheduler.
+    /// announce_host announces the host to the scheduler.
     #[instrument(skip(self))]
     pub async fn announce_host(&self, request: AnnounceHostRequest) -> Result<()> {
         // Update scheduler addresses of the client.
@@ -207,7 +208,7 @@ impl SchedulerClient {
         Ok(())
     }
 
-    // init_announce_host announces the host to the scheduler.
+    /// init_announce_host announces the host to the scheduler.
     #[instrument(skip(self))]
     pub async fn init_announce_host(&self, request: AnnounceHostRequest) -> Result<()> {
         let mut join_set = JoinSet::new();
@@ -262,7 +263,7 @@ impl SchedulerClient {
         Ok(())
     }
 
-    // delete_host tells the scheduler that the host is deleting.
+    /// delete_host tells the scheduler that the host is deleting.
     #[instrument(skip(self))]
     pub async fn delete_host(&self, request: DeleteHostRequest) -> Result<()> {
         // Update scheduler addresses of the client.
@@ -320,7 +321,7 @@ impl SchedulerClient {
         Ok(())
     }
 
-    // announce_cache_peer announces the cache peer to the scheduler.
+    /// announce_cache_peer announces the cache peer to the scheduler.
     #[instrument(skip_all)]
     pub async fn announce_cache_peer(
         &self,
@@ -336,7 +337,7 @@ impl SchedulerClient {
         Ok(response)
     }
 
-    // stat_cache_peer gets the status of the cache peer.
+    /// stat_cache_peer gets the status of the cache peer.
     #[instrument(skip(self))]
     pub async fn stat_cache_peer(&self, request: StatCachePeerRequest) -> Result<CachePeer> {
         let task_id = request.task_id.clone();
@@ -349,7 +350,7 @@ impl SchedulerClient {
         Ok(response.into_inner())
     }
 
-    // delete_cache_peer tells the scheduler that the cache peer is deleting.
+    /// delete_cache_peer tells the scheduler that the cache peer is deleting.
     #[instrument(skip(self))]
     pub async fn delete_cache_peer(&self, request: DeleteCachePeerRequest) -> Result<()> {
         let task_id = request.task_id.clone();
@@ -361,7 +362,7 @@ impl SchedulerClient {
         Ok(())
     }
 
-    // upload_cache_task_started uploads the metadata of the cache task started.
+    /// upload_cache_task_started uploads the metadata of the cache task started.
     #[instrument(skip(self))]
     pub async fn upload_cache_task_started(
         &self,
@@ -376,7 +377,8 @@ impl SchedulerClient {
         Ok(())
     }
 
-    // upload_cache_task_finished uploads the metadata of the cache task finished.
+    /// upload_cache_task_finished uploads the metadata of the cache task finished.
+    #[instrument(skip_all)]
     pub async fn upload_cache_task_finished(
         &self,
         request: UploadCacheTaskFinishedRequest,
@@ -391,7 +393,8 @@ impl SchedulerClient {
         Ok(response.into_inner())
     }
 
-    // upload_cache_task_failed uploads the metadata of the cache task failed.
+    /// upload_cache_task_failed uploads the metadata of the cache task failed.
+    #[instrument(skip_all)]
     pub async fn upload_cache_task_failed(
         &self,
         request: UploadCacheTaskFailedRequest,
@@ -405,7 +408,7 @@ impl SchedulerClient {
         Ok(())
     }
 
-    // stat_cache_task gets the status of the cache task.
+    /// stat_cache_task gets the status of the cache task.
     #[instrument(skip(self))]
     pub async fn stat_cache_task(&self, request: StatCacheTaskRequest) -> Result<CacheTask> {
         let task_id = request.task_id.clone();
@@ -418,7 +421,7 @@ impl SchedulerClient {
         Ok(response.into_inner())
     }
 
-    // delete_cache_task tells the scheduler that the cache task is deleting.
+    /// delete_cache_task tells the scheduler that the cache task is deleting.
     #[instrument(skip(self))]
     pub async fn delete_cache_task(&self, request: DeleteCacheTaskRequest) -> Result<()> {
         let task_id = request.task_id.clone();
@@ -430,7 +433,7 @@ impl SchedulerClient {
         Ok(())
     }
 
-    // client gets the grpc client of the scheduler.
+    /// client gets the grpc client of the scheduler.
     #[instrument(skip(self))]
     async fn client(
         &self,
@@ -477,7 +480,7 @@ impl SchedulerClient {
             .max_encoding_message_size(usize::MAX))
     }
 
-    // update_available_scheduler_addrs updates the addresses of available schedulers.
+    /// update_available_scheduler_addrs updates the addresses of available schedulers.
     #[instrument(skip(self))]
     async fn update_available_scheduler_addrs(&self) -> Result<()> {
         // Get the endpoints of available schedulers.
@@ -563,7 +566,7 @@ impl SchedulerClient {
         Ok(())
     }
 
-    // refresh_available_scheduler_addrs refreshes addresses of available schedulers.
+    /// refresh_available_scheduler_addrs refreshes addresses of available schedulers.
     #[instrument(skip(self))]
     async fn refresh_available_scheduler_addrs(&self) -> Result<()> {
         // Refresh the dynamic configuration.
@@ -573,7 +576,8 @@ impl SchedulerClient {
         self.update_available_scheduler_addrs().await
     }
 
-    // make_request creates a new request with timeout.
+    /// make_request creates a new request with timeout.
+    #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);

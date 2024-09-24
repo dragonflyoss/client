@@ -16,30 +16,37 @@
 
 use dragonfly_api::common::v2::Priority;
 use reqwest::header::HeaderMap;
-use tracing::error;
+use tracing::{error, instrument};
 
-// DRAGONFLY_TAG_HEADER is the header key of tag in http request.
+/// DRAGONFLY_TAG_HEADER is the header key of tag in http request.
 pub const DRAGONFLY_TAG_HEADER: &str = "X-Dragonfly-Tag";
 
-// DRAGONFLY_APPLICATION_HEADER is the header key of application in http request.
+/// DRAGONFLY_APPLICATION_HEADER is the header key of application in http request.
 pub const DRAGONFLY_APPLICATION_HEADER: &str = "X-Dragonfly-Application";
 
-// DRAGONFLY_PRIORITY_HEADER is the header key of priority in http request,
-// refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L67.
+/// DRAGONFLY_PRIORITY_HEADER is the header key of priority in http request,
+/// refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L67.
 pub const DRAGONFLY_PRIORITY_HEADER: &str = "X-Dragonfly-Priority";
 
-// DRAGONFLY_REGISTRY_HEADER is the header key of custom address of container registry.
+/// DRAGONFLY_REGISTRY_HEADER is the header key of custom address of container registry.
 pub const DRAGONFLY_REGISTRY_HEADER: &str = "X-Dragonfly-Registry";
 
-// DRAGONFLY_FILTERS_HEADER is the header key of filters in http request,
-// it is the filtered query params to generate the task id.
-// When filter is "X-Dragonfly-Filtered-Query-Params: Signature,Expires,ns" for example:
-// http://example.com/xyz?Expires=e1&Signature=s1&ns=docker.io and http://example.com/xyz?Expires=e2&Signature=s2&ns=docker.io
-// will generate the same task id.
-// Default value includes the filtered query params of s3, gcs, oss, obs, cos.
+/// DRAGONFLY_FILTERS_HEADER is the header key of filters in http request,
+/// it is the filtered query params to generate the task id.
+/// When filter is "X-Dragonfly-Filtered-Query-Params: Signature,Expires,ns" for example:
+/// http://example.com/xyz?Expires=e1&Signature=s1&ns=docker.io and http://example.com/xyz?Expires=e2&Signature=s2&ns=docker.io
+/// will generate the same task id.
+/// Default value includes the filtered query params of s3, gcs, oss, obs, cos.
 pub const DRAGONFLY_FILTERED_QUERY_PARAMS_HEADER: &str = "X-Dragonfly-Filtered-Query-Params";
 
-// get_tag gets the tag from http header.
+/// DRAGONFLY_USE_P2P_HEADER is the header key of use p2p in http request.
+/// If the value is "true", the request will use P2P technology to distribute
+/// the content. If the value is "false", but url matches the regular expression in proxy config.
+/// The request will also use P2P technology to distribute the content.
+pub const DRAGONFLY_USE_P2P_HEADER: &str = "X-Dragonfly-Use-P2P";
+
+/// get_tag gets the tag from http header.
+#[instrument(skip_all)]
 pub fn get_tag(header: &HeaderMap) -> Option<String> {
     match header.get(DRAGONFLY_TAG_HEADER) {
         Some(tag) => match tag.to_str() {
@@ -53,7 +60,8 @@ pub fn get_tag(header: &HeaderMap) -> Option<String> {
     }
 }
 
-// get_application gets the application from http header.
+/// get_application gets the application from http header.
+#[instrument(skip_all)]
 pub fn get_application(header: &HeaderMap) -> Option<String> {
     match header.get(DRAGONFLY_APPLICATION_HEADER) {
         Some(application) => match application.to_str() {
@@ -67,7 +75,8 @@ pub fn get_application(header: &HeaderMap) -> Option<String> {
     }
 }
 
-// get_priority gets the priority from http header.
+/// get_priority gets the priority from http header.
+#[instrument(skip_all)]
 pub fn get_priority(header: &HeaderMap) -> i32 {
     let default_priority = Priority::Level6 as i32;
     match header.get(DRAGONFLY_PRIORITY_HEADER) {
@@ -88,7 +97,8 @@ pub fn get_priority(header: &HeaderMap) -> i32 {
     }
 }
 
-// get_registry gets the custom address of container registry from http header.
+/// get_registry gets the custom address of container registry from http header.
+#[instrument(skip_all)]
 pub fn get_registry(header: &HeaderMap) -> Option<String> {
     match header.get(DRAGONFLY_REGISTRY_HEADER) {
         Some(registry) => match registry.to_str() {
@@ -102,7 +112,8 @@ pub fn get_registry(header: &HeaderMap) -> Option<String> {
     }
 }
 
-// get_filters gets the filters from http header.
+/// get_filters gets the filters from http header.
+#[instrument(skip_all)]
 pub fn get_filtered_query_params(
     header: &HeaderMap,
     default_filtered_query_params: Vec<String>,
@@ -116,5 +127,20 @@ pub fn get_filtered_query_params(
             }
         },
         None => default_filtered_query_params,
+    }
+}
+
+/// get_use_p2p gets the use p2p from http header.
+#[instrument(skip_all)]
+pub fn get_use_p2p(header: &HeaderMap) -> bool {
+    match header.get(DRAGONFLY_USE_P2P_HEADER) {
+        Some(value) => match value.to_str() {
+            Ok(value) => value.eq_ignore_ascii_case("true"),
+            Err(err) => {
+                error!("get use p2p from header failed: {}", err);
+                false
+            }
+        },
+        None => false,
     }
 }

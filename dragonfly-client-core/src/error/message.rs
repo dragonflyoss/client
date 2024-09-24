@@ -16,29 +16,29 @@
 
 use std::borrow::Cow;
 
-// Message is the message for the error.
+/// Message is the message for the error.
 #[derive(Debug)]
 pub struct Message(Cow<'static, str>);
 
-// From<&'static str> for Message implements the conversion from &'static str to Message.
+/// From<&'static str> for Message implements the conversion from &'static str to Message.
 impl From<&'static str> for Message {
-    // from returns the message from the string.
+    /// from returns the message from the string.
     fn from(s: &'static str) -> Self {
         Message(Cow::Borrowed(s))
     }
 }
 
-// From<String> for Message implements the conversion from String to Message.
+/// From<String> for Message implements the conversion from String to Message.
 impl From<String> for Message {
-    // from returns the message from the string.
+    /// from returns the message from the string.
     fn from(s: String) -> Self {
         Message(Cow::Owned(s))
     }
 }
 
-// Message implements the message for the error.
+/// Message implements the message for the error.
 impl Message {
-    // as_str returns the string of the message.
+    /// as_str returns the string of the message.
     pub fn as_str(&self) -> &str {
         &self.0
     }

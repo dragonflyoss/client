@@ -24,38 +24,38 @@ use std::result::Result;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio_util::io::StreamReader;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 use url::Url;
 
-// Scheme is the scheme of the object storage.
+/// Scheme is the scheme of the object storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scheme {
-    // S3 is the Amazon Simple Storage Service.
+    /// S3 is the Amazon Simple Storage Service.
     S3,
 
-    // GCS is the Google Cloud Storage Service.
+    /// GCS is the Google Cloud Storage Service.
     GCS,
 
-    // ABS is the Azure Blob Storage Service.
+    /// ABS is the Azure Blob Storage Service.
     ABS,
 
-    // OSS is the Aliyun Object Storage Service.
+    /// OSS is the Aliyun Object Storage Service.
     OSS,
 
-    // OBS is the Huawei Cloud Object Storage Service.
+    /// OBS is the Huawei Cloud Object Storage Service.
     OBS,
 
-    // COS is the Tencent Cloud Object Storage Service.
+    /// COS is the Tencent Cloud Object Storage Service.
     COS,
 }
 
-// Scheme implements the Display.
+/// Scheme implements the Display.
 impl fmt::Display for Scheme {
-    // fmt formats the value using the given formatter.
+    /// fmt formats the value using the given formatter.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Scheme::S3 => write!(f, "s3"),
-            Scheme::GCS => write!(f, "gcs"),
+            Scheme::GCS => write!(f, "gs"),
             Scheme::ABS => write!(f, "abs"),
             Scheme::OSS => write!(f, "oss"),
             Scheme::OBS => write!(f, "obs"),
@@ -64,15 +64,15 @@ impl fmt::Display for Scheme {
     }
 }
 
-// Scheme implements the FromStr.
+/// Scheme implements the FromStr.
 impl FromStr for Scheme {
     type Err = String;
 
-    // from_str parses an scheme string.
+    /// from_str parses an scheme string.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "s3" => Ok(Scheme::S3),
-            "gcs" => Ok(Scheme::GCS),
+            "gs" => Ok(Scheme::GCS),
             "abs" => Ok(Scheme::ABS),
             "oss" => Ok(Scheme::OSS),
             "obs" => Ok(Scheme::OBS),
@@ -82,30 +82,30 @@ impl FromStr for Scheme {
     }
 }
 
-// ParsedURL is a struct that contains the parsed URL, bucket, and path.
+/// ParsedURL is a struct that contains the parsed URL, bucket, and path.
 #[derive(Debug)]
 pub struct ParsedURL {
-    // url is the requested URL of the object storage.
+    /// url is the requested URL of the object storage.
     pub url: Url,
 
-    // scheme is the scheme of the object storage.
+    /// scheme is the scheme of the object storage.
     pub scheme: Scheme,
 
-    // bucket is the bucket of the object storage.
+    /// bucket is the bucket of the object storage.
     pub bucket: String,
 
-    // key is the key of the object storage.
+    /// key is the key of the object storage.
     pub key: String,
 }
 
-// ParsedURL implements the ParsedURL trait.
+/// ParsedURL implements the ParsedURL trait.
 impl ParsedURL {
-    // is_dir returns true if the URL path ends with a slash.
+    /// is_dir returns true if the URL path ends with a slash.
     pub fn is_dir(&self) -> bool {
         self.url.path().ends_with('/')
     }
 
-    // make_url_by_entry_path makes a URL by the entry path when the URL is a directory.
+    /// make_url_by_entry_path makes a URL by the entry path when the URL is a directory.
     pub fn make_url_by_entry_path(&self, entry_path: &str) -> Url {
         let mut url = self.url.clone();
         url.set_path(entry_path);
@@ -113,13 +113,13 @@ impl ParsedURL {
     }
 }
 
-// ParsedURL implements the TryFrom trait for the URL.
-//
-// The object storage URL should be in the format of `scheme://<bucket>/<path>`.
+/// ParsedURL implements the TryFrom trait for the URL.
+///
+/// The object storage URL should be in the format of `scheme://<bucket>/<path>`.
 impl TryFrom<Url> for ParsedURL {
     type Error = ClientError;
 
-    // try_from parses the URL and returns a ParsedURL.
+    /// try_from parses the URL and returns a ParsedURL.
     fn try_from(url: Url) -> Result<Self, Self::Error> {
         // Get the bucket from the URL host.
         let bucket = url
@@ -150,26 +150,52 @@ impl TryFrom<Url> for ParsedURL {
     }
 }
 
-// ObjectStorage is a struct that implements the backend trait.
+/// make_need_fields_message makes a message for the need fields in the object storage.
+macro_rules! make_need_fields_message {
+    ($var:ident {$($field:ident),*}) => {{
+            let mut need_fields: Vec<&'static str> = vec![];
+
+            $(
+                if $var.$field.is_none() {
+                    need_fields.push(stringify!($field));
+                }
+            )*
+
+            format!("need {}", need_fields.join(", "))
+       }};
+}
+
+/// ObjectStorage is a struct that implements the backend trait.
 pub struct ObjectStorage {
-    // scheme is the scheme of the object storage.
+    /// scheme is the scheme of the object storage.
     scheme: Scheme,
 }
 
-// ObjectStorage implements the ObjectStorage trait.
+/// ObjectStorage implements the ObjectStorage trait.
 impl ObjectStorage {
     /// Returns ObjectStorage that implements the Backend trait.
+    #[instrument(skip_all)]
     pub fn new(scheme: Scheme) -> ObjectStorage {
         Self { scheme }
     }
 
-    // operator initializes the operator with the parsed URL and object storage.
+    /// operator initializes the operator with the parsed URL and object storage.
+    #[instrument(skip_all)]
     pub fn operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
         object_storage: Option<common::v2::ObjectStorage>,
         timeout: Duration,
     ) -> ClientResult<Operator> {
+        // If download backend is object storage, object_storage parameter is required.
+        let Some(object_storage) = object_storage else {
+            return Err(ClientError::BackendError(BackendError {
+                message: format!("{} need object_storage parameter", self.scheme),
+                status_code: None,
+                header: None,
+            }));
+        };
+
         match self.scheme {
             Scheme::S3 => self.s3_operator(parsed_url, object_storage, timeout),
             Scheme::GCS => self.gcs_operator(parsed_url, object_storage, timeout),
@@ -180,38 +206,46 @@ impl ObjectStorage {
         }
     }
 
-    // s3_operator initializes the S3 operator with the parsed URL and object storage.
+    /// s3_operator initializes the S3 operator with the parsed URL and object storage.
+    #[instrument(skip_all)]
     pub fn s3_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
-        object_storage: Option<common::v2::ObjectStorage>,
+        object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Check if the object storage is provided.
-        let Some(object_storage) = object_storage else {
-            error!("need access_key_id and access_key_secret");
+        // Create a reqwest http client.
+        let client = reqwest::Client::builder().timeout(timeout).build()?;
+
+        // S3 requires the access key id and the secret access key.
+        let (Some(access_key_id), Some(access_key_secret), Some(region)) = (
+            &object_storage.access_key_id,
+            &object_storage.access_key_secret,
+            &object_storage.region,
+        ) else {
             return Err(ClientError::BackendError(BackendError {
-                message: "need access_key_id and access_key_secret".to_string(),
+                message: format!(
+                    "{} {}",
+                    self.scheme,
+                    make_need_fields_message!(object_storage {
+                        access_key_id,
+                        access_key_secret,
+                        region
+                    })
+                ),
                 status_code: None,
                 header: None,
             }));
         };
 
-        // Create a reqwest http client.
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
-
         // Initialize the S3 operator with the object storage.
         let mut builder = opendal::services::S3::default();
         builder = builder
-            .access_key_id(&object_storage.access_key_id)
-            .secret_access_key(&object_storage.access_key_secret)
+            .access_key_id(access_key_id)
+            .secret_access_key(access_key_secret)
             .http_client(HttpClient::with(client))
-            .bucket(&parsed_url.bucket);
-
-        // Configure the region and endpoint if they are provided.
-        if let Some(region) = object_storage.region.as_deref() {
-            builder = builder.region(region);
-        }
+            .bucket(&parsed_url.bucket)
+            .region(region);
 
         // Configure the endpoint if it is provided.
         if let Some(endpoint) = object_storage.endpoint.as_deref() {
@@ -226,23 +260,14 @@ impl ObjectStorage {
         Ok(Operator::new(builder)?.finish())
     }
 
-    // gcs_operator initializes the GCS operator with the parsed URL and object storage.
+    /// gcs_operator initializes the GCS operator with the parsed URL and object storage.
+    #[instrument(skip_all)]
     pub fn gcs_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
-        object_storage: Option<common::v2::ObjectStorage>,
+        object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Check if the object storage is provided.
-        let Some(object_storage) = object_storage else {
-            error!("need credential");
-            return Err(ClientError::BackendError(BackendError {
-                message: "need credential".to_string(),
-                status_code: None,
-                header: None,
-            }));
-        };
-
         // Create a reqwest http client.
         let client = reqwest::Client::builder().timeout(timeout).build()?;
 
@@ -252,16 +277,15 @@ impl ObjectStorage {
             .http_client(HttpClient::with(client))
             .bucket(&parsed_url.bucket);
 
-        // Configure the region and endpoint if they are provided.
-        if let Some(credential) = object_storage.credential.as_deref() {
-            builder = builder.credential(credential);
-        } else {
-            error!("need credential");
-            return Err(ClientError::BackendError(BackendError {
-                message: "need credential".to_string(),
-                status_code: None,
-                header: None,
-            }));
+        // Configure the credentials using the local path to the crendential file if provided.
+        // Otherwise, configure using the Application Default Credentials (ADC).
+        if let Some(credential_path) = object_storage.credential_path.as_deref() {
+            builder = builder.credential_path(credential_path);
+        }
+
+        // Configure the endpoint if it is provided.
+        if let Some(endpoint) = object_storage.endpoint.as_deref() {
+            builder = builder.endpoint(endpoint);
         }
 
         // Configure the predefined ACL if it is provided.
@@ -272,168 +296,194 @@ impl ObjectStorage {
         Ok(Operator::new(builder)?.finish())
     }
 
-    // abs_operator initializes the ABS operator with the parsed URL and object storage.
+    /// abs_operator initializes the ABS operator with the parsed URL and object storage.
+    #[instrument(skip_all)]
     pub fn abs_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
-        object_storage: Option<common::v2::ObjectStorage>,
+        object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Check if the object storage is provided.
-        let Some(object_storage) = object_storage else {
-            error!("need access_key_id and access_key_secret");
+        // Create a reqwest http client.
+        let client = reqwest::Client::builder().timeout(timeout).build()?;
+
+        // ABS requires the account name and the account key.
+        let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
+            &object_storage.access_key_id,
+            &object_storage.access_key_secret,
+            &object_storage.endpoint,
+        ) else {
             return Err(ClientError::BackendError(BackendError {
-                message: "need access_key_id and access_key_secret".to_string(),
+                message: format!(
+                    "{} {}",
+                    self.scheme,
+                    make_need_fields_message!(object_storage {
+                        access_key_id,
+                        access_key_secret,
+                        endpoint
+                    })
+                ),
                 status_code: None,
                 header: None,
             }));
         };
-
-        // Create a reqwest http client.
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
 
         // Initialize the ABS operator with the object storage.
         let mut builder = opendal::services::Azblob::default();
         builder = builder
-            .account_name(&object_storage.access_key_id)
-            .account_key(&object_storage.access_key_secret)
+            .account_name(access_key_id)
+            .account_key(access_key_secret)
             .http_client(HttpClient::with(client))
-            .container(&parsed_url.bucket);
-
-        // Configure the endpoint if it is provided.
-        if let Some(endpoint) = object_storage.endpoint.as_deref() {
-            builder = builder.endpoint(endpoint);
-        }
+            .container(&parsed_url.bucket)
+            .endpoint(endpoint);
 
         Ok(Operator::new(builder)?.finish())
     }
 
-    // oss_operator initializes the OSS operator with the parsed URL and object storage.
+    /// oss_operator initializes the OSS operator with the parsed URL and object storage.
+    #[instrument(skip_all)]
     pub fn oss_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
-        object_storage: Option<common::v2::ObjectStorage>,
+        object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Check if the object storage is provided.
-        let Some(object_storage) = object_storage else {
-            error!("need endpoint, access_key_id and access_key_secret");
+        // Create a reqwest http client.
+        let client = reqwest::Client::builder().timeout(timeout).build()?;
+
+        // OSS requires the access key id, access key secret, and endpoint.
+        let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
+            &object_storage.access_key_id,
+            &object_storage.access_key_secret,
+            &object_storage.endpoint,
+        ) else {
             return Err(ClientError::BackendError(BackendError {
-                message: "need endpoint, access_key_id and access_key_secret".to_string(),
+                message: format!(
+                    "{} {}",
+                    self.scheme,
+                    make_need_fields_message!(object_storage {
+                        access_key_id,
+                        access_key_secret,
+                        endpoint
+                    })
+                ),
                 status_code: None,
                 header: None,
             }));
         };
-
-        // Create a reqwest http client.
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
 
         // Initialize the OSS operator with the object storage.
         let mut builder = opendal::services::Oss::default();
         builder = builder
-            .access_key_id(&object_storage.access_key_id)
-            .access_key_secret(&object_storage.access_key_secret)
+            .access_key_id(access_key_id)
+            .access_key_secret(access_key_secret)
+            .endpoint(endpoint)
             .http_client(HttpClient::with(client))
             .root("/")
             .bucket(&parsed_url.bucket);
 
-        // Configure the endpoint if provided.
-        if let Some(endpoint) = object_storage.endpoint {
-            builder = builder.endpoint(&endpoint);
-        } else {
-            error!("need endpoint");
-            return Err(ClientError::BackendError(BackendError {
-                message: "need endpoint".to_string(),
-                status_code: None,
-                header: None,
-            }));
-        }
-
         Ok(Operator::new(builder)?.finish())
     }
 
-    // obs_operator initializes the OBS operator with the parsed URL and object storage.
+    /// obs_operator initializes the OBS operator with the parsed URL and object storage.
+    #[instrument(skip_all)]
     pub fn obs_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
-        object_storage: Option<common::v2::ObjectStorage>,
+        object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Check if the object storage is provided.
-        let Some(object_storage) = object_storage else {
-            error!("need endpoint, access_key_id and access_key_secret");
+        // Create a reqwest http client.
+        let client = reqwest::Client::builder().timeout(timeout).build()?;
+
+        // OBS requires the endpoint, access key id, and access key secret.
+        let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
+            &object_storage.access_key_id,
+            &object_storage.access_key_secret,
+            &object_storage.endpoint,
+        ) else {
             return Err(ClientError::BackendError(BackendError {
-                message: "need endpoint, access_key_id and access_key_secret".to_string(),
+                message: format!(
+                    "{} {}",
+                    self.scheme,
+                    make_need_fields_message!(object_storage {
+                        access_key_id,
+                        access_key_secret,
+                        endpoint
+                    })
+                ),
                 status_code: None,
                 header: None,
             }));
         };
-
-        // Create a reqwest http client.
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
 
         // Initialize the OBS operator with the object storage.
         let mut builder = opendal::services::Obs::default();
         builder = builder
-            .access_key_id(&object_storage.access_key_id)
-            .secret_access_key(&object_storage.access_key_secret)
+            .access_key_id(access_key_id)
+            .secret_access_key(access_key_secret)
+            .endpoint(endpoint)
             .http_client(HttpClient::with(client))
             .bucket(&parsed_url.bucket);
-
-        // Configure the endpoint if provided.
-        if let Some(endpoint) = object_storage.endpoint {
-            builder = builder.endpoint(&endpoint);
-        }
 
         Ok(Operator::new(builder)?.finish())
     }
 
-    // cos_operator initializes the COS operator with the parsed URL and object storage.
+    /// cos_operator initializes the COS operator with the parsed URL and object storage.
     pub fn cos_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
-        object_storage: Option<common::v2::ObjectStorage>,
+        object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Check if the object storage is provided.
-        let Some(object_storage) = object_storage else {
-            error!("need endpoint, access_key_id and access_key_secret");
+        // Create a reqwest http client.
+        let client = reqwest::Client::builder().timeout(timeout).build()?;
+
+        // COS requires the access key id, the access key secret, and the endpoint.
+        let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
+            &object_storage.access_key_id,
+            &object_storage.access_key_secret,
+            &object_storage.endpoint,
+        ) else {
             return Err(ClientError::BackendError(BackendError {
-                message: "need endpoint, access_key_id and access_key_secret".to_string(),
+                message: format!(
+                    "{} {}",
+                    self.scheme,
+                    make_need_fields_message!(object_storage {
+                        access_key_id,
+                        access_key_secret,
+                        endpoint
+                    })
+                ),
                 status_code: None,
                 header: None,
             }));
         };
 
-        // Create a reqwest http client.
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
-
         // Initialize the COS operator with the object storage.
         let mut builder = opendal::services::Cos::default();
         builder = builder
-            .secret_id(&object_storage.access_key_id)
-            .secret_key(&object_storage.access_key_secret)
+            .secret_id(access_key_id)
+            .secret_key(access_key_secret)
+            .endpoint(endpoint)
             .http_client(HttpClient::with(client))
             .bucket(&parsed_url.bucket);
-
-        // Configure the endpoint if provided.
-        if let Some(endpoint) = object_storage.endpoint {
-            builder = builder.endpoint(&endpoint);
-        }
 
         Ok(Operator::new(builder)?.finish())
     }
 }
 
-// Backend implements the Backend trait.
+/// Backend implements the Backend trait.
 #[tonic::async_trait]
 impl crate::Backend for ObjectStorage {
-    // scheme returns the scheme of the object storage.
+    /// scheme returns the scheme of the object storage.
+    #[instrument(skip_all)]
     fn scheme(&self) -> String {
         self.scheme.to_string()
     }
 
-    //head gets the header of the request.
+    /// head gets the header of the request.
+    #[instrument(skip_all)]
     async fn head(&self, request: super::HeadRequest) -> ClientResult<super::HeadResponse> {
         info!(
             "head request {} {}: {:?}",
@@ -518,7 +568,8 @@ impl crate::Backend for ObjectStorage {
         })
     }
 
-    // Returns content of requested file.
+    /// Returns content of requested file.
+    #[instrument(skip_all)]
     async fn get(
         &self,
         request: super::GetRequest,
@@ -535,7 +586,7 @@ impl crate::Backend for ObjectStorage {
             .map_err(|_| ClientError::InvalidURI(request.url.clone()))?;
         let parsed_url: super::object_storage::ParsedURL = url.try_into().map_err(|err| {
             error!(
-                "parse head request url failed {} {}: {}",
+                "parse get request url failed {} {}: {}",
                 request.piece_id, request.url, err
             );
             err
@@ -599,6 +650,7 @@ impl crate::Backend for ObjectStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dragonfly_api::common::v2::ObjectStorage as ObjectStorageInfo;
 
     #[test]
     fn should_get_parsed_url() {
@@ -636,6 +688,33 @@ mod tests {
     }
 
     #[test]
+    fn should_get_url_with_the_same_prefix() {
+        let file_key = "test-bucket/file";
+        let schemes = vec![
+            Scheme::OBS,
+            Scheme::S3,
+            Scheme::ABS,
+            Scheme::OSS,
+            Scheme::COS,
+            Scheme::GCS,
+        ];
+
+        // Test each scheme for both file and directory URLs.
+        for scheme in schemes {
+            let file_url = format!("{}://{}", scheme, file_key);
+            let url: Url = file_url.parse().unwrap();
+            let parsed_url: ParsedURL = url.try_into().unwrap();
+
+            let new_url = parsed_url.make_url_by_entry_path("test-entry");
+            let new_parsed_url: ParsedURL = new_url.try_into().unwrap();
+
+            assert_eq!(parsed_url.bucket, new_parsed_url.bucket);
+            assert_eq!(parsed_url.scheme, new_parsed_url.scheme);
+            assert_eq!(new_parsed_url.key, "test-entry");
+        }
+    }
+
+    #[test]
     fn should_return_error_when_scheme_not_valid() {
         let url: Url = "github://test-bucket/file".parse().unwrap();
         let result = TryInto::<ParsedURL>::try_into(url);
@@ -665,56 +744,530 @@ mod tests {
     }
 
     #[test]
-    fn should_get_oss_operator() {
-        let url: Url = "oss://test-bucket/file".parse().unwrap();
-        let parsed_url: ParsedURL = url.try_into().unwrap();
+    fn should_get_operator() {
+        let test_cases = vec![
+            (
+                Scheme::S3,
+                ObjectStorageInfo {
+                    region: Some("test-region".into()),
+                    access_key_id: Some("access-key-id".into()),
+                    access_key_secret: Some("access-key-secret".into()),
+                    ..Default::default()
+                },
+            ),
+            (Scheme::GCS, ObjectStorageInfo::default()),
+            (
+                Scheme::ABS,
+                ObjectStorageInfo {
+                    endpoint: Some("test-endpoint.local".into()),
+                    access_key_id: Some("access-key-id".into()),
+                    access_key_secret: Some("access-key-secret".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                Scheme::OSS,
+                ObjectStorageInfo {
+                    endpoint: Some("test-endpoint.local".into()),
+                    access_key_id: Some("access-key-id".into()),
+                    access_key_secret: Some("access-key-secret".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                Scheme::OBS,
+                ObjectStorageInfo {
+                    endpoint: Some("test-endpoint.local".into()),
+                    access_key_id: Some("access-key-id".into()),
+                    access_key_secret: Some("access-key-secret".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                Scheme::COS,
+                ObjectStorageInfo {
+                    endpoint: Some("test-endpoint.local".into()),
+                    access_key_id: Some("access-key-id".into()),
+                    access_key_secret: Some("access-key-secret".into()),
+                    ..Default::default()
+                },
+            ),
+        ];
 
-        let object_storage = dragonfly_api::common::v2::ObjectStorage {
-            endpoint: Some("test-endpoint.local".into()),
-            access_key_id: "access-key-id".into(),
-            access_key_secret: "access-key-secret".into(),
-            ..Default::default()
-        };
+        for (scheme, object_storage) in test_cases {
+            let url: Url = format!("{}://test-bucket/file", scheme).parse().unwrap();
+            let parsed_url: ParsedURL = url.try_into().unwrap();
 
-        let result = ObjectStorage::new(Scheme::OSS).oss_operator(
-            &parsed_url,
-            Some(object_storage),
-            Duration::from_secs(3),
-        );
+            let result = ObjectStorage::new(scheme).operator(
+                &parsed_url,
+                Some(object_storage),
+                Duration::from_secs(3),
+            );
 
-        assert!(result.is_ok());
+            assert!(
+                result.is_ok(),
+                "can not get {} operator, due to: {}",
+                scheme,
+                result.unwrap_err()
+            );
+        }
     }
 
     #[test]
-    fn should_return_error_when_oss_aksk_not_provided() {
-        let url: Url = "oss://test-bucket/file".parse().unwrap();
+    fn should_get_s3_operator_with_extra_info() {
+        let test_cases = vec![
+            ObjectStorageInfo {
+                access_key_id: Some("access_key_id".into()),
+                access_key_secret: Some("access_key_secret".into()),
+                region: Some("test-region".into()),
+
+                endpoint: Some("test-endpoint.local".into()),
+                ..Default::default()
+            },
+            ObjectStorageInfo {
+                access_key_id: Some("access_key_id".into()),
+                access_key_secret: Some("access_key_secret".into()),
+                region: Some("test-region".into()),
+
+                session_token: Some("session_token".into()),
+                ..Default::default()
+            },
+            ObjectStorageInfo {
+                access_key_id: Some("access_key_id".into()),
+                access_key_secret: Some("access_key_secret".into()),
+                region: Some("test-region".into()),
+
+                endpoint: Some("test-endpoint.local".into()),
+                session_token: Some("session_token".into()),
+                ..Default::default()
+            },
+        ];
+
+        for object_storage in test_cases {
+            let url: Url = "s3://test-bucket/file".parse().unwrap();
+            let parsed_url: ParsedURL = url.try_into().unwrap();
+
+            let result = ObjectStorage::new(Scheme::S3).operator(
+                &parsed_url,
+                Some(object_storage),
+                Duration::from_secs(3),
+            );
+
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap().info().scheme().to_string(), "s3");
+        }
+    }
+
+    #[test]
+    fn should_get_gcs_operator_with_extra_info() {
+        let test_cases = vec![
+            ObjectStorageInfo {
+                credential_path: Some("credential_path".into()),
+                ..Default::default()
+            },
+            ObjectStorageInfo {
+                endpoint: Some("test-endpoint".into()),
+                ..Default::default()
+            },
+            ObjectStorageInfo {
+                predefined_acl: Some("predefine_acl".into()),
+                ..Default::default()
+            },
+            ObjectStorageInfo {
+                credential_path: Some("credential_path".into()),
+                endpoint: Some("test-endpoint".into()),
+                ..Default::default()
+            },
+            ObjectStorageInfo {
+                credential_path: Some("credential_path".into()),
+                predefined_acl: Some("predefine_acl".into()),
+                ..Default::default()
+            },
+            ObjectStorageInfo {
+                endpoint: Some("test-endpoint".into()),
+                predefined_acl: Some("predefine_acl".into()),
+                ..Default::default()
+            },
+            ObjectStorageInfo {
+                credential_path: Some("credential_path".into()),
+                endpoint: Some("test-endpoint".into()),
+                predefined_acl: Some("predefine_acl".into()),
+                ..Default::default()
+            },
+        ];
+
+        for object_storage in test_cases {
+            let url: Url = "gs://test-bucket/file".parse().unwrap();
+            let parsed_url: ParsedURL = url.try_into().unwrap();
+
+            let result = ObjectStorage::new(Scheme::GCS).operator(
+                &parsed_url,
+                Some(object_storage),
+                Duration::from_secs(3),
+            );
+
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap().info().scheme().to_string(), "gcs");
+        }
+    }
+
+    #[test]
+    fn should_return_error_when_lacks_of_info() {
+        let url: Url = "s3://test-bucket/file".parse().unwrap();
         let parsed_url: ParsedURL = url.try_into().unwrap();
 
         let result =
-            ObjectStorage::new(Scheme::OSS).oss_operator(&parsed_url, None, Duration::from_secs(3));
+            ObjectStorage::new(Scheme::S3).operator(&parsed_url, None, Duration::from_secs(3));
 
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ClientError::BackendError(..)));
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "backend error s3 need object_storage parameter"
+        )
     }
 
     #[test]
-    fn should_return_error_when_oss_endpoint_not_provided() {
-        let url: Url = "oss://test-bucket/file".parse().unwrap();
-        let parsed_url: ParsedURL = url.try_into().unwrap();
+    fn should_return_error_when_s3_lacks_of_info() {
+        let test_cases = vec![
+            (
+                ObjectStorageInfo::default(),
+                "backend error s3 need access_key_id, access_key_secret, region",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_id: Some("access_key_id".into()),
+                    ..Default::default()
+                },
+                "backend error s3 need access_key_secret, region",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_secret: Some("access_key_secret".into()),
+                    ..Default::default()
+                },
+                "backend error s3 need access_key_id, region",
+            ),
+            (
+                ObjectStorageInfo {
+                    region: Some("test-region".into()),
+                    ..Default::default()
+                },
+                "backend error s3 need access_key_id, access_key_secret",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_id: Some("access_key_id".into()),
+                    access_key_secret: Some("access_key_secret".into()),
+                    ..Default::default()
+                },
+                "backend error s3 need region",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_id: Some("access_key_id".into()),
+                    region: Some("test-region".into()),
+                    ..Default::default()
+                },
+                "backend error s3 need access_key_secret",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_secret: Some("access_key_secret".into()),
+                    region: Some("test-region".into()),
+                    ..Default::default()
+                },
+                "backend error s3 need access_key_id",
+            ),
+        ];
 
-        let object_storage = dragonfly_api::common::v2::ObjectStorage {
-            access_key_id: "access-key-id".into(),
-            access_key_secret: "access-key-secret".into(),
-            ..Default::default()
-        };
+        for (object_storage, error_message) in test_cases {
+            let url: Url = "s3://test-bucket/file".parse().unwrap();
+            let parsed_url: ParsedURL = url.try_into().unwrap();
 
-        let result = ObjectStorage::new(Scheme::OSS).oss_operator(
-            &parsed_url,
-            Some(object_storage),
-            Duration::from_secs(3),
-        );
+            let result = ObjectStorage::new(Scheme::S3).operator(
+                &parsed_url,
+                Some(object_storage),
+                Duration::from_secs(3),
+            );
 
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ClientError::BackendError(..)));
+            assert!(result.is_err());
+            assert_eq!(result.unwrap_err().to_string(), error_message);
+        }
+    }
+
+    #[test]
+    fn should_return_error_when_abs_lacks_of_info() {
+        let test_cases = vec![
+            (
+                ObjectStorageInfo::default(),
+                "backend error abs need access_key_id, access_key_secret, endpoint",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_id: Some("access_key_id".into()),
+                    ..Default::default()
+                },
+                "backend error abs need access_key_secret, endpoint",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_secret: Some("access_key_secret".into()),
+                    ..Default::default()
+                },
+                "backend error abs need access_key_id, endpoint",
+            ),
+            (
+                ObjectStorageInfo {
+                    endpoint: Some("test-endpoint.local".into()),
+                    ..Default::default()
+                },
+                "backend error abs need access_key_id, access_key_secret",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_id: Some("access_key_id".into()),
+                    access_key_secret: Some("access_key_secret".into()),
+                    ..Default::default()
+                },
+                "backend error abs need endpoint",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_id: Some("access_key_id".into()),
+                    endpoint: Some("test-endpoint.local".into()),
+                    ..Default::default()
+                },
+                "backend error abs need access_key_secret",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_secret: Some("access_key_secret".into()),
+                    endpoint: Some("test-endpoint.local".into()),
+                    ..Default::default()
+                },
+                "backend error abs need access_key_id",
+            ),
+        ];
+
+        for (object_storage, error_message) in test_cases {
+            let url: Url = "abs://test-bucket/file".parse().unwrap();
+            let parsed_url: ParsedURL = url.try_into().unwrap();
+
+            let result = ObjectStorage::new(Scheme::ABS).operator(
+                &parsed_url,
+                Some(object_storage),
+                Duration::from_secs(3),
+            );
+
+            assert!(result.is_err());
+            assert_eq!(result.unwrap_err().to_string(), error_message);
+        }
+    }
+
+    #[test]
+    fn should_return_error_when_oss_lacks_of_info() {
+        let test_cases = vec![
+            (
+                ObjectStorageInfo::default(),
+                "backend error oss need access_key_id, access_key_secret, endpoint",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_id: Some("access_key_id".into()),
+                    ..Default::default()
+                },
+                "backend error oss need access_key_secret, endpoint",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_secret: Some("access_key_secret".into()),
+                    ..Default::default()
+                },
+                "backend error oss need access_key_id, endpoint",
+            ),
+            (
+                ObjectStorageInfo {
+                    endpoint: Some("test-endpoint.local".into()),
+                    ..Default::default()
+                },
+                "backend error oss need access_key_id, access_key_secret",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_id: Some("access_key_id".into()),
+                    access_key_secret: Some("access_key_secret".into()),
+                    ..Default::default()
+                },
+                "backend error oss need endpoint",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_id: Some("access_key_id".into()),
+                    endpoint: Some("test-endpoint.local".into()),
+                    ..Default::default()
+                },
+                "backend error oss need access_key_secret",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_secret: Some("access_key_secret".into()),
+                    endpoint: Some("test-endpoint.local".into()),
+                    ..Default::default()
+                },
+                "backend error oss need access_key_id",
+            ),
+        ];
+
+        for (object_storage, error_message) in test_cases {
+            let url: Url = "oss://test-bucket/file".parse().unwrap();
+            let parsed_url: ParsedURL = url.try_into().unwrap();
+
+            let result = ObjectStorage::new(Scheme::OSS).operator(
+                &parsed_url,
+                Some(object_storage),
+                Duration::from_secs(3),
+            );
+
+            assert!(result.is_err());
+            assert_eq!(result.unwrap_err().to_string(), error_message);
+        }
+    }
+
+    #[test]
+    fn should_return_error_when_obs_lacks_of_info() {
+        let test_cases = vec![
+            (
+                ObjectStorageInfo::default(),
+                "backend error obs need access_key_id, access_key_secret, endpoint",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_id: Some("access_key_id".into()),
+                    ..Default::default()
+                },
+                "backend error obs need access_key_secret, endpoint",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_secret: Some("access_key_secret".into()),
+                    ..Default::default()
+                },
+                "backend error obs need access_key_id, endpoint",
+            ),
+            (
+                ObjectStorageInfo {
+                    endpoint: Some("test-endpoint.local".into()),
+                    ..Default::default()
+                },
+                "backend error obs need access_key_id, access_key_secret",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_id: Some("access_key_id".into()),
+                    access_key_secret: Some("access_key_secret".into()),
+                    ..Default::default()
+                },
+                "backend error obs need endpoint",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_id: Some("access_key_id".into()),
+                    endpoint: Some("test-endpoint.local".into()),
+                    ..Default::default()
+                },
+                "backend error obs need access_key_secret",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_secret: Some("access_key_secret".into()),
+                    endpoint: Some("test-endpoint.local".into()),
+                    ..Default::default()
+                },
+                "backend error obs need access_key_id",
+            ),
+        ];
+
+        for (object_storage, error_message) in test_cases {
+            let url: Url = "obs://test-bucket/file".parse().unwrap();
+            let parsed_url: ParsedURL = url.try_into().unwrap();
+
+            let result = ObjectStorage::new(Scheme::OBS).operator(
+                &parsed_url,
+                Some(object_storage),
+                Duration::from_secs(3),
+            );
+
+            assert!(result.is_err());
+            assert_eq!(result.unwrap_err().to_string(), error_message);
+        }
+    }
+
+    #[test]
+    fn should_return_error_when_cos_lacks_of_info() {
+        let test_cases = vec![
+            (
+                ObjectStorageInfo::default(),
+                "backend error cos need access_key_id, access_key_secret, endpoint",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_id: Some("access_key_id".into()),
+                    ..Default::default()
+                },
+                "backend error cos need access_key_secret, endpoint",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_secret: Some("access_key_secret".into()),
+                    ..Default::default()
+                },
+                "backend error cos need access_key_id, endpoint",
+            ),
+            (
+                ObjectStorageInfo {
+                    endpoint: Some("test-endpoint.local".into()),
+                    ..Default::default()
+                },
+                "backend error cos need access_key_id, access_key_secret",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_id: Some("access_key_id".into()),
+                    access_key_secret: Some("access_key_secret".into()),
+                    ..Default::default()
+                },
+                "backend error cos need endpoint",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_id: Some("access_key_id".into()),
+                    endpoint: Some("test-endpoint.local".into()),
+                    ..Default::default()
+                },
+                "backend error cos need access_key_secret",
+            ),
+            (
+                ObjectStorageInfo {
+                    access_key_secret: Some("access_key_secret".into()),
+                    endpoint: Some("test-endpoint.local".into()),
+                    ..Default::default()
+                },
+                "backend error cos need access_key_id",
+            ),
+        ];
+
+        for (object_storage, error_message) in test_cases {
+            let url: Url = "cos://test-bucket/file".parse().unwrap();
+            let parsed_url: ParsedURL = url.try_into().unwrap();
+
+            let result = ObjectStorage::new(Scheme::COS).operator(
+                &parsed_url,
+                Some(object_storage),
+                Duration::from_secs(3),
+            );
+
+            assert!(result.is_err());
+            assert_eq!(result.unwrap_err().to_string(), error_message);
+        }
     }
 }

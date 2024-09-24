@@ -59,10 +59,10 @@ Examples:
   $ dfget s3://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret>
   
   # Download a file from Google Cloud Storage Service(GCS).
-  $ dfget gcs://<bucket>/<path> -O /tmp/file.txt --storage-credential=<credential> --storage-endpoint=<endpoint>
+  $ dfget gs://<bucket>/<path> -O /tmp/file.txt --storage-credential-path=<credential_path>
   
   # Download a file from Azure Blob Storage Service(ABS).
-  $ dfget abs://<container>/<path> -O /tmp/file.txt --storage-access-key-id=<account_name> --storage-access-key-secret=<account_key> --storage-endpoint=<endpoint>
+  $ dfget abs://<container>/<path> -O /tmp/file.txt --storage-access-key-id=<account_name> --storage-access-key-secret=<account_key>
   
   # Download a file from Aliyun Object Storage Service(OSS).
   $ dfget oss://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret> --storage-endpoint=<endpoint>
@@ -187,9 +187,9 @@ struct Args {
 
     #[arg(
         long,
-        help = "Specify the credential for Google Cloud Storage Service(GCS)"
+        help = "Specify the local path to the credential file which is used for OAuth2 authentication for Google Cloud Storage Service(GCS)"
     )]
-    storage_credential: Option<String>,
+    storage_credential_path: Option<String>,
 
     #[arg(
         long,
@@ -254,6 +254,7 @@ async fn main() -> anyhow::Result<()> {
         args.log_level,
         args.log_max_files,
         None,
+        false,
         false,
         args.verbose,
     );
@@ -545,7 +546,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-// run runs the dfget command.
+/// run runs the dfget command.
 async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
     // Get the absolute path of the output file.
     args.output = Path::new(&args.output).absolutize()?.into();
@@ -566,25 +567,18 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
     download(args, ProgressBar::new(0), dfdaemon_download_client).await
 }
 
-// download_dir downloads all files in the directory.
+/// download_dir downloads all files in the directory.
 async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Result<()> {
-    // Only when the `access_key_id` and `access_key_secret` are provided at the same time,
-    // they will be passed to the `DownloadTaskRequest`.
-    let mut object_storage = None;
-    if let (Some(access_key_id), Some(access_key_secret)) = (
-        args.storage_access_key_id.clone(),
-        args.storage_access_key_secret.clone(),
-    ) {
-        object_storage = Some(ObjectStorage {
-            access_key_id,
-            access_key_secret,
-            session_token: args.storage_session_token.clone(),
-            region: args.storage_region.clone(),
-            endpoint: args.storage_endpoint.clone(),
-            credential: args.storage_credential.clone(),
-            predefined_acl: args.storage_predefined_acl.clone(),
-        });
-    }
+    // Initalize the object storage.
+    let object_storage = Some(ObjectStorage {
+        access_key_id: args.storage_access_key_id.clone(),
+        access_key_secret: args.storage_access_key_secret.clone(),
+        session_token: args.storage_session_token.clone(),
+        region: args.storage_region.clone(),
+        endpoint: args.storage_endpoint.clone(),
+        credential_path: args.storage_credential_path.clone(),
+        predefined_acl: args.storage_predefined_acl.clone(),
+    });
 
     // Get all entries in the directory. If the directory is empty, then return directly.
     let entries = get_entries(args.clone(), object_storage.clone()).await?;
@@ -663,29 +657,25 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
     Ok(())
 }
 
-// download downloads the single file.
+/// download downloads the single file.
 async fn download(
     args: Args,
     progress_bar: ProgressBar,
     download_client: DfdaemonDownloadClient,
 ) -> Result<()> {
-    // Only when the `access_key_id` and `access_key_secret` are provided at the same time,
-    // they will be passed to the `DownloadTaskRequest`.
-    let mut object_storage = None;
-    if let (Some(access_key_id), Some(access_key_secret)) = (
-        args.storage_access_key_id.clone(),
-        args.storage_access_key_secret.clone(),
-    ) {
-        object_storage = Some(ObjectStorage {
-            access_key_id,
-            access_key_secret,
+    // Only initialize object storage when the scheme is an object storage protocol.
+    let object_storage = match object_storage::Scheme::from_str(args.url.scheme()) {
+        Ok(_) => Some(ObjectStorage {
+            access_key_id: args.storage_access_key_id.clone(),
+            access_key_secret: args.storage_access_key_secret.clone(),
             session_token: args.storage_session_token.clone(),
             region: args.storage_region.clone(),
             endpoint: args.storage_endpoint.clone(),
-            credential: args.storage_credential.clone(),
+            credential_path: args.storage_credential_path.clone(),
             predefined_acl: args.storage_predefined_acl.clone(),
-        });
-    }
+        }),
+        Err(_) => None,
+    };
 
     // If the `filtered_query_params` is not provided, then use the default value.
     let filtered_query_params = match args.filtered_query_params {
@@ -769,7 +759,7 @@ async fn download(
     Ok(())
 }
 
-// get_entries gets all entries in the directory.
+/// get_entries gets all entries in the directory.
 async fn get_entries(args: Args, object_storage: Option<ObjectStorage>) -> Result<Vec<DirEntry>> {
     // Initialize backend factory and build backend.
     let backend_factory = BackendFactory::new(None)?;
@@ -828,7 +818,7 @@ async fn get_entries(args: Args, object_storage: Option<ObjectStorage>) -> Resul
     Ok(response.entries)
 }
 
-// make_output_by_entry makes the output path by the entry information.
+/// make_output_by_entry makes the output path by the entry information.
 fn make_output_by_entry(url: Url, output: &Path, entry: DirEntry) -> Result<PathBuf> {
     // Get the root directory of the download directory and the output root directory.
     let root_dir = url.path().to_string();
@@ -846,7 +836,7 @@ fn make_output_by_entry(url: Url, output: &Path, entry: DirEntry) -> Result<Path
         .into())
 }
 
-// get_and_check_dfdaemon_download_client gets a dfdaemon download client and checks its health.
+/// get_and_check_dfdaemon_download_client gets a dfdaemon download client and checks its health.
 async fn get_dfdaemon_download_client(endpoint: PathBuf) -> Result<DfdaemonDownloadClient> {
     // Check dfdaemon's health.
     let health_client = HealthClient::new_unix(endpoint.clone()).await?;
@@ -857,7 +847,7 @@ async fn get_dfdaemon_download_client(endpoint: PathBuf) -> Result<DfdaemonDownl
     Ok(dfdaemon_download_client)
 }
 
-// validate_args validates the command line arguments.
+/// validate_args validates the command line arguments.
 fn validate_args(args: &Args) -> Result<()> {
     // If the URL is a directory, the output path should be a directory.
     if args.url.path().ends_with('/') && !args.output.is_dir() {

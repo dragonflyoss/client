@@ -6,8 +6,9 @@ on:
       - v*
 
 jobs:
-  release-github:
+  build:
     runs-on: ubuntu-latest
+    timeout-minutes: 480
     strategy:
       matrix:
         target:
@@ -101,18 +102,40 @@ jobs:
           tar -czf "$dirname.tar.gz" "$dirname"
           echo "CLIENT_TAR_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
 
-      - name: Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload Release Artifacts
+        uses: actions/upload-artifact@v4
         with:
-          generate_release_notes: true
-          draft: true
-          files: |
+          name: release-${{ matrix.target }}
+          path: |
             ${{ env.CLIENT_RPM_ASSET }}
             ${{ env.CLIENT_DEB_ASSET }}            
-            ${{ env.CLIENT_TAR_ASSET }}
+            ${{ env.CLIENT_TAR_ASSET }}          
+
+  release-github:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    needs: [build]
+    permissions:
+      contents: write
+    steps:
+      - name: Download Release Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: releases
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "releases/*"
+          generateReleaseNotes: true
+          allowUpdates: true
+          draft: true
 
   publish-crates:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main

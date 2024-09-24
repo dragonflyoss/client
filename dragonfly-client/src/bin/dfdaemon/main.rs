@@ -112,6 +112,7 @@ async fn main() -> Result<(), anyhow::Error> {
         args.log_level,
         args.log_max_files,
         config.tracing.addr.to_owned(),
+        config.tracing.flamegraph,
         true,
         args.verbose,
     );
@@ -297,10 +298,6 @@ async fn main() -> Result<(), anyhow::Error> {
             info!("stats server exited");
         },
 
-        _ = tokio::spawn(async move { proxy.run().await }) => {
-            info!("proxy server exited");
-        },
-
         _ = tokio::spawn(async move { manager_announcer.run().await.unwrap_or_else(|err| error!("announcer manager failed: {}", err))}) => {
             info!("announcer manager exited");
         },
@@ -315,6 +312,10 @@ async fn main() -> Result<(), anyhow::Error> {
 
         _ = tokio::spawn(async move { dfdaemon_download_grpc.run().await }) => {
             info!("dfdaemon download grpc unix server exited");
+        },
+
+        _ = tokio::spawn(async move { proxy.run().await }) => {
+            info!("proxy server exited");
         },
 
         _ = tokio::spawn(async move { gc.run().await }) => {

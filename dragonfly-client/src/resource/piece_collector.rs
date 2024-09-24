@@ -29,51 +29,52 @@ use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 use tracing::{error, info, instrument, Instrument};
 
-// CollectedParent is the parent peer collected from the remote peer.
+/// CollectedParent is the parent peer collected from the remote peer.
 #[derive(Clone, Debug)]
 pub struct CollectedParent {
-    // id is the id of the parent.
+    /// id is the id of the parent.
     pub id: String,
 
-    // host is the host of the parent.
+    /// host is the host of the parent.
     pub host: Option<Host>,
 }
 
-// CollectedPiece is the piece collected from a peer.
+/// CollectedPiece is the piece collected from a peer.
 pub struct CollectedPiece {
-    // number is the piece number.
+    /// number is the piece number.
     pub number: u32,
 
-    // length is the piece length.
+    /// length is the piece length.
     pub length: u64,
 
-    // parent is the parent peer.
+    /// parent is the parent peer.
     pub parent: CollectedParent,
 }
 
-// PieceCollector is used to collect pieces from peers.
+/// PieceCollector is used to collect pieces from peers.
 pub struct PieceCollector {
-    // config is the configuration of the dfdaemon.
+    /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    // host_id is the id of the host.
+    /// host_id is the id of the host.
     host_id: String,
 
-    // task_id is the id of the task.
+    /// task_id is the id of the task.
     task_id: String,
 
-    // parents is the parent peers.
+    /// parents is the parent peers.
     parents: Vec<CollectedParent>,
 
-    // interested_pieces is the pieces interested by the collector.
+    /// interested_pieces is the pieces interested by the collector.
     interested_pieces: Vec<metadata::Piece>,
 
-    // collected_pieces is the pieces collected from peers.
+    /// collected_pieces is the pieces collected from peers.
     collected_pieces: Arc<DashMap<u32, String>>,
 }
 
 impl PieceCollector {
-    // new creates a new PieceCollector.
+    /// new creates a new PieceCollector.
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         host_id: &str,
@@ -99,7 +100,8 @@ impl PieceCollector {
         }
     }
 
-    // run runs the piece collector.
+    /// run runs the piece collector.
+    #[instrument(skip_all)]
     pub async fn run(&self) -> Receiver<CollectedPiece> {
         let host_id = self.host_id.clone();
         let task_id = self.task_id.clone();
@@ -107,7 +109,7 @@ impl PieceCollector {
         let interested_pieces = self.interested_pieces.clone();
         let collected_pieces = self.collected_pieces.clone();
         let collected_piece_timeout = self.config.download.piece_timeout;
-        let (collected_piece_tx, collected_piece_rx) = mpsc::channel(1024);
+        let (collected_piece_tx, collected_piece_rx) = mpsc::channel(1024 * 10);
         tokio::spawn(
             async move {
                 Self::collect_from_remote_peers(
@@ -130,7 +132,7 @@ impl PieceCollector {
         collected_piece_rx
     }
 
-    // collect_from_remote_peers collects pieces from remote peers.
+    /// collect_from_remote_peers collects pieces from remote peers.
     #[instrument(skip_all)]
     async fn collect_from_remote_peers(
         host_id: String,

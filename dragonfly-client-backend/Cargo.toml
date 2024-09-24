@@ -27,4 +27,5 @@ futures = "0.3.28"
 libloading = "0.8.5"
 
 [dev-dependencies]
-wiremock = "0.6.1"
+tempfile.workspace = true
+wiremock = "0.6.2"

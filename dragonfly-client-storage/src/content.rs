@@ -23,41 +23,42 @@ use std::sync::Arc;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom};
 use tokio_util::io::InspectReader;
-use tracing::{error, info, warn};
+use tracing::{error, info, instrument, warn};
 
-// DEFAULT_DIR_NAME is the default directory name to store content.
+/// DEFAULT_DIR_NAME is the default directory name to store content.
 const DEFAULT_DIR_NAME: &str = "content";
 
-// Content is the content of a piece.
+/// Content is the content of a piece.
 pub struct Content {
-    // config is the configuration of the dfdaemon.
+    /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    // dir is the directory to store content.
+    /// dir is the directory to store content.
     dir: PathBuf,
 }
 
-// WritePieceResponse is the response of writing a piece.
+/// WritePieceResponse is the response of writing a piece.
 pub struct WritePieceResponse {
-    // length is the length of the piece.
+    /// length is the length of the piece.
     pub length: u64,
 
-    // hash is the hash of the piece.
+    /// hash is the hash of the piece.
     pub hash: String,
 }
 
-// WriteCacheTaskResponse is the response of writing a cache task.
+/// WriteCacheTaskResponse is the response of writing a cache task.
 pub struct WriteCacheTaskResponse {
-    // length is the length of the cache task.
+    /// length is the length of the cache task.
     pub length: u64,
 
-    // hash is the hash of the cache task.
+    /// hash is the hash of the cache task.
     pub hash: String,
 }
 
-// Content implements the content storage.
+/// Content implements the content storage.
 impl Content {
-    // new returns a new content.
+    /// new returns a new content.
+    #[instrument(skip_all)]
     pub async fn new(config: Arc<Config>, dir: &Path) -> Result<Content> {
         let dir = dir.join(DEFAULT_DIR_NAME);
 
@@ -74,7 +75,8 @@ impl Content {
         Ok(Content { config, dir })
     }
 
-    // hard_link_or_copy_task hard links or copies the task content to the destination.
+    /// hard_link_or_copy_task hard links or copies the task content to the destination.
+    #[instrument(skip_all)]
     pub async fn hard_link_or_copy_task(
         &self,
         task: crate::metadata::Task,
@@ -142,20 +144,43 @@ impl Content {
         Ok(())
     }
 
-    // hard_link_task hard links the task content.
+    /// hard_link_task hard links the task content.
+    #[instrument(skip_all)]
     async fn hard_link_task(&self, task_id: &str, link: &Path) -> Result<()> {
         fs::hard_link(self.dir.join(task_id), link).await?;
         Ok(())
     }
 
-    // copy_task copies the task content to the destination.
+    /// copy_task copies the task content to the destination.
+    #[instrument(skip_all)]
     async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        // Ensure the parent directory of the destination exists.
+        if let Some(parent) = to.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).await.map_err(|err| {
+                    error!("failed to create directory {:?}: {}", parent, err);
+                    err
+                })?;
+            }
+        }
+
         fs::copy(self.dir.join(task_id), to).await?;
         Ok(())
     }
 
-    // copy_task_by_range copies the task content to the destination by range.
+    /// copy_task_by_range copies the task content to the destination by range.
+    #[instrument(skip_all)]
     async fn copy_task_by_range(&self, task_id: &str, to: &Path, range: Range) -> Result<()> {
+        // Ensure the parent directory of the destination exists.
+        if let Some(parent) = to.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).await.map_err(|err| {
+                    error!("failed to create directory {:?}: {}", parent, err);
+                    err
+                })?;
+            }
+        }
+
         let mut from_f = File::open(self.dir.join(task_id)).await?;
         from_f.seek(SeekFrom::Start(range.start)).await?;
         let range_reader = from_f.take(range.length);
@@ -175,10 +200,10 @@ impl Content {
         Ok(())
     }
 
-    // read_task reads the task content by range.
+    /// read_task reads the task content by range.
+    #[instrument(skip_all)]
     pub async fn read_task_by_range(&self, task_id: &str, range: Range) -> Result<impl AsyncRead> {
         let task_path = self.dir.join(task_id);
-
         let mut from_f = File::open(task_path.as_path()).await.map_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
             err
@@ -196,8 +221,10 @@ impl Content {
         Ok(range_reader)
     }
 
-    // delete_task deletes the task content.
+    /// delete_task deletes the task content.
+    #[instrument(skip_all)]
     pub async fn delete_task(&self, task_id: &str) -> Result<()> {
+        info!("delete task content: {}", task_id);
         let task_path = self.dir.join(task_id);
         fs::remove_file(task_path.as_path()).await.map_err(|err| {
             error!("remove {:?} failed: {}", task_path, err);
@@ -206,7 +233,8 @@ impl Content {
         Ok(())
     }
 
-    // read_piece reads the piece from the content.
+    /// read_piece reads the piece from the content.
+    #[instrument(skip_all)]
     pub async fn read_piece(
         &self,
         task_id: &str,
@@ -215,7 +243,6 @@ impl Content {
         range: Option<Range>,
     ) -> Result<impl AsyncRead> {
         let task_path = self.dir.join(task_id);
-
         if let Some(range) = range {
             let target_offset = max(offset, range.start);
             let target_length =
@@ -247,7 +274,8 @@ impl Content {
         Ok(f.take(length))
     }
 
-    // write_piece writes the piece to the content.
+    /// write_piece writes the piece to the content.
+    #[instrument(skip_all)]
     pub async fn write_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
@@ -298,12 +326,24 @@ impl Content {
         })
     }
 
-    // hard_link_or_copy_cache_task hard links or copies the task content to the destination.
+    /// hard_link_or_copy_cache_task hard links or copies the task content to the destination.
+    #[instrument(skip_all)]
     pub async fn hard_link_or_copy_cache_task(
         &self,
         task: crate::metadata::CacheTask,
         to: &Path,
     ) -> Result<()> {
+        // Ensure the parent directory of the destination exists.
+        if let Some(parent) = to.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).await.map_err(|err| {
+                    error!("failed to create directory {:?}: {}", parent, err);
+                    err
+                })?;
+            }
+        }
+
+        // Get the cache task path.
         let task_path = self.dir.join(task.id.as_str());
 
         // If the hard link fails, copy the task content to the destination.
@@ -339,7 +379,8 @@ impl Content {
         Ok(())
     }
 
-    // copy_cache_task copies the cache task content to the destination.
+    /// copy_cache_task copies the cache task content to the destination.
+    #[instrument(skip_all)]
     pub async fn write_cache_task(
         &self,
         task_id: &str,
@@ -385,8 +426,10 @@ impl Content {
         })
     }
 
-    // delete_task deletes the cache task content.
+    /// delete_task deletes the cache task content.
+    #[instrument(skip_all)]
     pub async fn delete_cache_task(&self, cache_task_id: &str) -> Result<()> {
+        info!("delete cache task content: {}", cache_task_id);
         let cache_task_path = self.dir.join(cache_task_id);
         fs::remove_file(cache_task_path.as_path())
             .await

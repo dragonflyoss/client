@@ -29,26 +29,27 @@ use std::env;
 use std::sync::Arc;
 use sysinfo::System;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
-// ManagerAnnouncer is used to announce the dfdaemon information to the manager.
+/// ManagerAnnouncer is used to announce the dfdaemon information to the manager.
 pub struct ManagerAnnouncer {
-    // config is the configuration of the dfdaemon.
+    /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    // manager_client is the grpc client of the manager.
+    /// manager_client is the grpc client of the manager.
     manager_client: Arc<ManagerClient>,
 
-    // shutdown is used to shutdown the announcer.
+    /// shutdown is used to shutdown the announcer.
     shutdown: shutdown::Shutdown,
 
-    // _shutdown_complete is used to notify the announcer is shutdown.
+    /// _shutdown_complete is used to notify the announcer is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-// ManagerAnnouncer implements the manager announcer of the dfdaemon.
+/// ManagerAnnouncer implements the manager announcer of the dfdaemon.
 impl ManagerAnnouncer {
-    // new creates a new manager announcer.
+    /// new creates a new manager announcer.
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         manager_client: Arc<ManagerClient>,
@@ -63,7 +64,8 @@ impl ManagerAnnouncer {
         }
     }
 
-    // run announces the dfdaemon information to the manager.
+    /// run announces the dfdaemon information to the manager.
+    #[instrument(skip_all)]
     pub async fn run(&self) -> Result<()> {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -108,27 +110,28 @@ impl ManagerAnnouncer {
     }
 }
 
-// Announcer is used to announce the dfdaemon information to the manager and scheduler.
+/// Announcer is used to announce the dfdaemon information to the manager and scheduler.
 pub struct SchedulerAnnouncer {
-    // config is the configuration of the dfdaemon.
+    /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    // host_id is the id of the host.
+    /// host_id is the id of the host.
     host_id: String,
 
-    // scheduler_client is the grpc client of the scheduler.
+    /// scheduler_client is the grpc client of the scheduler.
     scheduler_client: Arc<SchedulerClient>,
 
-    // shutdown is used to shutdown the announcer.
+    /// shutdown is used to shutdown the announcer.
     shutdown: shutdown::Shutdown,
 
-    // _shutdown_complete is used to notify the announcer is shutdown.
+    /// _shutdown_complete is used to notify the announcer is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-// SchedulerAnnouncer implements the scheduler announcer of the dfdaemon.
+/// SchedulerAnnouncer implements the scheduler announcer of the dfdaemon.
 impl SchedulerAnnouncer {
-    // new creates a new scheduler announcer.
+    /// new creates a new scheduler announcer.
+    #[instrument(skip_all)]
     pub async fn new(
         config: Arc<Config>,
         host_id: String,
@@ -152,7 +155,8 @@ impl SchedulerAnnouncer {
         Ok(announcer)
     }
 
-    // run announces the dfdaemon information to the scheduler.
+    /// run announces the dfdaemon information to the scheduler.
+    #[instrument(skip_all)]
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -189,7 +193,8 @@ impl SchedulerAnnouncer {
         }
     }
 
-    // make_announce_host_request makes the announce host request.
+    /// make_announce_host_request makes the announce host request.
+    #[instrument(skip_all)]
     fn make_announce_host_request(&self) -> Result<AnnounceHostRequest> {
         // If the seed peer is enabled, we should announce the seed peer to the scheduler.
         let host_type = if self.config.seed_peer.enable {
@@ -287,6 +292,7 @@ impl SchedulerAnnouncer {
 
             // TODO: Get scheduler cluster id from dynconfig.
             scheduler_cluster_id: 0,
+            disable_shared: self.config.upload.disable_shared,
         };
 
         Ok(AnnounceHostRequest {

@@ -119,7 +119,7 @@ pub enum Command {
     Remove(remove::RemoveCommand),
 }
 
-// Implement the execute for Command.
+/// Implement the execute for Command.
 impl Command {
     #[allow(unused)]
     pub async fn execute(self, endpoint: &Path) -> Result<()> {
@@ -145,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
         args.log_max_files,
         None,
         false,
+        false,
         args.verbose,
     );
 
@@ -153,7 +154,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-// get_and_check_dfdaemon_download_client gets a dfdaemon download client and checks its health.
+/// get_and_check_dfdaemon_download_client gets a dfdaemon download client and checks its health.
 pub async fn get_dfdaemon_download_client(endpoint: PathBuf) -> Result<DfdaemonDownloadClient> {
     // Check dfdaemon's health.
     let health_client = HealthClient::new_unix(endpoint.clone()).await?;
