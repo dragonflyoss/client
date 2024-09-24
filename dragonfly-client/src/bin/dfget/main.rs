@@ -888,3 +888,185 @@ fn validate_args(args: &Args) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+
+    const BIN: &str = "dfget";
+    const OUTPUT: &str = "--output";
+    const FILE_URL: &str = "http://test.local/test.txt";
+    const DIR_URL: &str = "http://test.local/test-dir/";
+
+    #[test]
+    fn should_validate_args() {
+        let tempdir = tempfile::tempdir().unwrap();
+        // Download file.
+        let output_path = tempdir.path().join("test.txt");
+        let args = Args::parse_from(vec![
+            BIN.to_string(),
+            FILE_URL.to_string(),
+            OUTPUT.into(),
+            output_path.display().to_string(),
+        ]);
+
+        let result = validate_args(&args);
+        assert!(result.is_ok());
+
+        // Download directory.
+        let output_path = tempdir.path();
+        let args = Args::parse_from(vec![
+            BIN.to_string(),
+            DIR_URL.to_string(),
+            OUTPUT.into(),
+            output_path.display().to_string(),
+        ]);
+
+        let result = validate_args(&args);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn should_return_error_when_args_is_not_valid() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let file_path = tempdir.path().join("test.txt");
+        let dir_path = tempdir.path();
+        let non_existent_dir_path = dir_path.join("non_exsitent");
+        let non_existent_file_path = non_existent_dir_path.join("test.txt");
+
+        std::fs::File::create(&file_path).unwrap();
+
+        let test_cases = vec![
+            (
+                Args::parse_from(vec![
+                    BIN.to_string(),
+                    DIR_URL.to_string(),
+                    OUTPUT.into(),
+                    file_path.display().to_string(),
+                ]),
+                format!("output path {} is not a directory", file_path.display()),
+            ),
+            (
+                Args::parse_from(vec![
+                    BIN.to_string(),
+                    DIR_URL.to_string(),
+                    OUTPUT.into(),
+                    non_existent_dir_path.display().to_string(),
+                ]),
+                format!(
+                    "output path {} is not a directory",
+                    non_existent_dir_path.display()
+                ),
+            ),
+            (
+                Args::parse_from(vec![
+                    BIN.to_string(),
+                    FILE_URL.to_string(),
+                    OUTPUT.into(),
+                    file_path.display().to_string(),
+                ]),
+                format!("output path {} is already exist", file_path.display()),
+            ),
+            (
+                Args::parse_from(vec![
+                    BIN.to_string(),
+                    FILE_URL.into(),
+                    OUTPUT.into(),
+                    non_existent_file_path.display().to_string(),
+                ]),
+                format!(
+                    "output path {} is not a directory",
+                    non_existent_dir_path.display()
+                ),
+            ),
+            (
+                Args::parse_from(vec![
+                    BIN.to_string(),
+                    FILE_URL.into(),
+                    OUTPUT.into(),
+                    "/".to_string(),
+                ]),
+                "output path / is not exist".to_string(),
+            ),
+        ];
+
+        for (args, error_message) in test_cases {
+            let result = validate_args(&args);
+            assert!(result.is_err());
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                Error::ValidationError(error_message).to_string()
+            )
+        }
+    }
+
+    #[test]
+    fn should_make_output_by_entry() {
+        let url = Url::parse("http://example.com/root/").unwrap();
+
+        let temp_dir = tempdir().unwrap();
+        let output = temp_dir.path().to_path_buf();
+
+        let entry = DirEntry {
+            url: Url::parse("http://example.com/root/dir/file.txt")
+                .unwrap()
+                .to_string(),
+            content_length: 100,
+            is_dir: false,
+        };
+
+        let result = make_output_by_entry(url, &output, entry);
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), output.join("dir/file.txt"));
+    }
+
+    #[test]
+    fn should_make_output_by_entry_no_trailing_slash_in_output() {
+        let url = Url::parse("http://example.com/root/").unwrap();
+
+        let temp_dir = tempdir().unwrap();
+        let output = PathBuf::from_str(
+            temp_dir
+                .path()
+                .to_string_lossy()
+                .to_string()
+                .trim_end_matches('/'),
+        )
+        .unwrap();
+
+        let entry = DirEntry {
+            url: Url::parse("http://example.com/root/dir/file.txt")
+                .unwrap()
+                .to_string(),
+            content_length: 100,
+            is_dir: false,
+        };
+
+        let result = make_output_by_entry(url, &output, entry);
+
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        assert_eq!(path, output.join("dir/file.txt"));
+    }
+
+    #[test]
+    fn should_return_error_when_make_output_with_invalid_url() {
+        let url = Url::parse("http://example.com/root/dir/file.txt").unwrap();
+
+        let temp_dir = tempdir().unwrap();
+        let output = temp_dir.path().to_path_buf();
+
+        let entry = DirEntry {
+            url: "invalid_url".to_string(),
+            content_length: 100,
+            is_dir: false,
+        };
+
+        let result = make_output_by_entry(url, &output, entry);
+
+        assert!(result.is_err());
+    }
+}
