@@ -79,7 +79,7 @@ bytes = "1.7"
 sysinfo = "0.30.13"
 tower = "0.4.13"
 indicatif = "0.17.8"
-dashmap = "6.0.1"
+dashmap = "6.1.0"
 fs2 = "0.4.3"
 hashring = "0.3.6"
 libc = "0.2"
@@ -92,6 +92,9 @@ termion = "4.0.2"
 tabled = "0.16.0"
 path-absolutize = "3.1.1"
 mockall = "0.11"
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { version = "0.5.4", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
