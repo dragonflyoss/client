@@ -547,7 +547,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("task_id", task_id.as_str());
 
         // Collect the stat task metrics.
-        collect_stat_task_started_metrics(TaskType::Dfdaemon as i32);
+        collect_stat_task_started_metrics(TaskType::Standard as i32);
 
         // Get the task from the scheduler.
         let task = self
@@ -556,7 +556,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             .await
             .map_err(|err| {
                 // Collect the stat task failure metrics.
-                collect_stat_task_failure_metrics(TaskType::Dfdaemon as i32);
+                collect_stat_task_failure_metrics(TaskType::Standard as i32);
 
                 error!("stat task: {}", err);
                 Status::internal(err.to_string())
@@ -585,7 +585,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("task_id", task_id.as_str());
 
         // Collect the delete task started metrics.
-        collect_delete_task_started_metrics(TaskType::Dfdaemon as i32);
+        collect_delete_task_started_metrics(TaskType::Standard as i32);
 
         // Delete the task from the scheduler.
         self.task
@@ -593,7 +593,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             .await
             .map_err(|err| {
                 // Collect the delete task failure metrics.
-                collect_delete_task_failure_metrics(TaskType::Dfdaemon as i32);
+                collect_delete_task_failure_metrics(TaskType::Standard as i32);
 
                 error!("delete task: {}", err);
                 Status::internal(err.to_string())
@@ -856,7 +856,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let peer_id = self.task.id_generator.peer_id();
 
         // Generate the task type and task priority.
-        let task_type = TaskType::Dfcache as i32;
+        let task_type = TaskType::PersistCache as i32;
         let task_priority = Priority::Level0 as i32;
 
         // Span record the host id, task id and peer id.
@@ -1020,16 +1020,16 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
 
-        // Collect the stat cache task started metrics.
-        collect_stat_task_started_metrics(TaskType::Dfcache as i32);
+        // Collect the stat task started metrics.
+        collect_stat_task_started_metrics(TaskType::PersistCache as i32);
 
         let task = self
             .cache_task
             .stat(task_id.as_str(), host_id.as_str())
             .await
             .map_err(|err| {
-                // Collect the stat cache task failure metrics.
-                collect_stat_task_failure_metrics(TaskType::Dfcache as i32);
+                // Collect the stat task failure metrics.
+                collect_stat_task_failure_metrics(TaskType::PersistCache as i32);
 
                 error!("stat cache task: {}", err);
                 Status::internal(err.to_string())
@@ -1057,15 +1057,15 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
 
-        // Collect the delete cache task started metrics.
-        collect_delete_task_started_metrics(TaskType::Dfcache as i32);
+        // Collect the delete task started metrics.
+        collect_delete_task_started_metrics(TaskType::PersistCache as i32);
 
         self.cache_task
             .delete(task_id.as_str(), host_id.as_str())
             .await
             .map_err(|err| {
-                // Collect the delete cache task failure metrics.
-                collect_delete_task_failure_metrics(TaskType::Dfcache as i32);
+                // Collect the delete task failure metrics.
+                collect_delete_task_failure_metrics(TaskType::PersistCache as i32);
 
                 error!("delete cache task: {}", err);
                 Status::internal(err.to_string())

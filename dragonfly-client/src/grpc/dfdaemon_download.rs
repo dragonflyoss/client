@@ -564,7 +564,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("task_id", task_id.as_str());
 
         // Collect the stat task metrics.
-        collect_stat_task_started_metrics(TaskType::Dfdaemon as i32);
+        collect_stat_task_started_metrics(TaskType::Standard as i32);
 
         // Get the task from the scheduler.
         let task = self
@@ -573,7 +573,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             .await
             .map_err(|err| {
                 // Collect the stat task failure metrics.
-                collect_stat_task_failure_metrics(TaskType::Dfdaemon as i32);
+                collect_stat_task_failure_metrics(TaskType::Standard as i32);
 
                 error!("stat task: {}", err);
                 Status::internal(err.to_string())
@@ -602,7 +602,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("task_id", task_id.as_str());
 
         // Collect the delete task started metrics.
-        collect_delete_task_started_metrics(TaskType::Dfdaemon as i32);
+        collect_delete_task_started_metrics(TaskType::Standard as i32);
 
         // Delete the task from the scheduler.
         self.task
@@ -610,7 +610,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             .await
             .map_err(|err| {
                 // Collect the delete task failure metrics.
-                collect_delete_task_failure_metrics(TaskType::Dfdaemon as i32);
+                collect_delete_task_failure_metrics(TaskType::Standard as i32);
 
                 error!("delete task: {}", err);
                 Status::internal(err.to_string())
@@ -673,7 +673,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let peer_id = self.task.id_generator.peer_id();
 
         // Generate the task type and task priority.
-        let task_type = TaskType::Dfcache as i32;
+        let task_type = TaskType::PersistCache as i32;
         let task_priority = Priority::Level0 as i32;
 
         // Span record the host id, task id and peer id.
@@ -866,7 +866,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
         // Collect upload task started metrics.
         collect_upload_task_started_metrics(
-            TaskType::Dfcache as i32,
+            TaskType::PersistCache as i32,
             request.tag.clone().unwrap_or_default().as_str(),
             request.application.clone().unwrap_or_default().as_str(),
         );
@@ -887,7 +887,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             Ok(task) => {
                 // Collect upload task finished metrics.
                 collect_upload_task_finished_metrics(
-                    TaskType::Dfcache as i32,
+                    TaskType::PersistCache as i32,
                     request.tag.clone().unwrap_or_default().as_str(),
                     request.application.clone().unwrap_or_default().as_str(),
                     task.content_length,
@@ -899,7 +899,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             Err(err) => {
                 // Collect upload task failure metrics.
                 collect_upload_task_failure_metrics(
-                    TaskType::Dfcache as i32,
+                    TaskType::PersistCache as i32,
                     request.tag.clone().unwrap_or_default().as_str(),
                     request.application.clone().unwrap_or_default().as_str(),
                 );
@@ -932,7 +932,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("task_id", task_id.as_str());
 
         // Collect the stat cache task started metrics.
-        collect_stat_task_started_metrics(TaskType::Dfcache as i32);
+        collect_stat_task_started_metrics(TaskType::PersistCache as i32);
 
         let task = self
             .cache_task
@@ -940,7 +940,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             .await
             .map_err(|err| {
                 // Collect the stat cache task failure metrics.
-                collect_stat_task_failure_metrics(TaskType::Dfcache as i32);
+                collect_stat_task_failure_metrics(TaskType::PersistCache as i32);
 
                 error!("stat cache task: {}", err);
                 Status::internal(err.to_string())
@@ -969,14 +969,14 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("task_id", task_id.as_str());
 
         // Collect the delete cache task started metrics.
-        collect_delete_task_started_metrics(TaskType::Dfcache as i32);
+        collect_delete_task_started_metrics(TaskType::PersistCache as i32);
 
         self.cache_task
             .delete(task_id.as_str(), host_id.as_str())
             .await
             .map_err(|err| {
                 // Collect the delete cache task failure metrics.
-                collect_delete_task_failure_metrics(TaskType::Dfcache as i32);
+                collect_delete_task_failure_metrics(TaskType::PersistCache as i32);
 
                 error!("delete cache task: {}", err);
                 Status::internal(err.to_string())
