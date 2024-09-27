@@ -110,12 +110,12 @@ impl Dynconfig {
         }
     }
 
-    // get the config.
+    /// get the config.
     pub async fn get_config(&self) -> Arc<Config> {
         self.config.clone()
     }
 
-    // refresh refreshes the dynamic configuration of the dfdaemon.
+    /// refresh refreshes the dynamic configuration of the dfdaemon.
     pub async fn refresh(&self) -> Result<()> {
         // Only one refresh can be running at a time.
         let Ok(_guard) = self.mutex.try_lock() else {
