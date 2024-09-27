@@ -15,7 +15,7 @@
  */
 
 use clap::Parser;
-use dragonfly_api::dfdaemon::v2::DeleteCacheTaskRequest;
+use dragonfly_api::dfdaemon::v2::DeletePersistentCacheTaskRequest;
 use dragonfly_client_core::{Error, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::Path;
@@ -30,7 +30,7 @@ const DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL: Duration = Duration::from_milli
 /// RemoveCommand is the subcommand of remove.
 #[derive(Debug, Clone, Parser)]
 pub struct RemoveCommand {
-    #[arg(help = "Specify the cache task ID to remove")]
+    #[arg(help = "Specify the persistent cache task ID to remove")]
     id: String,
 }
 
@@ -190,7 +190,7 @@ impl RemoveCommand {
         pb.set_message("Removing...");
 
         dfdaemon_download_client
-            .delete_cache_task(DeleteCacheTaskRequest {
+            .delete_persistent_cache_task(DeletePersistentCacheTaskRequest {
                 task_id: self.id.clone(),
             })
             .await?;

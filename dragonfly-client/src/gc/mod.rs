@@ -16,7 +16,7 @@
 
 use crate::grpc::scheduler::SchedulerClient;
 use crate::shutdown;
-use dragonfly_api::scheduler::v2::{DeleteCacheTaskRequest, DeleteTaskRequest};
+use dragonfly_api::scheduler::v2::{DeletePersistentCacheTaskRequest, DeleteTaskRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
 use dragonfly_client_storage::{metadata, Storage};
@@ -77,14 +77,14 @@ impl GC {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    // Evict the cache task by ttl.
-                    if let Err(err) = self.evict_cache_task_by_ttl().await {
-                        info!("failed to evict cache task by ttl: {}", err);
+                    // Evict the persistent cache task by ttl.
+                    if let Err(err) = self.evict_persistent_cache_task_by_ttl().await {
+                        info!("failed to evict persistent cache task by ttl: {}", err);
                     }
 
                     // Evict the cache by disk usage.
-                    if let Err(err) = self.evict_cache_task_by_disk_usage().await {
-                        info!("failed to evict cache task by disk usage: {}", err);
+                    if let Err(err) = self.evict_persistent_cache_task_by_disk_usage().await {
+                        info!("failed to evict persistent cache task by disk usage: {}", err);
                     }
 
                     // Evict the task by ttl.
@@ -204,27 +204,28 @@ impl GC {
             });
     }
 
-    /// evict_cache_task_by_ttl evicts the cache task by ttl.
+    /// evict_persistent_cache_task_by_ttl evicts the persistent cache task by ttl.
     #[instrument(skip_all)]
-    async fn evict_cache_task_by_ttl(&self) -> Result<()> {
-        info!("start to evict by cache task ttl * 2");
-        for task in self.storage.get_cache_tasks()? {
-            // If the cache task is expired and not uploading, evict the cache task.
+    async fn evict_persistent_cache_task_by_ttl(&self) -> Result<()> {
+        info!("start to evict by persistent cache task ttl * 2");
+        for task in self.storage.get_persistent_cache_tasks()? {
+            // If the persistent cache task is expired and not uploading, evict the persistent cache task.
             if task.is_expired() {
-                self.storage.delete_cache_task(&task.id).await;
-                info!("evict cache task {}", task.id);
+                self.storage.delete_persistent_cache_task(&task.id).await;
+                info!("evict persistent cache task {}", task.id);
 
-                self.delete_cache_task_from_scheduler(task.clone()).await;
-                info!("delete cache task {} from scheduler", task.id);
+                self.delete_persistent_cache_task_from_scheduler(task.clone())
+                    .await;
+                info!("delete persistent cache task {} from scheduler", task.id);
             }
         }
 
         Ok(())
     }
 
-    /// evict_cache_task_by_disk_usage evicts the cache task by disk usage.
+    /// evict_persistent_cache_task_by_disk_usage evicts the persistent cache task by disk usage.
     #[instrument(skip_all)]
-    async fn evict_cache_task_by_disk_usage(&self) -> Result<()> {
+    async fn evict_persistent_cache_task_by_disk_usage(&self) -> Result<()> {
         let stats = fs2::statvfs(self.config.storage.dir.as_path())?;
         let available_space = stats.available_space();
         let total_space = stats.total_space();
@@ -233,7 +234,7 @@ impl GC {
         let usage_percent = (100 - available_space * 100 / total_space) as u8;
         if usage_percent >= self.config.gc.policy.dist_high_threshold_percent {
             info!(
-                "start to evict cache task by disk usage, disk usage {}% is higher than high threshold {}%",
+                "start to evict persistent cache task by disk usage, disk usage {}% is higher than high threshold {}%",
                 usage_percent, self.config.gc.policy.dist_high_threshold_percent
             );
 
@@ -242,8 +243,11 @@ impl GC {
                 * ((usage_percent - self.config.gc.policy.dist_low_threshold_percent) as f64
                     / 100.0);
 
-            // Evict the cache task by the need evict space.
-            if let Err(err) = self.evict_cache_task_space(need_evict_space as u64).await {
+            // Evict the persistent cache task by the need evict space.
+            if let Err(err) = self
+                .evict_persistent_cache_task_space(need_evict_space as u64)
+                .await
+            {
                 info!("failed to evict task by disk usage: {}", err);
             }
         }
@@ -251,10 +255,10 @@ impl GC {
         Ok(())
     }
 
-    /// evict_cache_task_space evicts the cache task by the given space.
+    /// evict_persistent_cache_task_space evicts the persistent cache task by the given space.
     #[instrument(skip_all)]
-    async fn evict_cache_task_space(&self, need_evict_space: u64) -> Result<()> {
-        let mut tasks = self.storage.get_cache_tasks()?;
+    async fn evict_persistent_cache_task_space(&self, need_evict_space: u64) -> Result<()> {
+        let mut tasks = self.storage.get_persistent_cache_tasks()?;
         tasks.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
 
         let mut evicted_space = 0;
@@ -264,7 +268,7 @@ impl GC {
                 break;
             }
 
-            // If the cache task is persistent, skip it.
+            // If the persistent cache task is persistent, skip it.
             if task.is_persistent() {
                 continue;
             }
@@ -276,27 +280,37 @@ impl GC {
 
             // Update the evicted space.
             evicted_space += task_space;
-            info!("evict cache task {} size {}", task.id, task_space);
+            info!(
+                "evict persistent cache task {} size {}",
+                task.id, task_space
+            );
 
-            self.delete_cache_task_from_scheduler(task.clone()).await;
-            info!("delete cache task {} from scheduler", task.id);
+            self.delete_persistent_cache_task_from_scheduler(task.clone())
+                .await;
+            info!("delete persistent cache task {} from scheduler", task.id);
         }
 
         info!("evict total size {}", evicted_space);
         Ok(())
     }
 
-    /// delete_cache_task_from_scheduler deletes the cache task from the scheduler.
+    /// delete_persistent_cache_task_from_scheduler deletes the persistent cache task from the scheduler.
     #[instrument(skip_all)]
-    async fn delete_cache_task_from_scheduler(&self, task: metadata::CacheTask) {
+    async fn delete_persistent_cache_task_from_scheduler(
+        &self,
+        task: metadata::PersistentCacheTask,
+    ) {
         self.scheduler_client
-            .delete_cache_task(DeleteCacheTaskRequest {
+            .delete_persistent_cache_task(DeletePersistentCacheTaskRequest {
                 host_id: self.host_id.clone(),
                 task_id: task.id.clone(),
             })
             .await
             .unwrap_or_else(|err| {
-                error!("failed to delete cache peer {}: {}", task.id, err);
+                error!(
+                    "failed to delete persistent cache peer {}: {}",
+                    task.id, err
+                );
             });
     }
 }
