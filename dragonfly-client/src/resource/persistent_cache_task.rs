@@ -15,20 +15,25 @@
  */
 
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
-use dragonfly_api::common::v2::{CachePeer, CacheTask as CommonCacheTask, Piece, TrafficType};
+use dragonfly_api::common::v2::{
+    PersistentCachePeer, PersistentCacheTask as CommonPersistentCacheTask, Piece, TrafficType,
+};
 use dragonfly_api::dfdaemon::{
     self,
     v2::{
-        download_cache_task_response, DownloadCacheTaskRequest, DownloadCacheTaskResponse,
-        UploadCacheTaskRequest,
+        download_persistent_cache_task_response, DownloadPersistentCacheTaskRequest,
+        DownloadPersistentCacheTaskResponse, UploadPersistentCacheTaskRequest,
     },
 };
 use dragonfly_api::scheduler::v2::{
-    announce_cache_peer_request, announce_cache_peer_response, AnnounceCachePeerRequest,
-    DeleteCacheTaskRequest, DownloadCachePeerFailedRequest, DownloadCachePeerFinishedRequest,
-    DownloadCachePeerStartedRequest, DownloadPieceFailedRequest, DownloadPieceFinishedRequest,
-    RegisterCachePeerRequest, RescheduleCachePeerRequest, StatCacheTaskRequest,
-    UploadCacheTaskFailedRequest, UploadCacheTaskFinishedRequest, UploadCacheTaskStartedRequest,
+    announce_persistent_cache_peer_request, announce_persistent_cache_peer_response,
+    AnnouncePersistentCachePeerRequest, DeletePersistentCacheTaskRequest,
+    DownloadPersistentCachePeerFailedRequest, DownloadPersistentCachePeerFinishedRequest,
+    DownloadPersistentCachePeerStartedRequest, DownloadPieceFailedRequest,
+    DownloadPieceFinishedRequest, RegisterPersistentCachePeerRequest,
+    ReschedulePersistentCachePeerRequest, StatPersistentCacheTaskRequest,
+    UploadPersistentCacheTaskFailedRequest, UploadPersistentCacheTaskFinishedRequest,
+    UploadPersistentCacheTaskStartedRequest,
 };
 use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::dfdaemon::Config;
@@ -54,8 +59,8 @@ use tracing::{error, info, instrument, Instrument};
 
 use super::*;
 
-/// CacheTask represents a cache task manager.
-pub struct CacheTask {
+/// PersistentCacheTask represents a persistent cache task manager.
+pub struct PersistentCacheTask {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
@@ -72,9 +77,9 @@ pub struct CacheTask {
     pub piece: Arc<piece::Piece>,
 }
 
-/// CacheTask is the implementation of CacheTask.
-impl CacheTask {
-    /// new creates a new CacheTask.
+/// PersistentCacheTask is the implementation of PersistentCacheTask.
+impl PersistentCacheTask {
+    /// new creates a new PersistentCacheTask.
     #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
@@ -91,7 +96,7 @@ impl CacheTask {
         );
         let piece = Arc::new(piece);
 
-        CacheTask {
+        PersistentCacheTask {
             config,
             id_generator,
             storage,
@@ -109,8 +114,8 @@ impl CacheTask {
         peer_id: &str,
         path: &Path,
         digest: &str,
-        request: UploadCacheTaskRequest,
-    ) -> ClientResult<CommonCacheTask> {
+        request: UploadPersistentCacheTaskRequest,
+    ) -> ClientResult<CommonPersistentCacheTask> {
         // Convert prost_wkt_types::Duration to std::time::Duration.
         let ttl = Duration::try_from(request.ttl.ok_or(Error::UnexpectedResponse)?)
             .or_err(ErrorType::ParseError)?;
@@ -129,9 +134,9 @@ impl CacheTask {
             content_length,
         );
 
-        // Notify the scheduler that the cache task is started.
+        // Notify the scheduler that the persistent cache task is started.
         self.scheduler_client
-            .upload_cache_task_started(UploadCacheTaskStartedRequest {
+            .upload_persistent_cache_task_started(UploadPersistentCacheTaskStartedRequest {
                 host_id: host_id.to_string(),
                 task_id: task_id.to_string(),
                 peer_id: peer_id.to_string(),
@@ -144,49 +149,60 @@ impl CacheTask {
             })
             .await
             .map_err(|err| {
-                error!("upload cache task started: {}", err);
+                error!("upload persistent cache task started: {}", err);
                 err
             })?;
 
         // Create the persistent cache task.
         match self
             .storage
-            .create_persistent_cache_task(task_id, ttl, path, piece_length, content_length, digest)
+            .create_persistent_persistent_cache_task(
+                task_id,
+                ttl,
+                path,
+                piece_length,
+                content_length,
+                digest,
+            )
             .await
         {
             Ok(metadata) => {
                 let response = match self
                     .scheduler_client
-                    .upload_cache_task_finished(UploadCacheTaskFinishedRequest {
-                        host_id: host_id.to_string(),
-                        task_id: task_id.to_string(),
-                        peer_id: peer_id.to_string(),
-                    })
+                    .upload_persistent_cache_task_finished(
+                        UploadPersistentCacheTaskFinishedRequest {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                        },
+                    )
                     .await
                 {
                     Ok(response) => response,
                     Err(err) => {
-                        // Notify the scheduler that the cache task is failed.
+                        // Notify the scheduler that the persistent cache task is failed.
                         self.scheduler_client
-                            .upload_cache_task_failed(UploadCacheTaskFailedRequest {
-                                host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
-                                peer_id: peer_id.to_string(),
-                                description: Some(err.to_string()),
-                            })
+                            .upload_persistent_cache_task_failed(
+                                UploadPersistentCacheTaskFailedRequest {
+                                    host_id: host_id.to_string(),
+                                    task_id: task_id.to_string(),
+                                    peer_id: peer_id.to_string(),
+                                    description: Some(err.to_string()),
+                                },
+                            )
                             .await
                             .map_err(|err| {
-                                error!("upload cache task failed: {}", err);
+                                error!("upload persistent cache task failed: {}", err);
                                 err
                             })?;
 
-                        // Delete the cache task.
-                        self.storage.delete_cache_task(task_id).await;
+                        // Delete the persistent cache task.
+                        self.storage.delete_persistent_cache_task(task_id).await;
                         return Err(err);
                     }
                 };
 
-                Ok(CommonCacheTask {
+                Ok(CommonPersistentCacheTask {
                     id: task_id.to_string(),
                     persistent_replica_count: request.persistent_replica_count,
                     replica_count: response.replica_count,
@@ -203,9 +219,9 @@ impl CacheTask {
                 })
             }
             Err(err) => {
-                // Notify the scheduler that the cache task is failed.
+                // Notify the scheduler that the persistent cache task is failed.
                 self.scheduler_client
-                    .upload_cache_task_failed(UploadCacheTaskFailedRequest {
+                    .upload_persistent_cache_task_failed(UploadPersistentCacheTaskFailedRequest {
                         host_id: host_id.to_string(),
                         task_id: task_id.to_string(),
                         peer_id: peer_id.to_string(),
@@ -213,28 +229,28 @@ impl CacheTask {
                     })
                     .await
                     .map_err(|err| {
-                        error!("upload cache task failed: {}", err);
+                        error!("upload persistent cache task failed: {}", err);
                         err
                     })?;
 
-                // Delete the cache task.
-                self.storage.delete_cache_task(task_id).await;
+                // Delete the persistent cache task.
+                self.storage.delete_persistent_cache_task(task_id).await;
                 Err(err)
             }
         }
     }
 
-    /// download_started updates the metadata of the cache task when the cache task downloads started.
+    /// download_started updates the metadata of the persistent cache task when the persistent cache task downloads started.
     #[instrument(skip_all)]
     pub async fn download_started(
         &self,
         task_id: &str,
         host_id: &str,
-        request: DownloadCacheTaskRequest,
-    ) -> ClientResult<metadata::CacheTask> {
+        request: DownloadPersistentCacheTaskRequest,
+    ) -> ClientResult<metadata::PersistentCacheTask> {
         let response = self
             .scheduler_client
-            .stat_cache_task(StatCacheTaskRequest {
+            .stat_persistent_cache_task(StatPersistentCacheTaskRequest {
                 host_id: host_id.to_string(),
                 task_id: task_id.to_string(),
             })
@@ -244,7 +260,7 @@ impl CacheTask {
         let ttl = Duration::try_from(response.ttl.ok_or(Error::InvalidParameter)?)
             .or_err(ErrorType::ParseError)?;
 
-        self.storage.download_cache_task_started(
+        self.storage.download_persistent_cache_task_started(
             task_id,
             ttl,
             request.persistent,
@@ -253,39 +269,44 @@ impl CacheTask {
         )
     }
 
-    /// download_finished updates the metadata of the cache task when the task downloads finished.
+    /// download_finished updates the metadata of the persistent cache task when the task downloads finished.
     #[instrument(skip_all)]
-    pub fn download_finished(&self, id: &str) -> ClientResult<metadata::CacheTask> {
-        self.storage.download_cache_task_finished(id)
+    pub fn download_finished(&self, id: &str) -> ClientResult<metadata::PersistentCacheTask> {
+        self.storage.download_persistent_cache_task_finished(id)
     }
 
-    /// download_failed updates the metadata of the cache task when the task downloads failed.
+    /// download_failed updates the metadata of the persistent cache task when the task downloads failed.
     #[instrument(skip_all)]
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
-        let _ = self.storage.download_cache_task_failed(id).await?;
+        let _ = self
+            .storage
+            .download_persistent_cache_task_failed(id)
+            .await?;
         Ok(())
     }
 
-    /// hard_link_or_copy hard links or copies the cache task content to the destination.
+    /// hard_link_or_copy hard links or copies the persistent cache task content to the destination.
     #[instrument(skip_all)]
     pub async fn hard_link_or_copy(
         &self,
-        task: metadata::CacheTask,
+        task: metadata::PersistentCacheTask,
         to: &Path,
     ) -> ClientResult<()> {
-        self.storage.hard_link_or_copy_cache_task(task, to).await
+        self.storage
+            .hard_link_or_copy_persistent_cache_task(task, to)
+            .await
     }
 
-    /// download downloads a cache task.
+    /// download downloads a persistent cache task.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     pub async fn download(
         &self,
-        task: metadata::CacheTask,
+        task: metadata::PersistentCacheTask,
         host_id: &str,
         peer_id: &str,
-        request: DownloadCacheTaskRequest,
-        download_progress_tx: Sender<Result<DownloadCacheTaskResponse, Status>>,
+        request: DownloadPersistentCacheTaskRequest,
+        download_progress_tx: Sender<Result<DownloadPersistentCacheTaskResponse, Status>>,
     ) -> ClientResult<()> {
         // Calculate the interested pieces to download.
         let interested_pieces =
@@ -318,7 +339,7 @@ impl CacheTask {
                 .collect::<Vec<u32>>()
         );
 
-        // Construct the pieces for the download cache task started response.
+        // Construct the pieces for the download persistent cache task started response.
         let mut pieces = Vec::new();
         for interested_piece in interested_pieces.clone() {
             pieces.push(Piece {
@@ -336,16 +357,16 @@ impl CacheTask {
             });
         }
 
-        // Send the download cache task started request.
+        // Send the download persistent cache task started request.
         download_progress_tx
             .send_timeout(
-                Ok(DownloadCacheTaskResponse {
+                Ok(DownloadPersistentCacheTaskResponse {
                     host_id: host_id.to_string(),
                     task_id: task.id.clone(),
                     peer_id: peer_id.to_string(),
                     response: Some(
-                        download_cache_task_response::Response::DownloadCacheTaskStartedResponse(
-                            dfdaemon::v2::DownloadCacheTaskStartedResponse {
+                        download_persistent_cache_task_response::Response::DownloadPersistentCacheTaskStartedResponse(
+                            dfdaemon::v2::DownloadPersistentCacheTaskStartedResponse {
                                 content_length: task.content_length,
                             },
                         ),
@@ -355,7 +376,7 @@ impl CacheTask {
             )
             .await
             .map_err(|err| {
-                error!("send DownloadCacheTaskStartedResponse failed: {:?}", err);
+                error!("send DownloadPersistentCacheTaskStartedResponse failed: {:?}", err);
                 err
             })?;
 
@@ -455,17 +476,17 @@ impl CacheTask {
         Ok(())
     }
 
-    /// download_partial_with_scheduler downloads a partial cache task with scheduler.
+    /// download_partial_with_scheduler downloads a partial persistent cache task with scheduler.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler(
         &self,
-        task: metadata::CacheTask,
+        task: metadata::PersistentCacheTask,
         host_id: &str,
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
-        request: DownloadCacheTaskRequest,
-        download_progress_tx: Sender<Result<DownloadCacheTaskResponse, Status>>,
+        request: DownloadPersistentCacheTaskRequest,
+        download_progress_tx: Sender<Result<DownloadPersistentCacheTaskResponse, Status>>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Initialize the schedule count.
         let mut schedule_count = 0;
@@ -479,13 +500,13 @@ impl CacheTask {
         // Send the register peer request.
         in_stream_tx
             .send_timeout(
-                AnnounceCachePeerRequest {
+                AnnouncePersistentCachePeerRequest {
                     host_id: host_id.to_string(),
                     task_id: task.id.clone(),
                     peer_id: peer_id.to_string(),
                     request: Some(
-                        announce_cache_peer_request::Request::RegisterCachePeerRequest(
-                            RegisterCachePeerRequest {
+                        announce_persistent_cache_peer_request::Request::RegisterPersistentCachePeerRequest(
+                            RegisterPersistentCachePeerRequest {
                                 host_id: host_id.to_string(),
                                 task_id: task.id.clone(),
                                 tag: request.tag.clone(),
@@ -501,17 +522,17 @@ impl CacheTask {
             )
             .await
             .map_err(|err| {
-                error!("send RegisterCachePeerRequest failed: {:?}", err);
+                error!("send RegisterPersistentCachePeerRequest failed: {:?}", err);
                 err
             })?;
-        info!("sent RegisterCachePeerRequest");
+        info!("sent RegisterPersistentCachePeerRequest");
 
         // Initialize the stream.
         let in_stream = ReceiverStream::new(in_stream_rx);
         let request_stream = Request::new(in_stream);
         let response = self
             .scheduler_client
-            .announce_cache_peer(task.id.as_str(), peer_id, request_stream)
+            .announce_persistent_cache_peer(task.id.as_str(), peer_id, request_stream)
             .await
             .map_err(|err| {
                 error!("announce peer failed: {:?}", err);
@@ -530,13 +551,13 @@ impl CacheTask {
             if schedule_count >= self.config.scheduler.max_schedule_count {
                 in_stream_tx
                     .send_timeout(
-                        AnnounceCachePeerRequest {
+                        AnnouncePersistentCachePeerRequest {
                             host_id: host_id.to_string(),
                             task_id: task.id.clone(),
                             peer_id: peer_id.to_string(),
                             request: Some(
-                                announce_cache_peer_request::Request::DownloadCachePeerFailedRequest(
-                                    DownloadCachePeerFailedRequest {
+                                announce_persistent_cache_peer_request::Request::DownloadPersistentCachePeerFailedRequest(
+                                    DownloadPersistentCachePeerFailedRequest {
                                         description: Some(
                                             "max schedule count exceeded".to_string(),
                                         ),
@@ -548,9 +569,9 @@ impl CacheTask {
                     )
                     .await
                     .unwrap_or_else(|err| {
-                        error!("send DownloadCachePeerFailedRequest failed: {:?}", err)
+                        error!("send DownloadPersistentCachePeerFailedRequest failed: {:?}", err)
                     });
-                info!("sent DownloadCachePeerFailedRequest");
+                info!("sent DownloadPersistentCachePeerFailedRequest");
 
                 // Wait for the latest message to be sent.
                 sleep(Duration::from_millis(1)).await;
@@ -559,20 +580,22 @@ impl CacheTask {
 
             let response = message?.response.ok_or(Error::UnexpectedResponse)?;
             match response {
-                announce_cache_peer_response::Response::EmptyCacheTaskResponse(response) => {
-                    // If the cache task is empty, return an empty vector.
-                    info!("empty cache task response: {:?}", response);
+                announce_persistent_cache_peer_response::Response::EmptyPersistentCacheTaskResponse(
+                    response,
+                ) => {
+                    // If the persistent cache task is empty, return an empty vector.
+                    info!("empty persistent cache task response: {:?}", response);
 
                     // Send the download peer started request.
                     in_stream_tx
                         .send_timeout(
-                            AnnounceCachePeerRequest {
+                            AnnouncePersistentCachePeerRequest {
                                 host_id: host_id.to_string(),
                                 task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
                                 request: Some(
-                                    announce_cache_peer_request::Request::DownloadCachePeerStartedRequest(
-                                        DownloadCachePeerStartedRequest {},
+                                    announce_persistent_cache_peer_request::Request::DownloadPersistentCachePeerStartedRequest(
+                                        DownloadPersistentCachePeerStartedRequest {},
                                     ),
                                 ),
                             },
@@ -580,21 +603,21 @@ impl CacheTask {
                         )
                         .await
                         .map_err(|err| {
-                            error!("send DownloadCachePeerStartedRequest failed: {:?}", err);
+                            error!("send DownloadPersistentCachePeerStartedRequest failed: {:?}", err);
                             err
                         })?;
-                    info!("sent DownloadCachePeerStartedRequest");
+                    info!("sent DownloadPersistentCachePeerStartedRequest");
 
                     // Send the download peer finished request.
                     in_stream_tx
                         .send_timeout(
-                            AnnounceCachePeerRequest {
+                            AnnouncePersistentCachePeerRequest {
                                 host_id: host_id.to_string(),
                                 task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
                                 request: Some(
-                                    announce_cache_peer_request::Request::DownloadCachePeerFinishedRequest(
-                                        DownloadCachePeerFinishedRequest {
+                                    announce_persistent_cache_peer_request::Request::DownloadPersistentCachePeerFinishedRequest(
+                                        DownloadPersistentCachePeerFinishedRequest {
                                             piece_count: 0,
                                         },
                                     ),
@@ -604,19 +627,21 @@ impl CacheTask {
                         )
                         .await
                         .map_err(|err| {
-                            error!("send DownloadCachePeerFinishedRequest failed: {:?}", err);
+                            error!("send DownloadPersistentCachePeerFinishedRequest failed: {:?}", err);
                             err
                         })?;
-                    info!("sent DownloadCachePeerFinishedRequest");
+                    info!("sent DownloadPersistentCachePeerFinishedRequest");
 
                     // Wait for the latest message to be sent.
                     sleep(Duration::from_millis(1)).await;
                     return Ok(Vec::new());
                 }
-                announce_cache_peer_response::Response::NormalCacheTaskResponse(response) => {
-                    // If the cache task is normal, download the pieces from the remote peer.
+                announce_persistent_cache_peer_response::Response::NormalPersistentCacheTaskResponse(
+                    response,
+                ) => {
+                    // If the persistent cache task is normal, download the pieces from the remote peer.
                     info!(
-                        "normal cache task response: {:?}",
+                        "normal persistent cache task response: {:?}",
                         response
                             .candidate_cache_parents
                             .iter()
@@ -627,13 +652,13 @@ impl CacheTask {
                     // Send the download peer started request.
                     match in_stream_tx
                         .send_timeout(
-                            AnnounceCachePeerRequest {
+                            AnnouncePersistentCachePeerRequest {
                                 host_id: host_id.to_string(),
                                 task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
                                 request: Some(
-                                    announce_cache_peer_request::Request::DownloadCachePeerStartedRequest(
-                                        DownloadCachePeerStartedRequest {},
+                                    announce_persistent_cache_peer_request::Request::DownloadPersistentCachePeerStartedRequest(
+                                        DownloadPersistentCachePeerStartedRequest {},
                                     ),
                                 ),
                             },
@@ -641,9 +666,9 @@ impl CacheTask {
                         )
                         .await
                     {
-                        Ok(_) => info!("sent DownloadCachePeerStartedRequest"),
+                        Ok(_) => info!("sent DownloadPersistentCachePeerStartedRequest"),
                         Err(err) => {
-                            error!("send DownloadCachePeerStartedRequest failed: {:?}", err);
+                            error!("send DownloadPersistentCachePeerStartedRequest failed: {:?}", err);
                             return Ok(finished_pieces);
                         }
                     };
@@ -693,13 +718,13 @@ impl CacheTask {
                         // Send the download peer finished request.
                         match in_stream_tx
                             .send_timeout(
-                                AnnounceCachePeerRequest {
+                                AnnouncePersistentCachePeerRequest {
                                     host_id: host_id.to_string(),
                                     task_id: task.id.clone(),
                                     peer_id: peer_id.to_string(),
                                     request: Some(
-                                        announce_cache_peer_request::Request::DownloadCachePeerFinishedRequest(
-                                            DownloadCachePeerFinishedRequest {
+                                        announce_persistent_cache_peer_request::Request::DownloadPersistentCachePeerFinishedRequest(
+                                            DownloadPersistentCachePeerFinishedRequest {
                                                 piece_count: interested_pieces.len() as u32,
                                             },
                                         ),
@@ -709,9 +734,9 @@ impl CacheTask {
                             )
                             .await
                         {
-                            Ok(_) => info!("sent DownloadCachePeerFinishedRequest"),
+                            Ok(_) => info!("sent DownloadPersistentCachePeerFinishedRequest"),
                             Err(err) => {
-                                error!("send DownloadCachePeerFinishedRequest failed: {:?}", err);
+                                error!("send DownloadPersistentCachePeerFinishedRequest failed: {:?}", err);
                             }
                         }
 
@@ -723,13 +748,13 @@ impl CacheTask {
                     // If not all pieces are downloaded, send the reschedule request.
                     match in_stream_tx
                         .send_timeout(
-                            AnnounceCachePeerRequest {
+                            AnnouncePersistentCachePeerRequest {
                                 host_id: host_id.to_string(),
                                 task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
                                 request: Some(
-                                    announce_cache_peer_request::Request::RescheduleCachePeerRequest(
-                                        RescheduleCachePeerRequest {
+                                    announce_persistent_cache_peer_request::Request::ReschedulePersistentCachePeerRequest(
+                                        ReschedulePersistentCachePeerRequest {
                                             candidate_parents: response.candidate_cache_parents,
                                             description: Some(
                                                 "not all pieces are downloaded from remote peer"
@@ -743,9 +768,9 @@ impl CacheTask {
                         )
                         .await
                     {
-                        Ok(_) => info!("sent RescheduleCachePeerRequest"),
+                        Ok(_) => info!("sent ReschedulePersistentCachePeerRequest"),
                         Err(err) => {
-                            error!("send RescheduleCachePeerRequest failed: {:?}", err);
+                            error!("send ReschedulePersistentCachePeerRequest failed: {:?}", err);
                             return Ok(finished_pieces);
                         }
                     };
@@ -758,18 +783,18 @@ impl CacheTask {
         Ok(finished_pieces)
     }
 
-    /// download_partial_with_scheduler_from_remote_peer downloads a partial cache task with scheduler from a remote peer.
+    /// download_partial_with_scheduler_from_remote_peer downloads a partial persistent cache task with scheduler from a remote peer.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler_from_remote_peer(
         &self,
-        task: metadata::CacheTask,
+        task: metadata::PersistentCacheTask,
         host_id: &str,
         peer_id: &str,
-        parents: Vec<CachePeer>,
+        parents: Vec<PersistentCachePeer>,
         interested_pieces: Vec<metadata::Piece>,
-        download_progress_tx: Sender<Result<DownloadCacheTaskResponse, Status>>,
-        in_stream_tx: Sender<AnnounceCachePeerRequest>,
+        download_progress_tx: Sender<Result<DownloadPersistentCacheTaskResponse, Status>>,
+        in_stream_tx: Sender<AnnouncePersistentCachePeerRequest>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Initialize the piece collector.
         let piece_collector = piece_collector::PieceCollector::new(
@@ -806,8 +831,8 @@ impl CacheTask {
                 piece_manager: Arc<super::piece::Piece>,
                 storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
-                download_progress_tx: Sender<Result<DownloadCacheTaskResponse, Status>>,
-                in_stream_tx: Sender<AnnounceCachePeerRequest>,
+                download_progress_tx: Sender<Result<DownloadPersistentCacheTaskResponse, Status>>,
+                in_stream_tx: Sender<AnnouncePersistentCachePeerRequest>,
             ) -> ClientResult<metadata::Piece> {
                 // Limit the concurrent download count.
                 let _permit = semaphore.acquire().await.unwrap();
@@ -856,12 +881,12 @@ impl CacheTask {
                 // Send the download piece finished request.
                 in_stream_tx
                     .send_timeout(
-                        AnnounceCachePeerRequest {
+                        AnnouncePersistentCachePeerRequest {
                             host_id: host_id.to_string(),
                             task_id: task_id.clone(),
                             peer_id: peer_id.to_string(),
                             request: Some(
-                                announce_cache_peer_request::Request::DownloadPieceFinishedRequest(
+                                announce_persistent_cache_peer_request::Request::DownloadPieceFinishedRequest(
                                     DownloadPieceFinishedRequest {
                                         piece: Some(piece.clone()),
                                     },
@@ -879,12 +904,12 @@ impl CacheTask {
                 // Send the download progress.
                 download_progress_tx
                     .send_timeout(
-                        Ok(DownloadCacheTaskResponse {
+                        Ok(DownloadPersistentCacheTaskResponse {
                             host_id: host_id.to_string(),
                             task_id: task_id.clone(),
                             peer_id: peer_id.to_string(),
                             response: Some(
-                                download_cache_task_response::Response::DownloadPieceFinishedResponse(
+                                download_persistent_cache_task_response::Response::DownloadPieceFinishedResponse(
                                     dfdaemon::v2::DownloadPieceFinishedResponse {
                                         piece: Some(piece.clone()),
                                     },
@@ -952,12 +977,12 @@ impl CacheTask {
                     // Send the download piece failed request.
                     in_stream_tx
                         .send_timeout(
-                            AnnounceCachePeerRequest {
+                            AnnouncePersistentCachePeerRequest {
                                 host_id: host_id.to_string(),
                                 task_id: task.id.clone(),
                                 peer_id: peer_id.to_string(),
                                 request: Some(
-                                    announce_cache_peer_request::Request::DownloadPieceFailedRequest(
+                                    announce_persistent_cache_peer_request::Request::DownloadPieceFailedRequest(
                                         DownloadPieceFailedRequest {
                                             piece_number: Some(err.piece_number),
                                             parent_id: err.parent_id,
@@ -984,16 +1009,16 @@ impl CacheTask {
         Ok(finished_pieces)
     }
 
-    /// download_partial_from_local_peer downloads a partial cache task from a local peer.
+    /// download_partial_from_local_peer downloads a partial persistent cache task from a local peer.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_from_local_peer(
         &self,
-        task: metadata::CacheTask,
+        task: metadata::PersistentCacheTask,
         host_id: &str,
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
-        download_progress_tx: Sender<Result<DownloadCacheTaskResponse, Status>>,
+        download_progress_tx: Sender<Result<DownloadPersistentCacheTaskResponse, Status>>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
@@ -1046,12 +1071,12 @@ impl CacheTask {
             // Send the download progress.
             download_progress_tx
                 .send_timeout(
-                    Ok(DownloadCacheTaskResponse {
+                    Ok(DownloadPersistentCacheTaskResponse {
                         host_id: host_id.to_string(),
                         task_id: task.id.clone(),
                         peer_id: peer_id.to_string(),
                         response: Some(
-                            download_cache_task_response::Response::DownloadPieceFinishedResponse(
+                            download_persistent_cache_task_response::Response::DownloadPieceFinishedResponse(
                                 dfdaemon::v2::DownloadPieceFinishedResponse {
                                     piece: Some(piece.clone()),
                                 },
@@ -1073,28 +1098,32 @@ impl CacheTask {
         Ok(finished_pieces)
     }
 
-    /// stat stats the cache task from the scheduler.
+    /// stat stats the persistent cache task from the scheduler.
     #[instrument(skip_all)]
-    pub async fn stat(&self, task_id: &str, host_id: &str) -> ClientResult<CommonCacheTask> {
+    pub async fn stat(
+        &self,
+        task_id: &str,
+        host_id: &str,
+    ) -> ClientResult<CommonPersistentCacheTask> {
         self.scheduler_client
-            .stat_cache_task(StatCacheTaskRequest {
+            .stat_persistent_cache_task(StatPersistentCacheTaskRequest {
                 host_id: host_id.to_string(),
                 task_id: task_id.to_string(),
             })
             .await
     }
 
-    /// delete_cache_task deletes a cache task.
+    /// delete_persistent_cache_task deletes a persistent cache task.
     #[instrument(skip_all)]
     pub async fn delete(&self, task_id: &str, host_id: &str) -> ClientResult<()> {
         self.scheduler_client
-            .delete_cache_task(DeleteCacheTaskRequest {
+            .delete_persistent_cache_task(DeletePersistentCacheTaskRequest {
                 host_id: host_id.to_string(),
                 task_id: task_id.to_string(),
             })
             .await
             .map_err(|err| {
-                error!("delete cache task: {}", err);
+                error!("delete persistent cache task: {}", err);
                 err
             })?;
 

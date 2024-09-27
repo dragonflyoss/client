@@ -20,12 +20,13 @@ use crate::grpc::health::HealthClient;
 use dragonfly_api::common::v2::{CachePeer, CacheTask, Peer, Task};
 use dragonfly_api::manager::v2::Scheduler;
 use dragonfly_api::scheduler::v2::{
-    scheduler_client::SchedulerClient as SchedulerGRPCClient, AnnounceCachePeerRequest,
-    AnnounceCachePeerResponse, AnnounceHostRequest, AnnouncePeerRequest, AnnouncePeerResponse,
-    DeleteCachePeerRequest, DeleteCacheTaskRequest, DeleteHostRequest, DeletePeerRequest,
-    DeleteTaskRequest, StatCachePeerRequest, StatCacheTaskRequest, StatPeerRequest,
-    StatTaskRequest, UploadCacheTaskFailedRequest, UploadCacheTaskFinishedRequest,
-    UploadCacheTaskStartedRequest,
+    scheduler_client::SchedulerClient as SchedulerGRPCClient, AnnounceHostRequest,
+    AnnouncePeerRequest, AnnouncePeerResponse, AnnouncePersistentCachePeerRequest,
+    AnnouncePersistentCachePeerResponse, DeleteHostRequest, DeletePeerRequest,
+    DeletePersistentCachePeerRequest, DeletePersistentCacheTaskRequest, DeleteTaskRequest,
+    StatPeerRequest, StatPersistentCachePeerRequest, StatPersistentCacheTaskRequest,
+    StatTaskRequest, UploadPersistentCacheTaskFailedRequest,
+    UploadPersistentCacheTaskFinishedRequest, UploadPersistentCacheTaskStartedRequest,
 };
 use dragonfly_client_core::error::{ErrorType, ExternalError, OrErr};
 use dragonfly_client_core::{Error, Result};
@@ -329,114 +330,126 @@ impl SchedulerClient {
         Ok(())
     }
 
-    /// announce_cache_peer announces the cache peer to the scheduler.
+    /// announce_persistent_cache_peer announces the persistent cache peer to the scheduler.
     #[instrument(skip_all)]
-    pub async fn announce_cache_peer(
+    pub async fn announce_persistent_cache_peer(
         &self,
         task_id: &str,
         peer_id: &str,
-        request: impl tonic::IntoStreamingRequest<Message = AnnounceCachePeerRequest>,
-    ) -> Result<tonic::Response<tonic::codec::Streaming<AnnounceCachePeerResponse>>> {
+        request: impl tonic::IntoStreamingRequest<Message = AnnouncePersistentCachePeerRequest>,
+    ) -> Result<tonic::Response<tonic::codec::Streaming<AnnouncePersistentCachePeerResponse>>> {
         let response = self
             .client(task_id, Some(peer_id))
             .await?
-            .announce_cache_peer(request)
+            .announce_persistent_cache_peer(request)
             .await?;
         Ok(response)
     }
 
-    /// stat_cache_peer gets the status of the cache peer.
+    /// stat_persistent_cache_peer gets the status of the persistent cache peer.
     #[instrument(skip(self))]
-    pub async fn stat_cache_peer(&self, request: StatCachePeerRequest) -> Result<CachePeer> {
+    pub async fn stat_persistent_cache_peer(
+        &self,
+        request: StatPersistentCachePeerRequest,
+    ) -> Result<PersistentCachePeer> {
         let task_id = request.task_id.clone();
         let request = Self::make_request(request);
         let response = self
             .client(task_id.as_str(), None)
             .await?
-            .stat_cache_peer(request)
+            .stat_persistent_cache_peer(request)
             .await?;
         Ok(response.into_inner())
     }
 
-    /// delete_cache_peer tells the scheduler that the cache peer is deleting.
+    /// delete_persistent_cache_peer tells the scheduler that the persistent cache peer is deleting.
     #[instrument(skip(self))]
-    pub async fn delete_cache_peer(&self, request: DeleteCachePeerRequest) -> Result<()> {
-        let task_id = request.task_id.clone();
-        let request = Self::make_request(request);
-        self.client(task_id.as_str(), None)
-            .await?
-            .delete_cache_peer(request)
-            .await?;
-        Ok(())
-    }
-
-    /// upload_cache_task_started uploads the metadata of the cache task started.
-    #[instrument(skip(self))]
-    pub async fn upload_cache_task_started(
+    pub async fn delete_persistent_cache_peer(
         &self,
-        request: UploadCacheTaskStartedRequest,
+        request: DeletePersistentCachePeerRequest,
     ) -> Result<()> {
         let task_id = request.task_id.clone();
         let request = Self::make_request(request);
         self.client(task_id.as_str(), None)
             .await?
-            .upload_cache_task_started(request)
+            .delete_persistent_cache_peer(request)
             .await?;
         Ok(())
     }
 
-    /// upload_cache_task_finished uploads the metadata of the cache task finished.
-    #[instrument(skip_all)]
-    pub async fn upload_cache_task_finished(
+    /// upload_persistent_cache_task_started uploads the metadata of the persistent cache task started.
+    #[instrument(skip(self))]
+    pub async fn upload_persistent_cache_task_started(
         &self,
-        request: UploadCacheTaskFinishedRequest,
-    ) -> Result<CacheTask> {
-        let task_id = request.task_id.clone();
-        let request = Self::make_request(request);
-        let response = self
-            .client(task_id.as_str(), None)
-            .await?
-            .upload_cache_task_finished(request)
-            .await?;
-        Ok(response.into_inner())
-    }
-
-    /// upload_cache_task_failed uploads the metadata of the cache task failed.
-    #[instrument(skip_all)]
-    pub async fn upload_cache_task_failed(
-        &self,
-        request: UploadCacheTaskFailedRequest,
+        request: UploadPersistentCacheTaskStartedRequest,
     ) -> Result<()> {
         let task_id = request.task_id.clone();
         let request = Self::make_request(request);
         self.client(task_id.as_str(), None)
             .await?
-            .upload_cache_task_failed(request)
+            .upload_persistent_cache_task_started(request)
             .await?;
         Ok(())
     }
 
-    /// stat_cache_task gets the status of the cache task.
-    #[instrument(skip(self))]
-    pub async fn stat_cache_task(&self, request: StatCacheTaskRequest) -> Result<CacheTask> {
+    /// upload_persistent_cache_task_finished uploads the metadata of the persistent cache task finished.
+    #[instrument(skip_all)]
+    pub async fn upload_persistent_cache_task_finished(
+        &self,
+        request: UploadPersistentCacheTaskFinishedRequest,
+    ) -> Result<PersistentCacheTask> {
         let task_id = request.task_id.clone();
         let request = Self::make_request(request);
         let response = self
             .client(task_id.as_str(), None)
             .await?
-            .stat_cache_task(request)
+            .upload_persistent_cache_task_finished(request)
             .await?;
         Ok(response.into_inner())
     }
 
-    /// delete_cache_task tells the scheduler that the cache task is deleting.
-    #[instrument(skip(self))]
-    pub async fn delete_cache_task(&self, request: DeleteCacheTaskRequest) -> Result<()> {
+    /// upload_persistent_cache_task_failed uploads the metadata of the persistent cache task failed.
+    #[instrument(skip_all)]
+    pub async fn upload_persistent_cache_task_failed(
+        &self,
+        request: UploadPersistentCacheTaskFailedRequest,
+    ) -> Result<()> {
         let task_id = request.task_id.clone();
         let request = Self::make_request(request);
         self.client(task_id.as_str(), None)
             .await?
-            .delete_cache_task(request)
+            .upload_persistent_cache_task_failed(request)
+            .await?;
+        Ok(())
+    }
+
+    /// stat_persistent_cache_task gets the status of the persistent cache task.
+    #[instrument(skip(self))]
+    pub async fn stat_persistent_cache_task(
+        &self,
+        request: StatPersistentCacheTaskRequest,
+    ) -> Result<PersistentCacheTask> {
+        let task_id = request.task_id.clone();
+        let request = Self::make_request(request);
+        let response = self
+            .client(task_id.as_str(), None)
+            .await?
+            .stat_persistent_cache_task(request)
+            .await?;
+        Ok(response.into_inner())
+    }
+
+    /// delete_persistent_cache_task tells the scheduler that the persistent cache task is deleting.
+    #[instrument(skip(self))]
+    pub async fn delete_persistent_cache_task(
+        &self,
+        request: DeletePersistentCacheTaskRequest,
+    ) -> Result<()> {
+        let task_id = request.task_id.clone();
+        let request = Self::make_request(request);
+        self.client(task_id.as_str(), None)
+            .await?
+            .delete_persistent_cache_task(request)
             .await?;
         Ok(())
     }
