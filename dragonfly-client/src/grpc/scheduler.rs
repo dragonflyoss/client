@@ -73,7 +73,7 @@ pub struct SchedulerClient {
     /// hashring is the hashring of the scheduler.
     hashring: Arc<RwLock<HashRing<VNode>>>,
 
-    // unavailable_scheduler_addrs is a map of unavailable scheduler addrs and the time they were marked as unavailable.
+    /// unavailable_scheduler_addrs is a map of unavailable scheduler addrs and the time they were marked as unavailable.
     unavailable_scheduler_addrs: Arc<RwLock<HashMap<SocketAddr, Instant>>>,
 }
 
@@ -565,7 +565,7 @@ impl SchedulerClient {
         Err(Error::AvailableSchedulersNotFound)
     }
 
-    // Check the health of the scheduler.
+    /// Check the health of the scheduler.
     async fn check_scheduler(&self, scheduler_addr: &SocketAddr) -> Result<Channel> {
         let addr = format!("http://{}:{}", scheduler_addr.ip(), scheduler_addr.port());
         let health_client = match HealthClient::new(&addr).await {
