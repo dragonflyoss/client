@@ -16,7 +16,7 @@
 
 use chrono::{DateTime, Local};
 use clap::Parser;
-use dragonfly_api::dfdaemon::v2::StatCacheTaskRequest;
+use dragonfly_api::dfdaemon::v2::StatPersistentCacheTaskRequest;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -35,7 +35,7 @@ use super::*;
 /// StatCommand is the subcommand of stat.
 #[derive(Debug, Clone, Parser)]
 pub struct StatCommand {
-    #[arg(help = "Specify the cache task ID to stat")]
+    #[arg(help = "Specify the persistent cache task ID to stat")]
     id: String,
 }
 
@@ -186,7 +186,7 @@ impl StatCommand {
     /// run runs the stat command.
     async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
         let task = dfdaemon_download_client
-            .stat_cache_task(StatCacheTaskRequest {
+            .stat_persistent_cache_task(StatPersistentCacheTaskRequest {
                 task_id: self.id.clone(),
             })
             .await?;

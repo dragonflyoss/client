@@ -113,7 +113,7 @@ jobs:
 
   release-github:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 360
     needs: [build]
     permissions:
       contents: write
@@ -135,7 +135,7 @@ jobs:
 
   publish-crates:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 360
     steps:
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main

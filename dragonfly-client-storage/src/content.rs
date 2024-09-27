@@ -46,12 +46,12 @@ pub struct WritePieceResponse {
     pub hash: String,
 }
 
-/// WriteCacheTaskResponse is the response of writing a cache task.
-pub struct WriteCacheTaskResponse {
-    /// length is the length of the cache task.
+/// WritePersistentCacheTaskResponse is the response of writing a persistent cache task.
+pub struct WritePersistentCacheTaskResponse {
+    /// length is the length of the persistent cache task.
     pub length: u64,
 
-    /// hash is the hash of the cache task.
+    /// hash is the hash of the persistent cache task.
     pub hash: String,
 }
 
@@ -326,11 +326,11 @@ impl Content {
         })
     }
 
-    /// hard_link_or_copy_cache_task hard links or copies the task content to the destination.
+    /// hard_link_or_copy_persistent_cache_task hard links or copies the task content to the destination.
     #[instrument(skip_all)]
-    pub async fn hard_link_or_copy_cache_task(
+    pub async fn hard_link_or_copy_persistent_cache_task(
         &self,
-        task: crate::metadata::CacheTask,
+        task: crate::metadata::PersistentCacheTask,
         to: &Path,
     ) -> Result<()> {
         // Ensure the parent directory of the destination exists.
@@ -343,7 +343,7 @@ impl Content {
             }
         }
 
-        // Get the cache task path.
+        // Get the persistent cache task path.
         let task_path = self.dir.join(task.id.as_str());
 
         // If the hard link fails, copy the task content to the destination.
@@ -354,10 +354,10 @@ impl Content {
         if let Err(err) = self.hard_link_task(task.id.as_str(), to).await {
             warn!("hard link {:?} to {:?} failed: {}", task_path, to, err);
 
-            // If the cache task is empty, no need to copy. Need to open the file to
+            // If the persistent cache task is empty, no need to copy. Need to open the file to
             // ensure the file exists.
             if task.is_empty() {
-                info!("cache task is empty, no need to copy");
+                info!("persistent cache task is empty, no need to copy");
                 File::create(to).await.map_err(|err| {
                     error!("create {:?} failed: {}", to, err);
                     err
@@ -379,13 +379,13 @@ impl Content {
         Ok(())
     }
 
-    /// copy_cache_task copies the cache task content to the destination.
+    /// copy_persistent_cache_task copies the persistent cache task content to the destination.
     #[instrument(skip_all)]
-    pub async fn write_cache_task(
+    pub async fn write_persistent_cache_task(
         &self,
         task_id: &str,
         from: &Path,
-    ) -> Result<WriteCacheTaskResponse> {
+    ) -> Result<WritePersistentCacheTaskResponse> {
         // Open the file to copy the content.
         let from_f = File::open(from).await?;
 
@@ -420,21 +420,24 @@ impl Content {
 
         // Calculate the hash of the content.
         let hash = hasher.finalize();
-        Ok(WriteCacheTaskResponse {
+        Ok(WritePersistentCacheTaskResponse {
             length,
             hash: base16ct::lower::encode_string(&hash.to_be_bytes()),
         })
     }
 
-    /// delete_task deletes the cache task content.
+    /// delete_task deletes the persistent cache task content.
     #[instrument(skip_all)]
-    pub async fn delete_cache_task(&self, cache_task_id: &str) -> Result<()> {
-        info!("delete cache task content: {}", cache_task_id);
-        let cache_task_path = self.dir.join(cache_task_id);
-        fs::remove_file(cache_task_path.as_path())
+    pub async fn delete_persistent_cache_task(&self, persistent_cache_task_id: &str) -> Result<()> {
+        info!(
+            "delete persistent cache task content: {}",
+            persistent_cache_task_id
+        );
+        let persistent_cache_task_path = self.dir.join(persistent_cache_task_id);
+        fs::remove_file(persistent_cache_task_path.as_path())
             .await
             .map_err(|err| {
-                error!("remove {:?} failed: {}", cache_task_path, err);
+                error!("remove {:?} failed: {}", persistent_cache_task_path, err);
                 err
             })?;
         Ok(())

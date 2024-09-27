@@ -22,17 +22,18 @@ use crate::metrics::{
     collect_stat_task_started_metrics, collect_upload_task_failure_metrics,
     collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
 };
-use crate::resource::{cache_task, task};
+use crate::resource::{persistent_cache_task, task};
 use crate::shutdown;
-use dragonfly_api::common::v2::{CacheTask, Priority, Task, TaskType};
+use dragonfly_api::common::v2::{PersistentCacheTask, Priority, Task, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_download_client::DfdaemonDownloadClient as DfdaemonDownloadGRPCClient,
     dfdaemon_download_server::{
         DfdaemonDownload, DfdaemonDownloadServer as DfdaemonDownloadGRPCServer,
     },
-    DeleteCacheTaskRequest, DeleteTaskRequest, DownloadCacheTaskRequest, DownloadCacheTaskResponse,
-    DownloadTaskRequest, DownloadTaskResponse, StatCacheTaskRequest,
-    StatTaskRequest as DfdaemonStatTaskRequest, UploadCacheTaskRequest,
+    DeletePersistentCacheTaskRequest, DeleteTaskRequest, DownloadPersistentCacheTaskRequest,
+    DownloadPersistentCacheTaskResponse, DownloadTaskRequest, DownloadTaskResponse,
+    StatPersistentCacheTaskRequest, StatTaskRequest as DfdaemonStatTaskRequest,
+    UploadPersistentCacheTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::DeleteHostRequest as SchedulerDeleteHostRequest;
@@ -82,7 +83,7 @@ impl DfdaemonDownloadServer {
     pub fn new(
         socket_path: PathBuf,
         task: Arc<task::Task>,
-        cache_task: Arc<cache_task::CacheTask>,
+        persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -90,7 +91,7 @@ impl DfdaemonDownloadServer {
         let service = DfdaemonDownloadGRPCServer::new(DfdaemonDownloadServerHandler {
             socket_path: socket_path.clone(),
             task,
-            cache_task,
+            persistent_cache_task,
         })
         .send_compressed(CompressionEncoding::Zstd)
         .accept_compressed(CompressionEncoding::Zstd)
@@ -164,8 +165,8 @@ pub struct DfdaemonDownloadServerHandler {
     /// task is the task manager.
     task: Arc<task::Task>,
 
-    /// cache_task is the cache task manager.
-    cache_task: Arc<cache_task::CacheTask>,
+    /// persistent_cache_task is the persistent cache task manager.
+    persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 }
 
 /// DfdaemonDownloadServerHandler implements the dfdaemon download grpc service.
@@ -564,7 +565,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("task_id", task_id.as_str());
 
         // Collect the stat task metrics.
-        collect_stat_task_started_metrics(TaskType::Dfdaemon as i32);
+        collect_stat_task_started_metrics(TaskType::Standard as i32);
 
         // Get the task from the scheduler.
         let task = self
@@ -573,7 +574,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             .await
             .map_err(|err| {
                 // Collect the stat task failure metrics.
-                collect_stat_task_failure_metrics(TaskType::Dfdaemon as i32);
+                collect_stat_task_failure_metrics(TaskType::Standard as i32);
 
                 error!("stat task: {}", err);
                 Status::internal(err.to_string())
@@ -602,7 +603,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("task_id", task_id.as_str());
 
         // Collect the delete task started metrics.
-        collect_delete_task_started_metrics(TaskType::Dfdaemon as i32);
+        collect_delete_task_started_metrics(TaskType::Standard as i32);
 
         // Delete the task from the scheduler.
         self.task
@@ -610,7 +611,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             .await
             .map_err(|err| {
                 // Collect the delete task failure metrics.
-                collect_delete_task_failure_metrics(TaskType::Dfdaemon as i32);
+                collect_delete_task_failure_metrics(TaskType::Standard as i32);
 
                 error!("delete task: {}", err);
                 Status::internal(err.to_string())
@@ -646,16 +647,17 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(()))
     }
 
-    /// DownloadCacheTaskStream is the stream of the download cache task response.
-    type DownloadCacheTaskStream = ReceiverStream<Result<DownloadCacheTaskResponse, Status>>;
+    /// DownloadPersistentCacheTaskStream is the stream of the download persistent cache task response.
+    type DownloadPersistentCacheTaskStream =
+        ReceiverStream<Result<DownloadPersistentCacheTaskResponse, Status>>;
 
-    /// download_cache_task downloads the cache task.
+    /// download_persistent_cache_task downloads the persistent cache task.
     #[instrument(skip_all, fields(host_id, task_id, peer_id))]
-    async fn download_cache_task(
+    async fn download_persistent_cache_task(
         &self,
-        request: Request<DownloadCacheTaskRequest>,
-    ) -> Result<Response<Self::DownloadCacheTaskStream>, Status> {
-        info!("download cache task in download server");
+        request: Request<DownloadPersistentCacheTaskRequest>,
+    ) -> Result<Response<Self::DownloadPersistentCacheTaskStream>, Status> {
+        info!("download persistent cache task in download server");
 
         // Record the start time.
         let start_time = Instant::now();
@@ -673,7 +675,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let peer_id = self.task.id_generator.peer_id();
 
         // Generate the task type and task priority.
-        let task_type = TaskType::Dfcache as i32;
+        let task_type = TaskType::PersistentCache as i32;
         let task_priority = Priority::Level0 as i32;
 
         // Span record the host id, task id and peer id.
@@ -682,18 +684,18 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("peer_id", peer_id.as_str());
 
         // Download task started.
-        info!("download cache task started: {:?}", request);
+        info!("download persistent cache task started: {:?}", request);
         let task = match self
-            .cache_task
+            .persistent_cache_task
             .download_started(task_id.as_str(), host_id.as_str(), request.clone())
             .await
         {
             Err(ClientError::BackendError(err)) => {
                 error!("download cache started failed by error: {}", err);
-                self.cache_task
+                self.persistent_cache_task
                     .download_failed(task_id.as_str())
                     .await
-                    .unwrap_or_else(|err| error!("download cache task failed: {}", err));
+                    .unwrap_or_else(|err| error!("download persistent cache task failed: {}", err));
 
                 match serde_json::to_vec::<Backend>(&Backend {
                     message: err.message.clone(),
@@ -718,7 +720,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 return Err(Status::internal(err.to_string()));
             }
             Ok(task) => {
-                // Collect download cache task started metrics.
+                // Collect download persistent cache task started metrics.
                 collect_download_task_started_metrics(
                     task_type,
                     request.tag.clone().unwrap_or_default().as_str(),
@@ -735,8 +737,8 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             task.piece_length()
         );
 
-        // Clone the cache task.
-        let task_manager = self.cache_task.clone();
+        // Clone the persistent cache task.
+        let task_manager = self.persistent_cache_task.clone();
 
         // Initialize stream channel.
         let request_clone = request.clone();
@@ -771,10 +773,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             start_time.elapsed(),
                         );
 
-                        // Download cache task succeeded.
-                        info!("download cache task succeeded");
+                        // Download persistent cache task succeeded.
+                        info!("download persistent cache task succeeded");
 
-                        // Hard link or copy the cache task content to the destination.
+                        // Hard link or copy the persistent cache task content to the destination.
                         if let Err(err) = task_manager_clone
                             .hard_link_or_copy(
                                 task_clone,
@@ -782,7 +784,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             )
                             .await
                         {
-                            error!("hard link or copy cache task: {}", err);
+                            error!("hard link or copy persistent cache task: {}", err);
                             out_stream_tx
                                 .send(Err(Status::internal(err.to_string())))
                                 .await
@@ -796,7 +798,9 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         task_manager_clone
                             .download_failed(task_clone.id.as_str())
                             .await
-                            .unwrap_or_else(|err| error!("download cache task failed: {}", err));
+                            .unwrap_or_else(|err| {
+                                error!("download persistent cache task failed: {}", err)
+                            });
 
                         // Collect download task failure metrics.
                         collect_download_task_failure_metrics(
@@ -818,12 +822,12 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// upload_cache_task uploads the cache task.
+    /// upload_persistent_cache_task uploads the persistent cache task.
     #[instrument(skip_all, fields(host_id, task_id, peer_id))]
-    async fn upload_cache_task(
+    async fn upload_persistent_cache_task(
         &self,
-        request: Request<UploadCacheTaskRequest>,
-    ) -> Result<Response<CacheTask>, Status> {
+        request: Request<UploadPersistentCacheTaskRequest>,
+    ) -> Result<Response<PersistentCacheTask>, Status> {
         // Record the start time.
         let start_time = Instant::now();
 
@@ -843,7 +847,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let task_id = self
             .task
             .id_generator
-            .cache_task_id(
+            .persistent_cache_task_id(
                 &path.to_path_buf(),
                 request.tag.as_deref(),
                 request.application.as_deref(),
@@ -866,14 +870,14 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
         // Collect upload task started metrics.
         collect_upload_task_started_metrics(
-            TaskType::Dfcache as i32,
+            TaskType::PersistentCache as i32,
             request.tag.clone().unwrap_or_default().as_str(),
             request.application.clone().unwrap_or_default().as_str(),
         );
 
         // Create the persistent cache task to local storage.
         let task = match self
-            .cache_task
+            .persistent_cache_task
             .create_persistent(
                 task_id.as_str(),
                 host_id.as_str(),
@@ -887,7 +891,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             Ok(task) => {
                 // Collect upload task finished metrics.
                 collect_upload_task_finished_metrics(
-                    TaskType::Dfcache as i32,
+                    TaskType::PersistentCache as i32,
                     request.tag.clone().unwrap_or_default().as_str(),
                     request.application.clone().unwrap_or_default().as_str(),
                     task.content_length,
@@ -899,7 +903,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             Err(err) => {
                 // Collect upload task failure metrics.
                 collect_upload_task_failure_metrics(
-                    TaskType::Dfcache as i32,
+                    TaskType::PersistentCache as i32,
                     request.tag.clone().unwrap_or_default().as_str(),
                     request.application.clone().unwrap_or_default().as_str(),
                 );
@@ -912,12 +916,12 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(task))
     }
 
-    /// stat_cache_task stats the cache task.
+    /// stat_persistent_cache_task stats the persistent cache task.
     #[instrument(skip_all, fields(host_id, task_id))]
-    async fn stat_cache_task(
+    async fn stat_persistent_cache_task(
         &self,
-        request: Request<StatCacheTaskRequest>,
-    ) -> Result<Response<CacheTask>, Status> {
+        request: Request<StatPersistentCacheTaskRequest>,
+    ) -> Result<Response<PersistentCacheTask>, Status> {
         // Clone the request.
         let request = request.into_inner();
 
@@ -931,29 +935,29 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
 
-        // Collect the stat cache task started metrics.
-        collect_stat_task_started_metrics(TaskType::Dfcache as i32);
+        // Collect the stat persistent cache task started metrics.
+        collect_stat_task_started_metrics(TaskType::PersistentCache as i32);
 
         let task = self
-            .cache_task
+            .persistent_cache_task
             .stat(task_id.as_str(), host_id.as_str())
             .await
             .map_err(|err| {
-                // Collect the stat cache task failure metrics.
-                collect_stat_task_failure_metrics(TaskType::Dfcache as i32);
+                // Collect the stat persistent cache task failure metrics.
+                collect_stat_task_failure_metrics(TaskType::PersistentCache as i32);
 
-                error!("stat cache task: {}", err);
+                error!("stat persistent cache task: {}", err);
                 Status::internal(err.to_string())
             })?;
 
         Ok(Response::new(task))
     }
 
-    /// delete_cache_task deletes the cache task.
+    /// delete_persistent_cache_task deletes the persistent cache task.
     #[instrument(skip_all, fields(host_id, task_id))]
-    async fn delete_cache_task(
+    async fn delete_persistent_cache_task(
         &self,
-        request: Request<DeleteCacheTaskRequest>,
+        request: Request<DeletePersistentCacheTaskRequest>,
     ) -> Result<Response<()>, Status> {
         // Clone the request.
         let request = request.into_inner();
@@ -968,17 +972,17 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
 
-        // Collect the delete cache task started metrics.
-        collect_delete_task_started_metrics(TaskType::Dfcache as i32);
+        // Collect the delete persistent cache task started metrics.
+        collect_delete_task_started_metrics(TaskType::PersistentCache as i32);
 
-        self.cache_task
+        self.persistent_cache_task
             .delete(task_id.as_str(), host_id.as_str())
             .await
             .map_err(|err| {
-                // Collect the delete cache task failure metrics.
-                collect_delete_task_failure_metrics(TaskType::Dfcache as i32);
+                // Collect the delete persistent cache task failure metrics.
+                collect_delete_task_failure_metrics(TaskType::PersistentCache as i32);
 
-                error!("delete cache task: {}", err);
+                error!("delete persistent cache task: {}", err);
                 Status::internal(err.to_string())
             })?;
 
@@ -1066,12 +1070,13 @@ impl DfdaemonDownloadClient {
         Ok(())
     }
 
-    /// download_cache_task downloads the cache task.
+    /// download_persistent_cache_task downloads the persistent cache task.
     #[instrument(skip_all)]
-    pub async fn download_cache_task(
+    pub async fn download_persistent_cache_task(
         &self,
-        request: DownloadCacheTaskRequest,
-    ) -> ClientResult<tonic::Response<tonic::codec::Streaming<DownloadCacheTaskResponse>>> {
+        request: DownloadPersistentCacheTaskRequest,
+    ) -> ClientResult<tonic::Response<tonic::codec::Streaming<DownloadPersistentCacheTaskResponse>>>
+    {
         // Clone the request.
         let request_clone = request.clone();
 
@@ -1086,16 +1091,20 @@ impl DfdaemonDownloadClient {
             );
         }
 
-        let response = self.client.clone().download_cache_task(request).await?;
+        let response = self
+            .client
+            .clone()
+            .download_persistent_cache_task(request)
+            .await?;
         Ok(response)
     }
 
-    /// upload_cache_task uploads the cache task.
+    /// upload_persistent_cache_task uploads the persistent cache task.
     #[instrument(skip_all)]
-    pub async fn upload_cache_task(
+    pub async fn upload_persistent_cache_task(
         &self,
-        request: UploadCacheTaskRequest,
-    ) -> ClientResult<CacheTask> {
+        request: UploadPersistentCacheTaskRequest,
+    ) -> ClientResult<PersistentCacheTask> {
         // Clone the request.
         let request_clone = request.clone();
 
@@ -1110,25 +1119,43 @@ impl DfdaemonDownloadClient {
             );
         }
 
-        let response = self.client.clone().upload_cache_task(request).await?;
+        let response = self
+            .client
+            .clone()
+            .upload_persistent_cache_task(request)
+            .await?;
         Ok(response.into_inner())
     }
 
-    /// stat_cache_task stats the cache task.
+    /// stat_persistent_cache_task stats the persistent cache task.
     #[instrument(skip_all)]
-    pub async fn stat_cache_task(&self, request: StatCacheTaskRequest) -> ClientResult<CacheTask> {
+    pub async fn stat_persistent_cache_task(
+        &self,
+        request: StatPersistentCacheTaskRequest,
+    ) -> ClientResult<PersistentCacheTask> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::CONNECT_TIMEOUT);
 
-        let response = self.client.clone().stat_cache_task(request).await?;
+        let response = self
+            .client
+            .clone()
+            .stat_persistent_cache_task(request)
+            .await?;
         Ok(response.into_inner())
     }
 
-    /// delete_cache_task deletes the cache task.
+    /// delete_persistent_cache_task deletes the persistent cache task.
     #[instrument(skip_all)]
-    pub async fn delete_cache_task(&self, request: DeleteCacheTaskRequest) -> ClientResult<()> {
+    pub async fn delete_persistent_cache_task(
+        &self,
+        request: DeletePersistentCacheTaskRequest,
+    ) -> ClientResult<()> {
         let request = Self::make_request(request);
-        let _response = self.client.clone().delete_cache_task(request).await?;
+        let _response = self
+            .client
+            .clone()
+            .delete_persistent_cache_task(request)
+            .await?;
         Ok(())
     }
 

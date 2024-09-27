@@ -25,14 +25,11 @@ use tracing::instrument;
 use url::Url;
 use uuid::Uuid;
 
-/// SEED_PEER_KEY is the key of the seed peer.
-const SEED_PEER_KEY: &str = "seed";
+/// SEED_PEER_SUFFIX is the suffix of the seed peer.
+const SEED_PEER_SUFFIX: &str = "seed";
 
-/// CACHE_KEY is the key of the cache.
-const CACHE_KEY: &str = "cache";
-
-/// PERSISTENT_CACHE_KEY is the key of the persistent cache.
-const PERSISTENT_CACHE_KEY: &str = "persistent";
+/// PERSISTENT_CACHE_TASK_SUFFIX is the suffix of the persistent cache task.
+const PERSISTENT_CACHE_TASK_SUFFIX: &str = "persistent-cache-task";
 
 /// IDGenerator is used to generate the id for the resources.
 #[derive(Debug)]
@@ -113,9 +110,9 @@ impl IDGenerator {
         Ok(hex::encode(hasher.finalize()))
     }
 
-    /// cache_task_id generates the cache task id.
+    /// persistent_cache_task_id generates the persistent cache task id.
     #[instrument(skip_all)]
-    pub fn cache_task_id(
+    pub fn persistent_cache_task_id(
         &self,
         path: &PathBuf,
         tag: Option<&str>,
@@ -128,17 +125,17 @@ impl IDGenerator {
         let mut f = std::fs::File::open(path)?;
         std::io::copy(&mut f, &mut hasher)?;
 
-        // Add the tag to generate the cache task id.
+        // Add the tag to generate the persistent cache task id.
         if let Some(tag) = tag {
             hasher.update(tag.as_bytes());
         }
 
-        // Add the application to generate the cache task id.
+        // Add the application to generate the persistent cache task id.
         if let Some(application) = application {
             hasher.update(application.as_bytes());
         }
 
-        // Generate the cache task id.
+        // Generate the persistent cache task id.
         Ok(hasher.finalize().to_hex().to_string())
     }
 
@@ -151,43 +148,20 @@ impl IDGenerator {
                 self.ip,
                 self.hostname,
                 Uuid::new_v4(),
-                SEED_PEER_KEY,
+                SEED_PEER_SUFFIX,
             );
         }
 
         format!("{}-{}-{}", self.ip, self.hostname, Uuid::new_v4())
     }
 
-    /// cache_peer_id generates the cache peer id.
-    #[instrument(skip_all)]
-    pub fn cache_peer_id(&self, persistent: bool) -> String {
-        if persistent {
-            return format!(
-                "{}-{}-{}-{}-{}",
-                self.ip,
-                self.hostname,
-                Uuid::new_v4(),
-                CACHE_KEY,
-                PERSISTENT_CACHE_KEY,
-            );
-        }
-
-        format!(
-            "{}-{}-{}-{}",
-            self.ip,
-            self.hostname,
-            Uuid::new_v4(),
-            CACHE_KEY,
-        )
-    }
-
     /// task_type generates the task type by the task id.
     #[instrument(skip_all)]
     pub fn task_type(&self, id: &str) -> TaskType {
-        if id.contains(CACHE_KEY) {
-            return TaskType::Dfcache;
+        if id.ends_with(PERSISTENT_CACHE_TASK_SUFFIX) {
+            return TaskType::PersistentCache;
         }
 
-        TaskType::Dfdaemon
+        TaskType::Standard
     }
 }

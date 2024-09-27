@@ -15,7 +15,7 @@
  */
 
 use clap::Parser;
-use dragonfly_api::dfdaemon::v2::UploadCacheTaskRequest;
+use dragonfly_api::dfdaemon::v2::UploadPersistentCacheTaskRequest;
 use dragonfly_client_config::dfcache::default_dfcache_persistent_replica_count;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -54,7 +54,7 @@ pub struct ImportCommand {
     #[arg(
         long = "tag",
         required = false,
-        help = "Different tags for the same file will be divided into different cache tasks"
+        help = "Different tags for the same file will be divided into different persistent cache tasks"
     )]
     tag: Option<String>,
 
@@ -62,7 +62,7 @@ pub struct ImportCommand {
         long = "ttl",
         value_parser= humantime::parse_duration,
         default_value = "1h",
-        help = "Specify the ttl of the cache task, maximum is 7d and minimum is 1m"
+        help = "Specify the ttl of the persistent cache task, maximum is 7d and minimum is 1m"
     )]
     ttl: Duration,
 
@@ -269,7 +269,7 @@ impl ImportCommand {
         pb.set_message("Importing...");
 
         dfdaemon_download_client
-            .upload_cache_task(UploadCacheTaskRequest {
+            .upload_persistent_cache_task(UploadPersistentCacheTaskRequest {
                 path: self.path.clone().into_os_string().into_string().unwrap(),
                 persistent_replica_count: self.persistent_replica_count,
                 tag: self.tag.clone(),

@@ -15,7 +15,9 @@
  */
 
 use clap::Parser;
-use dragonfly_api::dfdaemon::v2::{download_cache_task_response, DownloadCacheTaskRequest};
+use dragonfly_api::dfdaemon::v2::{
+    download_persistent_cache_task_response, DownloadPersistentCacheTaskRequest,
+};
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -34,7 +36,7 @@ use super::*;
 /// ExportCommand is the subcommand of export.
 #[derive(Debug, Clone, Parser)]
 pub struct ExportCommand {
-    #[arg(help = "Specify the cache task ID to export")]
+    #[arg(help = "Specify the persistent cache task ID to export")]
     id: String,
 
     #[arg(
@@ -47,7 +49,7 @@ pub struct ExportCommand {
     #[arg(
         long = "tag",
         default_value = "",
-        help = "Different tags for the same file will be divided into different cache tasks"
+        help = "Different tags for the same file will be divided into different persistent cache tasks"
     )]
     tag: String,
 
@@ -366,7 +368,7 @@ impl ExportCommand {
 
         // Create dfdaemon client.
         let response = dfdaemon_download_client
-            .download_cache_task(DownloadCacheTaskRequest {
+            .download_persistent_cache_task(DownloadPersistentCacheTaskRequest {
                 task_id: self.id.clone(),
                 // When scheduler triggers the export task, it will set true. If the export task is
                 // triggered by the user, it will set false.
@@ -381,7 +383,7 @@ impl ExportCommand {
             })
             .await
             .map_err(|err| {
-                error!("download cache task failed: {}", err);
+                error!("download persistent cache task failed: {}", err);
                 err
             })?;
 
@@ -406,12 +408,12 @@ impl ExportCommand {
             err
         })? {
             match message.response {
-                Some(download_cache_task_response::Response::DownloadCacheTaskStartedResponse(
+                Some(download_persistent_cache_task_response::Response::DownloadPersistentCacheTaskStartedResponse(
                     response,
                 )) => {
                     pb.set_length(response.content_length);
                 }
-                Some(download_cache_task_response::Response::DownloadPieceFinishedResponse(
+                Some(download_persistent_cache_task_response::Response::DownloadPieceFinishedResponse(
                     response,
                 )) => {
                     let piece = response.piece.ok_or(Error::InvalidParameter)?;

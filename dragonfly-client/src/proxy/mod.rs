@@ -959,7 +959,7 @@ fn make_download_task_request(
             digest: None,
             // Download range use header range in HTTP protocol.
             range: None,
-            r#type: TaskType::Dfdaemon as i32,
+            r#type: TaskType::Standard as i32,
             tag: header::get_tag(&reqwest_request_header),
             application: header::get_application(&reqwest_request_header),
             priority: header::get_priority(&reqwest_request_header),

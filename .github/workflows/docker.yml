@@ -11,7 +11,7 @@ jobs:
   push_client_image_to_registry:
     name: Push Client Image
     runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 480
+    timeout-minutes: 600
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -92,7 +92,7 @@ jobs:
   push_dfinit_image_to_registry:
     name: Push Dfinit Image
     runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 480
+    timeout-minutes: 600
     steps:
       - name: Check out code
         uses: actions/checkout@v4
