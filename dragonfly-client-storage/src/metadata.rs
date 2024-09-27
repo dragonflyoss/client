@@ -128,21 +128,21 @@ impl Task {
     }
 }
 
-/// CacheTask is the metadata of the cache task.
+/// PersistentCacheTask is the metadata of the persistent cache task.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CacheTask {
+pub struct PersistentCacheTask {
     /// id is the task id.
     pub id: String,
 
-    /// persistent represents whether the cache task is persistent.
-    /// If the cache task is persistent, the cache peer will
+    /// persistent represents whether the persistent cache task is persistent.
+    /// If the persistent cache task is persistent, the persistent cache peer will
     /// not be deleted when dfdamon runs garbage collection.
     pub persistent: bool,
 
-    /// ttl is the time to live of the cache task.
+    /// ttl is the time to live of the persistent cache task.
     pub ttl: Duration,
 
-    /// digests is the digests of the cache task.
+    /// digests is the digests of the persistent cache task.
     pub digest: String,
 
     /// piece_length is the length of the piece.
@@ -171,43 +171,43 @@ pub struct CacheTask {
     pub finished_at: Option<NaiveDateTime>,
 }
 
-/// CacheTask implements the cache task database object.
-impl DatabaseObject for CacheTask {
-    /// NAMESPACE is the namespace of [CacheTask] objects.
-    const NAMESPACE: &'static str = "cache_task";
+/// PersistentCacheTask implements the persistent cache task database object.
+impl DatabaseObject for PersistentCacheTask {
+    /// NAMESPACE is the namespace of [PersistentCacheTask] objects.
+    const NAMESPACE: &'static str = "persistent_cache_task";
 }
 
-/// CacheTask implements the cache task metadata.
-impl CacheTask {
-    /// is_started returns whether the cache task downloads started.
+/// PersistentCacheTask implements the persistent cache task metadata.
+impl PersistentCacheTask {
+    /// is_started returns whether the persistent cache task downloads started.
     pub fn is_started(&self) -> bool {
         self.finished_at.is_none()
     }
 
-    /// is_downloading returns whether the cache task is downloading.
+    /// is_downloading returns whether the persistent cache task is downloading.
     pub fn is_uploading(&self) -> bool {
         self.uploading_count > 0
     }
 
-    /// is_expired returns whether the cache task is expired.
+    /// is_expired returns whether the persistent cache task is expired.
     pub fn is_expired(&self) -> bool {
-        // When scheduler runs garbage collection, it will trigger dfdaemon to evict the cache task.
-        // But sometimes the dfdaemon may not evict the cache task in time, so we select the ttl * 1.2
-        // as the expired time to force evict the cache task.
+        // When scheduler runs garbage collection, it will trigger dfdaemon to evict the persistent cache task.
+        // But sometimes the dfdaemon may not evict the persistent cache task in time, so we select the ttl * 1.2
+        // as the expired time to force evict the persistent cache task.
         self.created_at + self.ttl * 2 < Utc::now().naive_utc()
     }
 
-    /// is_failed returns whether the cache task downloads failed.
+    /// is_failed returns whether the persistent cache task downloads failed.
     pub fn is_failed(&self) -> bool {
         self.failed_at.is_some()
     }
 
-    /// is_finished returns whether the cache task downloads finished.
+    /// is_finished returns whether the persistent cache task downloads finished.
     pub fn is_finished(&self) -> bool {
         self.finished_at.is_some()
     }
 
-    /// is_empty returns whether the cache task is empty.
+    /// is_empty returns whether the persistent cache task is empty.
     pub fn is_empty(&self) -> bool {
         if self.content_length == 0 {
             return true;
@@ -216,17 +216,17 @@ impl CacheTask {
         false
     }
 
-    /// is_persistent returns whether the cache task is persistent.
+    /// is_persistent returns whether the persistent cache task is persistent.
     pub fn is_persistent(&self) -> bool {
         self.persistent
     }
 
-    /// piece_length returns the piece length of the cache task.
+    /// piece_length returns the piece length of the persistent cache task.
     pub fn piece_length(&self) -> u64 {
         self.piece_length
     }
 
-    /// content_length returns the content length of the cache task.
+    /// content_length returns the content length of the persistent cache task.
     pub fn content_length(&self) -> u64 {
         self.content_length
     }
@@ -317,7 +317,7 @@ impl Piece {
     }
 }
 
-/// Metadata manages the metadata of [Task], [Piece] and [CacheTask].
+/// Metadata manages the metadata of [Task], [Piece] and [PersistentCacheTask].
 pub struct Metadata<E = RocksdbStorageEngine>
 where
     E: StorageEngineOwned,
@@ -533,19 +533,19 @@ impl<E: StorageEngineOwned> Metadata<E> {
         self.db.delete::<Task>(id.as_bytes())
     }
 
-    /// create_persistent_cache_task creates a new persistent cache task.
-    /// If the cache task imports the content to the dfdaemon finished,
+    /// create_persistent_persistent_cache_task creates a new persistent cache task.
+    /// If the persistent cache task imports the content to the dfdaemon finished,
     /// the dfdaemon will create a persistent cache task metadata.
     #[instrument(skip_all)]
-    pub fn create_persistent_cache_task(
+    pub fn create_persistent_persistent_cache_task(
         &self,
         id: &str,
         ttl: Duration,
         piece_length: u64,
         content_length: u64,
         digest: &str,
-    ) -> Result<CacheTask> {
-        let task = CacheTask {
+    ) -> Result<PersistentCacheTask> {
+        let task = PersistentCacheTask {
             id: id.to_string(),
             persistent: true,
             ttl,
@@ -562,26 +562,26 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    /// download_cache_task_started updates the metadata of the cache task when
-    /// the cache task downloads started. If the cache task downloaded by scheduler
+    /// download_persistent_cache_task_started updates the metadata of the persistent cache task when
+    /// the persistent cache task downloads started. If the persistent cache task downloaded by scheduler
     /// to create persistent cache task, the persistent should be set to true.
     #[instrument(skip_all)]
-    pub fn download_cache_task_started(
+    pub fn download_persistent_cache_task_started(
         &self,
         id: &str,
         ttl: Duration,
         persistent: bool,
         piece_length: u64,
         content_length: u64,
-    ) -> Result<CacheTask> {
-        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+    ) -> Result<PersistentCacheTask> {
+        let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
             Some(mut task) => {
                 // If the task exists, update the task metadata.
                 task.updated_at = Utc::now().naive_utc();
                 task.failed_at = None;
                 task
             }
-            None => CacheTask {
+            None => PersistentCacheTask {
                 id: id.to_string(),
                 persistent,
                 ttl,
@@ -597,15 +597,15 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    /// download_cache_task_finished updates the metadata of the cache task when the cache task downloads finished.
+    /// download_persistent_cache_task_finished updates the metadata of the persistent cache task when the persistent cache task downloads finished.
     #[instrument(skip_all)]
-    pub fn download_cache_task_finished(&self, id: &str) -> Result<CacheTask> {
-        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+    pub fn download_persistent_cache_task_finished(&self, id: &str) -> Result<PersistentCacheTask> {
+        let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
             Some(mut task) => {
                 task.updated_at = Utc::now().naive_utc();
                 task.failed_at = None;
 
-                // If the cache task is created by user, the finished_at has been set.
+                // If the persistent cache task is created by user, the finished_at has been set.
                 if task.finished_at.is_none() {
                     task.finished_at = Some(Utc::now().naive_utc());
                 }
@@ -619,10 +619,10 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    /// download_cache_task_failed updates the metadata of the cache task when the cache task downloads failed.
+    /// download_persistent_cache_task_failed updates the metadata of the persistent cache task when the persistent cache task downloads failed.
     #[instrument(skip_all)]
-    pub fn download_cache_task_failed(&self, id: &str) -> Result<CacheTask> {
-        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+    pub fn download_persistent_cache_task_failed(&self, id: &str) -> Result<PersistentCacheTask> {
+        let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
             Some(mut task) => {
                 task.updated_at = Utc::now().naive_utc();
                 task.failed_at = Some(Utc::now().naive_utc());
@@ -635,10 +635,10 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    /// upload_cache_task_started updates the metadata of the cache task when cache task uploads started.
+    /// upload_persistent_cache_task_started updates the metadata of the persistent cache task when persistent cache task uploads started.
     #[instrument(skip_all)]
-    pub fn upload_cache_task_started(&self, id: &str) -> Result<CacheTask> {
-        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+    pub fn upload_persistent_cache_task_started(&self, id: &str) -> Result<PersistentCacheTask> {
+        let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
             Some(mut task) => {
                 task.uploading_count += 1;
                 task.updated_at = Utc::now().naive_utc();
@@ -651,10 +651,10 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    /// upload_cache_task_finished updates the metadata of the cache task when cache task uploads finished.
+    /// upload_persistent_cache_task_finished updates the metadata of the persistent cache task when persistent cache task uploads finished.
     #[instrument(skip_all)]
-    pub fn upload_cache_task_finished(&self, id: &str) -> Result<CacheTask> {
-        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+    pub fn upload_persistent_cache_task_finished(&self, id: &str) -> Result<PersistentCacheTask> {
+        let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
             Some(mut task) => {
                 task.uploading_count -= 1;
                 task.uploaded_count += 1;
@@ -668,10 +668,10 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    /// upload_cache_task_failed updates the metadata of the cache task when the cache task uploads failed.
+    /// upload_persistent_cache_task_failed updates the metadata of the persistent cache task when the persistent cache task uploads failed.
     #[instrument(skip_all)]
-    pub fn upload_cache_task_failed(&self, id: &str) -> Result<CacheTask> {
-        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+    pub fn upload_persistent_cache_task_failed(&self, id: &str) -> Result<PersistentCacheTask> {
+        let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
             Some(mut task) => {
                 task.uploading_count -= 1;
                 task.updated_at = Utc::now().naive_utc();
@@ -684,24 +684,24 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    /// get_cache_task gets the cache task metadata.
+    /// get_persistent_cache_task gets the persistent cache task metadata.
     #[instrument(skip_all)]
-    pub fn get_cache_task(&self, id: &str) -> Result<Option<CacheTask>> {
+    pub fn get_persistent_cache_task(&self, id: &str) -> Result<Option<PersistentCacheTask>> {
         self.db.get(id.as_bytes())
     }
 
-    /// get_cache_tasks gets the cache task metadatas.
+    /// get_persistent_cache_tasks gets the persistent cache task metadatas.
     #[instrument(skip_all)]
-    pub fn get_cache_tasks(&self) -> Result<Vec<CacheTask>> {
-        let iter = self.db.iter::<CacheTask>()?;
+    pub fn get_persistent_cache_tasks(&self) -> Result<Vec<PersistentCacheTask>> {
+        let iter = self.db.iter::<PersistentCacheTask>()?;
         iter.map(|ele| ele.map(|(_, task)| task)).collect()
     }
 
-    /// delete_cache_task deletes the cache task metadata.
+    /// delete_persistent_cache_task deletes the persistent cache task metadata.
     #[instrument(skip_all)]
-    pub fn delete_cache_task(&self, id: &str) -> Result<()> {
-        info!("delete cache task metadata {}", id);
-        self.db.delete::<CacheTask>(id.as_bytes())
+    pub fn delete_persistent_cache_task(&self, id: &str) -> Result<()> {
+        info!("delete persistent cache task metadata {}", id);
+        self.db.delete::<PersistentCacheTask>(id.as_bytes())
     }
 
     /// download_piece_started updates the metadata of the piece when the piece downloads started.
@@ -897,7 +897,11 @@ impl Metadata<RocksdbStorageEngine> {
         let db = RocksdbStorageEngine::open(
             dir,
             log_dir,
-            &[Task::NAMESPACE, Piece::NAMESPACE, CacheTask::NAMESPACE],
+            &[
+                Task::NAMESPACE,
+                Piece::NAMESPACE,
+                PersistentCacheTask::NAMESPACE,
+            ],
             config.storage.keep,
         )?;
 

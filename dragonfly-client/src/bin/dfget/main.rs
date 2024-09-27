@@ -691,7 +691,7 @@ async fn download(
                 digest: Some(args.digest),
                 // NOTE: Dfget does not support range download.
                 range: None,
-                r#type: TaskType::Dfdaemon as i32,
+                r#type: TaskType::Standard as i32,
                 tag: Some(args.tag),
                 application: Some(args.application),
                 priority: args.priority,

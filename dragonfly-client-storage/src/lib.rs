@@ -151,19 +151,21 @@ impl Storage {
         });
     }
 
-    /// hard_link_or_copy_cache_task hard links or copies the cache task content to the destination.
+    /// hard_link_or_copy_persistent_cache_task hard links or copies the persistent cache task content to the destination.
     #[instrument(skip_all)]
-    pub async fn hard_link_or_copy_cache_task(
+    pub async fn hard_link_or_copy_persistent_cache_task(
         &self,
-        task: metadata::CacheTask,
+        task: metadata::PersistentCacheTask,
         to: &Path,
     ) -> Result<()> {
-        self.content.hard_link_or_copy_cache_task(task, to).await
+        self.content
+            .hard_link_or_copy_persistent_cache_task(task, to)
+            .await
     }
 
-    /// create_persistent_cache_task creates a new persistent cache task.
+    /// create_persistent_persistent_cache_task creates a new persistent cache task.
     #[instrument(skip_all)]
-    pub async fn create_persistent_cache_task(
+    pub async fn create_persistent_persistent_cache_task(
         &self,
         id: &str,
         ttl: Duration,
@@ -171,8 +173,8 @@ impl Storage {
         piece_length: u64,
         content_length: u64,
         expected_digest: &str,
-    ) -> Result<metadata::CacheTask> {
-        let response = self.content.write_cache_task(id, path).await?;
+    ) -> Result<metadata::PersistentCacheTask> {
+        let response = self.content.write_persistent_cache_task(id, path).await?;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
         if expected_digest != digest.to_string() {
             return Err(Error::DigestMismatch(
@@ -181,7 +183,7 @@ impl Storage {
             ));
         }
 
-        self.metadata.create_persistent_cache_task(
+        self.metadata.create_persistent_persistent_cache_task(
             id,
             ttl,
             piece_length,
@@ -190,62 +192,81 @@ impl Storage {
         )
     }
 
-    /// download_cache_task_started updates the metadata of the cache task when the cache task downloads started.
+    /// download_persistent_cache_task_started updates the metadata of the persistent cache task when the persistent cache task downloads started.
     #[instrument(skip_all)]
-    pub fn download_cache_task_started(
+    pub fn download_persistent_cache_task_started(
         &self,
         id: &str,
         ttl: Duration,
         persistent: bool,
         piece_length: u64,
         content_length: u64,
-    ) -> Result<metadata::CacheTask> {
-        self.metadata
-            .download_cache_task_started(id, ttl, persistent, piece_length, content_length)
+    ) -> Result<metadata::PersistentCacheTask> {
+        self.metadata.download_persistent_cache_task_started(
+            id,
+            ttl,
+            persistent,
+            piece_length,
+            content_length,
+        )
     }
 
-    /// download_cache_task_finished updates the metadata of the cache task when the cache task downloads finished.
+    /// download_persistent_cache_task_finished updates the metadata of the persistent cache task when the persistent cache task downloads finished.
     #[instrument(skip_all)]
-    pub fn download_cache_task_finished(&self, id: &str) -> Result<metadata::CacheTask> {
-        self.metadata.download_cache_task_finished(id)
+    pub fn download_persistent_cache_task_finished(
+        &self,
+        id: &str,
+    ) -> Result<metadata::PersistentCacheTask> {
+        self.metadata.download_persistent_cache_task_finished(id)
     }
 
-    /// download_cache_task_failed updates the metadata of the cache task when the cache task downloads failed.
+    /// download_persistent_cache_task_failed updates the metadata of the persistent cache task when the persistent cache task downloads failed.
     #[instrument(skip_all)]
-    pub async fn download_cache_task_failed(&self, id: &str) -> Result<metadata::CacheTask> {
-        self.metadata.download_cache_task_failed(id)
+    pub async fn download_persistent_cache_task_failed(
+        &self,
+        id: &str,
+    ) -> Result<metadata::PersistentCacheTask> {
+        self.metadata.download_persistent_cache_task_failed(id)
     }
 
-    /// upload_cache_task_finished updates the metadata of the cahce task when cache task uploads finished.
+    /// upload_persistent_cache_task_finished updates the metadata of the cahce task when persistent cache task uploads finished.
     #[instrument(skip_all)]
-    pub fn upload_cache_task_finished(&self, id: &str) -> Result<metadata::CacheTask> {
-        self.metadata.upload_cache_task_finished(id)
+    pub fn upload_persistent_cache_task_finished(
+        &self,
+        id: &str,
+    ) -> Result<metadata::PersistentCacheTask> {
+        self.metadata.upload_persistent_cache_task_finished(id)
     }
 
-    /// get_cache_task returns the cache task metadata.
+    /// get_persistent_cache_task returns the persistent cache task metadata.
     #[instrument(skip_all)]
-    pub fn get_cache_task(&self, id: &str) -> Result<Option<metadata::CacheTask>> {
-        self.metadata.get_cache_task(id)
+    pub fn get_persistent_cache_task(
+        &self,
+        id: &str,
+    ) -> Result<Option<metadata::PersistentCacheTask>> {
+        self.metadata.get_persistent_cache_task(id)
     }
 
     /// get_tasks returns the task metadatas.
     #[instrument(skip_all)]
-    pub fn get_cache_tasks(&self) -> Result<Vec<metadata::CacheTask>> {
-        self.metadata.get_cache_tasks()
+    pub fn get_persistent_cache_tasks(&self) -> Result<Vec<metadata::PersistentCacheTask>> {
+        self.metadata.get_persistent_cache_tasks()
     }
 
-    /// delete_cache_task deletes the cache task metadatas, cache task content and piece metadatas.
+    /// delete_persistent_cache_task deletes the persistent cache task metadatas, persistent cache task content and piece metadatas.
     #[instrument(skip_all)]
-    pub async fn delete_cache_task(&self, id: &str) {
-        self.metadata.delete_cache_task(id).unwrap_or_else(|err| {
-            error!("delete cache task metadata failed: {}", err);
-        });
+    pub async fn delete_persistent_cache_task(&self, id: &str) {
+        self.metadata
+            .delete_persistent_cache_task(id)
+            .unwrap_or_else(|err| {
+                error!("delete persistent cache task metadata failed: {}", err);
+            });
 
         self.content
-            .delete_cache_task(id)
+            .delete_persistent_cache_task(id)
             .await
             .unwrap_or_else(|err| {
-                error!("delete cache task content failed: {}", err);
+                error!("delete persistent cache task content failed: {}", err);
             });
     }
 
