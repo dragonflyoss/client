@@ -18,7 +18,6 @@
 use crate::dynconfig::Dynconfig;
 use dragonfly_api::common::v2::{Peer, PersistentCachePeer, PersistentCacheTask, Task};
 use crate::grpc::health::HealthClient;
-use dragonfly_api::common::v2::{CachePeer, CacheTask, Peer, Task};
 use dragonfly_api::manager::v2::Scheduler;
 use dragonfly_api::scheduler::v2::{
     scheduler_client::SchedulerClient as SchedulerGRPCClient, AnnounceHostRequest,
