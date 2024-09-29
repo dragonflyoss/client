@@ -110,6 +110,12 @@ impl Dynconfig {
         }
     }
 
+    /// get the config.
+    #[instrument(skip_all)]
+    pub async fn get_config(&self) -> Arc<Config> {
+        self.config.clone()
+    }
+
     /// refresh refreshes the dynamic configuration of the dfdaemon.
     #[instrument(skip_all)]
     pub async fn refresh(&self) -> Result<()> {

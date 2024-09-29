@@ -135,6 +135,29 @@ fn default_scheduler_schedule_timeout() -> Duration {
     Duration::from_secs(10)
 }
 
+/// default_scheduler_cooldown_interval is the default cooldown time (in seconds) for the scheduler.
+/// This duration specifies the time period during which the scheduler will not be accessed
+/// after it becomes unavailable due to an exception.
+#[inline]
+fn default_scheduler_cooldown_interval() -> Duration {
+    Duration::from_secs(60)
+}
+
+/// default_scheduler_max_attempts is the default maximum number of attempts to connect to the scheduler.
+/// If the connection to the scheduler fails, dfdaemon will retry up to this number of times.
+#[inline]
+fn default_scheduler_max_attempts() -> u32 {
+    3
+}
+
+/// default_scheduler_refresh_threshold is the default threshold for refreshing available scheduler nodes.
+/// When the number of attempts to connect to the scheduler reaches this value,
+/// dfdaemon will refresh the available scheduler nodes.
+#[inline]
+fn default_scheduler_refresh_threshold() -> u32 {
+    10
+}
+
 /// default_dynconfig_refresh_interval is the default interval to refresh dynamic configuration from manager.
 #[inline]
 fn default_dynconfig_refresh_interval() -> Duration {
@@ -492,6 +515,28 @@ pub struct Scheduler {
     #[serde(default = "default_download_max_schedule_count")]
     #[validate(range(min = 1))]
     pub max_schedule_count: u32,
+
+    // cooldown_duration is the scheduler's cooldown time (in seconds).
+    // When the scheduler becomes unavailable due to an exception, this field specifies
+    // the time period during which the scheduler will not be accessed.
+    #[serde(
+        default = "default_scheduler_cooldown_interval",
+        with = "humantime_serde"
+    )]
+    pub cooldown_interval: Duration,
+
+    // max_attempts is the maximum number of attempts to connect to the scheduler.
+    // If the connection to the scheduler fails, dfdaemon will retry up to this number of times.
+    #[serde(default = "default_scheduler_max_attempts")]
+    #[validate(range(min = 1))]
+    pub max_attempts: u32,
+
+    // refresh_threshold is the threshold for refreshing available scheduler nodes.
+    // When the number of attempts to connect to the scheduler reaches this value,
+    // dfdaemon will refresh the available scheduler nodes.
+    #[serde(default = "default_scheduler_refresh_threshold")]
+    #[validate(range(min = 1))]
+    pub refresh_threshold: u32,
 }
 
 /// Scheduler implements Default.
@@ -501,6 +546,9 @@ impl Default for Scheduler {
             announce_interval: default_scheduler_announce_interval(),
             schedule_timeout: default_scheduler_schedule_timeout(),
             max_schedule_count: default_download_max_schedule_count(),
+            cooldown_interval: default_scheduler_cooldown_interval(),
+            max_attempts: default_scheduler_max_attempts(),
+            refresh_threshold: default_scheduler_refresh_threshold(),
         }
     }
 }
