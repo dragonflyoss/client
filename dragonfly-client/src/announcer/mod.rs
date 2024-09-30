@@ -240,6 +240,16 @@ impl SchedulerAnnouncer {
             upload_tcp_connection_count: 0,
             idc: self.config.host.idc.clone(),
             location: self.config.host.location.clone(),
+
+            // TODO: Get the network download rate, refer to
+            // https://docs.rs/sysinfo/latest/sysinfo/struct.NetworkData.html#method.received.
+            download_rate: 0,
+            download_rate_limit: self.config.download.rate_limit.as_u64(),
+
+            // TODO: Get the network download rate, refer to
+            // https://docs.rs/sysinfo/latest/sysinfo/struct.NetworkData.html#method.transmitted
+            upload_rate: 0,
+            upload_rate_limit: self.config.upload.rate_limit.as_u64(),
         };
 
         // Get the disk information.
