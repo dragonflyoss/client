@@ -841,9 +841,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.0.162"
+version = "2.0.164"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c99abd008cd23a4b8f8ba09b825d092563c613404c89068f65592868f52fd814"
+checksum = "7889c7ab9f94bd9a45ee46653299592d410c73d0e1cf1b3b7cf0b1104c55cf0f"
 dependencies = [
  "prost 0.13.3",
  "prost-types",
@@ -2946,9 +2946,9 @@ dependencies = [
 
 [[package]]
 name = "prost-types"
-version = "0.13.2"
+version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60caa6738c7369b940c3d49246a8d1749323674c65cb13010134f5c9bad5b519"
+checksum = "4759aa0d3a6232fb8dbdb97b61de2c20047c68aca932c7ed76da9d788508d670"
 dependencies = [
  "prost 0.13.3",
 ]
@@ -4235,9 +4235,9 @@ dependencies = [
 
 [[package]]
 name = "tonic"
-version = "0.12.2"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6f6ba989e4b2c58ae83d862d3a3e27690b6e3ae630d0deb59f3697f32aa88ad"
+checksum = "877c5b330756d856ffcc4553ab34a5684481ade925ecc54bcd1bf02b1d0d4d52"
 dependencies = [
  "async-stream",
  "async-trait",
