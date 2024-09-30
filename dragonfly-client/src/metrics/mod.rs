@@ -15,9 +15,10 @@
  */
 
 use crate::shutdown;
-use chrono::DateTime;
 use dragonfly_api::common::v2::{Range, TrafficType};
-use dragonfly_client_config::dfdaemon::Config;
+use dragonfly_client_config::{
+    dfdaemon::Config, BUILD_PLATFORM, CARGO_PKG_VERSION, GIT_COMMIT_DATE, GIT_COMMIT_SHORT_HASH,
+};
 use lazy_static::lazy_static;
 use prometheus::{
     exponential_buckets, gather, Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGaugeVec,
@@ -638,15 +639,12 @@ impl Metrics {
         self.register_custom_metrics();
 
         // VERSION_GAUGE sets the version info of the service.
-        let build_timestamp = env!("BUILD_TIMESTAMP");
-        let build_date_time =
-            DateTime::from_timestamp(build_timestamp.parse::<i64>().unwrap(), 0).unwrap();
         VERSION_GAUGE
             .get_metric_with_label_values(&[
-                env!("GIT_VERSION"),
-                env!("GIT_COMMIT"),
-                env!("BUILD_PLATFORM"),
-                build_date_time.to_string().as_str(),
+                CARGO_PKG_VERSION,
+                &GIT_COMMIT_SHORT_HASH,
+                BUILD_PLATFORM,
+                &GIT_COMMIT_DATE,
             ])
             .unwrap()
             .set(1);
