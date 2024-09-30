@@ -9,7 +9,6 @@ keywords.workspace = true
 license.workspace = true
 readme.workspace = true
 edition.workspace = true
-build = "build.rs"
 
 [[bin]]
 name = "dfdaemon"
@@ -61,6 +60,7 @@ blake3.workspace = true
 bytesize.workspace = true
 uuid.workspace = true
 percent-encoding.workspace = true
+lazy_static.workspace = true
 serde_json = "1.0"
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
@@ -71,7 +71,6 @@ tracing-flame = "0.2.0"
 opentelemetry = { version = "0.18.0", default-features = false, features = ["trace", "rt-tokio"] }
 opentelemetry-jaeger = { version = "0.17.0", features = ["rt-tokio"] }
 pprof = { version = "0.13", features = ["flamegraph", "protobuf-codec"] }
-lazy_static = "1.5"
 prometheus = { version = "0.13", features = ["process"] }
 tonic-health = "0.12.2"
 tonic-reflection = "0.12.1"

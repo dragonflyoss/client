@@ -26,7 +26,7 @@ use dragonfly_client::metrics::{
 };
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::{object_storage, BackendFactory, DirEntry, HeadRequest};
-use dragonfly_client_config::DetailedVersionParser;
+use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{BackendError, ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
@@ -246,10 +246,10 @@ struct Args {
     #[arg(
         short = 'V',
         long = "version",
-        help = "Print version",
+        help = "Print version information",
         default_value_t = false,
         action = clap::ArgAction::SetTrue,
-        value_parser = DetailedVersionParser
+        value_parser = VersionValueParser
     )]
     version: bool,
 }

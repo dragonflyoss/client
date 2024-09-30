@@ -20,7 +20,7 @@ use crate::shutdown;
 use dragonfly_api::manager::v2::{
     ListSchedulersRequest, ListSchedulersResponse, Scheduler, SourceType,
 };
-use dragonfly_client_config::{dfdaemon::Config, CARGO_PKG_VERSION, GIT_HASH};
+use dragonfly_client_config::{dfdaemon::Config, CARGO_PKG_VERSION, GIT_COMMIT_SHORT_HASH};
 use dragonfly_client_core::{Error, Result};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
@@ -161,7 +161,7 @@ impl Dynconfig {
                 idc: self.config.host.idc.clone(),
                 location: self.config.host.location.clone(),
                 version: CARGO_PKG_VERSION.to_string(),
-                commit: GIT_HASH.unwrap_or_default().to_string(),
+                commit: GIT_COMMIT_SHORT_HASH.to_string(),
             })
             .await
     }
