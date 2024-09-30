@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
+use clap::{Arg, Command};
+use shadow_rs::shadow;
 use std::path::PathBuf;
+
+shadow!(build);
 
 pub mod dfcache;
 pub mod dfdaemon;
@@ -98,4 +102,30 @@ pub fn default_cache_dir() -> PathBuf {
 
     #[cfg(target_os = "macos")]
     return home::home_dir().unwrap().join(".dragonfly").join("cache");
+}
+
+#[derive(Debug, Clone)]
+pub struct DetailedVersionParser;
+
+impl clap::builder::TypedValueParser for DetailedVersionParser {
+    type Value = bool;
+    fn parse_ref(
+        &self,
+        cmd: &Command,
+        _arg: Option<&Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        if value.to_os_string().eq("true") {
+            println!(
+                "{} {} (@: {}, rust: {}, git: {})",
+                cmd.get_name(),
+                cmd.get_version().unwrap_or("unknown"),
+                &build::COMMIT_DATE[..10],
+                build::RUST_VERSION,
+                build::SHORT_COMMIT
+            );
+            std::process::exit(0);
+        }
+        Ok(false)
+    }
 }

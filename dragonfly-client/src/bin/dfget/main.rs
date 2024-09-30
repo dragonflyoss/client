@@ -26,6 +26,7 @@ use dragonfly_client::metrics::{
 };
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::{object_storage, BackendFactory, DirEntry, HeadRequest};
+use dragonfly_client_config::DetailedVersionParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{BackendError, ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
@@ -81,6 +82,7 @@ Examples:
     version,
     about = "dfget is a download command line based on P2P technology",
     long_about = LONG_ABOUT,
+    disable_version_flag = true,
 )]
 struct Args {
     #[arg(help = "Specify the URL to download")]
@@ -240,6 +242,16 @@ struct Args {
         help = "Specify whether to print log"
     )]
     verbose: bool,
+
+    #[arg(
+        short = 'V',
+        long = "version",
+        help = "Print version",
+        default_value_t = false,
+        action = clap::ArgAction::SetTrue,
+        value_parser = DetailedVersionParser
+    )]
+    version: bool,
 }
 
 #[tokio::main]
@@ -678,10 +690,9 @@ async fn download(
     };
 
     // If the `filtered_query_params` is not provided, then use the default value.
-    let filtered_query_params = match args.filtered_query_params {
-        Some(params) => params,
-        None => dfdaemon::default_proxy_rule_filtered_query_params(),
-    };
+    let filtered_query_params = args
+        .filtered_query_params
+        .unwrap_or_else(dfdaemon::default_proxy_rule_filtered_query_params);
 
     // Create dfdaemon client.
     let response = download_client
