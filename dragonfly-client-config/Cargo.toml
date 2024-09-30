@@ -8,9 +8,11 @@ repository.workspace = true
 keywords.workspace = true
 license.workspace = true
 edition.workspace = true
+build = "build.rs"
 
 [dependencies]
 dragonfly-client-core.workspace = true
+clap.workspace = true
 regex.workspace = true
 serde.workspace = true
 tracing.workspace = true
@@ -25,3 +27,7 @@ local-ip-address = "0.6.3"
 hostname = "^0.4"
 humantime-serde = "1.1.1"
 serde_regex = "1.1.0"
+shadow-rs = "0.35.0"
+
+[build-dependencies]
+shadow-rs = "0.35.0"

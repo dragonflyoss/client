@@ -18,6 +18,7 @@ use clap::{Parser, Subcommand};
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::tracing::init_tracing;
+use dragonfly_client_config::DetailedVersionParser;
 use dragonfly_client_config::{dfcache, dfdaemon};
 use dragonfly_client_core::Result;
 use std::path::{Path, PathBuf};
@@ -35,7 +36,8 @@ pub mod stat;
     version,
     about = "dfcache is a cache command line based on P2P technology in Dragonfly.",
     long_about = "A cache command line based on P2P technology in Dragonfly that can import file and export file in P2P network, \
-    and it can copy multiple replicas during import. P2P cache is effectively used for fast read and write cache."
+    and it can copy multiple replicas during import. P2P cache is effectively used for fast read and write cache.",
+    disable_version_flag = true
 )]
 struct Args {
     #[arg(
@@ -74,6 +76,16 @@ struct Args {
         help = "Specify whether to print log"
     )]
     verbose: bool,
+
+    #[arg(
+        short = 'V',
+        long = "version",
+        help = "Print version",
+        default_value_t = false,
+        action = clap::ArgAction::SetTrue,
+        value_parser = DetailedVersionParser
+    )]
+    version: bool,
 
     #[command(subcommand)]
     command: Command,

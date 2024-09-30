@@ -31,6 +31,7 @@ use dragonfly_client::stats::Stats;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::dfdaemon;
+use dragonfly_client_config::DetailedVersionParser;
 use dragonfly_client_storage::Storage;
 use dragonfly_client_util::id_generator::IDGenerator;
 use std::net::SocketAddr;
@@ -55,7 +56,8 @@ pub static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:19\0
     about = "dfdaemon is a high performance P2P download daemon",
     long_about = "A high performance P2P download daemon in Dragonfly that can download resources of different protocols. \
     When user triggers a file downloading task, dfdaemon will download the pieces of file from other peers. \
-    Meanwhile, it will act as an uploader to support other peers to download pieces from it if it owns them."
+    Meanwhile, it will act as an uploader to support other peers to download pieces from it if it owns them.",
+    disable_version_flag = true
 )]
 struct Args {
     #[arg(
@@ -94,6 +96,16 @@ struct Args {
         help = "Specify whether to print log"
     )]
     verbose: bool,
+
+    #[arg(
+        short = 'V',
+        long = "version",
+        help = "Print version",
+        default_value_t = false,
+        action = clap::ArgAction::SetTrue,
+        value_parser = DetailedVersionParser
+    )]
+    version: bool,
 }
 
 #[tokio::main]

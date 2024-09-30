@@ -17,6 +17,7 @@
 use clap::Parser;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_config::dfinit;
+use dragonfly_client_config::DetailedVersionParser;
 use dragonfly_client_init::container_runtime;
 use std::path::PathBuf;
 use tracing::{error, Level};
@@ -29,7 +30,8 @@ use tracing::{error, Level};
     about = "dfinit is a command line for initializing runtime environment of the dfdaemon",
     long_about = "A command line for initializing runtime environment of the dfdaemon, \
     For example, if the container's runtime is containerd, then dfinit will modify the mirror configuration of containerd and restart the containerd service. \
-    It also supports to change configuration of the other container's runtime, such as cri-o, docker, etc."
+    It also supports to change configuration of the other container's runtime, such as cri-o, docker, etc.",
+    disable_version_flag = true
 )]
 struct Args {
     #[arg(
@@ -68,6 +70,16 @@ struct Args {
         help = "Specify whether to print log"
     )]
     verbose: bool,
+
+    #[arg(
+        short = 'V',
+        long = "version",
+        help = "Print version",
+        default_value_t = false,
+        action = clap::ArgAction::SetTrue,
+        value_parser = DetailedVersionParser
+    )]
+    version: bool,
 }
 
 #[tokio::main]

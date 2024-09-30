@@ -16,6 +16,7 @@
 
 use clap::{Parser, Subcommand};
 use dragonfly_client::tracing::init_tracing;
+use dragonfly_client_config::DetailedVersionParser;
 use dragonfly_client_config::{dfdaemon, dfstore};
 use std::path::PathBuf;
 use tracing::Level;
@@ -29,7 +30,8 @@ use tracing::Level;
     long_about = "A storage command line based on P2P technology in Dragonfly that can rely on different types of object storage, \
     such as S3 or OSS, to provide stable object storage capabilities. It uses the entire P2P network as a cache when storing objects. \
     Rely on S3 or OSS as the backend to ensure storage reliability. In the process of object storage, \
-    P2P cache is effectively used for fast read and write storage."
+    P2P cache is effectively used for fast read and write storage.",
+    disable_version_flag = true
 )]
 struct Args {
     #[arg(
@@ -68,6 +70,16 @@ struct Args {
         help = "Specify whether to print log"
     )]
     verbose: bool,
+
+    #[arg(
+        short = 'V',
+        long = "version",
+        help = "Print version",
+        default_value_t = false,
+        action = clap::ArgAction::SetTrue,
+        value_parser = DetailedVersionParser
+    )]
+    version: bool,
 
     #[command(subcommand)]
     command: Command,
