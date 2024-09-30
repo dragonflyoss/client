@@ -31,7 +31,7 @@ use dragonfly_client::stats::Stats;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::dfdaemon;
-use dragonfly_client_config::DetailedVersionParser;
+use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_storage::Storage;
 use dragonfly_client_util::id_generator::IDGenerator;
 use std::net::SocketAddr;
@@ -100,10 +100,10 @@ struct Args {
     #[arg(
         short = 'V',
         long = "version",
-        help = "Print version",
+        help = "Print version information",
         default_value_t = false,
         action = clap::ArgAction::SetTrue,
-        value_parser = DetailedVersionParser
+        value_parser = VersionValueParser
     )]
     version: bool,
 }

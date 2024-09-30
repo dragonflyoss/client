@@ -21,7 +21,7 @@ use dragonfly_api::manager::v2::{DeleteSeedPeerRequest, SourceType, UpdateSeedPe
 use dragonfly_api::scheduler::v2::{AnnounceHostRequest, DeleteHostRequest};
 use dragonfly_client_config::{
     dfdaemon::{Config, HostType},
-    CARGO_PKG_RUSTC_VERSION, CARGO_PKG_VERSION, GIT_HASH,
+    CARGO_PKG_RUSTC_VERSION, CARGO_PKG_VERSION, GIT_COMMIT_SHORT_HASH,
 };
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::Result;
@@ -265,7 +265,7 @@ impl SchedulerAnnouncer {
         // Get the build information.
         let build = Build {
             git_version: CARGO_PKG_VERSION.to_string(),
-            git_commit: Some(GIT_HASH.unwrap_or_default().to_string()),
+            git_commit: Some(GIT_COMMIT_SHORT_HASH.to_string()),
             go_version: None,
             rust_version: Some(CARGO_PKG_RUSTC_VERSION.to_string()),
             platform: None,
