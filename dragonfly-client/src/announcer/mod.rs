@@ -214,7 +214,7 @@ impl SchedulerAnnouncer {
         let cpu = Cpu {
             logical_count: sys.physical_core_count().unwrap_or_default() as u32,
             physical_count: sys.physical_core_count().unwrap_or_default() as u32,
-            percent: sys.global_cpu_info().cpu_usage() as f64,
+            percent: sys.global_cpu_usage() as f64,
             process_percent: process.cpu_usage() as f64,
 
             // TODO: Get the cpu times.
