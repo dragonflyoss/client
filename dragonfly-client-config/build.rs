@@ -33,7 +33,7 @@ struct Commit {
 
 /// get_commit_from_git returns the git commit information.
 fn get_commit_from_git() -> Option<Commit> {
-    if !Path::new(".git").exists() {
+    if !Path::new("../.git").exists() {
         return None;
     }
 
