@@ -117,7 +117,6 @@ impl Piece {
     }
 
     /// calculate_interested calculates the interested pieces by content_length and range.
-    #[instrument(skip_all)]
     pub fn calculate_interested(
         &self,
         piece_length: u64,
@@ -145,6 +144,7 @@ impl Piece {
                         error!("piece not found");
                         Error::InvalidParameter
                     })?;
+
                     piece.length = piece_length + content_length - offset;
                     pieces.push(piece);
                     break;
@@ -197,6 +197,7 @@ impl Piece {
                     error!("piece not found");
                     Error::InvalidParameter
                 })?;
+
                 piece.length = piece_length + content_length - offset;
                 pieces.push(piece);
                 break;
@@ -636,5 +637,108 @@ impl Piece {
                 );
                 piece
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn should_calculate_interested() {
+        let temp_dir = tempdir().unwrap();
+
+        let config = Config::default();
+        let config = Arc::new(config);
+
+        let id_generator =
+            IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false);
+        let id_generator = Arc::new(id_generator);
+
+        let storage = Storage::new(
+            config.clone(),
+            temp_dir.path(),
+            temp_dir.path().to_path_buf(),
+        )
+        .await
+        .unwrap();
+        let storage = Arc::new(storage);
+
+        let backend_factory = BackendFactory::new(None).unwrap();
+        let backend_factory = Arc::new(backend_factory);
+
+        let piece = Piece::new(
+            config.clone(),
+            id_generator.clone(),
+            storage.clone(),
+            backend_factory.clone(),
+        );
+
+        let test_cases = vec![
+            (1000, 1, None, 1, vec![0], 0, 1),
+            (1000, 5000, None, 5, vec![0, 1, 2, 3, 4], 4000, 1000),
+            (5000, 1000, None, 1, vec![0], 0, 1000),
+            (
+                10,
+                101,
+                None,
+                11,
+                vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+                100,
+                1,
+            ),
+            (
+                1000,
+                5000,
+                Some(Range {
+                    start: 1500,
+                    length: 2000,
+                }),
+                3,
+                vec![1, 2, 3],
+                3000,
+                1000,
+            ),
+            (
+                1000,
+                5000,
+                Some(Range {
+                    start: 0,
+                    length: 1,
+                }),
+                1,
+                vec![0],
+                0,
+                1000,
+            ),
+        ];
+
+        for (
+            piece_length,
+            content_length,
+            range,
+            expected_len,
+            expected_numbers,
+            expected_last_piece_offset,
+            expected_last_piece_length,
+        ) in test_cases
+        {
+            let pieces = piece
+                .calculate_interested(piece_length, content_length, range)
+                .unwrap();
+            assert_eq!(pieces.len(), expected_len);
+            assert_eq!(
+                pieces
+                    .iter()
+                    .map(|piece| piece.number)
+                    .collect::<Vec<u32>>(),
+                expected_numbers
+            );
+
+            let last_piece = pieces.last().unwrap();
+            assert_eq!(last_piece.offset, expected_last_piece_offset);
+            assert_eq!(last_piece.length, expected_last_piece_length);
+        }
     }
 }

@@ -1236,6 +1236,28 @@ impl Task {
                     created_at: Some(prost_wkt_types::Timestamp::from(metadata.created_at)),
                 };
 
+                // Send the download piece finished request.
+                in_stream_tx
+                        .send_timeout(
+                            AnnouncePeerRequest {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.clone(),
+                                peer_id: peer_id.to_string(),
+                                request: Some(
+                                    announce_peer_request::Request::DownloadPieceBackToSourceFinishedRequest(
+                                        DownloadPieceBackToSourceFinishedRequest {
+                                            piece: Some(piece.clone()),
+                                        },
+                                    ),
+                                ),
+                            },
+                            REQUEST_TIMEOUT,
+                        )
+                        .await.map_err(|err| {
+                            error!("send DownloadPieceBackToSourceFinishedRequest for piece {} failed: {:?}", storage.piece_id(task_id.as_str(), number), err);
+                            err
+                        })?;
+
                 // Send the download progress.
                 download_progress_tx
                     .send_timeout(
@@ -1262,28 +1284,6 @@ impl Task {
                         );
                         err
                     })?;
-
-                // Send the download piece finished request.
-                in_stream_tx
-                        .send_timeout(
-                            AnnouncePeerRequest {
-                                host_id: host_id.to_string(),
-                                task_id: task_id.clone(),
-                                peer_id: peer_id.to_string(),
-                                request: Some(
-                                    announce_peer_request::Request::DownloadPieceBackToSourceFinishedRequest(
-                                        DownloadPieceBackToSourceFinishedRequest {
-                                            piece: Some(piece.clone()),
-                                        },
-                                    ),
-                                ),
-                            },
-                            REQUEST_TIMEOUT,
-                        )
-                        .await.map_err(|err| {
-                            error!("send DownloadPieceBackToSourceFinishedRequest for piece {} failed: {:?}", storage.piece_id(task_id.as_str(), number), err);
-                            err
-                        })?;
 
                 info!(
                     "finished piece {} from source",

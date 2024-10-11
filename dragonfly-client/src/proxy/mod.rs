@@ -57,10 +57,12 @@ use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+use tokio::time::sleep;
 use tokio_rustls::TlsAcceptor;
 use tokio_util::io::ReaderStream;
 use tracing::{error, info, instrument, Span};
@@ -709,6 +711,10 @@ async fn proxy_by_dfdaemon(
                         download_task_response,
                     )) = message.response
                     {
+                        // Sleep for a while to avoid the out stream is aborted. If the task is small, proxy read the piece
+                        // before the task download is finished. It will cause `user body write aborted` error.
+                        sleep(Duration::from_millis(1)).await;
+
                         // Send the none response to the client, if the first piece is received.
                         if !initialized {
                             info!("first piece received, send response");
