@@ -18,7 +18,9 @@ use bytesize::ByteSize;
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::Result;
 use local_ip_address::{local_ip, local_ipv6};
+use rcgen::Certificate;
 use regex::Regex;
+use rustls_pki_types::CertificateDer;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::fmt;
@@ -26,6 +28,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::fs;
+use tonic::transport::{ClientTlsConfig, ServerTlsConfig};
 use tracing::{info, instrument};
 use validator::Validate;
 
@@ -420,6 +423,30 @@ pub struct UploadServer {
     /// port is the port to the grpc server.
     #[serde(default = "default_upload_grpc_server_port")]
     pub port: u16,
+
+    /// ca_cert is the root CA cert path with PEM format for the upload server, and it is used
+    /// for mutual TLS.
+    pub ca_cert: Option<PathBuf>,
+
+    /// ca_cert_pem is the root CA cert with PEM format string for the upload server.
+    #[serde(skip)]
+    ca_cert_pem: Option<String>,
+
+    /// cert is the server cert path with PEM format for the upload server and it is used for
+    /// mutual TLS.
+    pub cert: Option<PathBuf>,
+
+    /// cert_pem is the server cert with PEM format string for the upload server.
+    #[serde(skip)]
+    cert_pem: Option<String>,
+
+    /// key is the server key path with PEM format for the upload server and it is used for
+    /// mutual TLS.
+    pub key: Option<PathBuf>,
+
+    /// key_pem is the server key with PEM format string for the upload server.
+    #[serde(skip)]
+    key_pem: Option<String>,
 }
 
 /// UploadServer implements Default.
@@ -428,7 +455,58 @@ impl Default for UploadServer {
         UploadServer {
             ip: None,
             port: default_upload_grpc_server_port(),
+            ca_cert: None,
+            ca_cert_pem: None,
+            cert: None,
+            cert_pem: None,
+            key: None,
+            key_pem: None,
         }
+    }
+}
+
+/// UploadServer is the implementation of UploadServer.
+impl UploadServer {
+    /// TODO: load_server_tls_config loads the server tls config.
+    pub fn load_server_tls_config(&self) -> Result<ServerTlsConfig> {
+        unimplemented!()
+    }
+}
+
+/// UploadClient is the upload client configuration for dfdaemon.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UploadClient {
+    /// ca_cert is the root CA cert path with PEM format for the upload client, and it is used
+    /// for mutual TLS.
+    pub ca_cert: Option<PathBuf>,
+
+    /// ca_cert_pem is the root CA cert with PEM format string for the upload client.
+    #[serde(skip)]
+    ca_cert_pem: Option<String>,
+
+    /// cert is the client cert path with PEM format for the upload client and it is used for
+    /// mutual TLS.
+    pub cert: Option<PathBuf>,
+
+    /// cert_pem is the client cert with PEM format string for the upload client.
+    #[serde(skip)]
+    cert_pem: Option<String>,
+
+    /// key is the client key path with PEM format for the upload client and it is used for
+    /// mutual TLS.
+    pub key: Option<PathBuf>,
+
+    /// key_pem is the client key with PEM format string for the upload client.
+    #[serde(skip)]
+    key_pem: Option<String>,
+}
+
+/// UploadClient is the implementation of UploadClient.
+impl UploadClient {
+    /// TODO: load_server_tls_config loads the client tls config.
+    pub fn load_client_tls_config(&self) -> Result<ClientTlsConfig> {
+        unimplemented!()
     }
 }
 
@@ -438,6 +516,9 @@ impl Default for UploadServer {
 pub struct Upload {
     /// server is the upload server configuration for dfdaemon.
     pub server: UploadServer,
+
+    /// client is the upload client configuration for dfdaemon.
+    pub client: UploadClient,
 
     /// disable_shared indicates whether disable to share data for other peers.
     pub disable_shared: bool,
@@ -452,6 +533,7 @@ impl Default for Upload {
     fn default() -> Self {
         Upload {
             server: UploadServer::default(),
+            client: UploadClient::default(),
             disable_shared: false,
             rate_limit: default_upload_rate_limit(),
         }
@@ -736,6 +818,14 @@ impl Default for ProxyServer {
     }
 }
 
+/// ProxyServer is the implementation of ProxyServer.
+impl ProxyServer {
+    /// TODO: load_cert loads the cert.
+    pub fn load_cert(&self) -> Result<Certificate> {
+        unimplemented!()
+    }
+}
+
 /// Rule is the proxy rule configuration.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -796,6 +886,14 @@ impl Default for RegistryMirror {
             addr: default_proxy_registry_mirror_addr(),
             certs: None,
         }
+    }
+}
+
+/// RegistryMirror is the implementation of RegistryMirror.
+impl RegistryMirror {
+    /// TODO: load_cert_ders loads the cert ders.
+    pub fn load_cert_ders(&self) -> Result<Vec<CertificateDer<'static>>> {
+        unimplemented!()
     }
 }
 
