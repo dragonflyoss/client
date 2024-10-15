@@ -560,9 +560,49 @@ impl Default for Upload {
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Manager {
-    /// addrs is manager addresses.
-    #[validate(length(min = 1))]
-    pub addrs: Vec<String>,
+    /// addr is the manager address.
+    pub addr: String,
+
+    /// ca_cert is the root CA cert path with PEM format for the manager, and it is used
+    /// for mutual TLS.
+    pub ca_cert: Option<PathBuf>,
+
+    /// cert is the client cert path with PEM format for the manager and it is used for
+    /// mutual TLS.
+    pub cert: Option<PathBuf>,
+
+    /// key is the client key path with PEM format for the manager and it is used for
+    /// mutual TLS.
+    pub key: Option<PathBuf>,
+}
+
+/// Manager is the implementation of Manager.
+impl Manager {
+    /// load_client_tls_config loads the client tls config.
+    pub async fn load_client_tls_config(
+        &self,
+        domain_name: &str,
+    ) -> Result<Option<ClientTlsConfig>> {
+        if let (Some(ca_cert_path), Some(client_cert_path), Some(client_key_path)) =
+            (self.ca_cert.clone(), self.cert.clone(), self.key.clone())
+        {
+            let client_cert = fs::read(&client_cert_path).await?;
+            let client_key = fs::read(&client_key_path).await?;
+            let client_identity = Identity::from_pem(client_cert, client_key);
+
+            let ca_cert = fs::read(&ca_cert_path).await?;
+            let ca_cert = TonicCertificate::from_pem(ca_cert);
+
+            return Ok(Some(
+                ClientTlsConfig::new()
+                    .domain_name(domain_name)
+                    .ca_certificate(ca_cert)
+                    .identity(client_identity),
+            ));
+        }
+
+        Ok(None)
+    }
 }
 
 /// Scheduler is the scheduler configuration for dfdaemon.
@@ -590,6 +630,18 @@ pub struct Scheduler {
     #[serde(default = "default_download_max_schedule_count")]
     #[validate(range(min = 1))]
     pub max_schedule_count: u32,
+
+    /// ca_cert is the root CA cert path with PEM format for the scheduler, and it is used
+    /// for mutual TLS.
+    pub ca_cert: Option<PathBuf>,
+
+    /// cert is the client cert path with PEM format for the scheduler and it is used for
+    /// mutual TLS.
+    pub cert: Option<PathBuf>,
+
+    /// key is the client key path with PEM format for the scheduler and it is used for
+    /// mutual TLS.
+    pub key: Option<PathBuf>,
 }
 
 /// Scheduler implements Default.
@@ -599,7 +651,39 @@ impl Default for Scheduler {
             announce_interval: default_scheduler_announce_interval(),
             schedule_timeout: default_scheduler_schedule_timeout(),
             max_schedule_count: default_download_max_schedule_count(),
+            ca_cert: None,
+            cert: None,
+            key: None,
         }
+    }
+}
+
+/// Scheduler is the implementation of Scheduler.
+impl Scheduler {
+    /// load_client_tls_config loads the client tls config.
+    pub async fn load_client_tls_config(
+        &self,
+        domain_name: &str,
+    ) -> Result<Option<ClientTlsConfig>> {
+        if let (Some(ca_cert_path), Some(client_cert_path), Some(client_key_path)) =
+            (self.ca_cert.clone(), self.cert.clone(), self.key.clone())
+        {
+            let client_cert = fs::read(&client_cert_path).await?;
+            let client_key = fs::read(&client_key_path).await?;
+            let client_identity = Identity::from_pem(client_cert, client_key);
+
+            let ca_cert = fs::read(&ca_cert_path).await?;
+            let ca_cert = TonicCertificate::from_pem(ca_cert);
+
+            return Ok(Some(
+                ClientTlsConfig::new()
+                    .domain_name(domain_name)
+                    .ca_certificate(ca_cert)
+                    .identity(client_identity),
+            ));
+        }
+
+        Ok(None)
     }
 }
 

@@ -21,6 +21,7 @@ use dragonfly_client_core::{
 use hyper_util::rt::TokioIo;
 use std::path::PathBuf;
 use tokio::net::UnixStream;
+use tonic::transport::ClientTlsConfig;
 use tonic::transport::{Channel, Endpoint, Uri};
 use tonic_health::pb::{
     health_client::HealthClient as HealthGRPCClient, HealthCheckRequest, HealthCheckResponse,
@@ -39,21 +40,39 @@ pub struct HealthClient {
 impl HealthClient {
     /// new creates a new HealthClient.
     #[instrument(skip_all)]
-    pub async fn new(addr: &str) -> Result<Self> {
-        let channel = Channel::from_shared(addr.to_string())
-            .map_err(|_| Error::InvalidURI(addr.into()))?
-            .connect_timeout(super::CONNECT_TIMEOUT)
-            .timeout(super::REQUEST_TIMEOUT)
-            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
-            .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
-            .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
-            .connect()
-            .await
-            .map_err(|err| {
-                error!("connect to {} failed: {}", addr, err);
-                err
-            })
-            .or_err(ErrorType::ConnectError)?;
+    pub async fn new(addr: &str, client_tls_config: Option<ClientTlsConfig>) -> Result<Self> {
+        let channel = match client_tls_config {
+            Some(client_tls_config) => Channel::from_shared(addr.to_string())
+                .map_err(|_| Error::InvalidURI(addr.into()))?
+                .tls_config(client_tls_config)?
+                .connect_timeout(super::CONNECT_TIMEOUT)
+                .timeout(super::REQUEST_TIMEOUT)
+                .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+                .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+                .connect()
+                .await
+                .map_err(|err| {
+                    error!("connect to {} failed: {}", addr, err);
+                    err
+                })
+                .or_err(ErrorType::ConnectError)?,
+            None => Channel::from_shared(addr.to_string())
+                .map_err(|_| Error::InvalidURI(addr.into()))?
+                .connect_timeout(super::CONNECT_TIMEOUT)
+                .timeout(super::REQUEST_TIMEOUT)
+                .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+                .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+                .connect()
+                .await
+                .map_err(|err| {
+                    error!("connect to {} failed: {}", addr, err);
+                    err
+                })
+                .or_err(ErrorType::ConnectError)?,
+        };
+
         let client = HealthGRPCClient::new(channel)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);

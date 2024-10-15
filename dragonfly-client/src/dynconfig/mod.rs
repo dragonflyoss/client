@@ -26,6 +26,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{error, info, instrument};
+use url::Url;
 
 /// Data is the dynamic configuration of the dfdaemon.
 #[derive(Default)]
@@ -180,20 +181,34 @@ impl Dynconfig {
                 }
             }
 
+            let addr = format!("http://{}:{}", scheduler.ip, scheduler.port);
+            let domain_name = Url::parse(addr.as_str())?
+                .host_str()
+                .ok_or_else(|| {
+                    error!("invalid address: {}", addr);
+                    Error::InvalidParameter
+                })?
+                .to_string();
+
             // Check the health of the scheduler.
-            let health_client =
-                match HealthClient::new(&format!("http://{}:{}", scheduler.ip, scheduler.port))
-                    .await
-                {
-                    Ok(client) => client,
-                    Err(err) => {
-                        error!(
-                            "create health client for scheduler {}:{} failed: {}",
-                            scheduler.ip, scheduler.port, err
-                        );
-                        continue;
-                    }
-                };
+            let health_client = match HealthClient::new(
+                &format!("http://{}:{}", scheduler.ip, scheduler.port),
+                self.config
+                    .scheduler
+                    .load_client_tls_config(domain_name.as_str())
+                    .await?,
+            )
+            .await
+            {
+                Ok(client) => client,
+                Err(err) => {
+                    error!(
+                        "create health client for scheduler {}:{} failed: {}",
+                        scheduler.ip, scheduler.port, err
+                    );
+                    continue;
+                }
+            };
 
             match health_client.check().await {
                 Ok(resp) => {

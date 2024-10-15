@@ -29,7 +29,6 @@ pub mod dfdaemon_upload;
 pub mod health;
 pub mod manager;
 pub mod scheduler;
-pub mod security;
 
 /// CONNECT_TIMEOUT is the timeout for GRPC connection.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
