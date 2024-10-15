@@ -29,3 +29,9 @@ libloading = "0.8.5"
 [dev-dependencies]
 tempfile.workspace = true
 wiremock = "0.6.2"
+rustls-pki-types.workspace = true
+rustls-pemfile.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+tokio-rustls.workspace = true
+rcgen.workspace = true

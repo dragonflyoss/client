@@ -61,6 +61,7 @@ bytesize.workspace = true
 uuid.workspace = true
 percent-encoding.workspace = true
 lazy_static.workspace = true
+tokio-rustls.workspace = true
 serde_json = "1.0"
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
@@ -84,7 +85,6 @@ hashring = "0.3.6"
 libc = "0.2"
 fslock = "0.2.1"
 leaky-bucket = "1.1.2"
-tokio-rustls = "0.25.0-alpha.4"
 http-body-util = "0.1.2"
 futures-util = "0.3.30"
 termion = "4.0.3"
@@ -186,7 +186,7 @@ assets = [
     "../ci/dfdaemon.yaml",
     "etc/dragonfly/dfdaemon.yaml",
     "644",
-  ],  
+  ],
   [
     "../CONTRIBUTING.md",
     "usr/share/doc/client/CONTRIBUTING.md",
@@ -310,52 +310,52 @@ assets = [
 
 [package.metadata.generate-rpm.variants.x86_64-unknown-linux-gnu]
 assets = [
-  {source = "../target/x86_64-unknown-linux-gnu/release/dfget", dest = "/usr/bin/dfget", mode = "755"},
-  {source = "../target/x86_64-unknown-linux-gnu/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755"},
-  {source = "../target/x86_64-unknown-linux-gnu/release/dfcache", dest = "/usr/bin/dfcache", mode = "755"},
-  {source = "../target/x86_64-unknown-linux-gnu/release/dfstore", dest = "/usr/bin/dfstore", mode = "755"}, 
-  {source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
-  {source = "../ci/dfdaemon.yaml", dest = "/etc/dragonfly/dfdaemon.yaml", mode = "644", config = true }, 
-  {source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true},
-  {source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true},
-  {source = "../README.md", dest = "/usr/share/doc/client/README.md", mode = "644", doc = true},
+  { source = "../target/x86_64-unknown-linux-gnu/release/dfget", dest = "/usr/bin/dfget", mode = "755" },
+  { source = "../target/x86_64-unknown-linux-gnu/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755" },
+  { source = "../target/x86_64-unknown-linux-gnu/release/dfcache", dest = "/usr/bin/dfcache", mode = "755" },
+  { source = "../target/x86_64-unknown-linux-gnu/release/dfstore", dest = "/usr/bin/dfstore", mode = "755" },
+  { source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
+  { source = "../ci/dfdaemon.yaml", dest = "/etc/dragonfly/dfdaemon.yaml", mode = "644", config = true },
+  { source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true },
+  { source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true },
+  { source = "../README.md", dest = "/usr/share/doc/client/README.md", mode = "644", doc = true },
 ]
 
 [package.metadata.generate-rpm.variants.x86_64-unknown-linux-musl]
 assets = [
-  {source = "../target/x86_64-unknown-linux-musl/release/dfget", dest = "/usr/bin/dfget", mode = "755"},
-  {source = "../target/x86_64-unknown-linux-musl/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755"},
-  {source = "../target/x86_64-unknown-linux-musl/release/dfcache", dest = "/usr/bin/dfcache", mode = "755"},
-  {source = "../target/x86_64-unknown-linux-musl/release/dfstore", dest = "/usr/bin/dfstore", mode = "755"}, 
-  {source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
-  {source = "../ci/dfdaemon.yaml", dest = "/etc/dragonfly/dfdaemon.yaml", mode = "644", config = true },   
-  {source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true},
-  {source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true},
-  {source = "../README.md", dest = "/usr/share/doc/client/README.md", mode = "644", doc = true},
+  { source = "../target/x86_64-unknown-linux-musl/release/dfget", dest = "/usr/bin/dfget", mode = "755" },
+  { source = "../target/x86_64-unknown-linux-musl/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755" },
+  { source = "../target/x86_64-unknown-linux-musl/release/dfcache", dest = "/usr/bin/dfcache", mode = "755" },
+  { source = "../target/x86_64-unknown-linux-musl/release/dfstore", dest = "/usr/bin/dfstore", mode = "755" },
+  { source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
+  { source = "../ci/dfdaemon.yaml", dest = "/etc/dragonfly/dfdaemon.yaml", mode = "644", config = true },
+  { source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true },
+  { source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true },
+  { source = "../README.md", dest = "/usr/share/doc/client/README.md", mode = "644", doc = true },
 ]
 
 [package.metadata.generate-rpm.variants.aarch64-unknown-linux-gnu]
 assets = [
-  {source = "../target/aarch64-unknown-linux-gnu/release/dfget", dest = "/usr/bin/dfget", mode = "755"},
-  {source = "../target/aarch64-unknown-linux-gnu/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755"},
-  {source = "../target/aarch64-unknown-linux-gnu/release/dfcache", dest = "/usr/bin/dfcache", mode = "755"},
-  {source = "../target/aarch64-unknown-linux-gnu/release/dfstore", dest = "/usr/bin/dfstore", mode = "755"},
-  {source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
-  {source = "../ci/dfdaemon.yaml", dest = "/etc/dragonfly/dfdaemon.yaml", mode = "644", config = true },     
-  {source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true},
-  {source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true},
-  {source = "../README.md", dest = "/usr/share/doc/client/README.md", mode = "644", doc = true},
+  { source = "../target/aarch64-unknown-linux-gnu/release/dfget", dest = "/usr/bin/dfget", mode = "755" },
+  { source = "../target/aarch64-unknown-linux-gnu/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755" },
+  { source = "../target/aarch64-unknown-linux-gnu/release/dfcache", dest = "/usr/bin/dfcache", mode = "755" },
+  { source = "../target/aarch64-unknown-linux-gnu/release/dfstore", dest = "/usr/bin/dfstore", mode = "755" },
+  { source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
+  { source = "../ci/dfdaemon.yaml", dest = "/etc/dragonfly/dfdaemon.yaml", mode = "644", config = true },
+  { source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true },
+  { source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true },
+  { source = "../README.md", dest = "/usr/share/doc/client/README.md", mode = "644", doc = true },
 ]
 
 [package.metadata.generate-rpm.variants.aarch64-unknown-linux-musl]
 assets = [
-  {source = "../target/aarch64-unknown-linux-musl/release/dfget", dest = "/usr/bin/dfget", mode = "755"},
-  {source = "../target/aarch64-unknown-linux-musl/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755"},
-  {source = "../target/aarch64-unknown-linux-musl/release/dfcache", dest = "/usr/bin/dfcache", mode = "755"},
-  {source = "../target/aarch64-unknown-linux-musl/release/dfstore", dest = "/usr/bin/dfstore", mode = "755"},
-  {source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
-  {source = "../ci/dfdaemon.yaml", dest = "/etc/dragonfly/dfdaemon.yaml", mode = "644", config = true },     
-  {source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true},
-  {source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true},
-  {source = "../README.md", dest = "/usr/share/doc/client/README.md", mode = "644", doc = true},
+  { source = "../target/aarch64-unknown-linux-musl/release/dfget", dest = "/usr/bin/dfget", mode = "755" },
+  { source = "../target/aarch64-unknown-linux-musl/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755" },
+  { source = "../target/aarch64-unknown-linux-musl/release/dfcache", dest = "/usr/bin/dfcache", mode = "755" },
+  { source = "../target/aarch64-unknown-linux-musl/release/dfstore", dest = "/usr/bin/dfstore", mode = "755" },
+  { source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
+  { source = "../ci/dfdaemon.yaml", dest = "/etc/dragonfly/dfdaemon.yaml", mode = "644", config = true },
+  { source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true },
+  { source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true },
+  { source = "../README.md", dest = "/usr/share/doc/client/README.md", mode = "644", doc = true },
 ]
