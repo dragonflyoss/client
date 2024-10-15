@@ -52,8 +52,8 @@ pub struct HeadRequest {
     /// timeout is the timeout of the request.
     pub timeout: Duration,
 
-    /// client_certs is the client certificates for the request.
-    pub client_certs: Option<Vec<CertificateDer<'static>>>,
+    /// client_cert is the client certificates for the request.
+    pub client_cert: Option<Vec<CertificateDer<'static>>>,
 
     /// object_storage is the object storage related information.
     pub object_storage: Option<ObjectStorage>,
@@ -101,8 +101,8 @@ pub struct GetRequest {
     /// timeout is the timeout of the request.
     pub timeout: Duration,
 
-    /// client_certs is the client certificates for the request.
-    pub client_certs: Option<Vec<CertificateDer<'static>>>,
+    /// client_cert is the client certificates for the request.
+    pub client_cert: Option<Vec<CertificateDer<'static>>>,
 
     /// the object storage related information.
     pub object_storage: Option<ObjectStorage>,

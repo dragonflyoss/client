@@ -155,7 +155,7 @@ impl Task {
                 url: request.url,
                 http_header: Some(request_header),
                 timeout: self.config.download.piece_timeout,
-                client_certs: None,
+                client_cert: None,
                 object_storage: request.object_storage,
             })
             .await
