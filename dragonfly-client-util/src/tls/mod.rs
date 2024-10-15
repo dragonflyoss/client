@@ -112,7 +112,7 @@ pub fn generate_ca_cert_from_pem(
 
 /// Generate certificates from PEM format files.
 #[instrument(skip_all)]
-pub fn generate_certs_from_pem(cert_path: &PathBuf) -> ClientResult<Vec<CertificateDer<'static>>> {
+pub fn generate_cert_from_pem(cert_path: &PathBuf) -> ClientResult<Vec<CertificateDer<'static>>> {
     let f = fs::File::open(cert_path)?;
     let mut certs_pem_reader = io::BufReader::new(f);
     let certs = rustls_pemfile::certs(&mut certs_pem_reader).collect::<Result<Vec<_>, _>>()?;

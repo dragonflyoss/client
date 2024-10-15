@@ -15,8 +15,11 @@
  */
 
 use bytesize::ByteSize;
-use dragonfly_client_core::error::{ErrorType, OrErr};
-use dragonfly_client_core::Result;
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Result,
+};
+use dragonfly_client_util::tls::{generate_ca_cert_from_pem, generate_cert_from_pem};
 use local_ip_address::{local_ip, local_ipv6};
 use rcgen::Certificate;
 use regex::Regex;
@@ -28,8 +31,10 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::fs;
-use tonic::transport::{ClientTlsConfig, ServerTlsConfig};
-use tracing::{info, instrument};
+use tonic::transport::{
+    Certificate as TonicCertificate, ClientTlsConfig, Identity, ServerTlsConfig,
+};
+use tracing::{error, info, instrument};
 use validator::Validate;
 
 /// NAME is the name of dfdaemon.
@@ -430,7 +435,7 @@ pub struct UploadServer {
 
     /// ca_cert_pem is the root CA cert with PEM format string for the upload server.
     #[serde(skip)]
-    ca_cert_pem: Option<String>,
+    ca_cert_pem: Option<Vec<u8>>,
 
     /// cert is the server cert path with PEM format for the upload server and it is used for
     /// mutual TLS.
@@ -438,7 +443,7 @@ pub struct UploadServer {
 
     /// cert_pem is the server cert with PEM format string for the upload server.
     #[serde(skip)]
-    cert_pem: Option<String>,
+    cert_pem: Option<Vec<u8>>,
 
     /// key is the server key path with PEM format for the upload server and it is used for
     /// mutual TLS.
@@ -446,7 +451,7 @@ pub struct UploadServer {
 
     /// key_pem is the server key with PEM format string for the upload server.
     #[serde(skip)]
-    key_pem: Option<String>,
+    key_pem: Option<Vec<u8>>,
 }
 
 /// UploadServer implements Default.
@@ -467,9 +472,44 @@ impl Default for UploadServer {
 
 /// UploadServer is the implementation of UploadServer.
 impl UploadServer {
-    /// TODO: load_server_tls_config loads the server tls config.
-    pub fn load_server_tls_config(&self) -> Result<ServerTlsConfig> {
-        unimplemented!()
+    /// load_server_tls_config loads the server tls config.
+    pub async fn load_server_tls_config(&mut self) -> Result<Option<ServerTlsConfig>> {
+        if let (Some(ca_cert_pem), Some(server_cert_pem), Some(server_key_pem)) = (
+            self.ca_cert_pem.clone(),
+            self.cert_pem.clone(),
+            self.key_pem.clone(),
+        ) {
+            let server_identity = Identity::from_pem(server_cert_pem, server_key_pem);
+            let ca_cert = TonicCertificate::from_pem(ca_cert_pem);
+
+            return Ok(Some(
+                ServerTlsConfig::new()
+                    .identity(server_identity)
+                    .client_ca_root(ca_cert),
+            ));
+        }
+
+        if let (Some(ca_cert_path), Some(server_cert_path), Some(server_key_path)) =
+            (self.ca_cert.clone(), self.cert.clone(), self.key.clone())
+        {
+            let server_cert = fs::read(&server_cert_path).await?;
+            self.cert_pem = Some(server_cert.clone());
+            let server_key = fs::read(&server_key_path).await?;
+            self.key_pem = Some(server_key.clone());
+            let server_identity = Identity::from_pem(server_cert, server_key);
+
+            let ca_cert = fs::read(&ca_cert_path).await?;
+            self.ca_cert_pem = Some(ca_cert.clone());
+            let ca_cert = TonicCertificate::from_pem(ca_cert);
+
+            return Ok(Some(
+                ServerTlsConfig::new()
+                    .identity(server_identity)
+                    .client_ca_root(ca_cert),
+            ));
+        }
+
+        Ok(None)
     }
 }
 
@@ -483,7 +523,7 @@ pub struct UploadClient {
 
     /// ca_cert_pem is the root CA cert with PEM format string for the upload client.
     #[serde(skip)]
-    ca_cert_pem: Option<String>,
+    ca_cert_pem: Option<Vec<u8>>,
 
     /// cert is the client cert path with PEM format for the upload client and it is used for
     /// mutual TLS.
@@ -491,7 +531,7 @@ pub struct UploadClient {
 
     /// cert_pem is the client cert with PEM format string for the upload client.
     #[serde(skip)]
-    cert_pem: Option<String>,
+    cert_pem: Option<Vec<u8>>,
 
     /// key is the client key path with PEM format for the upload client and it is used for
     /// mutual TLS.
@@ -499,14 +539,49 @@ pub struct UploadClient {
 
     /// key_pem is the client key with PEM format string for the upload client.
     #[serde(skip)]
-    key_pem: Option<String>,
+    key_pem: Option<Vec<u8>>,
 }
 
 /// UploadClient is the implementation of UploadClient.
 impl UploadClient {
-    /// TODO: load_server_tls_config loads the client tls config.
-    pub fn load_client_tls_config(&self) -> Result<ClientTlsConfig> {
-        unimplemented!()
+    /// load_server_tls_config loads the client tls config.
+    pub async fn load_client_tls_config(&mut self) -> Result<Option<ClientTlsConfig>> {
+        if let (Some(ca_cert_pem), Some(client_cert_pem), Some(client_key_pem)) = (
+            self.ca_cert_pem.clone(),
+            self.cert_pem.clone(),
+            self.key_pem.clone(),
+        ) {
+            let client_identity = Identity::from_pem(client_cert_pem, client_key_pem);
+            let ca_cert = TonicCertificate::from_pem(ca_cert_pem);
+
+            return Ok(Some(
+                ClientTlsConfig::new()
+                    .ca_certificate(ca_cert)
+                    .identity(client_identity),
+            ));
+        }
+
+        if let (Some(ca_cert_path), Some(client_cert_path), Some(client_key_path)) =
+            (self.ca_cert.clone(), self.cert.clone(), self.key.clone())
+        {
+            let client_cert = fs::read(&client_cert_path).await?;
+            self.cert_pem = Some(client_cert.clone());
+            let client_key = fs::read(&client_key_path).await?;
+            self.key_pem = Some(client_key.clone());
+            let client_identity = Identity::from_pem(client_cert, client_key);
+
+            let ca_cert = fs::read(&ca_cert_path).await?;
+            self.ca_cert_pem = Some(ca_cert.clone());
+            let ca_cert = TonicCertificate::from_pem(ca_cert);
+
+            return Ok(Some(
+                ClientTlsConfig::new()
+                    .ca_certificate(ca_cert)
+                    .identity(client_identity),
+            ));
+        }
+
+        Ok(None)
     }
 }
 
@@ -820,9 +895,21 @@ impl Default for ProxyServer {
 
 /// ProxyServer is the implementation of ProxyServer.
 impl ProxyServer {
-    /// TODO: load_cert loads the cert.
-    pub fn load_cert(&self) -> Result<Certificate> {
-        unimplemented!()
+    /// load_cert loads the cert.
+    pub fn load_cert(&self) -> Result<Option<Certificate>> {
+        if let (Some(server_ca_cert_path), Some(server_ca_key_path)) =
+            (self.ca_cert.clone(), self.ca_key.clone())
+        {
+            match generate_ca_cert_from_pem(&server_ca_cert_path, &server_ca_key_path) {
+                Ok(server_ca_cert) => return Ok(Some(server_ca_cert)),
+                Err(err) => {
+                    error!("generate ca cert and key from pem failed: {}", err);
+                    return Err(err);
+                }
+            }
+        }
+
+        Ok(None)
     }
 }
 
@@ -873,10 +960,10 @@ pub struct RegistryMirror {
     #[serde(default = "default_proxy_registry_mirror_addr")]
     pub addr: String,
 
-    /// certs is the client certs path with PEM format for the registry.
+    /// cert is the client cert path with PEM format for the registry.
     /// If registry use self-signed cert, the client should set the
     /// cert for the registry mirror.
-    pub certs: Option<PathBuf>,
+    pub cert: Option<PathBuf>,
 }
 
 /// RegistryMirror implements Default.
@@ -884,16 +971,26 @@ impl Default for RegistryMirror {
     fn default() -> Self {
         Self {
             addr: default_proxy_registry_mirror_addr(),
-            certs: None,
+            cert: None,
         }
     }
 }
 
 /// RegistryMirror is the implementation of RegistryMirror.
 impl RegistryMirror {
-    /// TODO: load_cert_ders loads the cert ders.
-    pub fn load_cert_ders(&self) -> Result<Vec<CertificateDer<'static>>> {
-        unimplemented!()
+    /// load_cert_ders loads the cert ders.
+    pub fn load_cert_der(&self) -> Result<Option<Vec<CertificateDer<'static>>>> {
+        if let Some(cert_path) = self.cert.clone() {
+            match generate_cert_from_pem(&cert_path) {
+                Ok(cert) => return Ok(Some(cert)),
+                Err(err) => {
+                    error!("generate cert from pems failed: {}", err);
+                    return Err(err);
+                }
+            }
+        };
+
+        Ok(None)
     }
 }
 

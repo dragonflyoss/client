@@ -40,14 +40,11 @@ impl HTTP {
 
     /// client returns a new reqwest client.
     #[instrument(skip_all)]
-    fn client(
-        &self,
-        client_certs: Option<Vec<CertificateDer<'static>>>,
-    ) -> Result<reqwest::Client> {
-        let client_config_builder = match client_certs.as_ref() {
-            Some(client_certs) => {
+    fn client(&self, client_cert: Option<Vec<CertificateDer<'static>>>) -> Result<reqwest::Client> {
+        let client_config_builder = match client_cert.as_ref() {
+            Some(client_cert) => {
                 let mut root_cert_store = rustls::RootCertStore::empty();
-                root_cert_store.add_parsable_certificates(client_certs.to_owned());
+                root_cert_store.add_parsable_certificates(client_cert.to_owned());
 
                 // TLS client config using the custom CA store for lookups.
                 rustls::ClientConfig::builder()
@@ -93,7 +90,7 @@ impl super::Backend for HTTP {
         // through the HEAD method. Use GET request to replace of HEAD request
         // to get header and status code.
         let response = self
-            .client(request.client_certs)?
+            .client(request.client_cert)?
             .get(&request.url)
             .headers(header)
             .timeout(request.timeout)
@@ -135,7 +132,7 @@ impl super::Backend for HTTP {
         // The header of the request is required.
         let header = request.http_header.ok_or(Error::InvalidParameter)?;
         let response = self
-            .client(request.client_certs)?
+            .client(request.client_cert)?
             .get(&request.url)
             .headers(header)
             .timeout(request.timeout)
@@ -356,7 +353,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 url: format!("{}/head", server.uri()),
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),
-                client_certs: None,
+                client_cert: None,
                 object_storage: None,
             })
             .await
@@ -383,7 +380,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 url: format!("{}/head", server.uri()),
                 http_header: None,
                 timeout: std::time::Duration::from_secs(5),
-                client_certs: None,
+                client_cert: None,
                 object_storage: None,
             })
             .await;
@@ -412,7 +409,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 range: None,
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),
-                client_certs: None,
+                client_cert: None,
                 object_storage: None,
             })
             .await
@@ -431,7 +428,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 url: server_addr,
                 http_header: Some(HeaderMap::new()),
                 timeout: Duration::from_secs(5),
-                client_certs: Some(load_certs_from_pem(CA_CERT).unwrap()),
+                client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
                 object_storage: None,
             })
             .await
@@ -449,7 +446,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 url: server_addr,
                 http_header: Some(HeaderMap::new()),
                 timeout: Duration::from_secs(5),
-                client_certs: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
+                client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
                 object_storage: None,
             })
             .await;
@@ -468,7 +465,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 range: None,
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),
-                client_certs: Some(load_certs_from_pem(CA_CERT).unwrap()),
+                client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
                 object_storage: None,
             })
             .await
@@ -489,7 +486,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 range: None,
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),
-                client_certs: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
+                client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
                 object_storage: None,
             })
             .await;
@@ -506,7 +503,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 url: server_addr,
                 http_header: Some(HeaderMap::new()),
                 timeout: Duration::from_secs(5),
-                client_certs: None,
+                client_cert: None,
                 object_storage: None,
             })
             .await
@@ -527,7 +524,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 range: None,
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),
-                client_certs: None,
+                client_cert: None,
                 object_storage: None,
             })
             .await

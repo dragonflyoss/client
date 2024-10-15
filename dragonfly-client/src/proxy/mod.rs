@@ -34,10 +34,7 @@ use dragonfly_client_util::{
         hashmap_to_hyper_header_map, hyper_headermap_to_reqwest_headermap,
         reqwest_headermap_to_hashmap,
     },
-    tls::{
-        generate_ca_cert_from_pem, generate_certs_from_pem, generate_self_signed_certs_by_ca_cert,
-        generate_simple_self_signed_certs, NoVerifier,
-    },
+    tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
 use futures_util::TryStreamExt;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, StreamBody};
@@ -83,8 +80,8 @@ pub struct Proxy {
     /// addr is the address of the proxy server.
     addr: SocketAddr,
 
-    /// registry_certs is the certificate of the client for the registry.
-    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
+    /// registry_cert is the certificate of the client for the registry.
+    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 
     /// server_ca_cert is the CA certificate of the proxy server to
     /// sign the self-signed certificate.
@@ -111,61 +108,35 @@ impl Proxy {
             config: config.clone(),
             task: task.clone(),
             addr: SocketAddr::new(config.proxy.server.ip.unwrap(), config.proxy.server.port),
-            registry_certs: Arc::new(None),
+            registry_cert: Arc::new(None),
             server_ca_cert: Arc::new(None),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         };
 
         // Load and generate the registry certificates from the PEM format file.
-        proxy.registry_certs = match config.proxy.registry_mirror.certs.clone() {
-            Some(certs_path) => match generate_certs_from_pem(&certs_path) {
-                Ok(certs) => {
-                    info!(
-                        "generate registry cert from {} pem success",
-                        certs_path.to_string_lossy()
-                    );
-                    Arc::new(Some(certs))
-                }
-                Err(err) => {
-                    error!(
-                        "generate registry cert from {} pem failed: {}",
-                        certs_path.to_string_lossy(),
-                        err
-                    );
-                    Arc::new(None)
-                }
-            },
-            None => Arc::new(None),
-        };
-
-        // Load the CA certificate and key from the PEM format files.
-        let Some(server_ca_cert_path) = config.proxy.server.ca_cert.clone() else {
-            info!("ca_cert is not set, use self-signed certificate");
-            return proxy;
-        };
-
-        // Load the CA certificate and key from the PEM format files.
-        let Some(server_ca_key_path) = config.proxy.server.ca_key.clone() else {
-            info!("ca_key is not set, use self-signed certificate");
-            return proxy;
+        proxy.registry_cert = match config.proxy.registry_mirror.load_cert_der() {
+            Ok(registry_cert) => {
+                info!("load registry cert success");
+                Arc::new(registry_cert)
+            }
+            Err(err) => {
+                error!("load registry cert failed: {}", err);
+                Arc::new(None)
+            }
         };
 
         // Generate the CA certificate and key from the PEM format files.
-        proxy.server_ca_cert =
-            match generate_ca_cert_from_pem(&server_ca_cert_path, &server_ca_key_path) {
-                Ok(server_ca_cert) => {
-                    info!(
-                        "generate proxy ca cert and key from pem success: {}",
-                        server_ca_cert_path.to_string_lossy()
-                    );
-                    Arc::new(Some(server_ca_cert))
-                }
-                Err(err) => {
-                    error!("generate ca cert and key from pem failed: {}", err);
-                    Arc::new(None)
-                }
-            };
+        proxy.server_ca_cert = match config.proxy.server.load_cert() {
+            Ok(server_ca_cert) => {
+                info!("load proxy ca cert and key success");
+                Arc::new(server_ca_cert)
+            }
+            Err(err) => {
+                error!("load proxy ca cert and key failed: {}", err);
+                Arc::new(None)
+            }
+        };
 
         proxy
     }
@@ -196,7 +167,7 @@ impl Proxy {
                         config.download.server.socket_path.clone(),
                     ).await?;
 
-                    let registry_certs = self.registry_certs.clone();
+                    let registry_cert = self.registry_cert.clone();
                     let server_ca_cert = self.server_ca_cert.clone();
                     tokio::task::spawn(async move {
                         if let Err(err) = http1::Builder::new()
@@ -205,7 +176,7 @@ impl Proxy {
                             .title_case_headers(true)
                             .serve_connection(
                                 io,
-                                service_fn(move |request| handler(config.clone(), task.clone(), request, dfdaemon_download_client.clone(), registry_certs.clone(), server_ca_cert.clone())),
+                                service_fn(move |request| handler(config.clone(), task.clone(), request, dfdaemon_download_client.clone(), registry_cert.clone(), server_ca_cert.clone())),
                                 )
                             .with_upgrades()
                             .await
@@ -232,7 +203,7 @@ pub async fn handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
-    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
+    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
     // Record the proxy request started metrics. The metrics will be recorded
@@ -248,7 +219,7 @@ pub async fn handler(
                 task,
                 request,
                 dfdaemon_download_client,
-                registry_certs,
+                registry_cert,
                 server_ca_cert,
             )
             .await;
@@ -259,7 +230,7 @@ pub async fn handler(
             task,
             request,
             dfdaemon_download_client,
-            registry_certs,
+            registry_cert,
         )
         .await;
     }
@@ -275,7 +246,7 @@ pub async fn handler(
             task,
             request,
             dfdaemon_download_client,
-            registry_certs,
+            registry_cert,
             server_ca_cert,
         )
         .await;
@@ -286,7 +257,7 @@ pub async fn handler(
         task,
         request,
         dfdaemon_download_client,
-        registry_certs,
+        registry_cert,
     )
     .await
 }
@@ -298,7 +269,7 @@ pub async fn registry_mirror_http_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
-    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
+    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     let request = make_registry_mirror_request(config.clone(), request)?;
     return http_handler(
@@ -306,7 +277,7 @@ pub async fn registry_mirror_http_handler(
         task,
         request,
         dfdaemon_download_client,
-        registry_certs,
+        registry_cert,
     )
     .await;
 }
@@ -318,7 +289,7 @@ pub async fn registry_mirror_https_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
-    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
+    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
     let request = make_registry_mirror_request(config.clone(), request)?;
@@ -327,7 +298,7 @@ pub async fn registry_mirror_https_handler(
         task,
         request,
         dfdaemon_download_client,
-        registry_certs,
+        registry_cert,
         server_ca_cert,
     )
     .await;
@@ -340,7 +311,7 @@ pub async fn http_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
-    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
+    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     info!("handle HTTP request: {:?}", request);
 
@@ -388,7 +359,7 @@ pub async fn http_handler(
             request.method(),
             request.uri()
         );
-        return proxy_https(request, registry_certs).await;
+        return proxy_https(request, registry_cert).await;
     }
 
     info!(
@@ -406,7 +377,7 @@ pub async fn https_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
-    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
+    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
     info!("handle HTTPS request: {:?}", request);
@@ -423,7 +394,7 @@ pub async fn https_handler(
                         upgraded,
                         host,
                         dfdaemon_download_client,
-                        registry_certs,
+                        registry_cert,
                         server_ca_cert,
                     )
                     .await
@@ -451,7 +422,7 @@ async fn upgraded_tunnel(
     upgraded: Upgraded,
     host: String,
     dfdaemon_download_client: DfdaemonDownloadClient,
-    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
+    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<()> {
     // Initialize the tcp stream to the remote server.
@@ -492,7 +463,7 @@ async fn upgraded_tunnel(
                     host.clone(),
                     request,
                     dfdaemon_download_client.clone(),
-                    registry_certs.clone(),
+                    registry_cert.clone(),
                 )
             }),
         )
@@ -513,7 +484,7 @@ pub async fn upgraded_handler(
     host: String,
     mut request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
-    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
+    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     // Span record the uri and method.
     Span::current().record("uri", request.uri().to_string().as_str());
@@ -570,7 +541,7 @@ pub async fn upgraded_handler(
             request.method(),
             request.uri()
         );
-        return proxy_https(request, registry_certs).await;
+        return proxy_https(request, registry_cert).await;
     }
 
     info!(
@@ -876,12 +847,12 @@ async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Res
 #[instrument(skip_all)]
 async fn proxy_https(
     request: Request<hyper::body::Incoming>,
-    registry_certs: Arc<Option<Vec<CertificateDer<'static>>>>,
+    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
-    let client_config_builder = match registry_certs.as_ref() {
-        Some(registry_certs) => {
+    let client_config_builder = match registry_cert.as_ref() {
+        Some(registry_cert) => {
             let mut root_cert_store = RootCertStore::empty();
-            root_cert_store.add_parsable_certificates(registry_certs.to_owned());
+            root_cert_store.add_parsable_certificates(registry_cert.to_owned());
 
             // TLS client config using the custom CA store for lookups.
             rustls::ClientConfig::builder()

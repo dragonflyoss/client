@@ -962,6 +962,7 @@ dependencies = [
  "bytesize-serde",
  "clap",
  "dragonfly-client-core",
+ "dragonfly-client-util",
  "home",
  "hostname",
  "humantime",
