@@ -181,28 +181,21 @@ impl Default for HTTP {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        http::{self, HTTP},
-        Backend, GetRequest, HeadRequest,
-    };
-
+    use crate::{http::HTTP, Backend, GetRequest, HeadRequest};
+    use dragonfly_client_util::tls::{load_certs_from_pem, load_key_from_pem};
     use hyper_util::rt::{TokioExecutor, TokioIo};
     use reqwest::{header::HeaderMap, StatusCode};
-    use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+    use std::{sync::Arc, time::Duration};
+    use tokio::net::TcpListener;
+    use tokio_rustls::rustls::ServerConfig;
+    use tokio_rustls::TlsAcceptor;
     use wiremock::{
         matchers::{method, path},
         Mock, ResponseTemplate,
     };
 
-    use rustls_pemfile::{certs, private_key};
-    use std::{sync::Arc, time::Duration};
-    use tokio::net::TcpListener;
-
-    use tokio_rustls::rustls::ServerConfig;
-    use tokio_rustls::TlsAcceptor;
-
-    /// All these certs are generate by this scripts: "<project-root>/scripts/generate_certs.sh".
-    const SERVER_CERT_PEM: &str = r#"""
+    // Generate the certificate and private key by script(`scripts/generate_certs.sh`).
+    const SERVER_CERT: &str = r#"""
 -----BEGIN CERTIFICATE-----
 MIIDsDCCApigAwIBAgIUWuckNOpaPERz+QMACyqCqFJwYIYwDQYJKoZIhvcNAQEL
 BQAwYjELMAkGA1UEBhMCQ04xEDAOBgNVBAgMB0JlaWppbmcxEDAOBgNVBAcMB0Jl
@@ -226,7 +219,8 @@ FnIyiyfYYcSpVMhhaNkeCtWOfgVYU/m4XXn5bwEOhMN6q0JcdBPnT6kd2otLhiIo
 /WeyWEUeZ4rQhS7C1i31AYtNtVnnvI7BrsI4czYdcJcj3CM+
 -----END CERTIFICATE-----
 """#;
-    const SERVER_KEY_PEM: &str = r#"""
+
+    const SERVER_KEY: &str = r#"""
 -----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCID3ASB7cmryrD
 wjH3Pq2yzu20r/j1Mx12GdC6qhisUqNiWK699tFk5TWcE/v7ldICWI8MJE09LXsl
@@ -256,7 +250,8 @@ wzvR3jZ1B4UlEBXl2V+VRbrXyPTN4uUF42AkSGuOsK4O878wW8noX+ZZTk7gydTN
 Z+yQ5jhu/fmSBNhqO/8Lp+Y=
 -----END PRIVATE KEY-----
 """#;
-    const CA_CRT: &str = r#"""
+
+    const CA_CERT: &str = r#"""
 -----BEGIN CERTIFICATE-----
 MIIDpTCCAo2gAwIBAgIULqNbOr0fRj05VwIKlYdDt8HwxsUwDQYJKoZIhvcNAQEL
 BQAwYjELMAkGA1UEBhMCQ04xEDAOBgNVBAgMB0JlaWppbmcxEDAOBgNVBAcMB0Jl
@@ -280,7 +275,8 @@ FnJ4fV4c4aJ+9D3VyPlrdiBqIPI0Wms9YqqG2b8EDid561Jj7paIR2wLn0/Gq61b
 ePv3eLH0ZmBhSyl4+q/V56Z1TdZU46QZlg==
 -----END CERTIFICATE-----
 """#;
-    const WRONG_CA_CRT: &str = r#"""
+
+    const WRONG_CA_CERT: &str = r#"""
 -----BEGIN CERTIFICATE-----
 MIIDqTCCApGgAwIBAgIUW+6n+025VMqvZd4wm+Xdfzu4o38wDQYJKoZIhvcNAQEL
 BQAwZDELMAkGA1UEBhMCQ04xEDAOBgNVBAgMB0JlaWppbmcxEDAOBgNVBAcMB0Jl
@@ -305,29 +301,15 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
 -----END CERTIFICATE-----
 """#;
 
-    fn load_certs(cert_pem: &str) -> Vec<CertificateDer<'static>> {
-        certs(&mut cert_pem.as_bytes())
-            .map(Result::unwrap)
-            .collect()
-    }
-
-    fn load_keys(key_pem: &str) -> Vec<PrivateKeyDer<'static>> {
-        private_key(&mut key_pem.as_bytes())
-            .into_iter()
-            .map(Option::unwrap)
-            .collect()
-    }
-
     /// Start a https server with given public key and private key.
     async fn start_https_server(cert_pem: &str, key_pem: &str) -> String {
-        // Load certs.
-        let certs = load_certs(cert_pem);
-        let keys = load_keys(key_pem);
+        let server_certs = load_certs_from_pem(cert_pem).unwrap();
+        let server_key = load_key_from_pem(key_pem).unwrap();
 
         // Setup the server.
         let config = ServerConfig::builder()
             .with_no_client_auth()
-            .with_single_cert(certs, keys[0].clone_key())
+            .with_single_cert(server_certs, server_key.clone_key())
             .unwrap();
 
         let acceptor = TlsAcceptor::from(Arc::new(config));
@@ -340,6 +322,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 let acceptor = acceptor.clone();
                 tokio::spawn(async move {
                     let stream = acceptor.accept(stream).await.unwrap();
+
                     // Always return 200 OK with OK as its body for any requests.
                     let service = hyper::service::service_fn(|_| async {
                         Ok::<_, hyper::Error>(hyper::Response::new("OK".to_string()))
@@ -367,8 +350,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let http_backend = http::HTTP::new("http");
-        let resp = http_backend
+        let resp = HTTP::new("http")
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: format!("{}/head", server.uri()),
@@ -395,8 +377,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let http_backend = http::HTTP::new("http");
-        let resp = http_backend
+        let resp = HTTP::new("http")
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: format!("{}/head", server.uri()),
@@ -423,8 +404,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let http_backend = http::HTTP::new("http");
-        let mut resp = http_backend
+        let mut resp = HTTP::new("http")
             .get(GetRequest {
                 task_id: "test".to_string(),
                 piece_id: "test".to_string(),
@@ -444,16 +424,14 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
 
     #[tokio::test]
     async fn should_get_head_response_with_self_signed_cert() {
-        let server_addr = start_https_server(SERVER_CERT_PEM, SERVER_KEY_PEM).await;
-
-        let http_backend = HTTP::new("https");
-        let resp = http_backend
+        let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
+        let resp = HTTP::new("https")
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
                 http_header: Some(HeaderMap::new()),
                 timeout: Duration::from_secs(5),
-                client_certs: Some(load_certs(CA_CRT)),
+                client_certs: Some(load_certs_from_pem(CA_CERT).unwrap()),
                 object_storage: None,
             })
             .await
@@ -464,16 +442,14 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
 
     #[tokio::test]
     async fn should_return_error_response_when_head_with_wrong_cert() {
-        let server_addr = start_https_server(SERVER_CERT_PEM, SERVER_KEY_PEM).await;
-
-        let http_backend = HTTP::new("https");
-        let resp = http_backend
+        let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
+        let resp = HTTP::new("https")
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
                 http_header: Some(HeaderMap::new()),
                 timeout: Duration::from_secs(5),
-                client_certs: Some(load_certs(WRONG_CA_CRT)),
+                client_certs: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
                 object_storage: None,
             })
             .await;
@@ -483,10 +459,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
 
     #[tokio::test]
     async fn should_get_response_with_self_signed_cert() {
-        let server_addr = start_https_server(SERVER_CERT_PEM, SERVER_KEY_PEM).await;
-
-        let http_backend = HTTP::new("https");
-        let mut resp = http_backend
+        let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
+        let mut resp = HTTP::new("https")
             .get(GetRequest {
                 task_id: "test".to_string(),
                 piece_id: "test".to_string(),
@@ -494,7 +468,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 range: None,
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),
-                client_certs: Some(load_certs(CA_CRT)),
+                client_certs: Some(load_certs_from_pem(CA_CERT).unwrap()),
                 object_storage: None,
             })
             .await
@@ -506,10 +480,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
 
     #[tokio::test]
     async fn should_return_error_response_when_get_with_wrong_cert() {
-        let server_addr = start_https_server(SERVER_CERT_PEM, SERVER_KEY_PEM).await;
-
-        let http_backend = HTTP::new("https");
-        let resp = http_backend
+        let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
+        let resp = HTTP::new("https")
             .get(GetRequest {
                 task_id: "test".to_string(),
                 piece_id: "test".to_string(),
@@ -517,7 +489,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 range: None,
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),
-                client_certs: Some(load_certs(WRONG_CA_CRT)),
+                client_certs: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
                 object_storage: None,
             })
             .await;
@@ -527,10 +499,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
 
     #[tokio::test]
     async fn should_get_head_response_with_no_verifier() {
-        let server_addr = start_https_server(SERVER_CERT_PEM, SERVER_KEY_PEM).await;
-
-        let http_backend = HTTP::new("https");
-        let resp = http_backend
+        let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
+        let resp = HTTP::new("https")
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
@@ -547,8 +517,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
 
     #[tokio::test]
     async fn should_get_response_with_no_verifier() {
-        let server_addr = start_https_server(SERVER_CERT_PEM, SERVER_KEY_PEM).await;
-
+        let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
         let http_backend = HTTP::new("https");
         let mut resp = http_backend
             .get(GetRequest {

@@ -176,3 +176,18 @@ pub fn certs_to_raw_certs(certs: Vec<CertificateDer<'static>>) -> Vec<Vec<u8>> {
 pub fn raw_certs_to_certs(raw_certs: Vec<Vec<u8>>) -> Vec<CertificateDer<'static>> {
     raw_certs.into_iter().map(|cert| cert.into()).collect()
 }
+
+/// load_certs_from_pem loads certificates from PEM format string.
+#[instrument(skip_all)]
+pub fn load_certs_from_pem(cert_pem: &str) -> ClientResult<Vec<CertificateDer<'static>>> {
+    let certs = rustls_pemfile::certs(&mut cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>()?;
+    return Ok(certs);
+}
+
+/// load_key_from_pem loads private key from PEM format string.
+#[instrument(skip_all)]
+pub fn load_key_from_pem(key_pem: &str) -> ClientResult<PrivateKeyDer<'static>> {
+    let key = rustls_pemfile::private_key(&mut key_pem.as_bytes())?
+        .ok_or_else(|| ClientError::Unknown("failed to load private key".to_string()))?;
+    return Ok(key);
+}

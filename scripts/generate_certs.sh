@@ -29,9 +29,17 @@ openssl genrsa -out server.key 2048
 openssl req -new -key server.key -out server.csr -subj "/C=CN/ST=Beijing/L=Beijing/O=Test Server/OU=IT/CN=localhost" -config san.cnf
 
 # Sign server CSR by using CA with SAN extension.
-openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 500 -sha256 -extensions v3_req -extfile san.cnf
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 365 -sha256 -extensions v3_req -extfile san.cnf
 
-# Convert crt to pem.
+# Convert server.crt to pem.
 openssl x509 -in server.crt -out server.pem -outform PEM
 
-rm *.csr
+# Generate client private key and CSR.
+openssl genrsa -out client.key 2048
+openssl req -new -key client.key -out client.csr -subj "/C=CN/ST=Beijing/L=Beijing/O=Test Server/OU=IT/CN=localhost" -config san.cnf
+
+# Sign client CSR by using CA with SAN extension.
+openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out client.crt -days 365 -sha256 -extensions v3_req -extfile san.cnf
+
+# Convert client.crt to pem.
+openssl x509 -in client.crt -out client.pem -outform PEM
