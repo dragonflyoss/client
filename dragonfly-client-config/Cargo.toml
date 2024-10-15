@@ -12,6 +12,7 @@ build = "build.rs"
 
 [dependencies]
 dragonfly-client-core.workspace = true
+dragonfly-client-util.workspace = true
 clap.workspace = true
 regex.workspace = true
 serde.workspace = true

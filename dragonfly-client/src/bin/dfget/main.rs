@@ -790,7 +790,7 @@ async fn get_entries(args: Args, object_storage: Option<ObjectStorage>) -> Resul
                 args.header.clone().unwrap_or_default(),
             )?),
             timeout: args.timeout,
-            client_certs: None,
+            client_cert: None,
             object_storage,
         })
         .await
