@@ -103,6 +103,7 @@ impl PieceCollector {
     /// run runs the piece collector.
     #[instrument(skip_all)]
     pub async fn run(&self) -> Receiver<CollectedPiece> {
+        let config = self.config.clone();
         let host_id = self.host_id.clone();
         let task_id = self.task_id.clone();
         let parents = self.parents.clone();
@@ -113,6 +114,7 @@ impl PieceCollector {
         tokio::spawn(
             async move {
                 Self::collect_from_remote_peers(
+                    config,
                     host_id,
                     task_id,
                     parents,
@@ -133,8 +135,10 @@ impl PieceCollector {
     }
 
     /// collect_from_remote_peers collects pieces from remote peers.
+    #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn collect_from_remote_peers(
+        config: Arc<Config>,
         host_id: String,
         task_id: String,
         parents: Vec<CollectedParent>,
@@ -148,6 +152,7 @@ impl PieceCollector {
         for parent in parents.iter() {
             #[allow(clippy::too_many_arguments)]
             async fn sync_pieces(
+                config: Arc<Config>,
                 host_id: String,
                 task_id: String,
                 parent: CollectedParent,
@@ -167,7 +172,7 @@ impl PieceCollector {
 
                 // Create a dfdaemon client.
                 let dfdaemon_upload_client =
-                    DfdaemonUploadClient::new(format!("http://{}:{}", host.ip, host.port))
+                    DfdaemonUploadClient::new(config, format!("http://{}:{}", host.ip, host.port))
                         .await
                         .map_err(|err| {
                             error!(
@@ -244,6 +249,7 @@ impl PieceCollector {
 
             join_set.spawn(
                 sync_pieces(
+                    config.clone(),
                     host_id.clone(),
                     task_id.clone(),
                     parent.clone(),

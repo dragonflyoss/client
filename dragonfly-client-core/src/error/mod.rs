@@ -145,9 +145,17 @@ pub enum DFError {
     #[error(transparent)]
     TonicStatus(#[from] tonic::Status),
 
+    /// TonicTransportError is the error for tonic transport.
+    #[error(transparent)]
+    TonicTransportError(#[from] tonic::transport::Error),
+
     /// TonicStreamElapsed is the error for tonic stream elapsed.
     #[error(transparent)]
     TokioStreamElapsed(#[from] tokio_stream::Elapsed),
+
+    /// URLParseError is the error for url parse.
+    #[error(transparent)]
+    URLParseError(#[from] url::ParseError),
 
     /// ReqwestError is the error for reqwest.
     #[error(transparent)]
