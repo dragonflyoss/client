@@ -54,9 +54,13 @@ use tonic::{
     Code, Request, Response, Status,
 };
 use tracing::{error, info, instrument, Instrument, Span};
+use url::Url;
 
 /// DfdaemonUploadServer is the grpc server of the upload.
 pub struct DfdaemonUploadServer {
+    /// config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
     /// addr is the address of the grpc server.
     addr: SocketAddr,
 
@@ -94,6 +98,7 @@ impl DfdaemonUploadServer {
         .max_encoding_message_size(usize::MAX);
 
         Self {
+            config,
             addr,
             service,
             shutdown,
@@ -123,7 +128,14 @@ impl DfdaemonUploadServer {
 
         // Start upload grpc server.
         info!("upload server listening on {}", self.addr);
-        Server::builder()
+        let mut server_builder = Server::builder();
+        if let Ok(Some(server_tls_config)) =
+            self.config.upload.server.load_server_tls_config().await
+        {
+            server_builder = server_builder.tls_config(server_tls_config).unwrap();
+        }
+
+        server_builder
             .max_frame_size(super::MAX_FRAME_SIZE)
             .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
             .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
@@ -1090,18 +1102,48 @@ pub struct DfdaemonUploadClient {
 impl DfdaemonUploadClient {
     /// new creates a new DfdaemonUploadClient.
     #[instrument(skip_all)]
-    pub async fn new(addr: String) -> ClientResult<Self> {
-        let channel = Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
-            .buffer_size(super::BUFFER_SIZE)
-            .connect_timeout(super::CONNECT_TIMEOUT)
-            .timeout(super::REQUEST_TIMEOUT)
-            .connect()
-            .await
-            .map_err(|err| {
-                error!("connect to {} failed: {}", addr, err);
-                err
-            })
-            .or_err(ErrorType::ConnectError)?;
+    pub async fn new(config: Arc<Config>, addr: String) -> ClientResult<Self> {
+        let domain_name = Url::parse(addr.as_str())?
+            .host_str()
+            .ok_or_else(|| {
+                error!("invalid address: {}", addr);
+                ClientError::InvalidParameter
+            })?
+            .to_string();
+
+        let channel = match config
+            .upload
+            .client
+            .load_client_tls_config(domain_name.as_str())
+            .await?
+        {
+            Some(client_tls_config) => {
+                Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
+                    .tls_config(client_tls_config)?
+                    .buffer_size(super::BUFFER_SIZE)
+                    .connect_timeout(super::CONNECT_TIMEOUT)
+                    .timeout(super::REQUEST_TIMEOUT)
+                    .connect()
+                    .await
+                    .map_err(|err| {
+                        error!("connect to {} failed: {}", addr, err);
+                        err
+                    })
+                    .or_err(ErrorType::ConnectError)?
+            }
+            None => Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
+                .buffer_size(super::BUFFER_SIZE)
+                .connect_timeout(super::CONNECT_TIMEOUT)
+                .timeout(super::REQUEST_TIMEOUT)
+                .connect()
+                .await
+                .map_err(|err| {
+                    error!("connect to {} failed: {}", addr, err);
+                    err
+                })
+                .or_err(ErrorType::ConnectError)?,
+        };
+
         let client = DfdaemonUploadGRPCClient::new(channel)
             .send_compressed(CompressionEncoding::Zstd)
             .accept_compressed(CompressionEncoding::Zstd)

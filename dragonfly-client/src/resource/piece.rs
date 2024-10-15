@@ -391,20 +391,22 @@ impl Piece {
 
             Error::InvalidPeer(parent.id.clone())
         })?;
-        let dfdaemon_upload_client =
-            DfdaemonUploadClient::new(format!("http://{}:{}", host.ip, host.port))
-                .await
-                .map_err(|err| {
-                    error!(
-                        "create dfdaemon upload client from {}:{} failed: {}",
-                        host.ip, host.port, err
-                    );
-                    if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
-                        error!("set piece metadata failed: {}", err)
-                    };
+        let dfdaemon_upload_client = DfdaemonUploadClient::new(
+            self.config.clone(),
+            format!("http://{}:{}", host.ip, host.port),
+        )
+        .await
+        .map_err(|err| {
+            error!(
+                "create dfdaemon upload client from {}:{} failed: {}",
+                host.ip, host.port, err
+            );
+            if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                error!("set piece metadata failed: {}", err)
+            };
 
-                    err
-                })?;
+            err
+        })?;
 
         // Send the interested pieces request.
         let response = dfdaemon_upload_client

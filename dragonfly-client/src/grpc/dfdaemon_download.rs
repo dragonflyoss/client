@@ -136,6 +136,7 @@ impl DfdaemonDownloadServer {
             .unwrap();
         let uds = UnixListener::bind(&self.socket_path).unwrap();
         let uds_stream = UnixListenerStream::new(uds);
+
         Server::builder()
             .max_frame_size(super::MAX_FRAME_SIZE)
             .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)

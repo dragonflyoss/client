@@ -433,25 +433,13 @@ pub struct UploadServer {
     /// for mutual TLS.
     pub ca_cert: Option<PathBuf>,
 
-    /// ca_cert_pem is the root CA cert with PEM format string for the upload server.
-    #[serde(skip)]
-    ca_cert_pem: Option<Vec<u8>>,
-
     /// cert is the server cert path with PEM format for the upload server and it is used for
     /// mutual TLS.
     pub cert: Option<PathBuf>,
 
-    /// cert_pem is the server cert with PEM format string for the upload server.
-    #[serde(skip)]
-    cert_pem: Option<Vec<u8>>,
-
     /// key is the server key path with PEM format for the upload server and it is used for
     /// mutual TLS.
     pub key: Option<PathBuf>,
-
-    /// key_pem is the server key with PEM format string for the upload server.
-    #[serde(skip)]
-    key_pem: Option<Vec<u8>>,
 }
 
 /// UploadServer implements Default.
@@ -461,11 +449,8 @@ impl Default for UploadServer {
             ip: None,
             port: default_upload_grpc_server_port(),
             ca_cert: None,
-            ca_cert_pem: None,
             cert: None,
-            cert_pem: None,
             key: None,
-            key_pem: None,
         }
     }
 }
@@ -473,33 +458,15 @@ impl Default for UploadServer {
 /// UploadServer is the implementation of UploadServer.
 impl UploadServer {
     /// load_server_tls_config loads the server tls config.
-    pub async fn load_server_tls_config(&mut self) -> Result<Option<ServerTlsConfig>> {
-        if let (Some(ca_cert_pem), Some(server_cert_pem), Some(server_key_pem)) = (
-            self.ca_cert_pem.clone(),
-            self.cert_pem.clone(),
-            self.key_pem.clone(),
-        ) {
-            let server_identity = Identity::from_pem(server_cert_pem, server_key_pem);
-            let ca_cert = TonicCertificate::from_pem(ca_cert_pem);
-
-            return Ok(Some(
-                ServerTlsConfig::new()
-                    .identity(server_identity)
-                    .client_ca_root(ca_cert),
-            ));
-        }
-
+    pub async fn load_server_tls_config(&self) -> Result<Option<ServerTlsConfig>> {
         if let (Some(ca_cert_path), Some(server_cert_path), Some(server_key_path)) =
             (self.ca_cert.clone(), self.cert.clone(), self.key.clone())
         {
             let server_cert = fs::read(&server_cert_path).await?;
-            self.cert_pem = Some(server_cert.clone());
             let server_key = fs::read(&server_key_path).await?;
-            self.key_pem = Some(server_key.clone());
             let server_identity = Identity::from_pem(server_cert, server_key);
 
             let ca_cert = fs::read(&ca_cert_path).await?;
-            self.ca_cert_pem = Some(ca_cert.clone());
             let ca_cert = TonicCertificate::from_pem(ca_cert);
 
             return Ok(Some(
@@ -521,61 +488,35 @@ pub struct UploadClient {
     /// for mutual TLS.
     pub ca_cert: Option<PathBuf>,
 
-    /// ca_cert_pem is the root CA cert with PEM format string for the upload client.
-    #[serde(skip)]
-    ca_cert_pem: Option<Vec<u8>>,
-
     /// cert is the client cert path with PEM format for the upload client and it is used for
     /// mutual TLS.
     pub cert: Option<PathBuf>,
 
-    /// cert_pem is the client cert with PEM format string for the upload client.
-    #[serde(skip)]
-    cert_pem: Option<Vec<u8>>,
-
     /// key is the client key path with PEM format for the upload client and it is used for
     /// mutual TLS.
     pub key: Option<PathBuf>,
-
-    /// key_pem is the client key with PEM format string for the upload client.
-    #[serde(skip)]
-    key_pem: Option<Vec<u8>>,
 }
 
 /// UploadClient is the implementation of UploadClient.
 impl UploadClient {
-    /// load_server_tls_config loads the client tls config.
-    pub async fn load_client_tls_config(&mut self) -> Result<Option<ClientTlsConfig>> {
-        if let (Some(ca_cert_pem), Some(client_cert_pem), Some(client_key_pem)) = (
-            self.ca_cert_pem.clone(),
-            self.cert_pem.clone(),
-            self.key_pem.clone(),
-        ) {
-            let client_identity = Identity::from_pem(client_cert_pem, client_key_pem);
-            let ca_cert = TonicCertificate::from_pem(ca_cert_pem);
-
-            return Ok(Some(
-                ClientTlsConfig::new()
-                    .ca_certificate(ca_cert)
-                    .identity(client_identity),
-            ));
-        }
-
+    /// load_client_tls_config loads the client tls config.
+    pub async fn load_client_tls_config(
+        &self,
+        domain_name: &str,
+    ) -> Result<Option<ClientTlsConfig>> {
         if let (Some(ca_cert_path), Some(client_cert_path), Some(client_key_path)) =
             (self.ca_cert.clone(), self.cert.clone(), self.key.clone())
         {
             let client_cert = fs::read(&client_cert_path).await?;
-            self.cert_pem = Some(client_cert.clone());
             let client_key = fs::read(&client_key_path).await?;
-            self.key_pem = Some(client_key.clone());
             let client_identity = Identity::from_pem(client_cert, client_key);
 
             let ca_cert = fs::read(&ca_cert_path).await?;
-            self.ca_cert_pem = Some(ca_cert.clone());
             let ca_cert = TonicCertificate::from_pem(ca_cert);
 
             return Ok(Some(
                 ClientTlsConfig::new()
+                    .domain_name(domain_name)
                     .ca_certificate(ca_cert)
                     .identity(client_identity),
             ));
