@@ -27,7 +27,8 @@ use dragonfly_api::scheduler::v2::{
     StatTaskRequest, UploadPersistentCacheTaskFailedRequest,
     UploadPersistentCacheTaskFinishedRequest, UploadPersistentCacheTaskStartedRequest,
 };
-use dragonfly_client_core::error::{ErrorType, ExternalError, OrErr};
+use dragonfly_client_config::dfdaemon::Config;
+use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
 use hashring::HashRing;
 use std::net::{IpAddr, SocketAddr};
@@ -37,6 +38,7 @@ use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tonic::transport::Channel;
 use tracing::{error, info, instrument, Instrument};
+use url::Url;
 
 /// VNode is the virtual node of the hashring.
 #[derive(Debug, Copy, Clone, Hash, PartialEq)]
@@ -56,6 +58,9 @@ impl std::fmt::Display for VNode {
 /// SchedulerClient is a wrapper of SchedulerGRPCClient.
 #[derive(Clone)]
 pub struct SchedulerClient {
+    /// config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
     /// dynconfig is the dynamic configuration of the dfdaemon.
     dynconfig: Arc<Dynconfig>,
 
@@ -73,8 +78,9 @@ pub struct SchedulerClient {
 impl SchedulerClient {
     /// new creates a new SchedulerClient.
     #[instrument(skip_all)]
-    pub async fn new(dynconfig: Arc<Dynconfig>) -> Result<Self> {
+    pub async fn new(config: Arc<Config>, dynconfig: Arc<Dynconfig>) -> Result<Self> {
         let client = Self {
+            config,
             dynconfig,
             available_schedulers: Arc::new(RwLock::new(Vec::new())),
             available_scheduler_addrs: Arc::new(RwLock::new(Vec::new())),
@@ -464,28 +470,52 @@ impl SchedulerClient {
         drop(addrs);
         info!("picked {:?}", addr);
 
-        let channel = match Channel::from_shared(format!("http://{}", addr))
-            .map_err(|_| Error::InvalidURI(addr.to_string()))?
-            .buffer_size(super::BUFFER_SIZE)
-            .connect_timeout(super::CONNECT_TIMEOUT)
-            .timeout(super::REQUEST_TIMEOUT)
-            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
-            .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
-            .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
-            .connect()
-            .await
-        {
-            Ok(channel) => channel,
-            Err(err) => {
-                error!("connect to {} failed: {}", addr.to_string(), err);
-                if let Err(err) = self.refresh_available_scheduler_addrs().await {
-                    error!("failed to refresh scheduler client: {}", err);
-                };
+        let addr = format!("http://{}", addr);
+        let domain_name = Url::parse(addr.as_str())?
+            .host_str()
+            .ok_or_else(|| {
+                error!("invalid address: {}", addr);
+                Error::InvalidParameter
+            })?
+            .to_string();
 
-                return Err(ExternalError::new(ErrorType::ConnectError)
-                    .with_cause(Box::new(err))
-                    .into());
-            }
+        let channel = match self
+            .config
+            .scheduler
+            .load_client_tls_config(domain_name.as_str())
+            .await?
+        {
+            Some(client_tls_config) => Channel::from_shared(addr.clone())
+                .map_err(|_| Error::InvalidURI(addr.clone()))?
+                .tls_config(client_tls_config)?
+                .buffer_size(super::BUFFER_SIZE)
+                .connect_timeout(super::CONNECT_TIMEOUT)
+                .timeout(super::REQUEST_TIMEOUT)
+                .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+                .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+                .connect()
+                .await
+                .map_err(|err| {
+                    error!("connect to {} failed: {}", addr.to_string(), err);
+                    err
+                })
+                .or_err(ErrorType::ConnectError)?,
+            None => Channel::from_shared(addr.clone())
+                .map_err(|_| Error::InvalidURI(addr.clone()))?
+                .buffer_size(super::BUFFER_SIZE)
+                .connect_timeout(super::CONNECT_TIMEOUT)
+                .timeout(super::REQUEST_TIMEOUT)
+                .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+                .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+                .connect()
+                .await
+                .map_err(|err| {
+                    error!("connect to {} failed: {}", addr.to_string(), err);
+                    err
+                })
+                .or_err(ErrorType::ConnectError)?,
         };
 
         Ok(SchedulerGRPCClient::new(channel)

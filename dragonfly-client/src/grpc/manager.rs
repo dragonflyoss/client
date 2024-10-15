@@ -14,18 +14,19 @@
  * limitations under the License.
  */
 
-use crate::grpc::health::HealthClient;
 use dragonfly_api::manager::v2::{
     manager_client::ManagerClient as ManagerGRPCClient, DeleteSeedPeerRequest,
     ListSchedulersRequest, ListSchedulersResponse, SeedPeer, UpdateSeedPeerRequest,
 };
+use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
+use std::sync::Arc;
 use tonic::transport::Channel;
-use tonic_health::pb::health_check_response::ServingStatus;
-use tracing::{error, info, instrument, warn};
+use tracing::{error, instrument, warn};
+use url::Url;
 
 /// ManagerClient is a wrapper of ManagerGRPCClient.
 #[derive(Clone)]
@@ -38,53 +39,53 @@ pub struct ManagerClient {
 impl ManagerClient {
     /// new creates a new ManagerClient.
     #[instrument(skip_all)]
-    pub async fn new(addrs: Vec<String>) -> Result<Self> {
-        // Find the available manager address.
-        let mut available_addr = String::new();
-        for addr in addrs {
-            let health_client = match HealthClient::new(addr.as_str()).await {
-                Ok(client) => client,
-                Err(err) => {
-                    warn!("create {} health client failed: {}", addr, err);
-                    continue;
-                }
-            };
+    pub async fn new(config: Arc<Config>, addr: String) -> Result<Self> {
+        let domain_name = Url::parse(addr.as_str())?
+            .host_str()
+            .ok_or_else(|| {
+                error!("invalid address: {}", addr);
+                Error::InvalidParameter
+            })?
+            .to_string();
 
-            match health_client.check().await {
-                Ok(resp) => {
-                    if resp.status == ServingStatus::Serving as i32 {
-                        info!("use manager address: {}", addr);
-                        available_addr = addr;
-                    }
-                }
-                Err(err) => {
-                    warn!("check manager health failed: {}", err);
-                    continue;
-                }
-            }
-        }
+        let channel = match config
+            .manager
+            .load_client_tls_config(domain_name.as_str())
+            .await?
+        {
+            Some(client_tls_config) => Channel::from_shared(addr.clone())
+                .map_err(|_| Error::InvalidURI(addr.clone()))?
+                .tls_config(client_tls_config)?
+                .buffer_size(super::BUFFER_SIZE)
+                .connect_timeout(super::CONNECT_TIMEOUT)
+                .timeout(super::REQUEST_TIMEOUT)
+                .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+                .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+                .connect()
+                .await
+                .map_err(|err| {
+                    error!("connect to {} failed: {}", addr.to_string(), err);
+                    err
+                })
+                .or_err(ErrorType::ConnectError)?,
+            None => Channel::from_shared(addr.clone())
+                .map_err(|_| Error::InvalidURI(addr.clone()))?
+                .buffer_size(super::BUFFER_SIZE)
+                .connect_timeout(super::CONNECT_TIMEOUT)
+                .timeout(super::REQUEST_TIMEOUT)
+                .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+                .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+                .connect()
+                .await
+                .map_err(|err| {
+                    error!("connect to {} failed: {}", addr.to_string(), err);
+                    err
+                })
+                .or_err(ErrorType::ConnectError)?,
+        };
 
-        // Return error if no available address found.
-        if available_addr.is_empty() {
-            return Err(Error::AvailableManagerNotFound);
-        }
-
-        // Initialize the manager client by the available address.
-        let channel = Channel::from_shared(available_addr.clone())
-            .map_err(|_| Error::InvalidURI(available_addr.clone()))?
-            .buffer_size(super::BUFFER_SIZE)
-            .connect_timeout(super::CONNECT_TIMEOUT)
-            .timeout(super::REQUEST_TIMEOUT)
-            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
-            .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
-            .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
-            .connect()
-            .await
-            .map_err(|err| {
-                error!("connect to {} failed: {}", available_addr.to_string(), err);
-                err
-            })
-            .or_err(ErrorType::ConnectError)?;
         let client = ManagerGRPCClient::new(channel)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);
@@ -130,11 +131,13 @@ impl ManagerClient {
 #[cfg(test)]
 mod tests {
     use super::ManagerClient;
+    use dragonfly_client_config::dfdaemon::Config;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn invalid_uri_should_fail() {
-        let addrs = vec!["htt:/xxx".to_string()];
-        let result = ManagerClient::new(addrs).await;
+        let addr = "htt:/xxx".to_string();
+        let result = ManagerClient::new(Arc::new(Config::default()), addr).await;
         assert!(result.is_err());
         match result {
             Err(e) => assert_eq!(e.to_string(), "available manager not found"),

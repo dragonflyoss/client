@@ -147,7 +147,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let id_generator = Arc::new(id_generator);
 
     // Initialize manager client.
-    let manager_client = ManagerClient::new(config.manager.addrs.clone())
+    let manager_client = ManagerClient::new(config.clone(), config.manager.addr.clone())
         .await
         .map_err(|err| {
             error!("initialize manager client failed: {}", err);
@@ -174,7 +174,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let dynconfig = Arc::new(dynconfig);
 
     // Initialize scheduler client.
-    let scheduler_client = SchedulerClient::new(dynconfig.clone())
+    let scheduler_client = SchedulerClient::new(config.clone(), dynconfig.clone())
         .await
         .map_err(|err| {
             error!("initialize scheduler client failed: {}", err);
