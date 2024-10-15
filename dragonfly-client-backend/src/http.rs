@@ -181,12 +181,179 @@ impl Default for HTTP {
 
 #[cfg(test)]
 mod tests {
-    use crate::{http, Backend, GetRequest, HeadRequest};
+    use crate::{
+        http::{self, HTTP},
+        Backend, GetRequest, HeadRequest,
+    };
+
+    use hyper_util::rt::{TokioExecutor, TokioIo};
     use reqwest::{header::HeaderMap, StatusCode};
+    use rustls_pki_types::{CertificateDer, PrivateKeyDer};
     use wiremock::{
         matchers::{method, path},
         Mock, ResponseTemplate,
     };
+
+    use rustls_pemfile::{certs, private_key};
+    use std::{sync::Arc, time::Duration};
+    use tokio::net::TcpListener;
+
+    use tokio_rustls::rustls::ServerConfig;
+    use tokio_rustls::TlsAcceptor;
+
+    /// All these certs are generate by this scripts: "<project-root>/scripts/generate_certs.sh".
+    const SERVER_CERT_PEM: &str = r#"""
+-----BEGIN CERTIFICATE-----
+MIIDsDCCApigAwIBAgIUWuckNOpaPERz+QMACyqCqFJwYIYwDQYJKoZIhvcNAQEL
+BQAwYjELMAkGA1UEBhMCQ04xEDAOBgNVBAgMB0JlaWppbmcxEDAOBgNVBAcMB0Jl
+aWppbmcxEDAOBgNVBAoMB1Rlc3QgQ0ExCzAJBgNVBAsMAklUMRAwDgYDVQQDDAdU
+ZXN0IENBMB4XDTI0MTAxMTEyMTEwN1oXDTI2MDIyMzEyMTEwN1owaDELMAkGA1UE
+BhMCQ04xEDAOBgNVBAgMB0JlaWppbmcxEDAOBgNVBAcMB0JlaWppbmcxFDASBgNV
+BAoMC1Rlc3QgU2VydmVyMQswCQYDVQQLDAJJVDESMBAGA1UEAwwJbG9jYWxob3N0
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAiA9wEge3Jq8qw8Ix9z6t
+ss7ttK/49TMddhnQuqoYrFKjYliuvfbRZOU1nBP7+5XSAliPDCRNPS17JSwsXJk2
+bstc69fruDpYmthualSTsUYSwJJqzJjy5mlwSPtBsombcSHrUasMce5C4iXJX8Wx
+1O8ZCwuI5LUKxLujt+ZWnYfp5lzDcDhgD6wIzcMk67jv2edcWhqGkKmQbbmmK3Ve
+DJRa56NCh0F2U1SW0KCXTzoC1YU/bbB4UCfvHouMzCRNTr3VcrfL5aBIn/z/f6Xt
+atQkqFa/T1/lOQ0miMqNyBW58NxkPsTaJm2kVZ21hF2Dvo8MU/8Ras0J0aL8sc4n
+LwIDAQABo1gwVjAUBgNVHREEDTALgglsb2NhbGhvc3QwHQYDVR0OBBYEFJP+jy8a
+tCfnu6nekyZugvq8XT2gMB8GA1UdIwQYMBaAFOwXKq7J6STkwLUWC1xKwq1Psy63
+MA0GCSqGSIb3DQEBCwUAA4IBAQCu8nqnuzNn3E9dNC8ptV7ga1zb7cGdL3ZT5W3d
+10gmPo3YijWoCj4snattX9zxI8ThAY7uX6jrR0/HRXGJIw5JnlBmykdgyrQYEDzU
+FUL0GGabJNxZ+zDV77P+3WdgCx3F7wLQk+x+etMPvYuWC8RMse7W6dB1INyMT/l6
+k1rV73KTupSNJrYhqw0RnmNHIctkwiZLLpzLFj91BHjK5ero7VV4s7vnx+gtO/zQ
+FnIyiyfYYcSpVMhhaNkeCtWOfgVYU/m4XXn5bwEOhMN6q0JcdBPnT6kd2otLhiIo
+/WeyWEUeZ4rQhS7C1i31AYtNtVnnvI7BrsI4czYdcJcj3CM+
+-----END CERTIFICATE-----
+"""#;
+    const SERVER_KEY_PEM: &str = r#"""
+-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCID3ASB7cmryrD
+wjH3Pq2yzu20r/j1Mx12GdC6qhisUqNiWK699tFk5TWcE/v7ldICWI8MJE09LXsl
+LCxcmTZuy1zr1+u4Olia2G5qVJOxRhLAkmrMmPLmaXBI+0GyiZtxIetRqwxx7kLi
+JclfxbHU7xkLC4jktQrEu6O35ladh+nmXMNwOGAPrAjNwyTruO/Z51xaGoaQqZBt
+uaYrdV4MlFrno0KHQXZTVJbQoJdPOgLVhT9tsHhQJ+8ei4zMJE1OvdVyt8vloEif
+/P9/pe1q1CSoVr9PX+U5DSaIyo3IFbnw3GQ+xNombaRVnbWEXYO+jwxT/xFqzQnR
+ovyxzicvAgMBAAECggEABqHVkTfe1p+PBGx34tG/4nQxwIRxLJG31no+jeAdYOLF
+AEeulqezbmIroyTMA0uQKWscy0V/gXUi3avHOOktp72Vv9fxy98F/fyBPx3YEvLa
+69DMnl0qPl06CvLlTey6km8RKxUrRq9S2NoTydD+m1fC9jCIhvHkrNExIXjtaewU
+PvAHJy4ho+hVLo40udmQ4i1gnEWYUtjkr65ujuOAlWrlScHGvOrATbrfcaufPi/S
+5A/h8UlfahBstmh3a2tBLZlNl82s5ZKsVM1Oq1Vk9hAX5DP2JBAmuZKgX/xSDdpR
+62VUQGqp1WLgble5vR6ZUFo5+Jiw1uxe9jmNUg9mMQKBgQC8giG3DeeU6+rX9LVz
+cklF4jioU5LMdYutwXbtuGIWgXeJo8r0fzrgBtBVGRn7anS7YnYA+67h+A8SC6MO
+SXvktpHIC3Egge2Q9dRrWA4YCpkIxlOQ5ofCqovvCg9kq9sYqGz6lMr3RrzOWkUW
++0hF1CHCV0+KGFeIvTYVIKSsJwKBgQC4xiTsaShmwJ6HdR59jOmij+ccCPQTt2IO
+eGcniY2cHIoX9I7nn7Yah6JbMT0c8j75KA+pfCrK3FpRNrb71cI1iqBHedZXpRaV
+eshJztmw3AKtxQPNwRYrKYpY/M0ShAduppELeshZz1kubQU3sD4adrhcGCDXkctb
+dP44IpipuQKBgC+W5q4Q65L0ECCe3aQciRUEbGtKVfgaAL5H5h9TeifWXXg5Coa5
+DAL8lWG2aZHIKVoZHFNZNqhDeIKEv5BeytFNqfYHtXKQeoorFYpX+47kNgg6EWS2
+XjWt2o/pSUOQA0rxUjnckHTmvcmWjnSj0XYXfMJUSndBd+/EXL/ussPnAoGAGE5Q
+Wxz2KJYcBHuemCtqLG07nI988/8Ckh66ixPoIeoLLF2KUuPKg7Dl5ZMTk/Q13nar
+oMLpqifUZayJ45TZ6EslDGH1lS/tSZqOME9aiY5Xd95bwrwsm17qiQwwOchOZfrZ
+R6ZOJqpE8/t5XTr84GRPmiW+ZD0UgCJisqWyaVkCgYEAtupQDst0hmZ0KnJSIZ5U
+R6skHABhmwNU5lOPUBIzHVorbAaKDKd4iFbBI5wnBuWxXY0SANl2HYX3gZaPccH4
+wzvR3jZ1B4UlEBXl2V+VRbrXyPTN4uUF42AkSGuOsK4O878wW8noX+ZZTk7gydTN
+Z+yQ5jhu/fmSBNhqO/8Lp+Y=
+-----END PRIVATE KEY-----
+"""#;
+    const CA_CRT: &str = r#"""
+-----BEGIN CERTIFICATE-----
+MIIDpTCCAo2gAwIBAgIULqNbOr0fRj05VwIKlYdDt8HwxsUwDQYJKoZIhvcNAQEL
+BQAwYjELMAkGA1UEBhMCQ04xEDAOBgNVBAgMB0JlaWppbmcxEDAOBgNVBAcMB0Jl
+aWppbmcxEDAOBgNVBAoMB1Rlc3QgQ0ExCzAJBgNVBAsMAklUMRAwDgYDVQQDDAdU
+ZXN0IENBMB4XDTI0MTAxMTEyMTEwNloXDTI3MDgwMTEyMTEwNlowYjELMAkGA1UE
+BhMCQ04xEDAOBgNVBAgMB0JlaWppbmcxEDAOBgNVBAcMB0JlaWppbmcxEDAOBgNV
+BAoMB1Rlc3QgQ0ExCzAJBgNVBAsMAklUMRAwDgYDVQQDDAdUZXN0IENBMIIBIjAN
+BgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvDQCTmptzEmjwAkk6vsnEbch0Gt+
+Xp3bEEE1YhW89Jy6/bmclEINXsoRxpgkx4XnW0bcoDcqWBES82sFsQtEFWkP0Q3S
+8CQtpymDIuSj63xSVJWG8/cobzwztJfVQjBJwfmdnamXcjtqGHaGo3RjaHurSBTT
+Tft+gUvCuzFAblK+liQuQWRMq7JBwONgVzoMYoWSi+JJpEUcy/T+oznn9jNAW8Do
+FnXi1xvbRv6JiGOsYH1t869j5R8BkpjyGlZ6RYfPhiKtTg4K/ufnkkKteHzGZfcV
+HW2tqXyIkUl4j/+041nYtnyUuOZgLs2sJ33PER7GwVgi3sWG8AsNolRHUQIDAQAB
+o1MwUTAdBgNVHQ4EFgQU7BcqrsnpJOTAtRYLXErCrU+zLrcwHwYDVR0jBBgwFoAU
+7BcqrsnpJOTAtRYLXErCrU+zLrcwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0B
+AQsFAAOCAQEADFoewfDAIqf8OAhFFcTYiTTu16sbTzZTzRfxSa0R0oOmSl8338If
+71q8Yx65gFlu7FMiVRaVASzupwDhtLpqr6oVxLlmNW4fM0Bb+2CbmRuwhlm6ymBo
+NXtRh5AkWAxHOp124Rmrr3WB9r+zvZ2kxuWPvN/cOq4H4VAp/F0cBtKPRDw/W0IQ
+hDvG4OanBOKLE9Q7VH2kHXb6fJ4imKIztYcU4hOenKdUhfkCIBiIFgntUcEAaEpU
+FnJ4fV4c4aJ+9D3VyPlrdiBqIPI0Wms9YqqG2b8EDid561Jj7paIR2wLn0/Gq61b
+ePv3eLH0ZmBhSyl4+q/V56Z1TdZU46QZlg==
+-----END CERTIFICATE-----
+"""#;
+    const WRONG_CA_CRT: &str = r#"""
+-----BEGIN CERTIFICATE-----
+MIIDqTCCApGgAwIBAgIUW+6n+025VMqvZd4wm+Xdfzu4o38wDQYJKoZIhvcNAQEL
+BQAwZDELMAkGA1UEBhMCQ04xEDAOBgNVBAgMB0JlaWppbmcxEDAOBgNVBAcMB0Jl
+aWppbmcxETAPBgNVBAoMCFdyb25nIENBMQswCQYDVQQLDAJJVDERMA8GA1UEAwwI
+V3JvbmcgQ0EwHhcNMjQxMDExMTIxMTA2WhcNMjcwODAxMTIxMTA2WjBkMQswCQYD
+VQQGEwJDTjEQMA4GA1UECAwHQmVpamluZzEQMA4GA1UEBwwHQmVpamluZzERMA8G
+A1UECgwIV3JvbmcgQ0ExCzAJBgNVBAsMAklUMREwDwYDVQQDDAhXcm9uZyBDQTCC
+ASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALThl83CHSlT+xHONWqjOlsG
+z+qeYcdZRxVJZQWJ9DrfTBcE64fqXnRIMesZbZNGi0d4XyfiJDB8AxVRAD/lVHQi
+WR8LHglV/Hd7NjYG3bMQSkRHf5oleKjm1KDLvvnoD25YhqZsVDSCe+V4JkPc6xun
+SGU/WJluyzy0j49KJXjKJTzpkFsvYF91s8oYMCjwVMuYxcZLA7OCUgb9phlfZBND
+S9Dc5HI99O+0Uxfvfa/nRp85n2WpEJWQruGaazHFP/k842iR6zXIFclySE7n+1IG
+SBLJqZ4IYfS0NisTEozD/LcuEJ87/PZ7ag0zFhu7MpnD55JeJP8cq8pISHj8gJcC
+AwEAAaNTMFEwHQYDVR0OBBYEFLmV6Oqgwc1kIrv4JKLzn5qpKbvAMB8GA1UdIwQY
+MBaAFLmV6Oqgwc1kIrv4JKLzn5qpKbvAMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZI
+hvcNAQELBQADggEBAEJ+DbjdAZdJltIkHeIwFx9S4VnhA+Dw5+EBY03XzYo3HB/i
+qSQTvYz4laZppierxuR8Z5O6DPOxNJ4pXhXDcn2e2TzlBq+P0fUE9z2w+QBQyTEl
+6J2W5ce6dh9ke601pSMedLFDiARDGLkRDsIuEh91i62o+O3gNRkD/OWvjHAorQTf
+BOP2lbcTYGg6wMPOUMBHg73E/pyXVXeN9x1qN7dCWN4zDwInII7iUA6BQ0zECJAD
+sYhAYqHktkJsl0K4gJVanpnUhAC+SMD3+LRdjwMBp4mk+q3p2FMJMkACK3ffpn9j
+TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
+-----END CERTIFICATE-----
+"""#;
+
+    fn load_certs(cert_pem: &str) -> Vec<CertificateDer<'static>> {
+        certs(&mut cert_pem.as_bytes())
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    fn load_keys(key_pem: &str) -> Vec<PrivateKeyDer<'static>> {
+        private_key(&mut key_pem.as_bytes())
+            .into_iter()
+            .map(Option::unwrap)
+            .collect()
+    }
+
+    /// Start a https server with given public key and private key.
+    async fn start_https_server(cert_pem: &str, key_pem: &str) -> String {
+        // Load certs.
+        let certs = load_certs(cert_pem);
+        let keys = load_keys(key_pem);
+
+        // Setup the server.
+        let config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, keys[0].clone_key())
+            .unwrap();
+
+        let acceptor = TlsAcceptor::from(Arc::new(config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let stream = acceptor.accept(stream).await.unwrap();
+                    // Always return 200 OK with OK as its body for any requests.
+                    let service = hyper::service::service_fn(|_| async {
+                        Ok::<_, hyper::Error>(hyper::Response::new("OK".to_string()))
+                    });
+
+                    hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await
+                });
+            }
+        });
+
+        format!("https://localhost:{}", addr.port())
+    }
 
     #[tokio::test]
     async fn should_get_head_response() {
@@ -262,6 +429,132 @@ mod tests {
                 task_id: "test".to_string(),
                 piece_id: "test".to_string(),
                 url: format!("{}/get", server.uri()),
+                range: None,
+                http_header: Some(HeaderMap::new()),
+                timeout: std::time::Duration::from_secs(5),
+                client_certs: None,
+                object_storage: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp.http_status_code, Some(StatusCode::OK));
+        assert_eq!(resp.text().await.unwrap(), "OK");
+    }
+
+    #[tokio::test]
+    async fn should_get_head_response_with_self_signed_cert() {
+        let server_addr = start_https_server(SERVER_CERT_PEM, SERVER_KEY_PEM).await;
+
+        let http_backend = HTTP::new("https");
+        let resp = http_backend
+            .head(HeadRequest {
+                task_id: "test".to_string(),
+                url: server_addr,
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_certs: Some(load_certs(CA_CRT)),
+                object_storage: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp.http_status_code, Some(StatusCode::OK));
+    }
+
+    #[tokio::test]
+    async fn should_return_error_response_when_head_with_wrong_cert() {
+        let server_addr = start_https_server(SERVER_CERT_PEM, SERVER_KEY_PEM).await;
+
+        let http_backend = HTTP::new("https");
+        let resp = http_backend
+            .head(HeadRequest {
+                task_id: "test".to_string(),
+                url: server_addr,
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_certs: Some(load_certs(WRONG_CA_CRT)),
+                object_storage: None,
+            })
+            .await;
+
+        assert!(resp.is_err());
+    }
+
+    #[tokio::test]
+    async fn should_get_response_with_self_signed_cert() {
+        let server_addr = start_https_server(SERVER_CERT_PEM, SERVER_KEY_PEM).await;
+
+        let http_backend = HTTP::new("https");
+        let mut resp = http_backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "test".to_string(),
+                url: server_addr,
+                range: None,
+                http_header: Some(HeaderMap::new()),
+                timeout: std::time::Duration::from_secs(5),
+                client_certs: Some(load_certs(CA_CRT)),
+                object_storage: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp.http_status_code, Some(StatusCode::OK));
+        assert_eq!(resp.text().await.unwrap(), "OK");
+    }
+
+    #[tokio::test]
+    async fn should_return_error_response_when_get_with_wrong_cert() {
+        let server_addr = start_https_server(SERVER_CERT_PEM, SERVER_KEY_PEM).await;
+
+        let http_backend = HTTP::new("https");
+        let resp = http_backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "test".to_string(),
+                url: server_addr,
+                range: None,
+                http_header: Some(HeaderMap::new()),
+                timeout: std::time::Duration::from_secs(5),
+                client_certs: Some(load_certs(WRONG_CA_CRT)),
+                object_storage: None,
+            })
+            .await;
+
+        assert!(resp.is_err());
+    }
+
+    #[tokio::test]
+    async fn should_get_head_response_with_no_verifier() {
+        let server_addr = start_https_server(SERVER_CERT_PEM, SERVER_KEY_PEM).await;
+
+        let http_backend = HTTP::new("https");
+        let resp = http_backend
+            .head(HeadRequest {
+                task_id: "test".to_string(),
+                url: server_addr,
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_certs: None,
+                object_storage: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp.http_status_code, Some(StatusCode::OK));
+    }
+
+    #[tokio::test]
+    async fn should_get_response_with_no_verifier() {
+        let server_addr = start_https_server(SERVER_CERT_PEM, SERVER_KEY_PEM).await;
+
+        let http_backend = HTTP::new("https");
+        let mut resp = http_backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "test".to_string(),
+                url: server_addr,
                 range: None,
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),

@@ -151,7 +151,7 @@ pub enum DFError {
 
     /// ReqwestError is the error for reqwest.
     #[error(transparent)]
-    ReqwesError(#[from] reqwest::Error),
+    ReqwestError(#[from] reqwest::Error),
 
     /// OpenDALError is the error for opendal.
     #[error(transparent)]

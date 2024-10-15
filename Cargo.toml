@@ -88,6 +88,7 @@ bytesize-serde = "0.2.1"
 percent-encoding = "2.3.1"
 tempfile = "3.13.0"
 lazy_static = "1.5"
+tokio-rustls = "0.25.0-alpha.4"
 
 [profile.release]
 opt-level = "z"
