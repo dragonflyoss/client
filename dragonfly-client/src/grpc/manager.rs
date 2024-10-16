@@ -140,7 +140,7 @@ mod tests {
         let result = ManagerClient::new(Arc::new(Config::default()), addr).await;
         assert!(result.is_err());
         match result {
-            Err(e) => assert_eq!(e.to_string(), "available manager not found"),
+            Err(e) => assert_eq!(e.to_string(), "invalid parameter"),
             _ => panic!("unexpected error"),
         }
     }
