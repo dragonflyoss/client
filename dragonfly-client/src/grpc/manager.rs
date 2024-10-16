@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::grpc::health::HealthClient;
 use dragonfly_api::manager::v2::{
     manager_client::ManagerClient as ManagerGRPCClient, DeleteSeedPeerRequest,
     ListSchedulersRequest, ListSchedulersResponse, SeedPeer, UpdateSeedPeerRequest,
@@ -25,6 +26,7 @@ use dragonfly_client_core::{
 };
 use std::sync::Arc;
 use tonic::transport::Channel;
+use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{error, instrument, warn};
 use url::Url;
 
@@ -48,11 +50,22 @@ impl ManagerClient {
             })?
             .to_string();
 
-        let channel = match config
+        let client_tls_config = config
             .manager
             .load_client_tls_config(domain_name.as_str())
-            .await?
-        {
+            .await?;
+
+        let health_client = HealthClient::new(addr.as_str(), client_tls_config.clone()).await?;
+        match health_client.check().await {
+            Ok(resp) => {
+                if resp.status != ServingStatus::Serving as i32 {
+                    return Err(Error::AvailableManagerNotFound);
+                }
+            }
+            Err(err) => return Err(err),
+        }
+
+        let channel = match client_tls_config {
             Some(client_tls_config) => Channel::from_shared(addr.clone())
                 .map_err(|_| Error::InvalidURI(addr.clone()))?
                 .tls_config(client_tls_config)?
