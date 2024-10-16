@@ -514,6 +514,7 @@ impl UploadClient {
             let ca_cert = fs::read(&ca_cert_path).await?;
             let ca_cert = TonicCertificate::from_pem(ca_cert);
 
+            // TODO(gaius): Use trust_anchor to skip the verify of hostname.
             return Ok(Some(
                 ClientTlsConfig::new()
                     .domain_name(domain_name)
@@ -593,6 +594,7 @@ impl Manager {
             let ca_cert = fs::read(&ca_cert_path).await?;
             let ca_cert = TonicCertificate::from_pem(ca_cert);
 
+            // TODO(gaius): Use trust_anchor to skip the verify of hostname.
             return Ok(Some(
                 ClientTlsConfig::new()
                     .domain_name(domain_name)
@@ -675,6 +677,7 @@ impl Scheduler {
             let ca_cert = fs::read(&ca_cert_path).await?;
             let ca_cert = TonicCertificate::from_pem(ca_cert);
 
+            // TODO(gaius): Use trust_anchor to skip the verify of hostname.
             return Ok(Some(
                 ClientTlsConfig::new()
                     .domain_name(domain_name)
