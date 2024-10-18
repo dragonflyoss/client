@@ -15,6 +15,7 @@ dragonfly-api.workspace = true
 reqwest.workspace = true
 hyper.workspace = true
 http-range-header.workspace = true
+http.workspace = true
 tracing.workspace = true
 url.workspace = true
 rcgen.workspace = true
@@ -28,6 +29,7 @@ openssl.workspace = true
 blake3.workspace = true
 crc32fast.workspace = true
 base16ct.workspace = true
+base64 = "0.22.1"
 
 [dev-dependencies]
 tempfile.workspace = true

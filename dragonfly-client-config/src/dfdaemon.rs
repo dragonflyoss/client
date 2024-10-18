@@ -19,7 +19,10 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Result,
 };
-use dragonfly_client_util::tls::{generate_ca_cert_from_pem, generate_cert_from_pem};
+use dragonfly_client_util::{
+    http::basic_auth,
+    tls::{generate_ca_cert_from_pem, generate_cert_from_pem},
+};
 use local_ip_address::{local_ip, local_ipv6};
 use rcgen::Certificate;
 use regex::Regex;
@@ -871,6 +874,26 @@ impl Default for GC {
     }
 }
 
+/// BasicAuth is the basic auth configuration for HTTP proxy in dfdaemon.
+#[derive(Default, Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BasicAuth {
+    /// username is the username of the basic auth.
+    #[validate(length(min = 1, max = 20))]
+    pub username: String,
+
+    /// passwork is the passwork of the basic auth.
+    #[validate(length(min = 1, max = 20))]
+    pub password: String,
+}
+
+impl BasicAuth {
+    /// credentials loads the credentials.
+    pub fn credentials(&self) -> basic_auth::Credentials {
+        basic_auth::Credentials::new(&self.username, &self.password)
+    }
+}
+
 /// ProxyServer is the proxy server configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -907,6 +930,12 @@ pub struct ProxyServer {
     /// and key, and signs the server cert with the root CA cert. When client requests via the proxy,
     /// the proxy can intercept the request by the server cert.
     pub ca_key: Option<PathBuf>,
+
+    /// basic_auth is the basic auth configuration for HTTP proxy in dfdaemon. If basic_auth is not
+    /// empty, the proxy will use the basic auth to authenticate the client by Authorization
+    /// header. The value of the Authorization header is "Basic base64(username:password)", refer
+    /// to https://en.wikipedia.org/wiki/Basic_access_authentication.
+    pub basic_auth: Option<BasicAuth>,
 }
 
 /// ProxyServer implements Default.
@@ -917,6 +946,7 @@ impl Default for ProxyServer {
             port: default_proxy_server_port(),
             ca_cert: None,
             ca_key: None,
+            basic_auth: None,
         }
     }
 }

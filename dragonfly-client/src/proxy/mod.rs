@@ -39,8 +39,8 @@ use dragonfly_client_util::{
 use futures_util::TryStreamExt;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, StreamBody};
 use hyper::body::Frame;
-use hyper::client::conn::http1::Builder;
-use hyper::server::conn::http1;
+use hyper::client::conn::http1::Builder as ClientBuilder;
+use hyper::server::conn::http1::Builder as ServerBuilder;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{Method, Request};
@@ -170,7 +170,7 @@ impl Proxy {
                     let registry_cert = self.registry_cert.clone();
                     let server_ca_cert = self.server_ca_cert.clone();
                     tokio::task::spawn(async move {
-                        if let Err(err) = http1::Builder::new()
+                        if let Err(err) = ServerBuilder::new()
                             .keep_alive(true)
                             .preserve_header_case(true)
                             .title_case_headers(true)
@@ -315,6 +315,21 @@ pub async fn http_handler(
 ) -> ClientResult<Response> {
     info!("handle HTTP request: {:?}", request);
 
+    // Authenticate the request with the basic auth.
+    if let Some(basic_auth) = config.proxy.server.basic_auth.as_ref() {
+        match basic_auth.credentials().verify(request.headers()) {
+            Ok(_) => {}
+            Err(ClientError::Unauthorized) => {
+                error!("basic auth failed");
+                return Ok(make_error_response(http::StatusCode::UNAUTHORIZED, None));
+            }
+            Err(err) => {
+                error!("verify basic auth failed: {}", err);
+                return Ok(make_error_response(http::StatusCode::BAD_REQUEST, None));
+            }
+        }
+    }
+
     // If find the matching rule, proxy the request via the dfdaemon.
     let request_uri = request.uri();
     if let Some(rule) =
@@ -425,9 +440,6 @@ async fn upgraded_tunnel(
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<()> {
-    // Initialize the tcp stream to the remote server.
-    let upgraded = TokioIo::new(upgraded);
-
     // Generate the self-signed certificate by the given host. If the ca_cert
     // is not set, use the self-signed certificate. Otherwise, use the CA
     // certificate to sign the self-signed certificate.
@@ -449,8 +461,9 @@ async fn upgraded_tunnel(
         .with_single_cert(server_certs, server_key)
         .or_err(ErrorType::TLSConfigError)?;
     server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
+
     let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
-    let tls_stream = tls_acceptor.accept(upgraded).await?;
+    let tls_stream = tls_acceptor.accept(TokioIo::new(upgraded)).await?;
 
     // Serve the connection with the TLS stream.
     if let Err(err) = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
@@ -489,6 +502,20 @@ pub async fn upgraded_handler(
     // Span record the uri and method.
     Span::current().record("uri", request.uri().to_string().as_str());
     Span::current().record("method", request.method().as_str());
+
+    // Authenticate the request with the basic auth.
+    if let Some(basic_auth) = config.proxy.server.basic_auth.as_ref() {
+        match basic_auth.credentials().verify(request.headers()) {
+            Ok(_) => {}
+            Err(ClientError::Unauthorized) => {
+                return Ok(make_error_response(http::StatusCode::UNAUTHORIZED, None));
+            }
+            Err(err) => {
+                error!("verify basic auth failed: {}", err);
+                return Ok(make_error_response(http::StatusCode::BAD_REQUEST, None));
+            }
+        }
+    }
 
     // If the scheme is not set, set the scheme to https.
     if request.uri().scheme().is_none() {
@@ -827,7 +854,7 @@ async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Res
 
     let stream = TcpStream::connect((host, port)).await?;
     let io = TokioIo::new(stream);
-    let (mut client, conn) = Builder::new()
+    let (mut client, conn) = ClientBuilder::new()
         .preserve_header_case(true)
         .title_case_headers(true)
         .handshake(io)
