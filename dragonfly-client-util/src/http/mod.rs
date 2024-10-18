@@ -23,6 +23,8 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use std::collections::HashMap;
 use tracing::{error, instrument};
 
+pub mod basic_auth;
+
 /// reqwest_headermap_to_hashmap converts a reqwest headermap to a hashmap.
 #[instrument(skip_all)]
 pub fn reqwest_headermap_to_hashmap(header: &HeaderMap<HeaderValue>) -> HashMap<String, String> {

@@ -141,6 +141,10 @@ pub enum DFError {
     #[error{"RangeUnsatisfiable: Failed to parse range fallback error, please file an issue"}]
     EmptyHTTPRangeError,
 
+    /// Unauthorized is the error for unauthorized.
+    #[error{"unauthorized"}]
+    Unauthorized,
+
     /// TonicStatus is the error for tonic status.
     #[error(transparent)]
     TonicStatus(#[from] tonic::Status),
@@ -152,6 +156,10 @@ pub enum DFError {
     /// TonicStreamElapsed is the error for tonic stream elapsed.
     #[error(transparent)]
     TokioStreamElapsed(#[from] tokio_stream::Elapsed),
+
+    /// HeadersError is the error for headers.
+    #[error(transparent)]
+    HeadersError(#[from] headers::Error),
 
     /// URLParseError is the error for url parse.
     #[error(transparent)]
