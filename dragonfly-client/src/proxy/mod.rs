@@ -978,13 +978,29 @@ fn make_download_task_request(
             need_back_to_source: false,
             disable_back_to_source: config.proxy.disable_back_to_source,
             certificate_chain: Vec::new(),
-            // Prefetch is set to true if the request header contains the range header and the
-            // prefetch is enabled in the configuration.
-            prefetch: config.proxy.prefetch
-                && reqwest_request_header.contains_key(reqwest::header::RANGE),
+            prefetch: need_prefetch(config.clone(), &reqwest_request_header),
             object_storage: None,
         }),
     })
+}
+
+/// need_prefetch returns whether the prefetch is needed by the configuration and the request
+/// header.
+#[instrument(skip_all)]
+fn need_prefetch(config: Arc<Config>, header: &http::HeaderMap) -> bool {
+    // If the header not contains the range header, the request does not need prefetch.
+    if !header.contains_key(reqwest::header::RANGE) {
+        return false;
+    }
+
+    // If the header contains the X-Dragonfly-Prefetch header, return the value.
+    // Because the X-Dragonfly-Prefetch header has the highest priority.
+    if let Some(prefetch) = header::get_prefetch(header) {
+        return prefetch;
+    }
+
+    // Return the prefetch value from the configuration.
+    return config.proxy.prefetch;
 }
 
 /// make_download_url makes a download url by the given uri.

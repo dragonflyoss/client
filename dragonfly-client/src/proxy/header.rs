@@ -45,6 +45,12 @@ pub const DRAGONFLY_FILTERED_QUERY_PARAMS_HEADER: &str = "X-Dragonfly-Filtered-Q
 /// The request will also use P2P technology to distribute the content.
 pub const DRAGONFLY_USE_P2P_HEADER: &str = "X-Dragonfly-Use-P2P";
 
+/// DRAGONFLY_PREFETCH_HEADER is the header key of prefetch in http request.
+/// X-Dragonfly-Prefetch priority is higher than prefetch in config.
+/// If the value is "true", the range request will prefetch the entire file.
+/// If the value is "false", the range request will fetch the range content.
+pub const DRAGONFLY_PREFETCH_HEADER: &str = "X-Dragonfly-Prefetch";
+
 /// get_tag gets the tag from http header.
 #[instrument(skip_all)]
 pub fn get_tag(header: &HeaderMap) -> Option<String> {
@@ -142,5 +148,20 @@ pub fn get_use_p2p(header: &HeaderMap) -> bool {
             }
         },
         None => false,
+    }
+}
+
+/// get_prefetch gets the prefetch from http header.
+#[instrument(skip_all)]
+pub fn get_prefetch(header: &HeaderMap) -> Option<bool> {
+    match header.get(DRAGONFLY_PREFETCH_HEADER) {
+        Some(value) => match value.to_str() {
+            Ok(value) => Some(value.eq_ignore_ascii_case("true")),
+            Err(err) => {
+                error!("get use p2p from header failed: {}", err);
+                None
+            }
+        },
+        None => None,
     }
 }
