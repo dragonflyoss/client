@@ -19,7 +19,10 @@ use crate::shutdown;
 use dragonfly_api::scheduler::v2::{DeletePersistentCacheTaskRequest, DeleteTaskRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
-use dragonfly_client_storage::{metadata, Storage};
+use dragonfly_client_storage::{
+    content::{DEFAULT_CONTENT_DIR, DEFAULT_PERSISTENT_CACHE_TASK_DIR, DEFAULT_TASK_DIR},
+    metadata, Storage,
+};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info, instrument};
@@ -127,7 +130,14 @@ impl GC {
     /// evict_task_by_disk_usage evicts the task by disk usage.
     #[instrument(skip_all)]
     async fn evict_task_by_disk_usage(&self) -> Result<()> {
-        let stats = fs2::statvfs(self.config.storage.dir.as_path())?;
+        let stats = fs2::statvfs(
+            self.config
+                .storage
+                .dir
+                .join(DEFAULT_CONTENT_DIR)
+                .join(DEFAULT_TASK_DIR)
+                .as_path(),
+        )?;
         let available_space = stats.available_space();
         let total_space = stats.total_space();
 
@@ -226,7 +236,14 @@ impl GC {
     /// evict_persistent_cache_task_by_disk_usage evicts the persistent cache task by disk usage.
     #[instrument(skip_all)]
     async fn evict_persistent_cache_task_by_disk_usage(&self) -> Result<()> {
-        let stats = fs2::statvfs(self.config.storage.dir.as_path())?;
+        let stats = fs2::statvfs(
+            self.config
+                .storage
+                .dir
+                .join(DEFAULT_CONTENT_DIR)
+                .join(DEFAULT_PERSISTENT_CACHE_TASK_DIR)
+                .as_path(),
+        )?;
         let available_space = stats.available_space();
         let total_space = stats.total_space();
 
