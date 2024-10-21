@@ -25,8 +25,14 @@ use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom
 use tokio_util::io::InspectReader;
 use tracing::{error, info, instrument, warn};
 
-/// DEFAULT_DIR_NAME is the default directory name to store content.
-const DEFAULT_DIR_NAME: &str = "content";
+/// DEFAULT_CONTENT_DIR is the default directory for store content.
+pub const DEFAULT_CONTENT_DIR: &str = "content";
+
+/// DEFAULT_TASK_DIR is the default directory for store task.
+pub const DEFAULT_TASK_DIR: &str = "tasks";
+
+/// DEFAULT_PERSISTENT_CACHE_TASK_DIR is the default directory for store persistent cache task.
+pub const DEFAULT_PERSISTENT_CACHE_TASK_DIR: &str = "persistent-cache-tasks";
 
 /// Content is the content of a piece.
 pub struct Content {
@@ -60,7 +66,7 @@ impl Content {
     /// new returns a new content.
     #[instrument(skip_all)]
     pub async fn new(config: Arc<Config>, dir: &Path) -> Result<Content> {
-        let dir = dir.join(DEFAULT_DIR_NAME);
+        let dir = dir.join(DEFAULT_CONTENT_DIR);
 
         // If the storage is not kept, remove the directory.
         if !config.storage.keep {
@@ -69,9 +75,9 @@ impl Content {
             });
         }
 
-        fs::create_dir_all(&dir).await?;
+        fs::create_dir_all(&dir.join(DEFAULT_TASK_DIR)).await?;
+        fs::create_dir_all(&dir.join(DEFAULT_PERSISTENT_CACHE_TASK_DIR)).await?;
         info!("content initialized directory: {:?}", dir);
-
         Ok(Content { config, dir })
     }
 
@@ -83,7 +89,7 @@ impl Content {
         to: &Path,
         range: Option<Range>,
     ) -> Result<()> {
-        let task_path = self.dir.join(task.id.as_str());
+        let task_path = self.get_task_path(task.id.as_str());
 
         // Copy the task content to the destination by range
         // if the range is specified.
@@ -147,7 +153,7 @@ impl Content {
     /// hard_link_task hard links the task content.
     #[instrument(skip_all)]
     async fn hard_link_task(&self, task_id: &str, link: &Path) -> Result<()> {
-        fs::hard_link(self.dir.join(task_id), link).await?;
+        fs::hard_link(self.get_task_path(task_id), link).await?;
         Ok(())
     }
 
@@ -164,7 +170,7 @@ impl Content {
             }
         }
 
-        fs::copy(self.dir.join(task_id), to).await?;
+        fs::copy(self.get_task_path(task_id), to).await?;
         Ok(())
     }
 
@@ -181,7 +187,7 @@ impl Content {
             }
         }
 
-        let mut from_f = File::open(self.dir.join(task_id)).await?;
+        let mut from_f = File::open(self.get_task_path(task_id)).await?;
         from_f.seek(SeekFrom::Start(range.start)).await?;
         let range_reader = from_f.take(range.length);
 
@@ -203,7 +209,7 @@ impl Content {
     /// read_task reads the task content by range.
     #[instrument(skip_all)]
     pub async fn read_task_by_range(&self, task_id: &str, range: Range) -> Result<impl AsyncRead> {
-        let task_path = self.dir.join(task_id);
+        let task_path = self.get_task_path(task_id);
         let mut from_f = File::open(task_path.as_path()).await.map_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
             err
@@ -225,7 +231,7 @@ impl Content {
     #[instrument(skip_all)]
     pub async fn delete_task(&self, task_id: &str) -> Result<()> {
         info!("delete task content: {}", task_id);
-        let task_path = self.dir.join(task_id);
+        let task_path = self.get_task_path(task_id);
         fs::remove_file(task_path.as_path()).await.map_err(|err| {
             error!("remove {:?} failed: {}", task_path, err);
             err
@@ -242,7 +248,7 @@ impl Content {
         length: u64,
         range: Option<Range>,
     ) -> Result<impl AsyncRead> {
-        let task_path = self.dir.join(task_id);
+        let task_path = self.get_task_path(task_id);
         if let Some(range) = range {
             let target_offset = max(offset, range.start);
             let target_length =
@@ -282,8 +288,6 @@ impl Content {
         offset: u64,
         reader: &mut R,
     ) -> Result<WritePieceResponse> {
-        let task_path = self.dir.join(task_id);
-
         // Use a buffer to read the piece.
         let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
 
@@ -296,6 +300,7 @@ impl Content {
         });
 
         // Open the file and seek to the offset.
+        let task_path = self.create_or_get_task_path(task_id).await?;
         let mut f = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -326,6 +331,29 @@ impl Content {
         })
     }
 
+    /// get_task_path returns the task path by task id.
+    #[instrument(skip_all)]
+    fn get_task_path(&self, task_id: &str) -> PathBuf {
+        // The task needs split by the first 3 characters of task id(sha256) to
+        // avoid too many files in one directory.
+        self.dir
+            .join(DEFAULT_TASK_DIR)
+            .join(&task_id[..3])
+            .join(task_id)
+    }
+
+    /// create_or_get_task_path creates parent directories or returns the task path by task id.
+    #[instrument(skip_all)]
+    async fn create_or_get_task_path(&self, task_id: &str) -> Result<PathBuf> {
+        let task_dir = self.dir.join(DEFAULT_TASK_DIR).join(&task_id[..3]);
+        fs::create_dir_all(&task_dir).await.map_err(|err| {
+            error!("create {:?} failed: {}", task_dir, err);
+            err
+        })?;
+
+        Ok(task_dir.join(task_id))
+    }
+
     /// hard_link_or_copy_persistent_cache_task hard links or copies the task content to the destination.
     #[instrument(skip_all)]
     pub async fn hard_link_or_copy_persistent_cache_task(
@@ -344,7 +372,7 @@ impl Content {
         }
 
         // Get the persistent cache task path.
-        let task_path = self.dir.join(task.id.as_str());
+        let task_path = self.get_persistent_cache_task_path(task.id.as_str());
 
         // If the hard link fails, copy the task content to the destination.
         fs::remove_file(to).await.unwrap_or_else(|err| {
@@ -400,7 +428,9 @@ impl Content {
             hasher.update(bytes);
         });
 
-        let task_path = self.dir.join(task_id);
+        let task_path = self
+            .create_or_get_persistent_cache_task_path(task_id)
+            .await?;
         let mut to_f = OpenOptions::new()
             .create(true)
             .truncate(true)
@@ -428,12 +458,9 @@ impl Content {
 
     /// delete_task deletes the persistent cache task content.
     #[instrument(skip_all)]
-    pub async fn delete_persistent_cache_task(&self, persistent_cache_task_id: &str) -> Result<()> {
-        info!(
-            "delete persistent cache task content: {}",
-            persistent_cache_task_id
-        );
-        let persistent_cache_task_path = self.dir.join(persistent_cache_task_id);
+    pub async fn delete_persistent_cache_task(&self, task_id: &str) -> Result<()> {
+        info!("delete persistent cache task content: {}", task_id);
+        let persistent_cache_task_path = self.get_persistent_cache_task_path(task_id);
         fs::remove_file(persistent_cache_task_path.as_path())
             .await
             .map_err(|err| {
@@ -441,5 +468,32 @@ impl Content {
                 err
             })?;
         Ok(())
+    }
+
+    /// get_persistent_cache_task_path returns the persistent cache task path by task id.
+    #[instrument(skip_all)]
+    fn get_persistent_cache_task_path(&self, task_id: &str) -> PathBuf {
+        // The persistent cache task needs split by the first 3 characters of task id(sha256) to
+        // avoid too many files in one directory.
+        self.dir
+            .join(DEFAULT_PERSISTENT_CACHE_TASK_DIR)
+            .join(&task_id[..3])
+            .join(task_id)
+    }
+
+    /// create_or_get_persistent_cache_task_path creates parent directories or returns the persistent cache task path by task id.
+    #[instrument(skip_all)]
+    async fn create_or_get_persistent_cache_task_path(&self, task_id: &str) -> Result<PathBuf> {
+        let task_dir = self
+            .dir
+            .join(DEFAULT_PERSISTENT_CACHE_TASK_DIR)
+            .join(&task_id[..3]);
+
+        fs::create_dir_all(&task_dir).await.map_err(|err| {
+            error!("create {:?} failed: {}", task_dir, err);
+            err
+        })?;
+
+        Ok(task_dir.join(task_id))
     }
 }
