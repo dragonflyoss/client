@@ -642,9 +642,9 @@ impl Metrics {
         VERSION_GAUGE
             .get_metric_with_label_values(&[
                 CARGO_PKG_VERSION,
-                &GIT_COMMIT_SHORT_HASH,
+                GIT_COMMIT_SHORT_HASH,
                 BUILD_PLATFORM,
-                &GIT_COMMIT_DATE,
+                GIT_COMMIT_DATE,
             ])
             .unwrap()
             .set(1);
