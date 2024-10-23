@@ -15,7 +15,6 @@
  */
 
 use clap::{Arg, Command};
-use lazy_static::lazy_static;
 use std::path::PathBuf;
 
 pub mod dfcache;
@@ -42,17 +41,21 @@ pub const BUILD_PLATFORM: &str = env!("BUILD_PLATFORM");
 // BUILD_TIMESTAMP is the timestamp of the build.
 pub const BUILD_TIMESTAMP: &str = env!("BUILD_TIMESTAMP");
 
-lazy_static! {
-    /// GIT_COMMIT_SHORT_HASH is the short git commit hash of the package.
-    pub static ref GIT_COMMIT_SHORT_HASH: &'static str = {
-        option_env!("GIT_COMMIT_SHORT_HASH").unwrap_or("unknown")
-    };
+/// GIT_COMMIT_SHORT_HASH is the short git commit hash of the package.
+pub const GIT_COMMIT_SHORT_HASH: &str = {
+    match option_env!("GIT_COMMIT_SHORT_HASH") {
+        Some(hash) => hash,
+        None => "unknown",
+    }
+};
 
-    /// GIT_COMMIT_DATE is the git commit date of the package.
-    pub static ref GIT_COMMIT_DATE: &'static str = {
-        option_env!("GIT_COMMIT_DATE").unwrap_or("unknown")
-    };
-}
+/// GIT_COMMIT_DATE is the git commit date of the package.
+pub const GIT_COMMIT_DATE: &str = {
+    match option_env!("GIT_COMMIT_DATE") {
+        Some(hash) => hash,
+        None => "unknown",
+    }
+};
 
 /// default_root_dir is the default root directory for client.
 pub fn default_root_dir() -> PathBuf {
@@ -136,8 +139,8 @@ impl clap::builder::TypedValueParser for VersionValueParser {
                 "{} {} ({}, {})",
                 cmd.get_name(),
                 cmd.get_version().unwrap_or("unknown"),
-                *GIT_COMMIT_SHORT_HASH,
-                *GIT_COMMIT_DATE,
+                GIT_COMMIT_SHORT_HASH,
+                GIT_COMMIT_DATE,
             );
 
             std::process::exit(0);

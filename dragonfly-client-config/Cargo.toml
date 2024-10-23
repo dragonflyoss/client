@@ -23,7 +23,6 @@ serde_yaml.workspace = true
 tokio.workspace = true
 bytesize.workspace = true
 bytesize-serde.workspace = true
-lazy_static.workspace = true
 tonic.workspace = true
 rustls-pki-types.workspace = true
 rcgen.workspace = true
