@@ -467,8 +467,12 @@ async fn upgraded_tunnel(
 
     // Serve the connection with the TLS stream.
     // Ensure the connection uses HTTP/1 to prevent version mismatch errors, such as:
+    //
     // user => proxy => backend
-    //        http2       http1
+    //    http2    http1
+    //
+    // user => proxy => backend
+    //    http1    http2
     if let Err(err) = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
         .http1_only()
         .serve_connection(

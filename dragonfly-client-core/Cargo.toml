@@ -13,6 +13,7 @@ edition.workspace = true
 reqwest.workspace = true
 thiserror.workspace = true
 tonic.workspace = true
+tonic-reflection.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 hyper.workspace = true
