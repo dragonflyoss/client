@@ -49,6 +49,7 @@ rustls.workspace = true
 rustls-pki-types.workspace = true
 warp.workspace = true
 tonic.workspace = true
+tonic-reflection.workspace = true
 tokio-stream.workspace = true
 reqwest.workspace = true
 url.workspace = true
@@ -74,7 +75,6 @@ opentelemetry-jaeger = { version = "0.17.0", features = ["rt-tokio"] }
 pprof = { version = "0.13", features = ["flamegraph", "protobuf-codec"] }
 prometheus = { version = "0.13", features = ["process"] }
 tonic-health = "0.12.3"
-tonic-reflection = "0.12.3"
 bytes = "1.7"
 sysinfo = "0.32.0"
 tower = "0.4.13"
