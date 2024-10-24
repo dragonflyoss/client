@@ -108,12 +108,12 @@ impl DfdaemonDownloadServer {
 
     /// run starts the download server with unix domain socket.
     #[instrument(skip_all)]
-    pub async fn run(&mut self) {
+    pub async fn run(&mut self) -> ClientResult<()> {
         // Register the reflection service.
         let reflection = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
             .build_v1()
-            .unwrap();
+            .map_err(|e| ClientError::Unknown(e.to_string()))?;
 
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -131,10 +131,8 @@ impl DfdaemonDownloadServer {
             "download server listening on {}",
             self.socket_path.display()
         );
-        fs::create_dir_all(self.socket_path.parent().unwrap())
-            .await
-            .unwrap();
-        let uds = UnixListener::bind(&self.socket_path).unwrap();
+        fs::create_dir_all(self.socket_path.parent().unwrap()).await?;
+        let uds = UnixListener::bind(&self.socket_path)?;
         let uds_stream = UnixListenerStream::new(uds);
 
         Server::builder()
@@ -149,12 +147,12 @@ impl DfdaemonDownloadServer {
                 let _ = shutdown.recv().await;
                 info!("download grpc server shutting down");
             })
-            .await
-            .unwrap();
+            .await?;
 
         // Remove the unix domain socket file.
-        fs::remove_file(&self.socket_path).await.unwrap();
+        fs::remove_file(&self.socket_path).await?;
         info!("remove the unix domain socket file of the download server");
+        Ok(())
     }
 }
 

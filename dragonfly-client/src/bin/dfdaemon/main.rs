@@ -310,27 +310,27 @@ async fn main() -> Result<(), anyhow::Error> {
             info!("stats server exited");
         },
 
-        _ = tokio::spawn(async move { manager_announcer.run().await.unwrap_or_else(|err| error!("announcer manager failed: {}", err))}) => {
+        _ = tokio::spawn(async move { manager_announcer.run().await.unwrap_or_else(|err| error!("announcer manager failed: {}", err))} ) => {
             info!("announcer manager exited");
         },
 
-        _ = tokio::spawn(async move { scheduler_announcer.run().await }) => {
+        _ = tokio::spawn(async move { scheduler_announcer.run().await.unwrap_or_else(|err| error!("announcer scheduler failed: {}", err)) }) => {
             info!("announcer scheduler exited");
         },
 
-        _ = tokio::spawn(async move { dfdaemon_upload_grpc.run().await }) => {
+        _ = tokio::spawn(async move { dfdaemon_upload_grpc.run().await.unwrap_or_else(|err| error!("dfdaemon upload grpc server failed: {}", err)) }) => {
             info!("dfdaemon upload grpc server exited");
         },
 
-        _ = tokio::spawn(async move { dfdaemon_download_grpc.run().await }) => {
+        _ = tokio::spawn(async move { dfdaemon_download_grpc.run().await.unwrap_or_else(|err| error!("dfdaemon download grpc server failed: {}", err)) }) => {
             info!("dfdaemon download grpc unix server exited");
         },
 
-        _ = tokio::spawn(async move { proxy.run().await }) => {
+        _ = tokio::spawn(async move { proxy.run().await.unwrap_or_else(|err| error!("proxy server failed: {}", err)) }) => {
             info!("proxy server exited");
         },
 
-        _ = tokio::spawn(async move { gc.run().await }) => {
+        _ = tokio::spawn(async move { gc.run().await.unwrap_or_else(|err| error!("garbage collector failed: {}", err)) }) => {
             info!("garbage collector exited");
         },
 

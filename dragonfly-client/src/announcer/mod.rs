@@ -157,7 +157,7 @@ impl SchedulerAnnouncer {
 
     /// run announces the dfdaemon information to the scheduler.
     #[instrument(skip_all)]
-    pub async fn run(&self) {
+    pub async fn run(&self) -> Result<()> {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
 
@@ -187,7 +187,7 @@ impl SchedulerAnnouncer {
                     }
 
                     info!("announce to scheduler shutting down");
-                    return
+                    return Ok(());
                 }
             }
         }

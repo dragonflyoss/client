@@ -108,12 +108,12 @@ impl DfdaemonUploadServer {
 
     /// run starts the upload server.
     #[instrument(skip_all)]
-    pub async fn run(&mut self) {
+    pub async fn run(&mut self) -> ClientResult<()> {
         // Register the reflection service.
         let reflection = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
             .build_v1()
-            .unwrap();
+            .map_err(|e| ClientError::Unknown(e.to_string()))?;
 
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -132,10 +132,10 @@ impl DfdaemonUploadServer {
         if let Ok(Some(server_tls_config)) =
             self.config.upload.server.load_server_tls_config().await
         {
-            server_builder = server_builder.tls_config(server_tls_config).unwrap();
+            server_builder = server_builder.tls_config(server_tls_config)?;
         }
 
-        server_builder
+        Ok(server_builder
             .max_frame_size(super::MAX_FRAME_SIZE)
             .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
             .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
@@ -147,8 +147,7 @@ impl DfdaemonUploadServer {
                 let _ = shutdown.recv().await;
                 info!("upload grpc server shutting down");
             })
-            .await
-            .unwrap();
+            .await?)
     }
 }
 
