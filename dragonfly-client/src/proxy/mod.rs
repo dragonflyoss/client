@@ -460,13 +460,17 @@ async fn upgraded_tunnel(
         .with_no_client_auth()
         .with_single_cert(server_certs, server_key)
         .or_err(ErrorType::TLSConfigError)?;
-    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
+    server_config.alpn_protocols = vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()];
 
     let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
     let tls_stream = tls_acceptor.accept(TokioIo::new(upgraded)).await?;
 
     // Serve the connection with the TLS stream.
+    // Ensure the connection uses HTTP/1 to prevent version mismatch errors, such as:
+    // user => proxy => backend
+    //        http2       http1
     if let Err(err) = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
+        .http1_only()
         .serve_connection(
             TokioIo::new(tls_stream),
             service_fn(move |request| {

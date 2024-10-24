@@ -71,7 +71,7 @@ impl GC {
 
     /// run runs the garbage collector.
     #[instrument(skip_all)]
-    pub async fn run(&self) {
+    pub async fn run(&self) -> Result<()> {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
 
@@ -103,7 +103,7 @@ impl GC {
                 _ = shutdown.recv() => {
                     // Shutdown the garbage collector.
                     info!("garbage collector shutting down");
-                    return;
+                    return Ok(());
                 }
             }
         }
