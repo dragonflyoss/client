@@ -199,7 +199,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             .id_generator
             .task_id(
                 download.url.as_str(),
-                download.digest.as_deref(),
                 download.tag.as_deref(),
                 download.application.as_deref(),
                 download.filtered_query_params.clone(),

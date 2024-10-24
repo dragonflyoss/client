@@ -71,7 +71,6 @@ impl IDGenerator {
     pub fn task_id(
         &self,
         url: &str,
-        digest: Option<&str>,
         tag: Option<&str>,
         application: Option<&str>,
         filtered_query_params: Vec<String>,
@@ -83,18 +82,24 @@ impl IDGenerator {
             .filter(|(k, _)| !filtered_query_params.contains(&k.to_string()));
 
         let mut artifact_url = url.clone();
-        artifact_url.query_pairs_mut().clear().extend_pairs(query);
+        if query.clone().count() == 0 {
+            artifact_url.set_query(None);
+        } else {
+            artifact_url.query_pairs_mut().clear().extend_pairs(query);
+        }
+
+        let artifact_url_str = artifact_url.to_string();
+        let final_url = if artifact_url_str.ends_with('/') && artifact_url.path() == "/" {
+            artifact_url_str.trim_end_matches('/').to_string()
+        } else {
+            artifact_url_str
+        };
 
         // Initialize the hasher.
         let mut hasher = Sha256::new();
 
         // Add the url to generate the task id.
-        hasher.update(artifact_url.to_string());
-
-        // Add the digest to generate the task id.
-        if let Some(digest) = digest {
-            hasher.update(digest);
-        }
+        hasher.update(final_url);
 
         // Add the tag to generate the task id.
         if let Some(tag) = tag {
@@ -163,5 +168,153 @@ impl IDGenerator {
         }
 
         TaskType::Standard
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    #[test]
+    fn should_generate_host_id() {
+        let test_cases = vec![
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                "127.0.0.1-localhost",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), true),
+                "127.0.0.1-localhost-seed",
+            ),
+        ];
+
+        for (generator, expected) in test_cases {
+            assert_eq!(generator.host_id(), expected);
+        }
+    }
+
+    #[test]
+    fn should_generate_task_id() {
+        let test_cases = vec![
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                "https://example.com",
+                Some("foo"),
+                Some("bar"),
+                vec![],
+                "160fa7f001d9d2e893130894fbb60a5fb006e1d61bff82955f2946582bc9de1d",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                "https://example.com",
+                Some("foo"),
+                None,
+                vec![],
+                "2773851c628744fb7933003195db436ce397c1722920696c4274ff804d86920b",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                "https://example.com",
+                None,
+                Some("bar"),
+                vec![],
+                "63dee2822037636b0109876b58e95692233840753a882afa69b9b5ee82a6c57d",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                "https://example.com?foo=foo&bar=bar",
+                None,
+                None,
+                vec!["foo".to_string(), "bar".to_string()],
+                "100680ad546ce6a577f42f52df33b4cfdca756859e664b8d7de329b150d09ce9",
+            ),
+        ];
+
+        for (generator, url, tag, application, filtered_query_params, expected_id) in test_cases {
+            let task_id = generator
+                .task_id(url, tag, application, filtered_query_params)
+                .unwrap();
+            assert_eq!(task_id, expected_id);
+        }
+    }
+
+    #[test]
+    fn should_generate_persistent_cache_task_id() {
+        let test_cases = vec![
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                "This is a test file",
+                Some("tag1"),
+                Some("app1"),
+                "84ed9fca6c51c725c21ab005682509bc9f5a9e08779aa14039a1df41bd95bb9f",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                "This is a test file",
+                None,
+                Some("app1"),
+                "c39ee7baea1df8276d16224b6bbe93d0abaedaa056e819bb1a6318e28cdde508",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                "This is a test file",
+                Some("tag1"),
+                None,
+                "de692dcd9b6eace344140ef2718033527ee0a2e436c03044a771902bd536ae7d",
+            ),
+        ];
+
+        for (generator, file_content, tag, application, expected_id) in test_cases {
+            let dir = tempdir().unwrap();
+            let file_path = dir.path().join("testfile");
+            let mut f = File::create(&file_path).unwrap();
+            f.write_all(file_content.as_bytes()).unwrap();
+
+            let task_id = generator
+                .persistent_cache_task_id(&file_path, tag, application)
+                .unwrap();
+            assert_eq!(task_id, expected_id);
+        }
+    }
+
+    #[test]
+    fn should_generate_peer_id() {
+        let test_cases = vec![
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                false,
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), true),
+                true,
+            ),
+        ];
+
+        for (generator, is_seed_peer) in test_cases {
+            let peer_id = generator.peer_id();
+            assert!(peer_id.starts_with("127.0.0.1-localhost-"));
+            if is_seed_peer {
+                assert!(peer_id.ends_with("-seed"));
+            }
+        }
+    }
+
+    #[test]
+    fn should_generate_task_type() {
+        let test_cases = vec![
+            ("some-task-id", TaskType::Standard),
+            (
+                "some-task-id-persistent-cache-task",
+                TaskType::PersistentCache,
+            ),
+        ];
+
+        let generator = IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false);
+        for (id, expected_type) in test_cases {
+            assert_eq!(generator.task_type(id), expected_type);
+        }
     }
 }
