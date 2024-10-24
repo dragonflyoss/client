@@ -314,7 +314,7 @@ async fn main() -> Result<(), anyhow::Error> {
             info!("announcer manager exited");
         },
 
-        _ = tokio::spawn(async move { scheduler_announcer.run().await.unwrap_or_else(|err| error!("announcer scheduler failed: {}", err)) }) => {
+        _ = tokio::spawn(async move { scheduler_announcer.run().await }) => {
             info!("announcer scheduler exited");
         },
 
@@ -330,7 +330,7 @@ async fn main() -> Result<(), anyhow::Error> {
             info!("proxy server exited");
         },
 
-        _ = tokio::spawn(async move { gc.run().await.unwrap_or_else(|err| error!("garbage collector failed: {}", err)) }) => {
+        _ = tokio::spawn(async move { gc.run().await }) => {
             info!("garbage collector exited");
         },
 

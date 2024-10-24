@@ -112,8 +112,7 @@ impl DfdaemonUploadServer {
         // Register the reflection service.
         let reflection = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
-            .build_v1()
-            .map_err(|e| ClientError::Unknown(e.to_string()))?;
+            .build_v1()?;
 
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();

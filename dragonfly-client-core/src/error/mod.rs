@@ -153,6 +153,10 @@ pub enum DFError {
     #[error(transparent)]
     TonicTransportError(#[from] tonic::transport::Error),
 
+    /// TonicReflectionServerError is the error for tonic reflection server.
+    #[error(transparent)]
+    TonicReflectionServerError(#[from] tonic_reflection::server::Error),
+
     /// TonicStreamElapsed is the error for tonic stream elapsed.
     #[error(transparent)]
     TokioStreamElapsed(#[from] tokio_stream::Elapsed),
