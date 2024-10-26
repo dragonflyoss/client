@@ -1,4 +1,4 @@
-FROM rust:1.80.0 AS builder
+FROM rust:1.80 AS builder
 
 WORKDIR /app/client
 
@@ -48,7 +48,7 @@ RUN if [ "$(uname -m)" = "ppc64le" ]; then \
     fi && \
     chmod +x /bin/grpc_health_probe
 
-FROM golang:1.23.0-alpine3.20 AS pprof
+FROM golang:1.23 AS pprof
 
 RUN go install github.com/google/pprof@latest
 
