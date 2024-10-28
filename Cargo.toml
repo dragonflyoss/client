@@ -80,7 +80,7 @@ opendal = { version = "0.48.0", features = [
     "services-cos",
 ] }
 clap = { version = "4.5.20", features = ["derive"] }
-anyhow = "1.0.89"
+anyhow = "1.0.91"
 toml_edit = "0.22.22"
 toml = "0.8.19"
 base16ct = { version = "0.2", features = ["alloc"] }
