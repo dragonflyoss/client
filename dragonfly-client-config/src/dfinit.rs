@@ -56,6 +56,12 @@ fn default_container_runtime_crio_config_path() -> PathBuf {
     PathBuf::from("/etc/containers/registries.conf")
 }
 
+/// default_container_runtime_podman_config_path is the default podman configuration path.
+#[inline]
+fn default_container_runtime_podman_config_path() -> PathBuf {
+    PathBuf::from("/etc/containers/registries.conf")
+}
+
 /// default_container_runtime_crio_unqualified_search_registries is the default unqualified search registries of cri-o,
 /// refer to https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md#global-settings.
 #[inline]
@@ -66,6 +72,18 @@ fn default_container_runtime_crio_unqualified_search_registries() -> Vec<String>
         "docker.io".to_string(),
     ]
 }
+
+/// default_container_runtime_podman_unqualified_search_registries is the default unqualified search registries of cri-o,
+/// refer to https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md#global-settings.
+#[inline]
+fn default_container_runtime_podman_unqualified_search_registries() -> Vec<String> {
+    vec![
+        "registry.fedoraproject.org".to_string(),
+        "registry.access.redhat.com".to_string(),
+        "docker.io".to_string(),
+    ]
+}
+
 
 /// default_proxy_addr is the default proxy address of dfdaemon.
 #[inline]
@@ -156,6 +174,37 @@ pub struct CRIO {
     pub registries: Vec<CRIORegistry>,
 }
 
+/// CRIORegistry is the registry configuration for cri-o.
+#[derive(Debug, Clone, Default, Validate, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PodmanRegistry {
+    /// prefix is the prefix of the user-specified image name, refer to
+    /// https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md#choosing-a-registry-toml-table.
+    pub prefix: String,
+
+    /// location accepts the same format as the prefix field, and specifies the physical location of the prefix-rooted namespace,
+    /// refer to https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md#remapping-and-mirroring-registries.
+    pub location: String,
+}
+
+/// Podman is the podman configuration for dfinit.
+#[derive(Debug, Clone, Default, Validate, Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Podman {
+    /// config_path is the path of cri-o registries's configuration file.
+    #[serde(default = "default_container_runtime_podman_config_path")]
+    pub config_path: PathBuf,
+
+    /// unqualified_search_registries is an array of host[:port] registries to try when pulling an unqualified image, in order.
+    /// Refer to https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md#global-settings.
+    #[serde(default = "default_container_runtime_podman_unqualified_search_registries")]
+    pub unqualified_search_registries: Vec<String>,
+
+    /// registries is the list of cri-o registries, refer to
+    /// https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md#namespaced-registry-settings.
+    pub registries: Vec<PodmanRegistry>,
+}
+
 /// Docker is the docker configuration for dfinit.
 #[derive(Debug, Clone, Default, Validate, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -179,6 +228,7 @@ pub enum ContainerRuntimeConfig {
     Containerd(Containerd),
     Docker(Docker),
     CRIO(CRIO),
+    Podman(Podman),
 }
 
 /// Serialize is the implementation of the Serialize trait for ContainerRuntimeConfig.
@@ -203,6 +253,11 @@ impl Serialize for ContainerRuntimeConfig {
                 state.serialize_field("crio", &cfg)?;
                 state.end()
             }
+            ContainerRuntimeConfig::Podman(ref cfg) => {
+                let mut state = serializer.serialize_struct("podman", 1)?;
+                state.serialize_field("podman", &cfg)?;
+                state.end()
+            }
         }
     }
 }
@@ -218,6 +273,7 @@ impl<'de> Deserialize<'de> for ContainerRuntimeConfig {
             containerd: Option<Containerd>,
             docker: Option<Docker>,
             crio: Option<CRIO>,
+            podman: Option<Podman>,
         }
 
         let helper = ContainerRuntimeHelper::deserialize(deserializer)?;
@@ -233,9 +289,12 @@ impl<'de> Deserialize<'de> for ContainerRuntimeConfig {
             ContainerRuntimeHelper {
                 crio: Some(crio), ..
             } => Ok(ContainerRuntimeConfig::CRIO(crio)),
+            ContainerRuntimeHelper {
+                podman: Some(podman), ..
+            } => Ok(ContainerRuntimeConfig::Podman(podman)),
             _ => {
                 use serde::de::Error;
-                Err(D::Error::custom("expected containerd or docker or crio"))
+                Err(D::Error::custom("expected containerd or docker or crio or podman"))
             }
         }
     }
