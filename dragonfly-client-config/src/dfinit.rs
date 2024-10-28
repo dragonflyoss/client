@@ -84,7 +84,6 @@ fn default_container_runtime_podman_unqualified_search_registries() -> Vec<Strin
     ]
 }
 
-
 /// default_proxy_addr is the default proxy address of dfdaemon.
 #[inline]
 fn default_proxy_addr() -> String {
@@ -290,11 +289,14 @@ impl<'de> Deserialize<'de> for ContainerRuntimeConfig {
                 crio: Some(crio), ..
             } => Ok(ContainerRuntimeConfig::CRIO(crio)),
             ContainerRuntimeHelper {
-                podman: Some(podman), ..
+                podman: Some(podman),
+                ..
             } => Ok(ContainerRuntimeConfig::Podman(podman)),
             _ => {
                 use serde::de::Error;
-                Err(D::Error::custom("expected containerd or docker or crio or podman"))
+                Err(D::Error::custom(
+                    "expected containerd or docker or crio or podman",
+                ))
             }
         }
     }
