@@ -103,6 +103,7 @@ impl GC {
                 _ = shutdown.recv() => {
                     // Shutdown the garbage collector.
                     info!("garbage collector shutting down");
+                    return
                 }
             }
         }

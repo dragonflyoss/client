@@ -110,6 +110,7 @@ impl Stats {
             _ = shutdown.recv() => {
                 // Stats server shutting down with signals.
                 info!("stats server shutting down");
+                return
             }
         }
     }

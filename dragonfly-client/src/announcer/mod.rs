@@ -187,6 +187,7 @@ impl SchedulerAnnouncer {
                     }
 
                     info!("announce to scheduler shutting down");
+                    return
                 }
             }
         }
