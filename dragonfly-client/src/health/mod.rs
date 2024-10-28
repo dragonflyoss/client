@@ -71,6 +71,7 @@ impl Health {
             _ = shutdown.recv() => {
                 // Health server shutting down with signals.
                 info!("health server shutting down");
+                return
             }
         }
     }

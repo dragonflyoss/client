@@ -674,6 +674,7 @@ impl Metrics {
             _ = shutdown.recv() => {
                 // Metrics server shutting down with signals.
                 info!("metrics server shutting down");
+                return
             }
         }
     }
