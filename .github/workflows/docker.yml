@@ -25,6 +25,7 @@ jobs:
         run: |
           # default version is tag when pushing tag, or latest when pushing main
           # if pushing pull request, version is pr-{PR number}
+          echo ${GITHUB_REF}
           VERSION=${GITHUB_REF#refs/tags/}
           if [[ ${GITHUB_REF} == "refs/heads/main" ]]; then
             VERSION=latest
