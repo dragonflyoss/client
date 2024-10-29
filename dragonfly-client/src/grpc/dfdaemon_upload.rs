@@ -1072,18 +1072,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
         // Collect the delete task started metrics.
         collect_delete_task_started_metrics(TaskType::PersistentCache as i32);
-
-        self.persistent_cache_task
-            .delete(task_id.as_str(), host_id.as_str())
-            .await
-            .map_err(|err| {
-                // Collect the delete task failure metrics.
-                collect_delete_task_failure_metrics(TaskType::PersistentCache as i32);
-
-                error!("delete persistent cache task: {}", err);
-                Status::internal(err.to_string())
-            })?;
-
+        self.persistent_cache_task.delete(task_id.as_str()).await;
         Ok(Response::new(()))
     }
 }

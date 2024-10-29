@@ -27,10 +27,9 @@ use dragonfly_api::dfdaemon::{
 };
 use dragonfly_api::scheduler::v2::{
     announce_persistent_cache_peer_request, announce_persistent_cache_peer_response,
-    AnnouncePersistentCachePeerRequest, DeletePersistentCacheTaskRequest,
-    DownloadPersistentCachePeerFailedRequest, DownloadPersistentCachePeerFinishedRequest,
-    DownloadPersistentCachePeerStartedRequest, DownloadPieceFailedRequest,
-    DownloadPieceFinishedRequest, RegisterPersistentCachePeerRequest,
+    AnnouncePersistentCachePeerRequest, DownloadPersistentCachePeerFailedRequest,
+    DownloadPersistentCachePeerFinishedRequest, DownloadPersistentCachePeerStartedRequest,
+    DownloadPieceFailedRequest, DownloadPieceFinishedRequest, RegisterPersistentCachePeerRequest,
     ReschedulePersistentCachePeerRequest, StatPersistentCacheTaskRequest,
     UploadPersistentCacheTaskFailedRequest, UploadPersistentCacheTaskFinishedRequest,
     UploadPersistentCacheTaskStartedRequest,
@@ -1115,18 +1114,7 @@ impl PersistentCacheTask {
 
     /// delete_persistent_cache_task deletes a persistent cache task.
     #[instrument(skip_all)]
-    pub async fn delete(&self, task_id: &str, host_id: &str) -> ClientResult<()> {
-        self.scheduler_client
-            .delete_persistent_cache_task(DeletePersistentCacheTaskRequest {
-                host_id: host_id.to_string(),
-                task_id: task_id.to_string(),
-            })
-            .await
-            .map_err(|err| {
-                error!("delete persistent cache task: {}", err);
-                err
-            })?;
-
-        Ok(())
+    pub async fn delete(&self, task_id: &str) {
+        self.storage.delete_persistent_cache_task(task_id).await
     }
 }
