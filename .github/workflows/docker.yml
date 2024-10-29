@@ -2,7 +2,10 @@ name: Docker
 
 on:
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
+    paths:
+      - 'ci/Dockerfile*'
   push:
     branches:
       - main
@@ -44,7 +47,7 @@ jobs:
 
       - name: PrepareReg Names
         run: |
-           echo IMAGE_REPOSITORY=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]') >> $GITHUB_ENV
+          echo IMAGE_REPOSITORY=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]') >> $GITHUB_ENV
 
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v3
@@ -132,7 +135,7 @@ jobs:
 
       - name: PrepareReg Names
         run: |
-           echo IMAGE_REPOSITORY=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]') >> $GITHUB_ENV
+          echo IMAGE_REPOSITORY=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]') >> $GITHUB_ENV
 
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v3
