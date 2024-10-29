@@ -119,7 +119,7 @@ jobs:
             VERSION=latest
           fi
 
-          if [[ ${GITHUB_REF} =~ "refs/pull/([0-9]+)/merge" ]]; then
+          if [[ ${GITHUB_REF} =~ refs/pull/([0-9]+)/merge ]]; then
             VERSION="pr-${BASH_REMATCH[1]}"
           fi
 
