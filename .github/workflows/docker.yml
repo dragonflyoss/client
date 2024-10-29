@@ -25,13 +25,12 @@ jobs:
         run: |
           # default version is tag when pushing tag, or latest when pushing main
           # if pushing pull request, version is pr-{PR number}
-          echo ${GITHUB_REF}
           VERSION=${GITHUB_REF#refs/tags/}
           if [[ ${GITHUB_REF} == "refs/heads/main" ]]; then
             VERSION=latest
           fi
 
-          if [[ ${GITHUB_REF} =~ "refs/pull/([0-9]+)/merge" ]]; then
+          if [[ ${GITHUB_REF} =~ refs/pull/([0-9]+)/merge ]]; then
             VERSION="pr-${BASH_REMATCH[1]}"
           fi
 
