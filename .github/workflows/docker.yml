@@ -89,8 +89,7 @@ jobs:
           tags: |
             dragonflyoss/client:${{ steps.get_version.outputs.VERSION }}
             ghcr.io/${{ env.IMAGE_REPOSITORY }}:${{ steps.get_version.outputs.VERSION }}
-          # push: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
-          push: false 
+          push: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new
 
@@ -178,8 +177,7 @@ jobs:
           tags: |
             dragonflyoss/dfinit:${{ steps.get_version.outputs.VERSION }}
             ghcr.io/${{ env.IMAGE_REPOSITORY }}/dfinit:${{ steps.get_version.outputs.VERSION }}
-          # push: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
-          push: false
+          push: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new
 
