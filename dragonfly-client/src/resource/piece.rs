@@ -293,6 +293,11 @@ impl Piece {
         }
     }
 
+    /// calculate_piece_count calculates the piece count by piece_length and content_length.
+    pub fn calculate_piece_count(&self, piece_length: u64, content_length: u64) -> u32 {
+        (content_length as f64 / piece_length as f64).ceil() as u32
+    }
+
     /// upload_from_local_peer_into_async_read uploads a single piece from a local peer.
     #[instrument(skip_all, fields(piece_id))]
     pub async fn upload_from_local_peer_into_async_read(
