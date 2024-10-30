@@ -284,6 +284,12 @@ fn cos_filtered_query_params() -> Vec<String> {
     ]
 }
 
+/// containerd_filtered_query_params is the filtered query params with containerd to generate the task id.
+#[inline]
+fn containerd_filtered_query_params() -> Vec<String> {
+    vec!["ns".to_string()]
+}
+
 /// default_proxy_rule_filtered_query_params is the default filtered query params to generate the task id.
 #[inline]
 pub fn default_proxy_rule_filtered_query_params() -> Vec<String> {
@@ -305,6 +311,10 @@ pub fn default_proxy_rule_filtered_query_params() -> Vec<String> {
     }
 
     for query_param in cos_filtered_query_params() {
+        visited.insert(query_param);
+    }
+
+    for query_param in containerd_filtered_query_params() {
         visited.insert(query_param);
     }
 
