@@ -140,11 +140,15 @@ impl PersistentCacheTask {
                 task_id: task_id.to_string(),
                 peer_id: peer_id.to_string(),
                 persistent_replica_count: request.persistent_replica_count,
+                digest: digest.to_string(),
                 tag: request.tag.clone(),
                 application: request.application.clone(),
                 piece_length,
+                content_length,
+                piece_count: self
+                    .piece
+                    .calculate_piece_count(piece_length, content_length),
                 ttl: request.ttl,
-                timeout: request.timeout,
             })
             .await
             .map_err(|err| {
