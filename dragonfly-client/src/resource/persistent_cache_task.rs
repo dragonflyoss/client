@@ -208,7 +208,8 @@ impl PersistentCacheTask {
                 Ok(CommonPersistentCacheTask {
                     id: task_id.to_string(),
                     persistent_replica_count: request.persistent_replica_count,
-                    replica_count: response.replica_count,
+                    current_persistent_replica_count: response.current_persistent_replica_count,
+                    current_replica_count: response.current_replica_count,
                     digest: digest.to_string(),
                     tag: request.tag,
                     application: request.application,
