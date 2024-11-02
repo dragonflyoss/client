@@ -111,3 +111,53 @@ impl Podman {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_podman_config() {
+        use tempfile::NamedTempFile;
+
+        let podman_config_file = NamedTempFile::new().unwrap();
+        let podman = Podman::new(
+            dfinit::Podman {
+                config_path: podman_config_file.path().to_path_buf(),
+                registries: vec![dfinit::PodmanRegistry {
+                    prefix: "registry.example.com".into(),
+                    location: "registry.example.com".into(),
+                }],
+                unqualified_search_registries: vec!["registry.example.com".into()],
+            },
+            dfinit::Proxy {
+                addr: "http://127.0.0.1:5000".into(),
+            },
+        );
+        let result = podman.run().await;
+
+        assert!(result.is_ok());
+
+        // get the contents of the file
+        let contents = fs::read_to_string(podman_config_file.path().to_path_buf())
+            .await
+            .unwrap();
+        let expected_contents = r#"unqualified-search-registries = ["registry.example.com"]
+
+[[registry]]
+prefix = "registry.example.com"
+location = "registry.example.com"
+
+[[registry.mirror]]
+insecure = true
+location = "127.0.0.1:5000"
+"#;
+        // assert that the contents of the file are as expected
+        assert_eq!(contents, expected_contents);
+
+        // clean up
+        fs::remove_file(podman_config_file.path().to_path_buf())
+            .await
+            .unwrap();
+    }
+}
