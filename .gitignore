@@ -50,3 +50,6 @@ Temporary Items
 
 # Ignore unuseful files
 scripts/certs
+
+# Ignore .vscode folder
+.vscode

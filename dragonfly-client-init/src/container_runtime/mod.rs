@@ -21,6 +21,7 @@ use tracing::{info, instrument};
 pub mod containerd;
 pub mod crio;
 pub mod docker;
+pub mod podman;
 
 /// Engine represents config of the container runtime engine.
 #[derive(Debug, Clone)]
@@ -28,6 +29,7 @@ enum Engine {
     Containerd(containerd::Containerd),
     Docker(docker::Docker),
     Crio(crio::CRIO),
+    Podman(podman::Podman),
 }
 
 /// ContainerRuntime represents the container runtime manager.
@@ -55,6 +57,7 @@ impl ContainerRuntime {
             Some(Engine::Containerd(containerd)) => containerd.run().await,
             Some(Engine::Docker(docker)) => docker.run().await,
             Some(Engine::Crio(crio)) => crio.run().await,
+            Some(Engine::Podman(podman)) => podman.run().await,
         }
     }
 
@@ -71,6 +74,9 @@ impl ContainerRuntime {
                 }
                 ContainerRuntimeConfig::CRIO(crio) => {
                     Engine::Crio(crio::CRIO::new(crio.clone(), config.proxy.clone()))
+                }
+                ContainerRuntimeConfig::Podman(podman) => {
+                    Engine::Podman(podman::Podman::new(podman.clone(), config.proxy.clone()))
                 }
             };
 
