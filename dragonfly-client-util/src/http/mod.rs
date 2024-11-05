@@ -51,10 +51,8 @@ pub fn hashmap_to_reqwest_headermap(
 
 /// hashmap_to_hyper_header_map converts a hashmap to a hyper header map.
 #[instrument(skip_all)]
-pub fn hashmap_to_hyper_header_map(
-    header: &HashMap<String, String>,
-) -> Result<hyper::header::HeaderMap> {
-    let header: hyper::header::HeaderMap = (header).try_into().or_err(ErrorType::ParseError)?;
+pub fn hashmap_to_hyper_header_map(header: &HashMap<String, String>) -> Result<HeaderMap> {
+    let header: HeaderMap = (header).try_into().or_err(ErrorType::ParseError)?;
     Ok(header)
 }
 
@@ -63,10 +61,8 @@ pub fn hashmap_to_hyper_header_map(
 /// version is different. Reqwest header depends on the http crate
 /// version 0.2, but the Hyper header depends on the http crate version 0.1.
 #[instrument(skip_all)]
-pub fn hyper_headermap_to_reqwest_headermap(
-    hyper_header: &hyper::header::HeaderMap,
-) -> reqwest::header::HeaderMap {
-    let mut reqwest_header = reqwest::header::HeaderMap::new();
+pub fn hyper_headermap_to_reqwest_headermap(hyper_header: &HeaderMap) -> HeaderMap {
+    let mut reqwest_header = HeaderMap::new();
     for (hyper_header_key, hyper_header_value) in hyper_header.iter() {
         let reqwest_header_name: reqwest::header::HeaderName =
             match hyper_header_key.to_string().parse() {
@@ -113,9 +109,7 @@ pub fn header_vec_to_hashmap(raw_header: Vec<String>) -> Result<HashMap<String, 
 
 /// header_vec_to_reqwest_headermap converts a vector of header string to a reqwest headermap.
 #[instrument(skip_all)]
-pub fn header_vec_to_reqwest_headermap(
-    raw_header: Vec<String>,
-) -> Result<reqwest::header::HeaderMap> {
+pub fn header_vec_to_reqwest_headermap(raw_header: Vec<String>) -> Result<HeaderMap> {
     hashmap_to_reqwest_headermap(&header_vec_to_hashmap(raw_header)?)
 }
 
@@ -150,4 +144,110 @@ pub fn parse_range_header(range_header_value: &str, content_length: u64) -> Resu
     let start = valid_range.start().to_owned();
     let length = valid_range.end() - start + 1;
     Ok(Range { start, length })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::header::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn test_reqwest_headermap_to_hashmap() {
+        let mut header = HeaderMap::new();
+        header.insert("Content-Type", HeaderValue::from_static("application/json"));
+        header.insert("Authorization", HeaderValue::from_static("Bearer token"));
+
+        let hashmap = reqwest_headermap_to_hashmap(&header);
+
+        assert_eq!(hashmap.get("content-type").unwrap(), "application/json");
+        assert_eq!(hashmap.get("authorization").unwrap(), "Bearer token");
+        assert_eq!(hashmap.get("foo"), None);
+    }
+
+    #[test]
+    fn test_hashmap_to_reqwest_headermap() {
+        let mut hashmap = HashMap::new();
+        hashmap.insert("Content-Type".to_string(), "application/json".to_string());
+        hashmap.insert("Authorization".to_string(), "Bearer token".to_string());
+
+        let header = hashmap_to_reqwest_headermap(&hashmap).unwrap();
+
+        assert_eq!(header.get("Content-Type").unwrap(), "application/json");
+        assert_eq!(header.get("Authorization").unwrap(), "Bearer token");
+    }
+
+    #[test]
+    fn test_hashmap_to_hyper_header_map() {
+        let mut hashmap = HashMap::new();
+        hashmap.insert("Content-Type".to_string(), "application/json".to_string());
+        hashmap.insert("Authorization".to_string(), "Bearer token".to_string());
+
+        let header = hashmap_to_hyper_header_map(&hashmap).unwrap();
+
+        assert_eq!(header.get("Content-Type").unwrap(), "application/json");
+        assert_eq!(header.get("Authorization").unwrap(), "Bearer token");
+    }
+
+    #[test]
+    fn test_hyper_headermap_to_reqwest_headermap() {
+        let mut hyper_header = HeaderMap::new();
+        hyper_header.insert("Content-Type", HeaderValue::from_static("application/json"));
+        hyper_header.insert("Authorization", HeaderValue::from_static("Bearer token"));
+
+        let reqwest_header = hyper_headermap_to_reqwest_headermap(&hyper_header);
+
+        assert_eq!(
+            reqwest_header.get("Content-Type").unwrap(),
+            "application/json"
+        );
+        assert_eq!(reqwest_header.get("Authorization").unwrap(), "Bearer token");
+    }
+
+    #[test]
+    fn test_header_vec_to_hashmap() {
+        let raw_header = vec![
+            "Content-Type: application/json".to_string(),
+            "Authorization: Bearer token".to_string(),
+        ];
+
+        let hashmap = header_vec_to_hashmap(raw_header).unwrap();
+
+        assert_eq!(hashmap.get("Content-Type").unwrap(), "application/json");
+        assert_eq!(hashmap.get("Authorization").unwrap(), "Bearer token");
+    }
+
+    #[test]
+    fn test_header_vec_to_reqwest_headermap() {
+        let raw_header = vec![
+            "Content-Type: application/json".to_string(),
+            "Authorization: Bearer token".to_string(),
+        ];
+
+        let header = header_vec_to_reqwest_headermap(raw_header).unwrap();
+
+        assert_eq!(header.get("Content-Type").unwrap(), "application/json");
+        assert_eq!(header.get("Authorization").unwrap(), "Bearer token");
+    }
+
+    #[test]
+    fn test_get_range() {
+        let mut header = HeaderMap::new();
+        header.insert(
+            reqwest::header::RANGE,
+            HeaderValue::from_static("bytes=0-100"),
+        );
+
+        let range = get_range(&header, 200).unwrap().unwrap();
+
+        assert_eq!(range.start, 0);
+        assert_eq!(range.length, 101);
+    }
+
+    #[test]
+    fn test_parse_range_header() {
+        let range = parse_range_header("bytes=0-100", 200).unwrap();
+
+        assert_eq!(range.start, 0);
+        assert_eq!(range.length, 101);
+    }
 }
