@@ -79,3 +79,100 @@ impl Credentials {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http::header::HeaderValue;
+
+    #[test]
+    fn test_verify_no_auth_header() {
+        let credentials = Credentials::new("user", "pass");
+        let header = HeaderMap::new();
+
+        let result = credentials.verify(&header);
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::Unauthorized));
+    }
+
+    #[test]
+    fn test_verify_invalid_auth_type() {
+        let credentials = Credentials::new("user", "pass");
+        let mut header = HeaderMap::new();
+        header.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer some_token"),
+        );
+
+        let result = credentials.verify(&header);
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::Unauthorized));
+    }
+
+    #[test]
+    fn test_verify_invalid_base64() {
+        let credentials = Credentials::new("user", "pass");
+        let mut header = HeaderMap::new();
+        header.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Basic invalid_base64"),
+        );
+
+        let result = credentials.verify(&header);
+
+        assert!(result.is_err());
+        assert_eq!(
+            format!("{}", result.err().unwrap()),
+            format!(
+                "{:?} cause: Invalid symbol 95, offset 7.",
+                ErrorType::ParseError
+            ),
+        );
+    }
+
+    #[test]
+    fn test_verify_invalid_format() {
+        let credentials = Credentials::new("user", "pass");
+        let mut header = HeaderMap::new();
+        header.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Basic dXNlcg=="), // "user" in Base64
+        );
+
+        let result = credentials.verify(&header);
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::Unauthorized));
+    }
+
+    #[test]
+    fn test_verify_incorrect_credentials() {
+        let credentials = Credentials::new("user", "pass");
+        let mut header = HeaderMap::new();
+        header.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Basic dXNlcjpwYXNzX2Vycm9y"), // "user:pass_error" in Base64
+        );
+
+        let result = credentials.verify(&header);
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::Unauthorized));
+    }
+
+    #[test]
+    fn test_verify_correct_credentials() {
+        let credentials = Credentials::new("user", "pass");
+        let mut header = HeaderMap::new();
+        header.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Basic dXNlcjpwYXNz"), // "user:pass" in Base64
+        );
+
+        let result = credentials.verify(&header);
+
+        assert!(result.is_ok());
+    }
+}
