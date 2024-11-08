@@ -81,7 +81,7 @@ impl Task {
         self.finished_at.is_none()
     }
 
-    /// is_downloading returns whether the task is downloading.
+    /// is_uploading returns whether the task is uploading.
     pub fn is_uploading(&self) -> bool {
         self.uploading_count > 0
     }
@@ -184,7 +184,7 @@ impl PersistentCacheTask {
         self.finished_at.is_none()
     }
 
-    /// is_downloading returns whether the persistent cache task is downloading.
+    /// is_uploading returns whether the persistent cache task is uploading.
     pub fn is_uploading(&self) -> bool {
         self.uploading_count > 0
     }
@@ -947,47 +947,30 @@ mod tests {
         assert!(task.response_header.is_empty());
         assert_eq!(task.uploading_count, 0);
         assert_eq!(task.uploaded_count, 0);
+        assert!(!task.is_finished());
 
         // Test download_task_finished.
         metadata.download_task_finished(task_id).unwrap();
         let task = metadata.get_task(task_id).unwrap().unwrap();
-        assert!(
-            task.is_finished(),
-            "task should be finished after download_task_finished"
-        );
+        assert!(task.is_finished());
 
         // Test upload_task_started.
         metadata.upload_task_started(task_id).unwrap();
         let task = metadata.get_task(task_id).unwrap().unwrap();
-        assert_eq!(
-            task.uploading_count, 1,
-            "uploading_count should be increased by 1 after upload_task_started"
-        );
+        assert_eq!(task.uploading_count, 1,);
 
         // Test upload_task_finished.
         metadata.upload_task_finished(task_id).unwrap();
         let task = metadata.get_task(task_id).unwrap().unwrap();
-        assert_eq!(
-            task.uploading_count, 0,
-            "uploading_count should be decreased by 1 after upload_task_finished"
-        );
-        assert_eq!(
-            task.uploaded_count, 1,
-            "uploaded_count should be increased by 1 after upload_task_finished"
-        );
+        assert_eq!(task.uploading_count, 0,);
+        assert_eq!(task.uploaded_count, 1,);
 
         // Test upload_task_failed.
         let task = metadata.upload_task_started(task_id).unwrap();
         assert_eq!(task.uploading_count, 1);
         let task = metadata.upload_task_failed(task_id).unwrap();
-        assert_eq!(
-            task.uploading_count, 0,
-            "uploading_count should be decreased by 1 after upload_task_failed"
-        );
-        assert_eq!(
-            task.uploaded_count, 1,
-            "uploaded_count should not be changed after upload_task_failed"
-        );
+        assert_eq!(task.uploading_count, 0,);
+        assert_eq!(task.uploaded_count, 1,);
 
         // Test get_tasks.
         let task_id = "a535b115f18d96870f0422ac891f91dd162f2f391e4778fb84279701fcd02dd1";
@@ -995,12 +978,12 @@ mod tests {
             .download_task_started(task_id, Some(1024), None, None)
             .unwrap();
         let tasks = metadata.get_tasks().unwrap();
-        assert_eq!(tasks.len(), 2, "should get 2 tasks in total");
+        assert_eq!(tasks.len(), 2);
 
         // Test delete_task.
         metadata.delete_task(task_id).unwrap();
         let task = metadata.get_task(task_id).unwrap();
-        assert!(task.is_none(), "task should be deleted after delete_task");
+        assert!(task.is_none());
     }
 
     #[test]
@@ -1013,24 +996,15 @@ mod tests {
         // Test download_piece_started.
         metadata.download_piece_started(task_id, 1).unwrap();
         let piece = metadata.get_piece(task_id, 1).unwrap().unwrap();
-        assert_eq!(
-            piece.number, 1,
-            "should get newly created piece with number specified"
-        );
+        assert_eq!(piece.number, 1,);
 
         // Test download_piece_finished.
         metadata
             .download_piece_finished(task_id, 1, 0, 1024, "digest1", None)
             .unwrap();
         let piece = metadata.get_piece(task_id, 1).unwrap().unwrap();
-        assert_eq!(
-            piece.length, 1024,
-            "piece should be updated after download_piece_finished"
-        );
-        assert_eq!(
-            piece.digest, "digest1",
-            "piece should be updated after download_piece_finished"
-        );
+        assert_eq!(piece.length, 1024,);
+        assert_eq!(piece.digest, "digest1",);
 
         // Test get_pieces.
         metadata.download_piece_started(task_id, 2).unwrap();
@@ -1043,43 +1017,28 @@ mod tests {
         metadata.download_piece_started(task_id, 3).unwrap();
         metadata.download_piece_failed(task_id, 2).unwrap();
         let piece = metadata.get_piece(task_id, 2).unwrap();
-        assert!(
-            piece.is_none(),
-            "piece should be deleted after download_piece_failed"
-        );
+        assert!(piece.is_none());
 
         // Test upload_piece_started.
         metadata.upload_piece_started(task_id, 3).unwrap();
         let piece = metadata.get_piece(task_id, 3).unwrap().unwrap();
-        assert_eq!(
-            piece.uploading_count, 1,
-            "piece should be updated after upload_piece_started"
-        );
+        assert_eq!(piece.uploading_count, 1,);
 
         // Test upload_piece_finished.
         metadata.upload_piece_finished(task_id, 3).unwrap();
         let piece = metadata.get_piece(task_id, 3).unwrap().unwrap();
-        assert_eq!(
-            piece.uploading_count, 0,
-            "piece should be updated after upload_piece_finished"
-        );
-        assert_eq!(
-            piece.uploaded_count, 1,
-            "piece should be updated after upload_piece_finished"
-        );
+        assert_eq!(piece.uploading_count, 0,);
+        assert_eq!(piece.uploaded_count, 1,);
 
         // Test upload_piece_failed.
         metadata.upload_piece_started(task_id, 3).unwrap();
         metadata.upload_piece_failed(task_id, 3).unwrap();
         let piece = metadata.get_piece(task_id, 3).unwrap().unwrap();
-        assert_eq!(
-            piece.uploading_count, 0,
-            "piece should be updated after upload_piece_failed"
-        );
+        assert_eq!(piece.uploading_count, 0,);
 
         // Test delete_pieces.
         metadata.delete_pieces(task_id).unwrap();
         let pieces = metadata.get_pieces(task_id).unwrap();
-        assert!(pieces.is_empty(), "should get 0 pieces after delete_pieces");
+        assert!(pieces.is_empty());
     }
 }
