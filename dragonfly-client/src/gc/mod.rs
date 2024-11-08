@@ -16,6 +16,7 @@
 
 use crate::grpc::scheduler::SchedulerClient;
 use crate::shutdown;
+use chrono::Utc;
 use dragonfly_api::scheduler::v2::{DeletePersistentCacheTaskRequest, DeleteTaskRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
@@ -24,8 +25,13 @@ use dragonfly_client_storage::{
     metadata, Storage,
 };
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{error, info, instrument};
+
+// DOWNLOAD_TASK_TIMEOUT is the timeout of downloading the task. If the task download timeout, the
+// task will be garbage collected by disk usage, default 2 hours.
+pub const DOWNLOAD_TASK_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 
 /// GC is the garbage collector of dfdaemon.
 pub struct GC {
@@ -185,6 +191,17 @@ impl GC {
                 }
             };
 
+            //  If the task is started and not finished, and the task download is not timeout,
+            //  skip it.
+            if task.is_started()
+                && !task.is_finished()
+                && !task.is_failed()
+                && (task.created_at + DOWNLOAD_TASK_TIMEOUT > Utc::now().naive_utc())
+            {
+                info!("task {} is started and not finished, skip it", task.id);
+                continue;
+            }
+
             // Evict the task.
             self.storage.delete_task(&task.id).await;
 
@@ -290,12 +307,25 @@ impl GC {
                 continue;
             }
 
-            let task_space = task.content_length();
+            //  If the task is started and not finished, and the task download is not timeout,
+            //  skip it.
+            if task.is_started()
+                && !task.is_finished()
+                && !task.is_failed()
+                && (task.created_at + DOWNLOAD_TASK_TIMEOUT > Utc::now().naive_utc())
+            {
+                info!(
+                    "persistent cache task {} is started and not finished, skip it",
+                    task.id
+                );
+                continue;
+            }
 
             // Evict the task.
             self.storage.delete_task(&task.id).await;
 
             // Update the evicted space.
+            let task_space = task.content_length();
             evicted_space += task_space;
             info!(
                 "evict persistent cache task {} size {}",
