@@ -108,13 +108,10 @@ impl Task {
 
     /// is_empty returns whether the task is empty.
     pub fn is_empty(&self) -> bool {
-        if let Some(content_length) = self.content_length() {
-            if content_length == 0 {
-                return true;
-            }
+        match self.content_length() {
+            Some(content_length) => content_length == 0,
+            None => false,
         }
-
-        false
     }
 
     /// piece_length returns the piece length of the task.
@@ -209,11 +206,7 @@ impl PersistentCacheTask {
 
     /// is_empty returns whether the persistent cache task is empty.
     pub fn is_empty(&self) -> bool {
-        if self.content_length == 0 {
-            return true;
-        }
-
-        false
+        self.content_length == 0
     }
 
     /// is_persistent returns whether the persistent cache task is persistent.
