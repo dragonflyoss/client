@@ -275,14 +275,14 @@ impl Storage {
     #[instrument(skip_all)]
     pub async fn download_piece_started(
         &self,
-        task_id: &str,
+        piece_id: &str,
         number: u32,
     ) -> Result<metadata::Piece> {
         // Wait for the piece to be finished.
-        match self.wait_for_piece_finished(task_id, number).await {
+        match self.wait_for_piece_finished(piece_id).await {
             Ok(piece) => Ok(piece),
             // If piece is not found or wait timeout, create piece metadata.
-            Err(_) => self.metadata.download_piece_started(task_id, number),
+            Err(_) => self.metadata.download_piece_started(piece_id, number),
         }
     }
 
@@ -290,8 +290,8 @@ impl Storage {
     #[instrument(skip_all)]
     pub async fn download_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
+        piece_id: &str,
         task_id: &str,
-        number: u32,
         offset: u64,
         length: u64,
         reader: &mut R,
@@ -300,8 +300,7 @@ impl Storage {
         let digest = Digest::new(Algorithm::Crc32, response.hash);
 
         self.metadata.download_piece_finished(
-            task_id,
-            number,
+            piece_id,
             offset,
             length,
             digest.to_string().as_str(),
@@ -313,8 +312,8 @@ impl Storage {
     #[instrument(skip_all)]
     pub async fn download_piece_from_remote_peer_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
+        piece_id: &str,
         task_id: &str,
-        number: u32,
         offset: u64,
         expected_digest: &str,
         parent_id: &str,
@@ -333,8 +332,7 @@ impl Storage {
         }
 
         self.metadata.download_piece_finished(
-            task_id,
-            number,
+            piece_id,
             offset,
             length,
             digest.to_string().as_str(),
@@ -344,8 +342,8 @@ impl Storage {
 
     /// download_piece_failed updates the metadata of the piece when the piece downloads failed.
     #[instrument(skip_all)]
-    pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
-        self.metadata.download_piece_failed(task_id, number)
+    pub fn download_piece_failed(&self, piece_id: &str) -> Result<()> {
+        self.metadata.download_piece_failed(piece_id)
     }
 
     /// upload_piece updates the metadata of the piece and
@@ -353,25 +351,25 @@ impl Storage {
     #[instrument(skip_all)]
     pub async fn upload_piece(
         &self,
+        piece_id: &str,
         task_id: &str,
-        number: u32,
         range: Option<Range>,
     ) -> Result<impl AsyncRead> {
         // Wait for the piece to be finished.
-        self.wait_for_piece_finished(task_id, number).await?;
+        self.wait_for_piece_finished(piece_id).await?;
 
         // Start uploading the task.
         self.metadata.upload_task_started(task_id)?;
 
         // Start uploading the piece.
-        if let Err(err) = self.metadata.upload_piece_started(task_id, number) {
+        if let Err(err) = self.metadata.upload_piece_started(piece_id) {
             // Failed uploading the task.
             self.metadata.upload_task_failed(task_id)?;
             return Err(err);
         }
 
         // Get the piece metadata and return the content of the piece.
-        match self.metadata.get_piece(task_id, number) {
+        match self.metadata.get_piece(piece_id) {
             Ok(Some(piece)) => {
                 match self
                     .content
@@ -383,7 +381,7 @@ impl Storage {
                         self.metadata.upload_task_finished(task_id)?;
 
                         // Finish uploading the piece.
-                        self.metadata.upload_piece_finished(task_id, number)?;
+                        self.metadata.upload_piece_finished(piece_id)?;
                         Ok(reader)
                     }
                     Err(err) => {
@@ -391,7 +389,7 @@ impl Storage {
                         self.metadata.upload_task_failed(task_id)?;
 
                         // Failed uploading the piece.
-                        self.metadata.upload_piece_failed(task_id, number)?;
+                        self.metadata.upload_piece_failed(piece_id)?;
                         Err(err)
                     }
                 }
@@ -401,15 +399,15 @@ impl Storage {
                 self.metadata.upload_task_failed(task_id)?;
 
                 // Failed uploading the piece.
-                self.metadata.upload_piece_failed(task_id, number)?;
-                Err(Error::PieceNotFound(self.piece_id(task_id, number)))
+                self.metadata.upload_piece_failed(piece_id)?;
+                Err(Error::PieceNotFound(piece_id.to_string()))
             }
             Err(err) => {
                 // Failed uploading the task.
                 self.metadata.upload_task_failed(task_id)?;
 
                 // Failed uploading the piece.
-                self.metadata.upload_piece_failed(task_id, number)?;
+                self.metadata.upload_piece_failed(piece_id)?;
                 Err(err)
             }
         }
@@ -417,8 +415,8 @@ impl Storage {
 
     /// get_piece returns the piece metadata.
     #[instrument(skip_all)]
-    pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<metadata::Piece>> {
-        self.metadata.get_piece(task_id, number)
+    pub fn get_piece(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
+        self.metadata.get_piece(piece_id)
     }
 
     /// get_pieces returns the piece metadatas.
@@ -434,7 +432,7 @@ impl Storage {
 
     /// wait_for_piece_finished waits for the piece to be finished.
     #[instrument(skip_all)]
-    async fn wait_for_piece_finished(&self, task_id: &str, number: u32) -> Result<metadata::Piece> {
+    async fn wait_for_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
         // Initialize the timeout of piece.
         let piece_timeout = tokio::time::sleep(self.config.download.piece_timeout);
         tokio::pin!(piece_timeout);
@@ -446,8 +444,8 @@ impl Storage {
             tokio::select! {
                 _ = interval.tick() => {
                     let piece = self
-                        .get_piece(task_id, number)?
-                        .ok_or_else(|| Error::PieceNotFound(self.piece_id(task_id, number)))?;
+                        .get_piece(piece_id)?
+                        .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
 
                     // If the piece is finished, return.
                     if piece.is_finished() {
@@ -461,8 +459,8 @@ impl Storage {
                     wait_for_piece_count += 1;
                 }
                 _ = &mut piece_timeout => {
-                    self.metadata.wait_for_piece_finished_failed(task_id, number).unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
-                    return Err(Error::WaitForPieceFinishedTimeout(self.piece_id(task_id, number)));
+                    self.metadata.wait_for_piece_finished_failed(piece_id).unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
+                    return Err(Error::WaitForPieceFinishedTimeout(piece_id.to_string()));
                 }
             }
         }
