@@ -54,11 +54,11 @@ impl RocksdbStorageEngine {
     // DEFAULT_MAX_BACKGROUND_JOBS is the default max background jobs for rocksdb, default is 2.
     const DEFAULT_MAX_BACKGROUND_JOBS: i32 = 2;
 
-    /// DEFAULT_BLOCK_SIZE is the default block size for rocksdb, default is 128KB.
-    const DEFAULT_BLOCK_SIZE: usize = 128 * 1024;
+    /// DEFAULT_BLOCK_SIZE is the default block size for rocksdb, default is 64KB.
+    const DEFAULT_BLOCK_SIZE: usize = 64 * 1024;
 
-    /// DEFAULT_CACHE_SIZE is the default cache size for rocksdb, default is 512MB.
-    const DEFAULT_CACHE_SIZE: usize = 512 * 1024 * 1024;
+    /// DEFAULT_CACHE_SIZE is the default cache size for rocksdb, default is 1GB.
+    const DEFAULT_CACHE_SIZE: usize = 1024 * 1024 * 1024;
 
     /// DEFAULT_LOG_MAX_SIZE is the default max log size for rocksdb, default is 64MB.
     const DEFAULT_LOG_MAX_SIZE: usize = 64 * 1024 * 1024;
@@ -74,16 +74,21 @@ impl RocksdbStorageEngine {
         let mut options = rocksdb::Options::default();
         options.create_if_missing(true);
         options.create_missing_column_families(true);
-        options.increase_parallelism(num_cpus::get() as i32);
+
+        // Optimize compression.
         options.set_compression_type(rocksdb::DBCompressionType::Lz4);
+        options.set_bottommost_compression_type(rocksdb::DBCompressionType::Zstd);
+
+        // Improved parallelism.
+        options.increase_parallelism(num_cpus::get() as i32);
         options.set_max_background_jobs(std::cmp::max(
-            num_cpus::get() as i32 / 2,
+            num_cpus::get() as i32,
             Self::DEFAULT_MAX_BACKGROUND_JOBS,
         ));
 
         // Set rocksdb log options.
         options.set_db_log_dir(log_dir);
-        options.set_log_level(rocksdb::LogLevel::Debug);
+        options.set_log_level(rocksdb::LogLevel::Info);
         options.set_max_log_file_size(Self::DEFAULT_LOG_MAX_SIZE);
         options.set_keep_log_file_num(Self::DEFAULT_LOG_MAX_FILES);
 
@@ -91,12 +96,14 @@ impl RocksdbStorageEngine {
         let mut block_options = rocksdb::BlockBasedOptions::default();
         block_options.set_block_cache(&rocksdb::Cache::new_lru_cache(Self::DEFAULT_CACHE_SIZE));
         block_options.set_block_size(Self::DEFAULT_BLOCK_SIZE);
+        block_options.set_cache_index_and_filter_blocks(true);
+        block_options.set_pin_l0_filter_and_index_blocks_in_cache(true);
         options.set_block_based_table_factory(&block_options);
 
         // Initialize column family options.
         let mut cf_options = rocksdb::Options::default();
         cf_options.set_prefix_extractor(rocksdb::SliceTransform::create_fixed_prefix(64));
-        cf_options.set_memtable_prefix_bloom_ratio(0.2);
+        cf_options.set_memtable_prefix_bloom_ratio(0.25);
         cf_options.optimize_level_style_compaction(Self::DEFAULT_MEMTABLE_MEMORY_BUDGET);
 
         // Initialize column families.

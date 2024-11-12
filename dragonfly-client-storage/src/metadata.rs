@@ -699,7 +699,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
     /// download_piece_started updates the metadata of the piece when the piece downloads started.
     #[instrument(skip_all)]
-    pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<Piece> {
+    pub fn download_piece_started(&self, piece_id: &str, number: u32) -> Result<Piece> {
         // Construct the piece metadata.
         let piece = Piece {
             number,
@@ -709,8 +709,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         };
 
         // Put the piece metadata.
-        self.db
-            .put(self.piece_id(task_id, number).as_bytes(), &piece)?;
+        self.db.put(piece_id.as_bytes(), &piece)?;
         Ok(piece)
     }
 
@@ -718,16 +717,13 @@ impl<E: StorageEngineOwned> Metadata<E> {
     #[instrument(skip_all)]
     pub fn download_piece_finished(
         &self,
-        task_id: &str,
-        number: u32,
+        piece_id: &str,
         offset: u64,
         length: u64,
         digest: &str,
         parent_id: Option<String>,
     ) -> Result<Piece> {
-        // Get the piece id.
-        let id = self.piece_id(task_id, number);
-        let piece = match self.db.get::<Piece>(id.as_bytes())? {
+        let piece = match self.db.get::<Piece>(piece_id.as_bytes())? {
             Some(mut piece) => {
                 piece.offset = offset;
                 piece.length = length;
@@ -737,84 +733,78 @@ impl<E: StorageEngineOwned> Metadata<E> {
                 piece.finished_at = Some(Utc::now().naive_utc());
                 piece
             }
-            None => return Err(Error::PieceNotFound(id)),
+            None => return Err(Error::PieceNotFound(piece_id.to_string())),
         };
 
-        self.db.put(id.as_bytes(), &piece)?;
+        self.db.put(piece_id.as_bytes(), &piece)?;
         Ok(piece)
     }
 
     /// download_piece_failed updates the metadata of the piece when the piece downloads failed.
     #[instrument(skip_all)]
-    pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
-        self.delete_piece(task_id, number)
+    pub fn download_piece_failed(&self, piece_id: &str) -> Result<()> {
+        self.delete_piece(piece_id)
     }
 
     /// wait_for_piece_finished_failed waits for the piece to be finished or failed.
     #[instrument(skip_all)]
-    pub fn wait_for_piece_finished_failed(&self, task_id: &str, number: u32) -> Result<()> {
-        self.delete_piece(task_id, number)
+    pub fn wait_for_piece_finished_failed(&self, piece_id: &str) -> Result<()> {
+        self.delete_piece(piece_id)
     }
 
     /// upload_piece_started updates the metadata of the piece when piece uploads started.
     #[instrument(skip_all)]
-    pub fn upload_piece_started(&self, task_id: &str, number: u32) -> Result<Piece> {
-        // Get the piece id.
-        let id = self.piece_id(task_id, number);
-        let piece = match self.db.get::<Piece>(id.as_bytes())? {
+    pub fn upload_piece_started(&self, piece_id: &str) -> Result<Piece> {
+        let piece = match self.db.get::<Piece>(piece_id.as_bytes())? {
             Some(mut piece) => {
                 piece.uploading_count += 1;
                 piece.updated_at = Utc::now().naive_utc();
                 piece
             }
-            None => return Err(Error::PieceNotFound(id)),
+            None => return Err(Error::PieceNotFound(piece_id.to_string())),
         };
 
-        self.db.put(id.as_bytes(), &piece)?;
+        self.db.put(piece_id.as_bytes(), &piece)?;
         Ok(piece)
     }
 
     /// upload_piece_finished updates the metadata of the piece when piece uploads finished.
     #[instrument(skip_all)]
-    pub fn upload_piece_finished(&self, task_id: &str, number: u32) -> Result<Piece> {
-        // Get the piece id.
-        let id = self.piece_id(task_id, number);
-        let piece = match self.db.get::<Piece>(id.as_bytes())? {
+    pub fn upload_piece_finished(&self, piece_id: &str) -> Result<Piece> {
+        let piece = match self.db.get::<Piece>(piece_id.as_bytes())? {
             Some(mut piece) => {
                 piece.uploading_count -= 1;
                 piece.uploaded_count += 1;
                 piece.updated_at = Utc::now().naive_utc();
                 piece
             }
-            None => return Err(Error::PieceNotFound(id)),
+            None => return Err(Error::PieceNotFound(piece_id.to_string())),
         };
 
-        self.db.put(id.as_bytes(), &piece)?;
+        self.db.put(piece_id.as_bytes(), &piece)?;
         Ok(piece)
     }
 
     /// upload_piece_failed updates the metadata of the piece when the piece uploads failed.
     #[instrument(skip_all)]
-    pub fn upload_piece_failed(&self, task_id: &str, number: u32) -> Result<Piece> {
-        // Get the piece id.
-        let id = self.piece_id(task_id, number);
-        let piece = match self.db.get::<Piece>(id.as_bytes())? {
+    pub fn upload_piece_failed(&self, piece_id: &str) -> Result<Piece> {
+        let piece = match self.db.get::<Piece>(piece_id.as_bytes())? {
             Some(mut piece) => {
                 piece.uploading_count -= 1;
                 piece.updated_at = Utc::now().naive_utc();
                 piece
             }
-            None => return Err(Error::PieceNotFound(id)),
+            None => return Err(Error::PieceNotFound(piece_id.to_string())),
         };
 
-        self.db.put(id.as_bytes(), &piece)?;
+        self.db.put(piece_id.as_bytes(), &piece)?;
         Ok(piece)
     }
 
     /// get_piece gets the piece metadata.
     #[instrument(skip_all)]
-    pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<Piece>> {
-        self.db.get(self.piece_id(task_id, number).as_bytes())
+    pub fn get_piece(&self, piece_id: &str) -> Result<Option<Piece>> {
+        self.db.get(piece_id.as_bytes())
     }
 
     /// get_pieces gets the piece metadatas.
@@ -836,10 +826,9 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
     /// delete_piece deletes the piece metadata.
     #[instrument(skip_all)]
-    pub fn delete_piece(&self, task_id: &str, number: u32) -> Result<()> {
-        info!("delete piece metadata {}", self.piece_id(task_id, number));
-        self.db
-            .delete::<Piece>(self.piece_id(task_id, number).as_bytes())
+    pub fn delete_piece(&self, piece_id: &str) -> Result<()> {
+        info!("delete piece metadata {}", piece_id);
+        self.db.delete::<Piece>(piece_id.as_bytes())
     }
 
     /// delete_pieces deletes the piece metadatas.
@@ -950,20 +939,20 @@ mod tests {
         // Test upload_task_started.
         metadata.upload_task_started(task_id).unwrap();
         let task = metadata.get_task(task_id).unwrap().unwrap();
-        assert_eq!(task.uploading_count, 1,);
+        assert_eq!(task.uploading_count, 1);
 
         // Test upload_task_finished.
         metadata.upload_task_finished(task_id).unwrap();
         let task = metadata.get_task(task_id).unwrap().unwrap();
-        assert_eq!(task.uploading_count, 0,);
-        assert_eq!(task.uploaded_count, 1,);
+        assert_eq!(task.uploading_count, 0);
+        assert_eq!(task.uploaded_count, 1);
 
         // Test upload_task_failed.
         let task = metadata.upload_task_started(task_id).unwrap();
         assert_eq!(task.uploading_count, 1);
         let task = metadata.upload_task_failed(task_id).unwrap();
-        assert_eq!(task.uploading_count, 0,);
-        assert_eq!(task.uploaded_count, 1,);
+        assert_eq!(task.uploading_count, 0);
+        assert_eq!(task.uploaded_count, 1);
 
         // Test get_tasks.
         let task_id = "a535b115f18d96870f0422ac891f91dd162f2f391e4778fb84279701fcd02dd1";
@@ -985,49 +974,64 @@ mod tests {
         let log_dir = dir.path().join("log");
         let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
         let task_id = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
+        let piece_id = metadata.piece_id(task_id, 1);
 
         // Test download_piece_started.
-        metadata.download_piece_started(task_id, 1).unwrap();
-        let piece = metadata.get_piece(task_id, 1).unwrap().unwrap();
-        assert_eq!(piece.number, 1,);
+        metadata
+            .download_piece_started(piece_id.as_str(), 1)
+            .unwrap();
+        let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
+        assert_eq!(piece.number, 1);
 
         // Test download_piece_finished.
         metadata
-            .download_piece_finished(task_id, 1, 0, 1024, "digest1", None)
+            .download_piece_finished(piece_id.as_str(), 0, 1024, "digest1", None)
             .unwrap();
-        let piece = metadata.get_piece(task_id, 1).unwrap().unwrap();
-        assert_eq!(piece.length, 1024,);
-        assert_eq!(piece.digest, "digest1",);
+        let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
+        assert_eq!(piece.length, 1024);
+        assert_eq!(piece.digest, "digest1");
 
         // Test get_pieces.
-        metadata.download_piece_started(task_id, 2).unwrap();
-        metadata.download_piece_started(task_id, 3).unwrap();
+        metadata
+            .download_piece_started(metadata.piece_id(task_id, 2).as_str(), 2)
+            .unwrap();
+        metadata
+            .download_piece_started(metadata.piece_id(task_id, 3).as_str(), 3)
+            .unwrap();
         let pieces = metadata.get_pieces(task_id).unwrap();
-        assert_eq!(pieces.len(), 3, "should get 3 pieces in total");
+        assert_eq!(pieces.len(), 3);
 
         // Test download_piece_failed.
-        metadata.download_piece_started(task_id, 2).unwrap();
-        metadata.download_piece_started(task_id, 3).unwrap();
-        metadata.download_piece_failed(task_id, 2).unwrap();
-        let piece = metadata.get_piece(task_id, 2).unwrap();
+        let piece_id = metadata.piece_id(task_id, 2);
+        metadata
+            .download_piece_started(piece_id.as_str(), 2)
+            .unwrap();
+        metadata
+            .download_piece_started(metadata.piece_id(task_id, 3).as_str(), 3)
+            .unwrap();
+        metadata.download_piece_failed(piece_id.as_str()).unwrap();
+        let piece = metadata.get_piece(piece_id.as_str()).unwrap();
         assert!(piece.is_none());
 
         // Test upload_piece_started.
-        metadata.upload_piece_started(task_id, 3).unwrap();
-        let piece = metadata.get_piece(task_id, 3).unwrap().unwrap();
-        assert_eq!(piece.uploading_count, 1,);
+        let piece_id = metadata.piece_id(task_id, 3);
+        metadata.upload_piece_started(piece_id.as_str()).unwrap();
+        let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
+        assert_eq!(piece.uploading_count, 1);
 
         // Test upload_piece_finished.
-        metadata.upload_piece_finished(task_id, 3).unwrap();
-        let piece = metadata.get_piece(task_id, 3).unwrap().unwrap();
-        assert_eq!(piece.uploading_count, 0,);
-        assert_eq!(piece.uploaded_count, 1,);
+        let piece_id = metadata.piece_id(task_id, 3);
+        metadata.upload_piece_finished(piece_id.as_str()).unwrap();
+        let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
+        assert_eq!(piece.uploading_count, 0);
+        assert_eq!(piece.uploaded_count, 1);
 
         // Test upload_piece_failed.
-        metadata.upload_piece_started(task_id, 3).unwrap();
-        metadata.upload_piece_failed(task_id, 3).unwrap();
-        let piece = metadata.get_piece(task_id, 3).unwrap().unwrap();
-        assert_eq!(piece.uploading_count, 0,);
+        let piece_id = metadata.piece_id(task_id, 3);
+        metadata.upload_piece_started(piece_id.as_str()).unwrap();
+        metadata.upload_piece_failed(piece_id.as_str()).unwrap();
+        let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
+        assert_eq!(piece.uploading_count, 0);
 
         // Test delete_pieces.
         metadata.delete_pieces(task_id).unwrap();

@@ -110,10 +110,16 @@ impl Piece {
         }
     }
 
+    /// id generates a new piece id.
+    #[instrument(skip_all)]
+    pub fn id(&self, task_id: &str, number: u32) -> String {
+        self.storage.piece_id(task_id, number)
+    }
+
     /// get gets a piece from the local storage.
     #[instrument(skip_all)]
-    pub fn get(&self, task_id: &str, number: u32) -> Result<Option<metadata::Piece>> {
-        self.storage.get_piece(task_id, number)
+    pub fn get(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
+        self.storage.get_piece(piece_id)
     }
 
     /// calculate_interested calculates the interested pieces by content_length and range.
@@ -302,14 +308,14 @@ impl Piece {
     #[instrument(skip_all, fields(piece_id))]
     pub async fn upload_from_local_peer_into_async_read(
         &self,
+        piece_id: &str,
         task_id: &str,
-        number: u32,
         length: u64,
         range: Option<Range>,
         disable_rate_limit: bool,
     ) -> Result<impl AsyncRead> {
         // Span record the piece_id.
-        Span::current().record("piece_id", self.storage.piece_id(task_id, number));
+        Span::current().record("piece_id", piece_id);
 
         // Acquire the upload rate limiter.
         if !disable_rate_limit {
@@ -318,7 +324,7 @@ impl Piece {
 
         // Upload the piece content.
         self.storage
-            .upload_piece(task_id, number, range)
+            .upload_piece(piece_id, task_id, range)
             .await
             .map(|reader| {
                 collect_upload_piece_traffic_metrics(
@@ -333,14 +339,14 @@ impl Piece {
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_local_peer_into_async_read(
         &self,
+        piece_id: &str,
         task_id: &str,
-        number: u32,
         length: u64,
         range: Option<Range>,
         disable_rate_limit: bool,
     ) -> Result<impl AsyncRead> {
         // Span record the piece_id.
-        Span::current().record("piece_id", self.storage.piece_id(task_id, number));
+        Span::current().record("piece_id", piece_id);
 
         // Acquire the download rate limiter.
         if !disable_rate_limit {
@@ -348,7 +354,7 @@ impl Piece {
         }
 
         // Upload the piece content.
-        self.storage.upload_piece(task_id, number, range).await
+        self.storage.upload_piece(piece_id, task_id, range).await
     }
 
     /// download_from_local_peer downloads a single piece from a local peer. Fake the download piece
@@ -366,6 +372,7 @@ impl Piece {
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_remote_peer(
         &self,
+        piece_id: &str,
         host_id: &str,
         task_id: &str,
         number: u32,
@@ -373,13 +380,16 @@ impl Piece {
         parent: piece_collector::CollectedParent,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
-        Span::current().record("piece_id", self.storage.piece_id(task_id, number));
+        Span::current().record("piece_id", piece_id);
 
         // Acquire the download rate limiter.
         self.download_rate_limiter.acquire(length as usize).await;
 
         // Record the start of downloading piece.
-        let piece = self.storage.download_piece_started(task_id, number).await?;
+        let piece = self
+            .storage
+            .download_piece_started(piece_id, number)
+            .await?;
 
         // If the piece is downloaded by the other thread,
         // return the piece directly.
@@ -390,7 +400,7 @@ impl Piece {
         // Create a dfdaemon client.
         let host = parent.host.clone().ok_or_else(|| {
             error!("peer host is empty");
-            if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                 error!("set piece metadata failed: {}", err)
             };
 
@@ -406,7 +416,7 @@ impl Piece {
                 "create dfdaemon upload client from {}:{} failed: {}",
                 host.ip, host.port, err
             );
-            if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                 error!("set piece metadata failed: {}", err)
             };
 
@@ -426,7 +436,7 @@ impl Piece {
             .await
             .map_err(|err| {
                 error!("download piece failed: {}", err);
-                if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                     error!("set piece metadata failed: {}", err)
                 };
 
@@ -435,7 +445,7 @@ impl Piece {
 
         let piece = response.piece.ok_or_else(|| {
             error!("piece is empty");
-            if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                 error!("set piece metadata failed: {}", err)
             };
 
@@ -445,7 +455,7 @@ impl Piece {
         // Get the piece content.
         let content = piece.content.ok_or_else(|| {
             error!("piece content is empty");
-            if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                 error!("set piece metadata failed: {}", err)
             };
 
@@ -455,8 +465,8 @@ impl Piece {
         // Record the finish of downloading piece.
         self.storage
             .download_piece_from_remote_peer_finished(
+                piece_id,
                 task_id,
-                number,
                 piece.offset,
                 piece.digest.as_str(),
                 parent.id.as_str(),
@@ -467,7 +477,7 @@ impl Piece {
                 // Record the failure of downloading piece,
                 // If storage fails to record piece.
                 error!("download piece finished: {}", err);
-                if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                     error!("set piece metadata failed: {}", err)
                 };
 
@@ -475,7 +485,7 @@ impl Piece {
             })?;
 
         self.storage
-            .get_piece(task_id, number)?
+            .get_piece(piece_id)?
             .ok_or_else(|| {
                 error!("piece not found");
                 Error::PieceNotFound(number.to_string())
@@ -495,6 +505,7 @@ impl Piece {
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_source(
         &self,
+        piece_id: &str,
         task_id: &str,
         number: u32,
         url: &str,
@@ -504,13 +515,16 @@ impl Piece {
         object_storage: Option<ObjectStorage>,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
-        Span::current().record("piece_id", self.storage.piece_id(task_id, number));
+        Span::current().record("piece_id", piece_id);
 
         // Acquire the download rate limiter.
         self.download_rate_limiter.acquire(length as usize).await;
 
         // Record the start of downloading piece.
-        let piece = self.storage.download_piece_started(task_id, number).await?;
+        let piece = self
+            .storage
+            .download_piece_started(piece_id, number)
+            .await?;
 
         // If the piece is downloaded by the other thread,
         // return the piece directly.
@@ -530,7 +544,7 @@ impl Piece {
         // Download the piece from the source.
         let backend = self.backend_factory.build(url).map_err(|err| {
             error!("build backend failed: {}", err);
-            if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                 error!("set piece metadata failed: {}", err)
             };
 
@@ -548,7 +562,7 @@ impl Piece {
         let mut response = backend
             .get(GetRequest {
                 task_id: task_id.to_string(),
-                piece_id: self.storage.piece_id(task_id, number),
+                piece_id: piece_id.to_string(),
                 url: url.to_string(),
                 range: Some(Range {
                     start: offset,
@@ -569,7 +583,7 @@ impl Piece {
 
                 // if the request is failed.
                 error!("backend get failed: {}", err);
-                if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                     error!("set piece metadata failed: {}", err)
                 };
 
@@ -594,7 +608,7 @@ impl Piece {
             let error_message = response.error_message.unwrap_or_default();
             error!("backend get failed: {} {}", error_message, buffer.as_str());
 
-            self.storage.download_piece_failed(task_id, number)?;
+            self.storage.download_piece_failed(piece_id)?;
             return Err(Error::BackendError(BackendError {
                 message: error_message,
                 status_code: Some(response.http_status_code.unwrap_or_default()),
@@ -612,8 +626,8 @@ impl Piece {
         // Record the finish of downloading piece.
         self.storage
             .download_piece_from_source_finished(
+                piece_id,
                 task_id,
-                number,
                 offset,
                 length,
                 &mut response.reader,
@@ -623,7 +637,7 @@ impl Piece {
                 // Record the failure of downloading piece,
                 // If storage fails to record piece.
                 error!("download piece finished: {}", err);
-                if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                     error!("set piece metadata failed: {}", err)
                 };
 
@@ -631,7 +645,7 @@ impl Piece {
             })?;
 
         self.storage
-            .get_piece(task_id, number)?
+            .get_piece(piece_id)?
             .ok_or_else(|| {
                 error!("piece not found");
                 Error::PieceNotFound(number.to_string())

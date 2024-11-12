@@ -841,14 +841,16 @@ impl PersistentCacheTask {
                 // Limit the concurrent download count.
                 let _permit = semaphore.acquire().await.unwrap();
 
+                let piece_id = storage.piece_id(task_id.as_str(), number);
                 info!(
                     "start to download piece {} from remote peer {:?}",
-                    storage.piece_id(task_id.as_str(), number),
+                    piece_id,
                     parent.id.clone()
                 );
 
                 let metadata = piece_manager
                     .download_from_remote_peer(
+                        peer_id.as_str(),
                         host_id.as_str(),
                         task_id.as_str(),
                         number,
@@ -859,7 +861,7 @@ impl PersistentCacheTask {
                     .map_err(|err| {
                         error!(
                             "download piece {} from remote peer {:?} error: {:?}",
-                            storage.piece_id(task_id.as_str(), number),
+                            piece_id,
                             parent.id.clone(),
                             err
                         );
@@ -930,8 +932,7 @@ impl PersistentCacheTask {
 
                 info!(
                     "finished piece {} from remote peer {:?}",
-                    storage.piece_id(task_id.as_str(), metadata.number),
-                    metadata.parent_id
+                    piece_id, metadata.parent_id
                 );
 
                 Ok(metadata)
@@ -1029,24 +1030,19 @@ impl PersistentCacheTask {
 
         // Download the piece from the local peer.
         for interested_piece in interested_pieces {
+            let piece_id = self
+                .storage
+                .piece_id(task.id.as_str(), interested_piece.number);
+
             // Get the piece metadata from the local storage.
-            let piece = match self.piece.get(task.id.as_str(), interested_piece.number) {
+            let piece = match self.piece.get(piece_id.as_str()) {
                 Ok(Some(piece)) => piece,
                 Ok(None) => {
-                    info!(
-                        "piece {} not found in local storage",
-                        self.storage
-                            .piece_id(task.id.as_str(), interested_piece.number)
-                    );
+                    info!("piece {} not found in local storage", piece_id);
                     continue;
                 }
                 Err(err) => {
-                    error!(
-                        "get piece {} from local storage error: {:?}",
-                        self.storage
-                            .piece_id(task.id.as_str(), interested_piece.number),
-                        err
-                    );
+                    error!("get piece {} from local storage error: {:?}", piece_id, err);
                     continue;
                 }
             };
@@ -1054,10 +1050,7 @@ impl PersistentCacheTask {
             // Fake the download from the local peer.
             self.piece
                 .download_from_local_peer(task.id.as_str(), piece.length);
-            info!(
-                "finished piece {} from local peer",
-                self.storage.piece_id(task.id.as_str(), piece.number)
-            );
+            info!("finished piece {} from local peer", piece_id);
 
             // Construct the piece.
             let piece = Piece {

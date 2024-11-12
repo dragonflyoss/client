@@ -652,10 +652,12 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     let mut has_started_piece = false;
                     let mut finished_piece_numbers = Vec::new();
                     for interested_piece_number in interested_piece_numbers.iter() {
-                        let piece = match task_manager
-                            .piece
-                            .get(task_id.as_str(), *interested_piece_number)
-                        {
+                        let piece = match task_manager.piece.get(
+                            task_manager
+                                .piece
+                                .id(task_id.as_str(), *interested_piece_number)
+                                .as_str(),
+                        ) {
                             Ok(Some(piece)) => piece,
                             Ok(None) => continue,
                             Err(err) => {
@@ -765,17 +767,20 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Get the interested piece number from the request.
         let piece_number = request.piece_number;
 
+        // Generate the piece id.
+        let piece_id = self.task.piece.id(task_id.as_str(), piece_number);
+
         // Span record the host id, task id and piece number.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("remote_host_id", remote_host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
-        Span::current().record("piece_id", format!("{}-{}", task_id, piece_number).as_str());
+        Span::current().record("piece_id", piece_id.as_str());
 
         // Get the piece metadata from the local storage.
         let piece = self
             .task
             .piece
-            .get(task_id.as_str(), piece_number)
+            .get(piece_id.as_str())
             .map_err(|err| {
                 error!("upload piece metadata from local storage: {}", err);
                 Status::internal(err.to_string())
@@ -794,8 +799,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             .task
             .piece
             .upload_from_local_peer_into_async_read(
+                piece_id.as_str(),
                 task_id.as_str(),
-                piece_number,
                 piece.length,
                 None,
                 false,

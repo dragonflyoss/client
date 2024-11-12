@@ -964,14 +964,16 @@ impl Task {
                 // Limit the concurrent piece count.
                 let _permit = semaphore.acquire().await.unwrap();
 
+                let piece_id = storage.piece_id(task_id.as_str(), number);
                 info!(
                     "start to download piece {} from remote peer {:?}",
-                    storage.piece_id(task_id.as_str(), number),
+                    piece_id,
                     parent.id.clone()
                 );
 
                 let metadata = piece_manager
                     .download_from_remote_peer(
+                        piece_id.as_str(),
                         host_id.as_str(),
                         task_id.as_str(),
                         number,
@@ -982,7 +984,7 @@ impl Task {
                     .map_err(|err| {
                         error!(
                             "download piece {} from remote peer {:?} error: {:?}",
-                            storage.piece_id(task_id.as_str(), number),
+                            piece_id,
                             parent.id.clone(),
                             err
                         );
@@ -1026,8 +1028,7 @@ impl Task {
                     .map_err(|err| {
                         error!(
                             "send DownloadPieceFinishedRequest for piece {} failed: {:?}",
-                            storage.piece_id(task_id.as_str(), number),
-                            err
+                            piece_id, err
                         );
                         interrupt.store(true, Ordering::SeqCst);
                         err
@@ -1054,8 +1055,7 @@ impl Task {
                     .map_err(|err| {
                         error!(
                             "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
-                            storage.piece_id(task_id.as_str(), number),
-                            err
+                            piece_id, err
                         );
                         interrupt.store(true, Ordering::SeqCst);
                         err
@@ -1063,8 +1063,7 @@ impl Task {
 
                 info!(
                     "finished piece {} from remote peer {:?}",
-                    storage.piece_id(task_id.as_str(), metadata.number),
-                    metadata.parent_id
+                    piece_id, metadata.parent_id
                 );
 
                 let mut finished_pieces = finished_pieces.lock().unwrap();
@@ -1206,13 +1205,12 @@ impl Task {
                 // Limit the concurrent download count.
                 let _permit = semaphore.acquire().await.unwrap();
 
-                info!(
-                    "start to download piece {} from source",
-                    storage.piece_id(task_id.as_str(), number)
-                );
+                let piece_id = storage.piece_id(task_id.as_str(), number);
+                info!("start to download piece {} from source", piece_id);
 
                 let metadata = piece_manager
                     .download_from_source(
+                        piece_id.as_str(),
                         task_id.as_str(),
                         number,
                         url.as_str(),
@@ -1254,7 +1252,7 @@ impl Task {
                             REQUEST_TIMEOUT,
                         )
                         .await.map_err(|err| {
-                            error!("send DownloadPieceBackToSourceFinishedRequest for piece {} failed: {:?}", storage.piece_id(task_id.as_str(), number), err);
+                            error!("send DownloadPieceBackToSourceFinishedRequest for piece {} failed: {:?}", piece_id, err);
                             err
                         })?;
 
@@ -1279,17 +1277,12 @@ impl Task {
                     .map_err(|err| {
                         error!(
                             "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
-                            storage.piece_id(task_id.as_str(), number),
-                            err
+                            piece_id, err
                         );
                         err
                     })?;
 
-                info!(
-                    "finished piece {} from source",
-                    storage.piece_id(task_id.as_str(), piece.number)
-                );
-
+                info!("finished piece {} from source", piece_id);
                 Ok(metadata)
             }
 
@@ -1423,24 +1416,19 @@ impl Task {
 
         // Download the piece from the local peer.
         for interested_piece in interested_pieces {
+            let piece_id = self
+                .storage
+                .piece_id(task.id.as_str(), interested_piece.number);
+
             // Get the piece metadata from the local storage.
-            let piece = match self.piece.get(task.id.as_str(), interested_piece.number) {
+            let piece = match self.piece.get(piece_id.as_str()) {
                 Ok(Some(piece)) => piece,
                 Ok(None) => {
-                    info!(
-                        "piece {} not found in local storage",
-                        self.storage
-                            .piece_id(task.id.as_str(), interested_piece.number)
-                    );
+                    info!("piece {} not found in local storage", piece_id);
                     continue;
                 }
                 Err(err) => {
-                    error!(
-                        "get piece {} from local storage error: {:?}",
-                        self.storage
-                            .piece_id(task.id.as_str(), interested_piece.number),
-                        err
-                    );
+                    error!("get piece {} from local storage error: {:?}", piece_id, err);
                     continue;
                 }
             };
@@ -1448,10 +1436,7 @@ impl Task {
             // Fake the download from the local peer.
             self.piece
                 .download_from_local_peer(task.id.as_str(), piece.length);
-            info!(
-                "finished piece {} from local peer",
-                self.storage.piece_id(task.id.as_str(), piece.number)
-            );
+            info!("finished piece {} from local peer", piece_id,);
 
             // Construct the piece.
             let piece = Piece {
@@ -1487,8 +1472,7 @@ impl Task {
                 .map_err(|err| {
                     error!(
                         "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
-                        self.storage.piece_id(task.id.as_str(), piece.number),
-                        err
+                        piece_id, err
                     );
                     err
                 })?;
@@ -1545,13 +1529,12 @@ impl Task {
                 // Limit the concurrent download count.
                 let _permit = semaphore.acquire().await.unwrap();
 
-                info!(
-                    "start to download piece {} from source",
-                    storage.piece_id(task_id.as_str(), number)
-                );
+                let piece_id = storage.piece_id(task_id.as_str(), number);
+                info!("start to download piece {} from source", piece_id);
 
                 let metadata = piece_manager
                     .download_from_source(
+                        piece_id.as_str(),
                         task_id.as_str(),
                         number,
                         url.as_str(),
@@ -1596,16 +1579,12 @@ impl Task {
                     .map_err(|err| {
                         error!(
                             "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
-                            storage.piece_id(task_id.as_str(), metadata.number),
-                            err
+                            piece_id, err
                         );
                         err
                     })?;
 
-                info!(
-                    "finished piece {} from source",
-                    storage.piece_id(task_id.as_str(), metadata.number)
-                );
+                info!("finished piece {} from source", piece_id);
 
                 Ok(metadata)
             }
