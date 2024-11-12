@@ -740,8 +740,10 @@ async fn proxy_by_dfdaemon(
                         let piece_reader = match task
                             .piece
                             .download_from_local_peer_into_async_read(
+                                task.piece
+                                    .id(message.task_id.as_str(), piece.number)
+                                    .as_str(),
                                 message.task_id.as_str(),
-                                piece.number,
                                 piece.length,
                                 download_task_started_response.range,
                                 true,
