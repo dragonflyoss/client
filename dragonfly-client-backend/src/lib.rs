@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use dragonfly_api::common::v2::{ObjectStorage, Range};
+use dragonfly_api::common::v2::{Hdfs, ObjectStorage, Range};
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -29,6 +29,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{error, info, instrument, warn};
 use url::Url;
 
+pub mod hdfs;
 pub mod http;
 pub mod object_storage;
 
@@ -57,6 +58,9 @@ pub struct HeadRequest {
 
     /// object_storage is the object storage related information.
     pub object_storage: Option<ObjectStorage>,
+
+    /// hdfs is the hdfs related information.
+    pub hdfs: Option<Hdfs>,
 }
 
 /// HeadResponse is the head response for backend.
@@ -106,6 +110,9 @@ pub struct GetRequest {
 
     /// the object storage related information.
     pub object_storage: Option<ObjectStorage>,
+
+    /// hdfs is the hdfs related information.
+    pub hdfs: Option<Hdfs>,
 }
 
 /// GetResponse is the get response for backend.
@@ -175,7 +182,7 @@ pub struct BackendFactory {
     /// backends is the backends of the factory, including the plugin backends and
     /// the builtin backends.
     backends: HashMap<String, Box<dyn Backend + Send + Sync>>,
-    /// libraries is used to store the plugin's dynamic library, because when not saving the `Library`,
+    /// libraries are used to store the plugin's dynamic library, because when not saving the `Library`,
     /// it will drop when out of scope, resulting in the null pointer error.
     libraries: Vec<Library>,
 }
@@ -183,7 +190,7 @@ pub struct BackendFactory {
 /// BackendFactory implements the factory of the backend. It supports loading builtin
 /// backends and plugin backends.
 ///
-/// The builtin backends are http, https, etc, which are implemented
+/// The builtin backends are http, https, etc., which are implemented
 /// by the HTTP struct.
 ///
 /// The plugin backends are shared libraries, which are loaded
@@ -240,7 +247,7 @@ impl BackendFactory {
 
         self.backends
             .insert("https".to_string(), Box::new(http::HTTP::new("https")));
-        info!("load [https] builtin backend ");
+        info!("load [https] builtin backend");
 
         self.backends.insert(
             "s3".to_string(),
@@ -272,7 +279,7 @@ impl BackendFactory {
                 object_storage::Scheme::OSS,
             )),
         );
-        info!("load [oss] builtin backend ");
+        info!("load [oss] builtin backend");
 
         self.backends.insert(
             "obs".to_string(),
@@ -289,6 +296,10 @@ impl BackendFactory {
             )),
         );
         info!("load [cos] builtin backend");
+
+        self.backends
+            .insert("hdfs".to_string(), Box::new(hdfs::Hdfs::new()));
+        info!("load [hdfs] builtin backend");
     }
 
     /// load_plugin_backends loads the plugin backends.
@@ -318,8 +329,11 @@ impl BackendFactory {
                 > = lib.get(b"register_plugin").or_err(ErrorType::PluginError)?;
 
                 if let Some(file_stem) = path.file_stem() {
-                    if let Some(plugin_name) =
-                        file_stem.to_string_lossy().to_string().strip_prefix("lib")
+                    if let Some(plugin_name) = file_stem
+                        .to_string_lossy()
+                        .to_string()
+                        .replace("_", "-")
+                        .strip_prefix("lib")
                     {
                         self.backends
                             .insert(plugin_name.to_string(), register_plugin());
@@ -347,7 +361,9 @@ mod tests {
     #[test]
     fn should_load_builtin_backends() {
         let factory = BackendFactory::new(None).unwrap();
-        let expected_backends = vec!["http", "https", "s3", "gs", "abs", "oss", "obs", "cos"];
+        let expected_backends = vec![
+            "http", "https", "s3", "gs", "abs", "oss", "obs", "cos", "hdfs",
+        ];
         for backend in expected_backends {
             assert!(factory.backends.contains_key(backend));
         }
@@ -378,7 +394,7 @@ mod tests {
         let plugin_dir = dir.path().join("non_existent_plugin_dir");
 
         let factory = BackendFactory::new(Some(&plugin_dir)).unwrap();
-        assert_eq!(factory.backends.len(), 8);
+        assert_eq!(factory.backends.len(), 9);
     }
 
     #[test]

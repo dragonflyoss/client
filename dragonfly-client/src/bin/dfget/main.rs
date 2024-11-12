@@ -15,7 +15,7 @@
  */
 
 use clap::Parser;
-use dragonfly_api::common::v2::{Download, ObjectStorage, TaskType};
+use dragonfly_api::common::v2::{Download, Hdfs, ObjectStorage, TaskType};
 use dragonfly_api::dfdaemon::v2::{download_task_response, DownloadTaskRequest};
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
@@ -199,6 +199,12 @@ struct Args {
         help = "Specify the predefined ACL for Google Cloud Storage Service(GCS)"
     )]
     storage_predefined_acl: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the delegation token for Hadoop Distributed File System(HDFS)"
+    )]
+    storage_delegation_token: Option<String>,
 
     #[arg(
         long,
@@ -564,24 +570,28 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
     args.output = Path::new(&args.output).absolutize()?.into();
     info!("download file to: {}", args.output.to_string_lossy());
 
-    // If download from object storage, the path has end with '/', then download all files in then
-    // directory. Otherwise, download the single file. Only object storage protocol supports
-    // directory download.
+    // If the path has end with '/' and the scheme supports directory download,
+    // then download all files in the directory. Otherwise, download the single file.
     let scheme = args.url.scheme();
-    if object_storage::Scheme::from_str(scheme).is_err() && args.url.path().ends_with('/') {
-        return Err(Error::Unsupported(format!("{} download directory", scheme)));
-    };
-
     if args.url.path().ends_with('/') {
+        if !is_support_directory_download(scheme) {
+            return Err(Error::Unsupported(format!("{} download directory", scheme)));
+        };
         return download_dir(args, dfdaemon_download_client).await;
     };
 
     download(args, ProgressBar::new(0), dfdaemon_download_client).await
 }
 
+/// is_support_directory_download checks whether the scheme supports directory download.
+fn is_support_directory_download(scheme: &str) -> bool {
+    // Only object storage protocol and hdfs protocol supports directory download.
+    object_storage::Scheme::from_str(scheme).is_ok() || scheme == "hdfs"
+}
+
 /// download_dir downloads all files in the directory.
 async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Result<()> {
-    // Initalize the object storage.
+    // Initialize the object storage and the hdfs.
     let object_storage = Some(ObjectStorage {
         access_key_id: args.storage_access_key_id.clone(),
         access_key_secret: args.storage_access_key_secret.clone(),
@@ -591,9 +601,12 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         credential_path: args.storage_credential_path.clone(),
         predefined_acl: args.storage_predefined_acl.clone(),
     });
+    let hdfs = Some(Hdfs {
+        delegation_token: args.storage_delegation_token.clone(),
+    });
 
     // Get all entries in the directory. If the directory is empty, then return directly.
-    let entries = get_entries(args.clone(), object_storage.clone()).await?;
+    let entries = get_entries(args.clone(), object_storage, hdfs).await?;
     if entries.is_empty() {
         warn!("directory {} is empty", args.url);
         return Ok(());
@@ -689,6 +702,14 @@ async fn download(
         Err(_) => None,
     };
 
+    // Only initialize hdfs when the scheme is HDFS protocol.
+    let hdfs = match args.url.scheme() {
+        "hdfs" => Some(Hdfs {
+            delegation_token: args.storage_delegation_token.clone(),
+        }),
+        _ => None,
+    };
+
     // If the `filtered_query_params` is not provided, then use the default value.
     let filtered_query_params = args
         .filtered_query_params
@@ -719,7 +740,7 @@ async fn download(
                 certificate_chain: Vec::new(),
                 prefetch: false,
                 object_storage,
-                hdfs: None,
+                hdfs,
             }),
         })
         .await
@@ -772,7 +793,11 @@ async fn download(
 }
 
 /// get_entries gets all entries in the directory.
-async fn get_entries(args: Args, object_storage: Option<ObjectStorage>) -> Result<Vec<DirEntry>> {
+async fn get_entries(
+    args: Args,
+    object_storage: Option<ObjectStorage>,
+    hdfs: Option<Hdfs>,
+) -> Result<Vec<DirEntry>> {
     // Initialize backend factory and build backend.
     let backend_factory = BackendFactory::new(None)?;
     let backend = backend_factory.build(args.url.as_str())?;
@@ -793,6 +818,7 @@ async fn get_entries(args: Args, object_storage: Option<ObjectStorage>) -> Resul
             timeout: args.timeout,
             client_cert: None,
             object_storage,
+            hdfs,
         })
         .await
         .map_err(|err| {
@@ -938,8 +964,8 @@ mod tests {
     #[test]
     fn should_return_error_when_args_is_not_valid() {
         let tempdir = tempfile::tempdir().unwrap();
-        let non_exist_dir_path = tempdir.path().join("non_exsit");
-        let non_exist_file_path = non_exist_dir_path.join("non_exsit.txt");
+        let non_exist_dir_path = tempdir.path().join("non_exist");
+        let non_exist_file_path = non_exist_dir_path.join("non_exist.txt");
 
         let file_path = tempdir.path().join("test.txt");
         std::fs::File::create(&file_path).unwrap();
