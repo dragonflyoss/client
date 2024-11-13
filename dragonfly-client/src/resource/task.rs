@@ -60,7 +60,7 @@ use tokio::task::JoinSet;
 use tokio::time::sleep;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Status};
-use tracing::{error, info, instrument, Instrument};
+use tracing::{debug, error, info, instrument, Instrument};
 
 use super::*;
 
@@ -280,7 +280,7 @@ impl Task {
                     return Err(err);
                 }
             };
-        info!(
+        debug!(
             "interested pieces: {:?}",
             interested_pieces
                 .iter()

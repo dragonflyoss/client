@@ -58,7 +58,7 @@ use tonic::{
     Code, Request, Response, Status,
 };
 use tower::service_fn;
-use tracing::{error, info, instrument, Instrument, Span};
+use tracing::{debug, error, info, instrument, Instrument, Span};
 
 /// DfdaemonDownloadServer is the grpc unix server of the download.
 pub struct DfdaemonDownloadServer {
@@ -176,7 +176,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         &self,
         request: Request<DownloadTaskRequest>,
     ) -> Result<Response<Self::DownloadTaskStream>, Status> {
-        info!("download task in download server");
+        debug!("download task in download server");
 
         // Record the start time.
         let start_time = Instant::now();

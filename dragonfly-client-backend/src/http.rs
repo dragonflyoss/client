@@ -20,7 +20,7 @@ use futures::TryStreamExt;
 use rustls_pki_types::CertificateDer;
 use std::io::{Error as IOError, ErrorKind};
 use tokio_util::io::StreamReader;
-use tracing::{error, info, instrument};
+use tracing::{debug, error, instrument};
 
 /// HTTP is the HTTP backend.
 pub struct HTTP {
@@ -77,7 +77,7 @@ impl super::Backend for HTTP {
     /// head gets the header of the request.
     #[instrument(skip_all)]
     async fn head(&self, request: super::HeadRequest) -> Result<super::HeadResponse> {
-        info!(
+        debug!(
             "head request {} {}: {:?}",
             request.task_id, request.url, request.http_header
         );
@@ -106,7 +106,7 @@ impl super::Backend for HTTP {
 
         let header = response.headers().clone();
         let status_code = response.status();
-        info!(
+        debug!(
             "head response {} {}: {:?} {:?}",
             request.task_id, request.url, status_code, header
         );
@@ -124,7 +124,7 @@ impl super::Backend for HTTP {
     /// get gets the content of the request.
     #[instrument(skip_all)]
     async fn get(&self, request: super::GetRequest) -> Result<super::GetResponse<super::Body>> {
-        info!(
+        debug!(
             "get request {} {} {}: {:?}",
             request.task_id, request.piece_id, request.url, request.http_header
         );
@@ -153,7 +153,8 @@ impl super::Backend for HTTP {
                 .bytes_stream()
                 .map_err(|err| IOError::new(ErrorKind::Other, err)),
         ));
-        info!(
+
+        debug!(
             "get response {} {}: {:?} {:?}",
             request.task_id, request.piece_id, status_code, header
         );
