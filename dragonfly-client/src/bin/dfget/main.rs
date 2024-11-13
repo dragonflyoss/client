@@ -30,7 +30,7 @@ use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{BackendError, ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_util::http::{header_vec_to_hashmap, header_vec_to_reqwest_headermap};
+use dragonfly_client_util::http::{header_vec_to_hashmap, header_vec_to_headermap};
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
 use path_absolutize::*;
 use percent_encoding::percent_decode_str;
@@ -786,7 +786,7 @@ async fn get_entries(args: Args, object_storage: Option<ObjectStorage>) -> Resul
             // NOTE: Mock a task id for head request.
             task_id: Uuid::new_v4().to_string(),
             url: args.url.to_string(),
-            http_header: Some(header_vec_to_reqwest_headermap(
+            http_header: Some(header_vec_to_headermap(
                 args.header.clone().unwrap_or_default(),
             )?),
             timeout: args.timeout,
