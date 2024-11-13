@@ -44,7 +44,7 @@ pub fn hashmap_to_headermap(header: &HashMap<String, String>) -> Result<HeaderMa
     let mut headermap = HeaderMap::with_capacity(header.len());
     for (k, v) in header {
         let name = HeaderName::from_bytes(k.as_bytes()).or_err(ErrorType::ParseError)?;
-        let value = HeaderValue::from_str(v).or_err(ErrorType::ParseError)?;
+        let value = HeaderValue::from_bytes(v.as_bytes()).or_err(ErrorType::ParseError)?;
         headermap.insert(name, value);
     }
 

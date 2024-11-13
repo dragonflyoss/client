@@ -59,7 +59,7 @@ use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_rustls::TlsAcceptor;
 use tokio_util::io::ReaderStream;
-use tracing::{error, info, instrument, Span};
+use tracing::{debug, error, info, instrument, Span};
 
 pub mod header;
 
@@ -156,7 +156,7 @@ impl Proxy {
 
                     // Spawn a task to handle the connection.
                     let io = TokioIo::new(tcp);
-                    info!("accepted connection from {}", remote_address);
+                    debug!("accepted connection from {}", remote_address);
 
                     let config = self.config.clone();
                     let task = self.task.clone();
@@ -722,7 +722,7 @@ async fn proxy_by_dfdaemon(
 
                         // Send the none response to the client, if the first piece is received.
                         if !initialized {
-                            info!("first piece received, send response");
+                            debug!("first piece received, send response");
                             sender.send(None).await.unwrap_or_default();
                             initialized = true;
                         }
@@ -768,7 +768,7 @@ async fn proxy_by_dfdaemon(
                         while let Some(piece_reader) =
                             finished_piece_readers.get_mut(&need_piece_number)
                         {
-                            info!("copy piece {} to stream", need_piece_number);
+                            debug!("copy piece {} to stream", need_piece_number);
                             if let Err(err) = tokio::io::copy(piece_reader, &mut writer).await {
                                 error!("download piece reader error: {}", err);
                                 writer.shutdown().await.unwrap_or_else(|err| {
