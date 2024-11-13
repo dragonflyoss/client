@@ -47,6 +47,7 @@ pub fn init_tracing(
 
     // Setup stdout layer.
     let (stdout_writer, stdout_guard) = tracing_appender::non_blocking(std::io::stdout());
+    guards.push(stdout_guard);
 
     // Initialize stdout layer.
     let stdout_filter = if verbose {
@@ -64,7 +65,6 @@ pub fn init_tracing(
         .with_timer(ChronoLocal::rfc_3339())
         .pretty()
         .with_filter(stdout_filter);
-    guards.push(stdout_guard);
 
     // Setup file layer.
     fs::create_dir_all(log_dir.clone()).expect("failed to create log directory");
@@ -76,6 +76,8 @@ pub fn init_tracing(
     .expect("failed to create rolling file appender");
 
     let (rolling_writer, rolling_writer_guard) = tracing_appender::non_blocking(rolling_appender);
+    guards.push(rolling_writer_guard);
+
     let file_logging_layer = Layer::new()
         .with_writer(rolling_writer)
         .with_ansi(false)
@@ -86,7 +88,6 @@ pub fn init_tracing(
         .with_thread_ids(false)
         .with_timer(ChronoLocal::rfc_3339())
         .compact();
-    guards.push(rolling_writer_guard);
 
     // Setup env filter for log level.
     let env_filter = EnvFilter::try_from_default_env()
