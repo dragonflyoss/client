@@ -19,7 +19,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use rocksdb::{ReadOptions, WriteOptions};
+use rocksdb::WriteOptions;
 use std::{
     ops::Deref,
     path::{Path, PathBuf},
@@ -140,12 +140,7 @@ impl Operations for RocksdbStorageEngine {
     #[instrument(skip_all)]
     fn get<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>> {
         let cf = cf_handle::<O>(self)?;
-        let mut options = ReadOptions::default();
-        options.fill_cache(false);
-
-        let value = self
-            .get_cf_opt(cf, key, &options)
-            .or_err(ErrorType::StorageError)?;
+        let value = self.get_cf(cf, key).or_err(ErrorType::StorageError)?;
         match value {
             Some(value) => Ok(Some(O::deserialize_from(&value)?)),
             None => Ok(None),
@@ -156,11 +151,7 @@ impl Operations for RocksdbStorageEngine {
     #[instrument(skip_all)]
     fn put<O: DatabaseObject>(&self, key: &[u8], value: &O) -> Result<()> {
         let cf = cf_handle::<O>(self)?;
-        let serialized = value.serialized()?;
-        let mut options = WriteOptions::default();
-        options.set_sync(true);
-
-        self.put_cf_opt(cf, key, serialized, &options)
+        self.put_cf(cf, key, value.serialized()?)
             .or_err(ErrorType::StorageError)?;
         Ok(())
     }
