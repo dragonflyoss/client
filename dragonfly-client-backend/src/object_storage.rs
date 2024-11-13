@@ -24,7 +24,7 @@ use std::result::Result;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio_util::io::StreamReader;
-use tracing::{error, info, instrument};
+use tracing::{debug, error, instrument};
 use url::Url;
 
 /// Scheme is the scheme of the object storage.
@@ -485,7 +485,7 @@ impl crate::Backend for ObjectStorage {
     /// head gets the header of the request.
     #[instrument(skip_all)]
     async fn head(&self, request: super::HeadRequest) -> ClientResult<super::HeadResponse> {
-        info!(
+        debug!(
             "head request {} {}: {:?}",
             request.task_id, request.url, request.http_header
         );
@@ -551,7 +551,7 @@ impl crate::Backend for ObjectStorage {
             })
         })?;
 
-        info!(
+        debug!(
             "head response {} {}: {}",
             request.task_id,
             request.url,
@@ -574,7 +574,7 @@ impl crate::Backend for ObjectStorage {
         &self,
         request: super::GetRequest,
     ) -> ClientResult<super::GetResponse<super::Body>> {
-        info!(
+        debug!(
             "get request {} {}: {:?}",
             request.piece_id, request.url, request.http_header
         );

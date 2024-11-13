@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
-use tracing::{error, info, instrument};
+use tracing::{debug, error, info, instrument};
 
 pub mod content;
 pub mod metadata;
@@ -454,7 +454,7 @@ impl Storage {
                     }
 
                     if wait_for_piece_count > 0 {
-                        info!("wait piece finished");
+                        debug!("wait piece finished");
                     }
                     wait_for_piece_count += 1;
                 }

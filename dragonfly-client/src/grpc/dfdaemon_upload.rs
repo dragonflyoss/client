@@ -51,7 +51,7 @@ use tonic::{
     transport::{Channel, Server},
     Code, Request, Response, Status,
 };
-use tracing::{error, info, instrument, Instrument, Span};
+use tracing::{debug, error, info, instrument, Instrument, Span};
 use url::Url;
 
 /// DfdaemonUploadServer is the grpc server of the upload.
@@ -172,7 +172,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         request: Request<DownloadTaskRequest>,
     ) -> Result<Response<Self::DownloadTaskStream>, Status> {
-        info!("download task in upload server");
+        debug!("download task in upload server");
 
         // Record the start time.
         let start_time = Instant::now();
