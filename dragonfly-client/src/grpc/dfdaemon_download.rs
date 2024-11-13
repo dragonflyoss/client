@@ -43,7 +43,7 @@ use dragonfly_client_core::{
 };
 use dragonfly_client_util::{
     digest::{calculate_file_hash, Algorithm},
-    http::{get_range, hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap},
+    http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
 };
 use hyper_util::rt::TokioIo;
 use std::path::{Path, PathBuf};
@@ -235,7 +235,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
                 match serde_json::to_vec::<Backend>(&Backend {
                     message: err.message.clone(),
-                    header: reqwest_headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
+                    header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
                     status_code: err.status_code.map(|code| code.as_u16() as i32),
                 }) {
                     Ok(json) => {
@@ -301,7 +301,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // If download protocol is not http, use the range of the download.
         if download.range.is_none() {
             // Convert the header.
-            let request_header = match hashmap_to_reqwest_headermap(&download.request_header) {
+            let request_header = match hashmap_to_headermap(&download.request_header) {
                 Ok(header) => header,
                 Err(e) => {
                     // Download task failed.
@@ -431,9 +431,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
                         match serde_json::to_vec::<Backend>(&Backend {
                             message: err.message.clone(),
-                            header: reqwest_headermap_to_hashmap(
-                                &err.header.clone().unwrap_or_default(),
-                            ),
+                            header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
                             status_code: err.status_code.map(|code| code.as_u16() as i32),
                         }) {
                             Ok(json) => {
@@ -696,7 +694,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
                 match serde_json::to_vec::<Backend>(&Backend {
                     message: err.message.clone(),
-                    header: reqwest_headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
+                    header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
                     status_code: err.status_code.map(|code| code.as_u16() as i32),
                 }) {
                     Ok(json) => {

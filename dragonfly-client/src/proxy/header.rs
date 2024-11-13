@@ -54,31 +54,19 @@ pub const DRAGONFLY_PREFETCH_HEADER: &str = "X-Dragonfly-Prefetch";
 /// get_tag gets the tag from http header.
 #[instrument(skip_all)]
 pub fn get_tag(header: &HeaderMap) -> Option<String> {
-    match header.get(DRAGONFLY_TAG_HEADER) {
-        Some(tag) => match tag.to_str() {
-            Ok(tag) => Some(tag.to_string()),
-            Err(err) => {
-                error!("get tag from header failed: {}", err);
-                None
-            }
-        },
-        None => None,
-    }
+    header
+        .get(DRAGONFLY_TAG_HEADER)
+        .and_then(|tag| tag.to_str().ok())
+        .map(|tag| tag.to_string())
 }
 
 /// get_application gets the application from http header.
 #[instrument(skip_all)]
 pub fn get_application(header: &HeaderMap) -> Option<String> {
-    match header.get(DRAGONFLY_APPLICATION_HEADER) {
-        Some(application) => match application.to_str() {
-            Ok(application) => Some(application.to_string()),
-            Err(err) => {
-                error!("get application from header failed: {}", err);
-                None
-            }
-        },
-        None => None,
-    }
+    header
+        .get(DRAGONFLY_APPLICATION_HEADER)
+        .and_then(|application| application.to_str().ok())
+        .map(|application| application.to_string())
 }
 
 /// get_priority gets the priority from http header.
@@ -106,16 +94,10 @@ pub fn get_priority(header: &HeaderMap) -> i32 {
 /// get_registry gets the custom address of container registry from http header.
 #[instrument(skip_all)]
 pub fn get_registry(header: &HeaderMap) -> Option<String> {
-    match header.get(DRAGONFLY_REGISTRY_HEADER) {
-        Some(registry) => match registry.to_str() {
-            Ok(registry) => Some(registry.to_string()),
-            Err(err) => {
-                error!("get registry from header failed: {}", err);
-                None
-            }
-        },
-        None => None,
-    }
+    header
+        .get(DRAGONFLY_REGISTRY_HEADER)
+        .and_then(|registry| registry.to_str().ok())
+        .map(|registry| registry.to_string())
 }
 
 /// get_filters gets the filters from http header.
@@ -126,7 +108,7 @@ pub fn get_filtered_query_params(
 ) -> Vec<String> {
     match header.get(DRAGONFLY_FILTERED_QUERY_PARAMS_HEADER) {
         Some(filters) => match filters.to_str() {
-            Ok(filters) => filters.split(',').map(|s| s.to_string()).collect(),
+            Ok(filters) => filters.split(',').map(|s| s.trim().to_string()).collect(),
             Err(err) => {
                 error!("get filters from header failed: {}", err);
                 default_filtered_query_params

@@ -44,7 +44,7 @@ use dragonfly_client_core::{
 };
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::{
-    http::{hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap},
+    http::{hashmap_to_headermap, headermap_to_hashmap},
     id_generator::IDGenerator,
 };
 use reqwest::header::HeaderMap;
@@ -127,11 +127,10 @@ impl Task {
         }
 
         // Handle the request header.
-        let mut request_header =
-            hashmap_to_reqwest_headermap(&request.request_header).map_err(|err| {
-                error!("convert header: {}", err);
-                err
-            })?;
+        let mut request_header = hashmap_to_headermap(&request.request_header).map_err(|err| {
+            error!("convert header: {}", err);
+            err
+        })?;
 
         // Remove the range header to prevent the server from
         // returning a 206 partial content and returning
@@ -1333,7 +1332,7 @@ impl Task {
                                                 response: Some(download_piece_back_to_source_failed_request::Response::Backend(
                                                         Backend{
                                                             message: err.message.clone(),
-                                                            header: reqwest_headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
+                                                            header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
                                                             status_code: err.status_code.map(|code| code.as_u16() as i32),
                                                         }
                                                 )),
