@@ -38,9 +38,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error as ClientError, Result as ClientResult,
 };
-use dragonfly_client_util::http::{
-    get_range, hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap,
-};
+use dragonfly_client_util::http::{get_range, hashmap_to_headermap, headermap_to_hashmap};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -230,7 +228,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                 match serde_json::to_vec::<Backend>(&Backend {
                     message: err.message.clone(),
-                    header: reqwest_headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
+                    header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
                     status_code: err.status_code.map(|code| code.as_u16() as i32),
                 }) {
                     Ok(json) => {
@@ -297,7 +295,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // If download protocol is not http, use the range of the download.
         if download.range.is_none() {
             // Convert the header.
-            let request_header = match hashmap_to_reqwest_headermap(&download.request_header) {
+            let request_header = match hashmap_to_headermap(&download.request_header) {
                 Ok(header) => header,
                 Err(e) => {
                     // Download task failed.
@@ -429,9 +427,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                         match serde_json::to_vec::<Backend>(&Backend {
                             message: err.message.clone(),
-                            header: reqwest_headermap_to_hashmap(
-                                &err.header.clone().unwrap_or_default(),
-                            ),
+                            header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
                             status_code: err.status_code.map(|code| code.as_u16() as i32),
                         }) {
                             Ok(json) => {
@@ -896,7 +892,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                 match serde_json::to_vec::<Backend>(&Backend {
                     message: err.message.clone(),
-                    header: reqwest_headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
+                    header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
                     status_code: err.status_code.map(|code| code.as_u16() as i32),
                 }) {
                     Ok(json) => {

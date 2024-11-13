@@ -17,7 +17,7 @@
 use chrono::{NaiveDateTime, Utc};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_util::http::reqwest_headermap_to_hashmap;
+use dragonfly_client_util::http::headermap_to_hashmap;
 use rayon::prelude::*;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -332,7 +332,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         // Convert the response header to hashmap.
         let response_header = response_header
             .as_ref()
-            .map(reqwest_headermap_to_hashmap)
+            .map(headermap_to_hashmap)
             .unwrap_or_default();
 
         let task = match self.db.get::<Task>(id.as_bytes())? {

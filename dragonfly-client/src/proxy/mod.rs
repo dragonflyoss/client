@@ -30,10 +30,7 @@ use dragonfly_client_config::dfdaemon::{Config, Rule};
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_util::{
-    http::{
-        hashmap_to_hyper_header_map, hyper_headermap_to_reqwest_headermap,
-        reqwest_headermap_to_hashmap,
-    },
+    http::{hashmap_to_headermap, headermap_to_hashmap},
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
 use futures_util::TryStreamExt;
@@ -626,7 +623,7 @@ async fn proxy_by_dfdaemon(
                                 backend.status_code.unwrap_or_default() as u16
                             )
                             .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
-                            Some(hashmap_to_hyper_header_map(&backend.header)?),
+                            Some(hashmap_to_headermap(&backend.header)?),
                         ));
                     }
                     Err(_) => {
@@ -819,10 +816,7 @@ async fn proxy_by_dfdaemon(
                                         backend.status_code.unwrap_or_default() as u16,
                                     )
                                     .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
-                                    Some(
-                                        hashmap_to_hyper_header_map(&backend.header)
-                                            .unwrap_or_default(),
-                                    ),
+                                    Some(hashmap_to_headermap(&backend.header).unwrap_or_default()),
                                 )))
                                 .await
                                 .unwrap_or_default();
@@ -926,9 +920,8 @@ fn make_registry_mirror_request(
     config: Arc<Config>,
     mut request: Request<hyper::body::Incoming>,
 ) -> ClientResult<Request<hyper::body::Incoming>> {
-    // Convert the Reqwest header to the Hyper header.
-    let reqwest_request_header = hyper_headermap_to_reqwest_headermap(request.headers());
-    let registry_mirror_uri = match header::get_registry(&reqwest_request_header) {
+    let header = request.headers().clone();
+    let registry_mirror_uri = match header::get_registry(&header) {
         Some(registry) => format!("{}{}", registry, request.uri().path())
             .parse::<http::Uri>()
             .or_err(ErrorType::ParseError)?,
@@ -941,7 +934,7 @@ fn make_registry_mirror_request(
         .or_err(ErrorType::ParseError)?,
     };
 
-    header::get_registry(&reqwest_request_header);
+    header::get_registry(&header);
 
     *request.uri_mut() = registry_mirror_uri.clone();
     request.headers_mut().insert(
@@ -964,10 +957,10 @@ fn make_download_task_request(
     request: Request<hyper::body::Incoming>,
 ) -> ClientResult<DownloadTaskRequest> {
     // Convert the Reqwest header to the Hyper header.
-    let mut reqwest_request_header = hyper_headermap_to_reqwest_headermap(request.headers());
+    let mut header = request.headers().clone();
 
     // Registry will return the 403 status code if the Host header is set.
-    reqwest_request_header.remove(reqwest::header::HOST);
+    header.remove(reqwest::header::HOST);
 
     Ok(DownloadTaskRequest {
         download: Some(Download {
@@ -976,21 +969,21 @@ fn make_download_task_request(
             // Download range use header range in HTTP protocol.
             range: None,
             r#type: TaskType::Standard as i32,
-            tag: header::get_tag(&reqwest_request_header),
-            application: header::get_application(&reqwest_request_header),
-            priority: header::get_priority(&reqwest_request_header),
+            tag: header::get_tag(&header),
+            application: header::get_application(&header),
+            priority: header::get_priority(&header),
             filtered_query_params: header::get_filtered_query_params(
-                &reqwest_request_header,
+                &header,
                 rule.filtered_query_params.clone(),
             ),
-            request_header: reqwest_headermap_to_hashmap(&reqwest_request_header),
+            request_header: headermap_to_hashmap(&header),
             piece_length: None,
             output_path: None,
             timeout: None,
             need_back_to_source: false,
             disable_back_to_source: config.proxy.disable_back_to_source,
             certificate_chain: Vec::new(),
-            prefetch: need_prefetch(config.clone(), &reqwest_request_header),
+            prefetch: need_prefetch(config.clone(), &header),
             object_storage: None,
         }),
     })
@@ -1022,7 +1015,7 @@ fn make_download_url(
     use_tls: bool,
     redirect: Option<String>,
 ) -> ClientResult<String> {
-    let mut parts = uri.clone().into_parts();
+    let mut parts = http::uri::Parts::from(uri.clone());
 
     // Set the scheme to https if the rule uses tls.
     if use_tls {
@@ -1031,9 +1024,8 @@ fn make_download_url(
 
     // Set the authority to the redirect address.
     if let Some(redirect) = redirect {
-        parts.authority = Some(http::uri::Authority::from_static(Box::leak(
-            redirect.into_boxed_str(),
-        )));
+        parts.authority =
+            Some(http::uri::Authority::try_from(redirect).or_err(ErrorType::ParseError)?);
     }
 
     Ok(http::Uri::from_parts(parts)
@@ -1064,7 +1056,7 @@ fn make_response_headers(
         );
     };
 
-    hashmap_to_hyper_header_map(&download_task_started_response.response_header)
+    hashmap_to_headermap(&download_task_started_response.response_header)
 }
 
 /// find_matching_rule returns whether the dfdaemon should be used to download the task.
