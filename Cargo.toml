@@ -87,7 +87,7 @@ base16ct = { version = "0.2", features = ["alloc"] }
 bytesize = { version = "1.2.0", features = ["serde"] }
 bytesize-serde = "0.2.1"
 percent-encoding = "2.3.1"
-tempfile = "3.13.0"
+tempfile = "3.14.0"
 tokio-rustls = "0.25.0-alpha.4"
 
 [profile.release]
