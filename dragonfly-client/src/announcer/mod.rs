@@ -26,7 +26,8 @@ use dragonfly_client_config::{
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::Result;
 use std::env;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use sysinfo::System;
 use tokio::sync::mpsc;
 use tracing::{error, info, instrument};
@@ -121,6 +122,9 @@ pub struct SchedulerAnnouncer {
     /// scheduler_client is the grpc client of the scheduler.
     scheduler_client: Arc<SchedulerClient>,
 
+    // system is the system information.
+    system: Arc<Mutex<System>>,
+
     /// shutdown is used to shutdown the announcer.
     shutdown: shutdown::Shutdown,
 
@@ -143,6 +147,7 @@ impl SchedulerAnnouncer {
             config,
             host_id,
             scheduler_client,
+            system: Arc::new(Mutex::new(System::new_all())),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         };
@@ -150,7 +155,7 @@ impl SchedulerAnnouncer {
         // Initialize the scheduler announcer.
         announcer
             .scheduler_client
-            .init_announce_host(announcer.make_announce_host_request()?)
+            .init_announce_host(announcer.make_announce_host_request(Duration::ZERO)?)
             .await?;
         Ok(announcer)
     }
@@ -166,7 +171,7 @@ impl SchedulerAnnouncer {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    let request = match self.make_announce_host_request() {
+                    let request = match self.make_announce_host_request(interval.period()) {
                         Ok(request) => request,
                         Err(err) => {
                             error!("make announce host request failed: {}", err);
@@ -195,7 +200,7 @@ impl SchedulerAnnouncer {
 
     /// make_announce_host_request makes the announce host request.
     #[instrument(skip_all)]
-    fn make_announce_host_request(&self) -> Result<AnnounceHostRequest> {
+    fn make_announce_host_request(&self, interval: Duration) -> Result<AnnounceHostRequest> {
         // If the seed peer is enabled, we should announce the seed peer to the scheduler.
         let host_type = if self.config.seed_peer.enable {
             self.config.seed_peer.kind
@@ -203,8 +208,8 @@ impl SchedulerAnnouncer {
             HostType::Normal
         };
 
-        // Get the system information.
-        let mut sys = System::new_all();
+        // Refresh the system information.
+        let mut sys = self.system.lock().unwrap();
         sys.refresh_all();
 
         // Get the process information.
@@ -259,11 +264,21 @@ impl SchedulerAnnouncer {
         let used_space = total_space - available_space;
         let used_percent = (used_space as f64 / (total_space) as f64) * 100.0;
 
+        let mut write_bandwidth = 0;
+        let mut read_bandwidth = 0;
+        if interval != Duration::ZERO {
+            let disk_usage = process.disk_usage();
+            write_bandwidth = disk_usage.written_bytes / interval.as_secs();
+            read_bandwidth = disk_usage.read_bytes / interval.as_secs();
+        };
+
         let disk = Disk {
             total: total_space,
             free: available_space,
             used: used_space,
             used_percent,
+            write_bandwidth,
+            read_bandwidth,
 
             // TODO: Get the disk inodes information.
             inodes_total: 0,

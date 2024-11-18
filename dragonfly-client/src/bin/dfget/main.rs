@@ -719,6 +719,7 @@ async fn download(
                 certificate_chain: Vec::new(),
                 prefetch: false,
                 object_storage,
+                hdfs: None,
             }),
         })
         .await

@@ -985,6 +985,7 @@ fn make_download_task_request(
             certificate_chain: Vec::new(),
             prefetch: need_prefetch(config.clone(), &header),
             object_storage: None,
+            hdfs: None,
         }),
     })
 }
