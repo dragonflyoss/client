@@ -25,7 +25,7 @@ use dragonfly_client::metrics::{
     collect_backend_request_started_metrics,
 };
 use dragonfly_client::tracing::init_tracing;
-use dragonfly_client_backend::{object_storage, BackendFactory, DirEntry, HeadRequest};
+use dragonfly_client_backend::{hdfs, object_storage, BackendFactory, DirEntry, HeadRequest};
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{BackendError, ErrorType, OrErr};
@@ -55,6 +55,9 @@ The full documentation is here: https://d7y.io/docs/next/reference/commands/clie
 Examples:
   # Download a file from HTTP server.
   $ dfget https://<host>:<port>/<path> -O /tmp/file.txt
+
+  # Download a file from HDFS.
+  $ dfget hdfs://<host>:<port>/<path> -O /tmp/file.txt --hdfs-delegation-token=<delegation_token>
   
   # Download a file from Amazon Simple Storage Service(S3).
   $ dfget s3://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret>
@@ -204,7 +207,7 @@ struct Args {
         long,
         help = "Specify the delegation token for Hadoop Distributed File System(HDFS)"
     )]
-    storage_delegation_token: Option<String>,
+    hdfs_delegation_token: Option<String>,
 
     #[arg(
         long,
@@ -574,24 +577,19 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
     // then download all files in the directory. Otherwise, download the single file.
     let scheme = args.url.scheme();
     if args.url.path().ends_with('/') {
-        if !is_support_directory_download(scheme) {
+        if !BackendFactory::supported_download_directory(scheme) {
             return Err(Error::Unsupported(format!("{} download directory", scheme)));
         };
+
         return download_dir(args, dfdaemon_download_client).await;
     };
 
     download(args, ProgressBar::new(0), dfdaemon_download_client).await
 }
 
-/// is_support_directory_download checks whether the scheme supports directory download.
-fn is_support_directory_download(scheme: &str) -> bool {
-    // Only object storage protocol and hdfs protocol supports directory download.
-    object_storage::Scheme::from_str(scheme).is_ok() || scheme == "hdfs"
-}
-
 /// download_dir downloads all files in the directory.
 async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Result<()> {
-    // Initialize the object storage and the hdfs.
+    // Initialize the object storage config and the hdfs config.
     let object_storage = Some(ObjectStorage {
         access_key_id: args.storage_access_key_id.clone(),
         access_key_secret: args.storage_access_key_secret.clone(),
@@ -601,8 +599,9 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         credential_path: args.storage_credential_path.clone(),
         predefined_acl: args.storage_predefined_acl.clone(),
     });
+
     let hdfs = Some(Hdfs {
-        delegation_token: args.storage_delegation_token.clone(),
+        delegation_token: args.hdfs_delegation_token.clone(),
     });
 
     // Get all entries in the directory. If the directory is empty, then return directly.
@@ -702,10 +701,10 @@ async fn download(
         Err(_) => None,
     };
 
-    // Only initialize hdfs when the scheme is HDFS protocol.
+    // Only initialize HDFS when the scheme is HDFS protocol.
     let hdfs = match args.url.scheme() {
-        "hdfs" => Some(Hdfs {
-            delegation_token: args.storage_delegation_token.clone(),
+        hdfs::HDFS_SCHEME => Some(Hdfs {
+            delegation_token: args.hdfs_delegation_token.clone(),
         }),
         _ => None,
     };

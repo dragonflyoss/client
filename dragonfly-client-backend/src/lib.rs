@@ -23,6 +23,7 @@ use libloading::Library;
 use reqwest::header::HeaderMap;
 use rustls_pki_types::CertificateDer;
 use std::path::Path;
+use std::str::FromStr;
 use std::{collections::HashMap, pin::Pin, time::Duration};
 use std::{fmt::Debug, fs};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -227,6 +228,12 @@ impl BackendFactory {
         Ok(backend_factory)
     }
 
+    /// supported_download_directory returns whether the scheme supports directory download.
+    #[instrument(skip_all)]
+    pub fn supported_download_directory(scheme: &str) -> bool {
+        object_storage::Scheme::from_str(scheme).is_ok() || scheme == hdfs::HDFS_SCHEME
+    }
+
     /// build returns the backend by the scheme of the url.
     #[instrument(skip_all)]
     pub fn build(&self, url: &str) -> Result<&(dyn Backend + Send + Sync)> {
@@ -241,12 +248,16 @@ impl BackendFactory {
     /// load_builtin_backends loads the builtin backends.
     #[instrument(skip_all)]
     fn load_builtin_backends(&mut self) {
-        self.backends
-            .insert("http".to_string(), Box::new(http::HTTP::new("http")));
+        self.backends.insert(
+            "http".to_string(),
+            Box::new(http::HTTP::new(http::HTTP_SCHEME)),
+        );
         info!("load [http] builtin backend");
 
-        self.backends
-            .insert("https".to_string(), Box::new(http::HTTP::new("https")));
+        self.backends.insert(
+            "https".to_string(),
+            Box::new(http::HTTP::new(http::HTTPS_SCHEME)),
+        );
         info!("load [https] builtin backend");
 
         self.backends.insert(
