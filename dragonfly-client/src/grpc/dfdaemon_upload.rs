@@ -41,7 +41,7 @@ use dragonfly_client_core::{
 use dragonfly_client_util::http::{get_range, hashmap_to_headermap, headermap_to_hashmap};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
@@ -103,7 +103,7 @@ impl DfdaemonUploadServer {
 
     /// run starts the upload server.
     #[instrument(skip_all)]
-    pub async fn run(&mut self) -> ClientResult<()> {
+    pub async fn run(&mut self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         // Register the reflection service.
         let reflection = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
@@ -128,8 +128,7 @@ impl DfdaemonUploadServer {
         {
             server_builder = server_builder.tls_config(server_tls_config)?;
         }
-
-        Ok(server_builder
+        let server = server_builder
             .max_frame_size(super::MAX_FRAME_SIZE)
             .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
             .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
@@ -140,8 +139,13 @@ impl DfdaemonUploadServer {
                 // Upload grpc server shutting down with signals.
                 let _ = shutdown.recv().await;
                 info!("upload grpc server shutting down");
-            })
-            .await?)
+            });
+
+        // Notify the grpc server is started.
+        grpc_server_started_barrier.wait();
+
+        // Wait for the upload grpc server to shutdown.
+        Ok(server.await?)
     }
 }
 
