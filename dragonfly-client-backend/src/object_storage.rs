@@ -68,7 +68,7 @@ impl fmt::Display for Scheme {
 impl FromStr for Scheme {
     type Err = String;
 
-    /// from_str parses an scheme string.
+    /// from_str parses a scheme string.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "s3" => Ok(Scheme::S3),
@@ -277,7 +277,7 @@ impl ObjectStorage {
             .http_client(HttpClient::with(client))
             .bucket(&parsed_url.bucket);
 
-        // Configure the credentials using the local path to the crendential file if provided.
+        // Configure the credentials using the local path to the credential file if provided.
         // Otherwise, configure using the Application Default Credentials (ADC).
         if let Some(credential_path) = object_storage.credential_path.as_deref() {
             builder = builder.credential_path(credential_path);
@@ -568,7 +568,7 @@ impl crate::Backend for ObjectStorage {
         })
     }
 
-    /// Returns content of requested file.
+    /// get returns content of requested file.
     #[instrument(skip_all)]
     async fn get(
         &self,

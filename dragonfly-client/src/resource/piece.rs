@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use super::*;
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::metrics::{
     collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
@@ -21,7 +22,7 @@ use crate::metrics::{
     collect_upload_piece_traffic_metrics,
 };
 use chrono::Utc;
-use dragonfly_api::common::v2::{ObjectStorage, Range, TrafficType};
+use dragonfly_api::common::v2::{Hdfs, ObjectStorage, Range, TrafficType};
 use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
 use dragonfly_client_backend::{BackendFactory, GetRequest};
 use dragonfly_client_config::dfdaemon::Config;
@@ -36,11 +37,9 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{error, info, instrument, Span};
 
-use super::*;
-
 /// MAX_PIECE_COUNT is the maximum piece count. If the piece count is upper
 /// than MAX_PIECE_COUNT, the piece length will be optimized by the file length.
-/// When piece length becames the MAX_PIECE_LENGTH, the piece piece count
+/// When piece length became the MAX_PIECE_LENGTH, the piece count
 /// probably will be upper than MAX_PIECE_COUNT.
 const MAX_PIECE_COUNT: u64 = 500;
 
@@ -513,6 +512,7 @@ impl Piece {
         length: u64,
         request_header: HeaderMap,
         object_storage: Option<ObjectStorage>,
+        hdfs: Option<Hdfs>,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
@@ -572,6 +572,7 @@ impl Piece {
                 timeout: self.config.download.piece_timeout,
                 client_cert: None,
                 object_storage,
+                hdfs,
             })
             .await
             .map_err(|err| {

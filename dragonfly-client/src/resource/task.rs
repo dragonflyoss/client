@@ -20,7 +20,7 @@ use crate::metrics::{
     collect_backend_request_started_metrics,
 };
 use dragonfly_api::common::v2::{
-    Download, ObjectStorage, Peer, Piece, Range, Task as CommonTask, TrafficType,
+    Download, Hdfs, ObjectStorage, Peer, Piece, Range, Task as CommonTask, TrafficType,
 };
 use dragonfly_api::dfdaemon::{
     self,
@@ -156,6 +156,7 @@ impl Task {
                 timeout: self.config.download.piece_timeout,
                 client_cert: None,
                 object_storage: request.object_storage,
+                hdfs: request.hdfs,
             })
             .await
             .map_err(|err| {
@@ -1200,6 +1201,7 @@ impl Task {
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnouncePeerRequest>,
                 object_storage: Option<ObjectStorage>,
+                hdfs: Option<Hdfs>,
             ) -> ClientResult<metadata::Piece> {
                 // Limit the concurrent download count.
                 let _permit = semaphore.acquire().await.unwrap();
@@ -1217,6 +1219,7 @@ impl Task {
                         length,
                         request_header,
                         object_storage,
+                        hdfs,
                     )
                     .await?;
 
@@ -1301,6 +1304,7 @@ impl Task {
                     download_progress_tx.clone(),
                     in_stream_tx.clone(),
                     request.object_storage.clone(),
+                    request.hdfs.clone(),
                 )
                 .in_current_span(),
             );
@@ -1524,6 +1528,7 @@ impl Task {
                 semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 object_storage: Option<ObjectStorage>,
+                hdfs: Option<Hdfs>,
             ) -> ClientResult<metadata::Piece> {
                 // Limit the concurrent download count.
                 let _permit = semaphore.acquire().await.unwrap();
@@ -1541,6 +1546,7 @@ impl Task {
                         length,
                         request_header,
                         object_storage,
+                        hdfs,
                     )
                     .await?;
 
@@ -1603,6 +1609,7 @@ impl Task {
                     semaphore.clone(),
                     download_progress_tx.clone(),
                     request.object_storage.clone(),
+                    request.hdfs.clone(),
                 )
                 .in_current_span(),
             );
@@ -1678,7 +1685,7 @@ impl Task {
                     })
                     .await
                     .map_err(|err| {
-                        error!("delete task {} failed from scheudler: {:?}", task_id, err);
+                        error!("delete task {} failed from scheduler: {:?}", task_id, err);
                         err
                     })?;
 
