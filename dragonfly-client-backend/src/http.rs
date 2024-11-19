@@ -356,6 +356,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: std::time::Duration::from_secs(5),
                 client_cert: None,
                 object_storage: None,
+                hdfs: None,
             })
             .await
             .unwrap();
@@ -383,6 +384,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: std::time::Duration::from_secs(5),
                 client_cert: None,
                 object_storage: None,
+                hdfs: None,
             })
             .await;
 
@@ -412,6 +414,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: std::time::Duration::from_secs(5),
                 client_cert: None,
                 object_storage: None,
+                hdfs: None,
             })
             .await
             .unwrap();
@@ -431,6 +434,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: Duration::from_secs(5),
                 client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
                 object_storage: None,
+                hdfs: None,
             })
             .await
             .unwrap();
@@ -449,6 +453,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: Duration::from_secs(5),
                 client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
                 object_storage: None,
+                hdfs: None,
             })
             .await;
 
@@ -468,6 +473,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: std::time::Duration::from_secs(5),
                 client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
                 object_storage: None,
+                hdfs: None,
             })
             .await
             .unwrap();
@@ -489,6 +495,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: std::time::Duration::from_secs(5),
                 client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
                 object_storage: None,
+                hdfs: None,
             })
             .await;
 
@@ -506,6 +513,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: Duration::from_secs(5),
                 client_cert: None,
                 object_storage: None,
+                hdfs: None,
             })
             .await
             .unwrap();
@@ -527,6 +535,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: std::time::Duration::from_secs(5),
                 client_cert: None,
                 object_storage: None,
+                hdfs: None,
             })
             .await
             .unwrap();
