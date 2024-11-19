@@ -22,6 +22,12 @@ use std::io::{Error as IOError, ErrorKind};
 use tokio_util::io::StreamReader;
 use tracing::{debug, error, instrument};
 
+// HTTP_SCHEME is the HTTP scheme.
+pub const HTTP_SCHEME: &str = "http";
+
+// HTTPS_SCHEME is the HTTPS scheme.
+pub const HTTPS_SCHEME: &str = "https";
+
 /// HTTP is the HTTP backend.
 pub struct HTTP {
     /// scheme is the scheme of the HTTP backend.
@@ -173,13 +179,16 @@ impl super::Backend for HTTP {
 impl Default for HTTP {
     /// default returns a new default HTTP.
     fn default() -> Self {
-        Self::new("http")
+        Self::new(HTTP_SCHEME)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{http::HTTP, Backend, GetRequest, HeadRequest};
+    use crate::{
+        http::{HTTP, HTTPS_SCHEME, HTTP_SCHEME},
+        Backend, GetRequest, HeadRequest,
+    };
     use dragonfly_client_util::tls::{load_certs_from_pem, load_key_from_pem};
     use hyper_util::rt::{TokioExecutor, TokioIo};
     use reqwest::{header::HeaderMap, StatusCode};
@@ -348,7 +357,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let resp = HTTP::new("http")
+        let resp = HTTP::new(HTTP_SCHEME)
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: format!("{}/head", server.uri()),
@@ -376,7 +385,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let resp = HTTP::new("http")
+        let resp = HTTP::new(HTTP_SCHEME)
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: format!("{}/head", server.uri()),
@@ -404,7 +413,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let mut resp = HTTP::new("http")
+        let mut resp = HTTP::new(HTTP_SCHEME)
             .get(GetRequest {
                 task_id: "test".to_string(),
                 piece_id: "test".to_string(),
@@ -426,7 +435,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_get_head_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new("https")
+        let resp = HTTP::new(HTTPS_SCHEME)
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
@@ -445,7 +454,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_return_error_response_when_head_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new("https")
+        let resp = HTTP::new(HTTPS_SCHEME)
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
@@ -463,7 +472,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_get_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let mut resp = HTTP::new("https")
+        let mut resp = HTTP::new(HTTPS_SCHEME)
             .get(GetRequest {
                 task_id: "test".to_string(),
                 piece_id: "test".to_string(),
@@ -485,7 +494,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_return_error_response_when_get_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new("https")
+        let resp = HTTP::new(HTTPS_SCHEME)
             .get(GetRequest {
                 task_id: "test".to_string(),
                 piece_id: "test".to_string(),
@@ -505,7 +514,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_get_head_response_with_no_verifier() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new("https")
+        let resp = HTTP::new(HTTPS_SCHEME)
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
@@ -524,7 +533,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_get_response_with_no_verifier() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let http_backend = HTTP::new("https");
+        let http_backend = HTTP::new(HTTPS_SCHEME);
         let mut resp = http_backend
             .get(GetRequest {
                 task_id: "test".to_string(),

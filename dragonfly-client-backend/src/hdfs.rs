@@ -23,17 +23,26 @@ use tokio_util::io::StreamReader;
 use tracing::{error, info, instrument};
 use url::Url;
 
-const NAMENODE_DEFAULT_WEB_PORT: u16 = 9870;
+/// HDFS_SCHEME is the scheme of the HDFS.
+pub const HDFS_SCHEME: &str = "hdfs";
+
+/// DEFAULT_NAMENODE_PORT is the default port of the HDFS namenode.
+const DEFAULT_NAMENODE_PORT: u16 = 9870;
 
 /// Hdfs is a struct that implements the Backend trait.
-pub struct Hdfs {}
+pub struct Hdfs {
+    /// scheme is the scheme of the HDFS.
+    scheme: String,
+}
 
 /// Hdfs implements the Backend trait.
 impl Hdfs {
     /// new returns a new HDFS backend.
     #[instrument(skip_all)]
     pub fn new() -> Self {
-        Self {}
+        Self {
+            scheme: HDFS_SCHEME.to_string(),
+        }
     }
 
     /// operator initializes the operator with the parsed URL and HDFS config.
@@ -44,7 +53,7 @@ impl Hdfs {
             .host_str()
             .ok_or_else(|| ClientError::InvalidURI(url.to_string()))?
             .to_string();
-        let port = url.port().unwrap_or(NAMENODE_DEFAULT_WEB_PORT);
+        let port = url.port().unwrap_or(DEFAULT_NAMENODE_PORT);
 
         // Initialize the HDFS operator.
         let mut builder = opendal::services::Webhdfs::default();
@@ -54,7 +63,7 @@ impl Hdfs {
 
         // If HDFS config is not None, set the config for builder.
         if let Some(config) = config {
-            if let Some(delegation_token) = config.delegation_token {
+            if let Some(delegation_token) = &config.delegation_token {
                 builder = builder.delegation(delegation_token.as_str());
             }
         }
@@ -69,7 +78,7 @@ impl super::Backend for Hdfs {
     /// scheme returns the scheme of the HDFS backend.
     #[instrument(skip_all)]
     fn scheme(&self) -> String {
-        "hdfs".to_string()
+        self.scheme.clone()
     }
 
     /// head gets the header of the request.
@@ -238,9 +247,6 @@ mod tests {
     async fn should_get_operator() {
         let url: Url = Url::parse("hdfs://127.0.0.1:9870/file").unwrap();
         let operator = Hdfs::new().operator(url, None);
-
-        // If HDFS is running on localhost, the following code can be used to check the operator.
-        // operator.unwrap().check().await.unwrap();
 
         assert!(
             operator.is_ok(),
