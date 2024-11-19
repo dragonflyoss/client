@@ -141,6 +141,10 @@ impl Proxy {
     /// run starts the proxy server.
     #[instrument(skip_all)]
     pub async fn run(&self) -> ClientResult<()> {
+        let dfdaemon_download_client =
+            DfdaemonDownloadClient::new_unix(self.config.download.server.socket_path.clone())
+                .await?;
+
         let listener = TcpListener::bind(self.addr).await?;
         info!("proxy server listening on {}", self.addr);
 
@@ -160,9 +164,7 @@ impl Proxy {
 
                     let config = self.config.clone();
                     let task = self.task.clone();
-                    let dfdaemon_download_client = DfdaemonDownloadClient::new_unix(
-                        config.download.server.socket_path.clone(),
-                    ).await?;
+                    let dfdaemon_download_client = dfdaemon_download_client.clone();
 
                     let registry_cert = self.registry_cert.clone();
                     let server_ca_cert = self.server_ca_cert.clone();

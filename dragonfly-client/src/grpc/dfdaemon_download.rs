@@ -47,7 +47,7 @@ use dragonfly_client_util::{
 };
 use hyper_util::rt::TokioIo;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::net::{UnixListener, UnixStream};
@@ -105,7 +105,7 @@ impl DfdaemonDownloadServer {
 
     /// run starts the download server with unix domain socket.
     #[instrument(skip_all)]
-    pub async fn run(&mut self) -> ClientResult<()> {
+    pub async fn run(&mut self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         // Register the reflection service.
         let reflection = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
@@ -130,11 +130,14 @@ impl DfdaemonDownloadServer {
         fs::create_dir_all(self.socket_path.parent().unwrap()).await?;
         let uds = UnixListener::bind(&self.socket_path)?;
         let uds_stream = UnixListenerStream::new(uds);
-
-        Server::builder()
+        let server = Server::builder()
+            .tcp_nodelay(true)
             .max_frame_size(super::MAX_FRAME_SIZE)
             .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
             .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
+            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+            .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
+            .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
             .add_service(reflection.clone())
             .add_service(health_service)
             .add_service(self.service.clone())
@@ -142,8 +145,13 @@ impl DfdaemonDownloadServer {
                 // Download grpc server shutting down with signals.
                 let _ = shutdown.recv().await;
                 info!("download grpc server shutting down");
-            })
-            .await?;
+            });
+
+        // Notify the grpc server is started.
+        grpc_server_started_barrier.wait();
+
+        // Wait for the download grpc server to shutdown.
+        server.await?;
 
         // Remove the unix domain socket file.
         fs::remove_file(&self.socket_path).await?;
@@ -986,7 +994,14 @@ impl DfdaemonDownloadClient {
         // Ignore the uri because it is not used.
         let channel = Endpoint::try_from("http://[::]:50051")
             .unwrap()
+            .tcp_nodelay(true)
             .buffer_size(super::BUFFER_SIZE)
+            .connect_timeout(super::CONNECT_TIMEOUT)
+            .timeout(super::REQUEST_TIMEOUT)
+            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+            .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+            .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+            .keep_alive_while_idle(true)
             .connect_with_connector(service_fn(move |_: Uri| {
                 let socket_path = socket_path.clone();
                 async move {
