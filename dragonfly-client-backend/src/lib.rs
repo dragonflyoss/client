@@ -329,11 +329,8 @@ impl BackendFactory {
                 > = lib.get(b"register_plugin").or_err(ErrorType::PluginError)?;
 
                 if let Some(file_stem) = path.file_stem() {
-                    if let Some(plugin_name) = file_stem
-                        .to_string_lossy()
-                        .to_string()
-                        .replace("_", "-")
-                        .strip_prefix("lib")
+                    if let Some(plugin_name) =
+                        file_stem.to_string_lossy().to_string().strip_prefix("lib")
                     {
                         self.backends
                             .insert(plugin_name.to_string(), register_plugin());
