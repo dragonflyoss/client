@@ -244,7 +244,7 @@ lazy_static! {
     /// DISK_READ_BYTES is used to count of the disk read bytes.
     pub static ref DISK_READ_BYTES: IntGaugeVec =
         IntGaugeVec::new(
-            Opts::new("disk_read_bandwidth", "Gauge of the disk read bytes.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            Opts::new("disk_read_bytes", "Gauge of the disk read bytes.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
             &[]
         ).expect("metric can be created");
 }
