@@ -40,6 +40,12 @@ const POOL_MAX_IDLE_PER_HOST: usize = 1024;
 /// KEEP_ALIVE_INTERVAL is the keep alive interval for TCP connection.
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(60);
 
+/// HTTP2_KEEP_ALIVE_INTERVAL is the interval for HTTP2 keep alive.
+const HTTP2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(300);
+
+/// HTTP2_KEEP_ALIVE_TIMEOUT is the timeout for HTTP2 keep alive.
+const HTTP2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// NAME is the name of the package.
 pub const NAME: &str = "backend";
 
@@ -270,7 +276,7 @@ impl BackendFactory {
             "s3".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::S3,
-            )),
+            )?),
         );
         info!("load [s3] builtin backend");
 
@@ -278,7 +284,7 @@ impl BackendFactory {
             "gs".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::GCS,
-            )),
+            )?),
         );
         info!("load [gcs] builtin backend");
 
@@ -286,7 +292,7 @@ impl BackendFactory {
             "abs".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::ABS,
-            )),
+            )?),
         );
         info!("load [abs] builtin backend");
 
@@ -294,7 +300,7 @@ impl BackendFactory {
             "oss".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::OSS,
-            )),
+            )?),
         );
         info!("load [oss] builtin backend");
 
@@ -302,7 +308,7 @@ impl BackendFactory {
             "obs".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::OBS,
-            )),
+            )?),
         );
         info!("load [obs] builtin backend");
 
@@ -310,7 +316,7 @@ impl BackendFactory {
             "cos".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::COS,
-            )),
+            )?),
         );
         info!("load [cos] builtin backend");
 
