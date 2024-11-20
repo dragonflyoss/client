@@ -34,6 +34,12 @@ pub mod hdfs;
 pub mod http;
 pub mod object_storage;
 
+/// POOL_MAX_IDLE_PER_HOST is the max idle connections per host.
+const POOL_MAX_IDLE_PER_HOST: usize = 1024;
+
+/// KEEP_ALIVE_INTERVAL is the keep alive interval for TCP connection.
+const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(60);
+
 /// NAME is the name of the package.
 pub const NAME: &str = "backend";
 
@@ -215,7 +221,7 @@ impl BackendFactory {
     #[instrument(skip_all)]
     pub fn new(plugin_dir: Option<&Path>) -> Result<Self> {
         let mut backend_factory = Self::default();
-        backend_factory.load_builtin_backends();
+        backend_factory.load_builtin_backends()?;
         if let Some(plugin_dir) = plugin_dir {
             backend_factory
                 .load_plugin_backends(plugin_dir)
@@ -247,16 +253,16 @@ impl BackendFactory {
 
     /// load_builtin_backends loads the builtin backends.
     #[instrument(skip_all)]
-    fn load_builtin_backends(&mut self) {
+    fn load_builtin_backends(&mut self) -> Result<()> {
         self.backends.insert(
             "http".to_string(),
-            Box::new(http::HTTP::new(http::HTTP_SCHEME)),
+            Box::new(http::HTTP::new(http::HTTP_SCHEME)?),
         );
         info!("load [http] builtin backend");
 
         self.backends.insert(
             "https".to_string(),
-            Box::new(http::HTTP::new(http::HTTPS_SCHEME)),
+            Box::new(http::HTTP::new(http::HTTPS_SCHEME)?),
         );
         info!("load [https] builtin backend");
 
@@ -311,6 +317,8 @@ impl BackendFactory {
         self.backends
             .insert("hdfs".to_string(), Box::new(hdfs::Hdfs::new()));
         info!("load [hdfs] builtin backend");
+
+        Ok(())
     }
 
     /// load_plugin_backends loads the plugin backends.
