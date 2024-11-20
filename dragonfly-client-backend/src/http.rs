@@ -22,52 +22,65 @@ use std::io::{Error as IOError, ErrorKind};
 use tokio_util::io::StreamReader;
 use tracing::{debug, error, instrument};
 
-// HTTP_SCHEME is the HTTP scheme.
+/// HTTP_SCHEME is the HTTP scheme.
 pub const HTTP_SCHEME: &str = "http";
 
-// HTTPS_SCHEME is the HTTPS scheme.
+/// HTTPS_SCHEME is the HTTPS scheme.
 pub const HTTPS_SCHEME: &str = "https";
 
 /// HTTP is the HTTP backend.
 pub struct HTTP {
     /// scheme is the scheme of the HTTP backend.
     scheme: String,
+
+    /// client is the reqwest client.
+    client: reqwest::Client,
 }
 
 /// HTTP implements the http interface.
 impl HTTP {
     /// new returns a new HTTP.
     #[instrument(skip_all)]
-    pub fn new(scheme: &str) -> HTTP {
-        Self {
+    pub fn new(scheme: &str) -> Result<HTTP> {
+        // Default TLS client config with no validation.
+        let client_config_builder = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(NoVerifier::new())
+            .with_no_client_auth();
+
+        let client = reqwest::Client::builder()
+            .use_preconfigured_tls(client_config_builder)
+            .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
+            .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
+            .build()?;
+
+        Ok(Self {
             scheme: scheme.to_string(),
-        }
+            client,
+        })
     }
 
     /// client returns a new reqwest client.
     #[instrument(skip_all)]
     fn client(&self, client_cert: Option<Vec<CertificateDer<'static>>>) -> Result<reqwest::Client> {
-        let client_config_builder = match client_cert.as_ref() {
+        match client_cert.as_ref() {
             Some(client_cert) => {
                 let mut root_cert_store = rustls::RootCertStore::empty();
                 root_cert_store.add_parsable_certificates(client_cert.to_owned());
 
                 // TLS client config using the custom CA store for lookups.
-                rustls::ClientConfig::builder()
+                let client_config_builder = rustls::ClientConfig::builder()
                     .with_root_certificates(root_cert_store)
-                    .with_no_client_auth()
-            }
-            // Default TLS client config with native roots.
-            None => rustls::ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(NoVerifier::new())
-                .with_no_client_auth(),
-        };
+                    .with_no_client_auth();
 
-        let client = reqwest::Client::builder()
-            .use_preconfigured_tls(client_config_builder)
-            .build()?;
-        Ok(client)
+                let client = reqwest::Client::builder()
+                    .use_preconfigured_tls(client_config_builder)
+                    .build()?;
+                Ok(client)
+            }
+            // Default TLS client config with no validation.
+            None => Ok(self.client.clone()),
+        }
     }
 }
 
@@ -172,14 +185,6 @@ impl super::Backend for HTTP {
             reader,
             error_message: Some(status_code.to_string()),
         })
-    }
-}
-
-/// Default implements the Default trait.
-impl Default for HTTP {
-    /// default returns a new default HTTP.
-    fn default() -> Self {
-        Self::new(HTTP_SCHEME)
     }
 }
 
@@ -358,6 +363,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .await;
 
         let resp = HTTP::new(HTTP_SCHEME)
+            .unwrap()
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: format!("{}/head", server.uri()),
@@ -386,6 +392,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .await;
 
         let resp = HTTP::new(HTTP_SCHEME)
+            .unwrap()
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: format!("{}/head", server.uri()),
@@ -414,6 +421,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .await;
 
         let mut resp = HTTP::new(HTTP_SCHEME)
+            .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
                 piece_id: "test".to_string(),
@@ -436,6 +444,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     async fn should_get_head_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
         let resp = HTTP::new(HTTPS_SCHEME)
+            .unwrap()
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
@@ -455,6 +464,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     async fn should_return_error_response_when_head_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
         let resp = HTTP::new(HTTPS_SCHEME)
+            .unwrap()
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
@@ -473,6 +483,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     async fn should_get_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
         let mut resp = HTTP::new(HTTPS_SCHEME)
+            .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
                 piece_id: "test".to_string(),
@@ -495,6 +506,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     async fn should_return_error_response_when_get_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
         let resp = HTTP::new(HTTPS_SCHEME)
+            .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
                 piece_id: "test".to_string(),
@@ -515,6 +527,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     async fn should_get_head_response_with_no_verifier() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
         let resp = HTTP::new(HTTPS_SCHEME)
+            .unwrap()
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
@@ -535,6 +548,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
         let http_backend = HTTP::new(HTTPS_SCHEME);
         let mut resp = http_backend
+            .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
                 piece_id: "test".to_string(),
