@@ -21,7 +21,7 @@ use std::cmp::{max, min};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::{self, File, OpenOptions};
-use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom};
+use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, BufReader, BufWriter, SeekFrom};
 use tokio_util::io::InspectReader;
 use tracing::{error, info, instrument, warn};
 
@@ -249,35 +249,29 @@ impl Content {
         range: Option<Range>,
     ) -> Result<impl AsyncRead> {
         let task_path = self.get_task_path(task_id);
-        if let Some(range) = range {
-            let target_offset = max(offset, range.start);
-            let target_length =
-                min(offset + length - 1, range.start + range.length - 1) - target_offset + 1;
-
-            let mut f = File::open(task_path.as_path()).await.map_err(|err| {
-                error!("open {:?} failed: {}", task_path, err);
-                err
-            })?;
-
-            f.seek(SeekFrom::Start(target_offset))
-                .await
-                .map_err(|err| {
-                    error!("seek {:?} failed: {}", task_path, err);
-                    err
-                })?;
-            return Ok(f.take(target_length));
-        }
-
         let mut f = File::open(task_path.as_path()).await.map_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
             err
         })?;
 
-        f.seek(SeekFrom::Start(offset)).await.map_err(|err| {
-            error!("seek {:?} failed: {}", task_path, err);
-            err
-        })?;
-        Ok(f.take(length))
+        // Calculate the target offset and length based on the range.
+        let (target_offset, target_length) = if let Some(range) = range {
+            let target_offset = max(offset, range.start);
+            let target_length =
+                min(offset + length - 1, range.start + range.length - 1) - target_offset + 1;
+            (target_offset, target_length)
+        } else {
+            (offset, length)
+        };
+
+        f.seek(SeekFrom::Start(target_offset))
+            .await
+            .map_err(|err| {
+                error!("seek {:?} failed: {}", task_path, err);
+                err
+            })?;
+
+        Ok(f.take(target_length))
     }
 
     /// write_piece writes the piece to the content.
@@ -318,7 +312,8 @@ impl Content {
         })?;
 
         // Copy the piece to the file.
-        let length = io::copy(&mut tee, &mut f).await.map_err(|err| {
+        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
+        let length = io::copy(&mut tee, &mut writer).await.map_err(|err| {
             error!("copy {:?} failed: {}", task_path, err);
             err
         })?;

@@ -805,11 +805,11 @@ pub struct Storage {
     #[serde(default = "default_storage_keep")]
     pub keep: bool,
 
-    /// write_buffer_size is the buffer size for writing piece to disk, default is 4KB.
+    /// write_buffer_size is the buffer size for writing piece to disk, default is 128KB.
     #[serde(default = "default_storage_write_buffer_size")]
     pub write_buffer_size: usize,
 
-    /// read_buffer_size is the buffer size for reading piece from disk, default is 4KB.
+    /// read_buffer_size is the buffer size for reading piece from disk, default is 128KB.
     #[serde(default = "default_storage_read_buffer_size")]
     pub read_buffer_size: usize,
 }
