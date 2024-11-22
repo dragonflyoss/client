@@ -49,8 +49,10 @@ use dragonfly_client_util::{
 };
 use reqwest::header::HeaderMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::time::{Duration, Instant};
 use tokio::sync::{
     mpsc::{self, Sender},
