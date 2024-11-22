@@ -83,12 +83,9 @@ impl PieceCollector {
         parents: Vec<CollectedParent>,
     ) -> Self {
         let collected_pieces = Arc::new(DashMap::new());
-        interested_pieces
-            .clone()
-            .into_iter()
-            .for_each(|interested_piece| {
-                collected_pieces.insert(interested_piece.number, "".to_string());
-            });
+        for interested_piece in &interested_pieces {
+            collected_pieces.insert(interested_piece.number, String::new());
+        }
 
         Self {
             config,
@@ -115,8 +112,8 @@ impl PieceCollector {
             async move {
                 Self::collect_from_remote_peers(
                     config,
-                    host_id,
-                    task_id,
+                    host_id.as_str(),
+                    task_id.as_str(),
                     parents,
                     interested_pieces,
                     collected_pieces,
@@ -139,8 +136,8 @@ impl PieceCollector {
     #[instrument(skip_all)]
     async fn collect_from_remote_peers(
         config: Arc<Config>,
-        host_id: String,
-        task_id: String,
+        host_id: &str,
+        task_id: &str,
         parents: Vec<CollectedParent>,
         interested_pieces: Vec<metadata::Piece>,
         collected_pieces: Arc<DashMap<u32, String>>,
@@ -250,8 +247,8 @@ impl PieceCollector {
             join_set.spawn(
                 sync_pieces(
                     config.clone(),
-                    host_id.clone(),
-                    task_id.clone(),
+                    host_id.to_string(),
+                    task_id.to_string(),
                     parent.clone(),
                     parents.clone(),
                     interested_pieces.clone(),

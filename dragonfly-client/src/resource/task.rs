@@ -916,11 +916,10 @@ impl Task {
             task.id.as_str(),
             interested_pieces.clone(),
             parents
-                .clone()
                 .into_iter()
                 .map(|peer| piece_collector::CollectedParent {
-                    id: peer.id.clone(),
-                    host: peer.host.clone(),
+                    id: peer.id,
+                    host: peer.host,
                 })
                 .collect(),
         );
