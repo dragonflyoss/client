@@ -176,3 +176,77 @@ impl Containerd {
         Ok(())
     }
 }
+
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+    use tokio::fs;
+
+    #[tokio::test]
+    async fn test_containerd_config_with_existing_config_path() {
+        
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+        let certs_dir = temp_dir.path().join("certs.d");
+        let certs_dir_str = certs_dir.to_str().unwrap();
+
+        // Create initial containerd config with config_path
+        let initial_config = format!(
+            r#"
+[plugins]
+  [plugins."io.containerd.grpc.v1.cri"]
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "{}"
+"#,
+            certs_dir_str
+        );
+        fs::write(&config_path, initial_config).await.unwrap();
+
+        // Create Containerd instance
+        let containerd = Containerd::new(
+            dfinit::Containerd {
+                config_path: config_path.clone(),
+                registries: vec![ContainerdRegistry {
+                    host_namespace: "docker.io".into(),
+                    server_addr: "https://registry.example.com".into(),
+                    skip_verify: Some(true),
+                    ca: Some(vec!["test-ca-cert".into()]),
+                    capabilities: vec!["pull".into(), "resolve".into()],
+                }],
+            },
+            dfinit::Proxy {
+                addr: "http://127.0.0.1:65001".into(),
+            },
+        );
+
+        // Run containerd configuration
+        let result = containerd.run().await;
+        if let Err(e) = &result {
+            println!("Error: {:?}", e);
+            if let Ok(contents) = fs::read_to_string(&config_path).await {
+                println!("Current config file contents:\n{}", contents);
+            }
+        }
+        assert!(result.is_ok());
+
+        // Verify the hosts.toml file content
+        let hosts_file_path = certs_dir.join("docker.io").join("hosts.toml");
+        let contents = fs::read_to_string(&hosts_file_path).await.unwrap();
+
+        let expected_contents = r#"server = "https://registry.example.com"
+
+[host."http://127.0.0.1:65001"]
+capabilities = ["pull", "resolve"]
+skip_verify = true
+ca = ["test-ca-cert"]
+
+[host."http://127.0.0.1:65001".header]
+X-Dragonfly-Registry = "https://registry.example.com"
+"#;
+
+        assert_eq!(contents.trim(), expected_contents.trim());
+    }
+}
