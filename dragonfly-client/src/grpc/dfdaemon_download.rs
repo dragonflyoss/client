@@ -355,7 +355,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let download_clone = download.clone();
         let task_manager_clone = task_manager.clone();
         let task_clone = task.clone();
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(1024 * 10);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(10);
         tokio::spawn(
             async move {
                 match task_manager_clone
@@ -744,7 +744,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let request_clone = request.clone();
         let task_manager_clone = task_manager.clone();
         let task_clone = task.clone();
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(1024 * 10);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(10);
         tokio::spawn(
             async move {
                 match task_manager_clone

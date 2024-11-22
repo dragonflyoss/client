@@ -26,7 +26,7 @@ use dragonfly_api::dfdaemon::{
     self,
     v2::{download_task_response, DownloadTaskResponse},
 };
-use dragonfly_api::errordetails::v2::Backend;
+use dragonfly_api::errordetails::v2::{Backend, Unknown};
 use dragonfly_api::scheduler::v2::{
     announce_peer_request, announce_peer_response, download_piece_back_to_source_failed_request,
     AnnouncePeerRequest, DeleteTaskRequest, DownloadPeerBackToSourceFailedRequest,
@@ -482,7 +482,7 @@ impl Task {
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
         // Initialize stream channel.
-        let (in_stream_tx, in_stream_rx) = mpsc::channel(1024 * 10);
+        let (in_stream_tx, in_stream_rx) = mpsc::channel(10 * 1024);
 
         // Send the register peer request.
         in_stream_tx
@@ -1362,7 +1362,11 @@ impl Task {
                                     request: Some(announce_peer_request::Request::DownloadPieceBackToSourceFailedRequest(
                                             DownloadPieceBackToSourceFailedRequest{
                                                 piece_number: None,
-                                                response: None,
+                                                response: Some(download_piece_back_to_source_failed_request::Response::Unknown(
+                                                        Unknown{
+                                                            message: Some("send timeout".to_string()),
+                                                        }
+                                                )),
                                             }
                                     )),
                                 }, REQUEST_TIMEOUT)
@@ -1385,7 +1389,11 @@ impl Task {
                                     request: Some(announce_peer_request::Request::DownloadPieceBackToSourceFailedRequest(
                                             DownloadPieceBackToSourceFailedRequest{
                                                 piece_number: None,
-                                                response: None,
+                                                response: Some(download_piece_back_to_source_failed_request::Response::Unknown(
+                                                        Unknown{
+                                                            message: Some(err.to_string()),
+                                                        }
+                                                )),
                                             }
                                     )),
                                 }, REQUEST_TIMEOUT)
@@ -1427,7 +1435,7 @@ impl Task {
             let piece = match self.piece.get(piece_id.as_str()) {
                 Ok(Some(piece)) => piece,
                 Ok(None) => {
-                    info!("piece {} not found in local storage", piece_id);
+                    debug!("piece {} not found in local storage", piece_id);
                     continue;
                 }
                 Err(err) => {
@@ -1590,7 +1598,6 @@ impl Task {
                     })?;
 
                 info!("finished piece {} from source", piece_id);
-
                 Ok(metadata)
             }
 
@@ -1638,14 +1645,14 @@ impl Task {
         }
 
         // Check if all pieces are downloaded.
-        if finished_pieces.len() == interested_pieces.len() {
-            return Ok(finished_pieces);
+        if finished_pieces.len() != interested_pieces.len() {
+            // If not all pieces are downloaded, return an error.
+            return Err(Error::Unknown(
+                "not all pieces are downloaded from source".to_string(),
+            ));
         }
 
-        // If not all pieces are downloaded, return an error.
-        Err(Error::Unknown(
-            "not all pieces are downloaded from source".to_string(),
-        ))
+        return Ok(finished_pieces);
     }
 
     /// stat_task returns the task metadata.

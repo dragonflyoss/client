@@ -21,7 +21,7 @@ use std::cmp::{max, min};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::{self, File, OpenOptions};
-use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom};
+use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, BufReader, BufWriter, SeekFrom};
 use tokio_util::io::InspectReader;
 use tracing::{error, info, instrument, warn};
 
@@ -317,8 +317,11 @@ impl Content {
             err
         })?;
 
+        // Use a buffer to write the piece.
+        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
+
         // Copy the piece to the file.
-        let length = io::copy(&mut tee, &mut f).await.map_err(|err| {
+        let length = io::copy(&mut tee, &mut writer).await.map_err(|err| {
             error!("copy {:?} failed: {}", task_path, err);
             err
         })?;

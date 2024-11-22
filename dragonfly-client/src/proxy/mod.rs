@@ -673,7 +673,7 @@ async fn proxy_by_dfdaemon(
     let (reader, mut writer) = tokio::io::duplex(4096);
 
     // Write the status code to the writer.
-    let (sender, mut receiver) = mpsc::channel(1024 * 10);
+    let (sender, mut receiver) = mpsc::channel(10 * 1024);
 
     // Construct the response body.
     let reader_stream = ReaderStream::new(reader);
