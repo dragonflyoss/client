@@ -47,11 +47,12 @@ use dragonfly_client_util::{
 };
 use hyper_util::rt::TokioIo;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Barrier};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
+use tokio::sync::Barrier;
 use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
 use tonic::{
     transport::{Channel, Endpoint, Server, Uri},
@@ -123,18 +124,12 @@ impl DfdaemonDownloadServer {
             .await;
 
         // Start download grpc server with unix domain socket.
-        info!(
-            "download server listening on {}",
-            self.socket_path.display()
-        );
         fs::create_dir_all(self.socket_path.parent().unwrap()).await?;
         let uds = UnixListener::bind(&self.socket_path)?;
         let uds_stream = UnixListenerStream::new(uds);
+
         let server = Server::builder()
-            .tcp_nodelay(true)
             .max_frame_size(super::MAX_FRAME_SIZE)
-            .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
-            .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
@@ -148,9 +143,13 @@ impl DfdaemonDownloadServer {
             });
 
         // Notify the grpc server is started.
-        grpc_server_started_barrier.wait();
+        grpc_server_started_barrier.wait().await;
 
         // Wait for the download grpc server to shutdown.
+        info!(
+            "download server listening on {}",
+            self.socket_path.display()
+        );
         server.await?;
 
         // Remove the unix domain socket file.
@@ -994,7 +993,6 @@ impl DfdaemonDownloadClient {
         // Ignore the uri because it is not used.
         let channel = Endpoint::try_from("http://[::]:50051")
             .unwrap()
-            .tcp_nodelay(true)
             .buffer_size(super::BUFFER_SIZE)
             .connect_timeout(super::CONNECT_TIMEOUT)
             .timeout(super::REQUEST_TIMEOUT)

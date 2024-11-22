@@ -41,10 +41,11 @@ use dragonfly_client_core::{
 use dragonfly_client_util::http::{get_range, hashmap_to_headermap, headermap_to_hashmap};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Barrier};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
+use tokio::sync::Barrier;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{
     transport::{Channel, Server},
@@ -121,13 +122,13 @@ impl DfdaemonUploadServer {
             .await;
 
         // Start upload grpc server.
-        info!("upload server listening on {}", self.addr);
         let mut server_builder = Server::builder();
         if let Ok(Some(server_tls_config)) =
             self.config.upload.server.load_server_tls_config().await
         {
             server_builder = server_builder.tls_config(server_tls_config)?;
         }
+
         let server = server_builder
             .max_frame_size(super::MAX_FRAME_SIZE)
             .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
@@ -142,9 +143,10 @@ impl DfdaemonUploadServer {
             });
 
         // Notify the grpc server is started.
-        grpc_server_started_barrier.wait();
+        grpc_server_started_barrier.wait().await;
 
         // Wait for the upload grpc server to shutdown.
+        info!("upload server listening on {}", self.addr);
         Ok(server.await?)
     }
 }
