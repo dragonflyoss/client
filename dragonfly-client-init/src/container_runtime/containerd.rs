@@ -177,8 +177,6 @@ impl Containerd {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,7 +185,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_containerd_config_with_existing_config_path() {
-        
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.toml");
         let certs_dir = temp_dir.path().join("certs.d");
