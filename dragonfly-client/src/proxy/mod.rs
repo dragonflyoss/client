@@ -59,7 +59,7 @@ use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_rustls::TlsAcceptor;
 use tokio_util::io::ReaderStream;
-use tracing::{debug, error, info, instrument, Span};
+use tracing::{debug, error, info, instrument, Instrument, Span};
 
 pub mod header;
 
@@ -589,7 +589,7 @@ pub async fn upgraded_handler(
 }
 
 /// proxy_by_dfdaemon proxies the request via the dfdaemon.
-#[instrument(skip_all)]
+#[instrument(skip_all, fields(host_id, task_id, peer_id))]
 async fn proxy_by_dfdaemon(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -657,6 +657,11 @@ async fn proxy_by_dfdaemon(
         ));
     };
 
+    // Span record the host_id, task_id, and peer_id.
+    Span::current().record("host_id", message.host_id.as_str());
+    Span::current().record("task_id", message.task_id.as_str());
+    Span::current().record("peer_id", message.peer_id.as_str());
+
     // Handle the download task started response.
     let Some(download_task_response::Response::DownloadTaskStartedResponse(
         download_task_started_response,
@@ -670,10 +675,10 @@ async fn proxy_by_dfdaemon(
     };
 
     // Write the task data to the reader.
-    let (reader, mut writer) = tokio::io::duplex(4096);
+    let (reader, mut writer) = tokio::io::duplex(10 * 1024);
 
     // Write the status code to the writer.
-    let (sender, mut receiver) = mpsc::channel(1024 * 10);
+    let (sender, mut receiver) = mpsc::channel(10 * 1024);
 
     // Construct the response body.
     let reader_stream = ReaderStream::new(reader);
@@ -693,157 +698,166 @@ async fn proxy_by_dfdaemon(
 
     // Write task data to pipe. If grpc received error message,
     // shutdown the writer.
-    tokio::spawn(async move {
-        // Initialize the hashmap of the finished piece readers and pieces.
-        let mut finished_piece_readers = HashMap::new();
+    tokio::spawn(
+        async move {
+            // Initialize the hashmap of the finished piece readers and pieces.
+            let mut finished_piece_readers = HashMap::new();
 
-        // Get the first piece number from the started response.
-        let Some(first_piece) = download_task_started_response.pieces.first() else {
-            error!("response pieces is empty");
-            if let Err(err) = writer.shutdown().await {
-                error!("writer shutdown error: {}", err);
-            }
+            // Get the first piece number from the started response.
+            let Some(first_piece) = download_task_started_response.pieces.first() else {
+                error!("response pieces is empty");
+                if let Err(err) = writer.shutdown().await {
+                    error!("writer shutdown error: {}", err);
+                }
 
-            return;
-        };
-        let mut need_piece_number = first_piece.number;
+                return;
+            };
+            let mut need_piece_number = first_piece.number;
 
-        // Read piece data from stream and write to pipe. If the piece data is
-        // not in order, store it in the hashmap, and write it to the pipe
-        // when the previous piece data is written.
-        loop {
-            match out_stream.message().await {
-                Ok(Some(message)) => {
-                    if let Some(download_task_response::Response::DownloadPieceFinishedResponse(
-                        download_task_response,
-                    )) = message.response
-                    {
-                        // Sleep for a while to avoid the out stream is aborted. If the task is small, proxy read the piece
-                        // before the task download is finished. It will cause `user body write aborted` error.
-                        sleep(Duration::from_millis(1)).await;
+            // Read piece data from stream and write to pipe. If the piece data is
+            // not in order, store it in the hashmap, and write it to the pipe
+            // when the previous piece data is written.
+            loop {
+                match out_stream.message().await {
+                    Ok(Some(message)) => {
+                        if let Some(
+                            download_task_response::Response::DownloadPieceFinishedResponse(
+                                download_task_response,
+                            ),
+                        ) = message.response
+                        {
+                            // Sleep for a while to avoid the out stream is aborted. If the task is small, proxy read the piece
+                            // before the task download is finished. It will cause `user body write aborted` error.
+                            sleep(Duration::from_millis(10)).await;
 
-                        // Send the none response to the client, if the first piece is received.
-                        if !initialized {
-                            debug!("first piece received, send response");
-                            sender.send(None).await.unwrap_or_default();
-                            initialized = true;
-                        }
+                            // Send the none response to the client, if the first piece is received.
+                            if !initialized {
+                                debug!("first piece received, send response");
+                                sender.send(None).await.unwrap_or_default();
+                                initialized = true;
+                            }
 
-                        let Some(piece) = download_task_response.piece else {
-                            error!("response piece is empty");
+                            let Some(piece) = download_task_response.piece else {
+                                error!("response piece is empty");
+                                writer.shutdown().await.unwrap_or_else(|err| {
+                                    error!("writer shutdown error: {}", err);
+                                });
+
+                                return;
+                            };
+
+                            let piece_reader = match task
+                                .piece
+                                .download_from_local_peer_into_async_read(
+                                    task.piece
+                                        .id(message.task_id.as_str(), piece.number)
+                                        .as_str(),
+                                    message.task_id.as_str(),
+                                    piece.length,
+                                    download_task_started_response.range,
+                                    true,
+                                )
+                                .await
+                            {
+                                Ok(piece_reader) => piece_reader,
+                                Err(err) => {
+                                    error!("download piece reader error: {}", err);
+                                    writer.shutdown().await.unwrap_or_else(|err| {
+                                        error!("writer shutdown error: {}", err);
+                                    });
+
+                                    return;
+                                }
+                            };
+
+                            // Use a buffer to read the piece.
+                            let piece_reader =
+                                BufReader::with_capacity(read_buffer_size, piece_reader);
+
+                            // Write the piece data to the pipe in order.
+                            finished_piece_readers.insert(piece.number, piece_reader);
+                            while let Some(piece_reader) =
+                                finished_piece_readers.get_mut(&need_piece_number)
+                            {
+                                debug!("copy piece {} to stream", need_piece_number);
+                                if let Err(err) = tokio::io::copy(piece_reader, &mut writer).await {
+                                    error!("download piece reader error: {}", err);
+                                    writer.shutdown().await.unwrap_or_else(|err| {
+                                        error!("writer shutdown error: {}", err);
+                                    });
+
+                                    return;
+                                }
+
+                                need_piece_number += 1;
+                            }
+                        } else {
+                            error!("response unknown message");
                             writer.shutdown().await.unwrap_or_else(|err| {
                                 error!("writer shutdown error: {}", err);
                             });
 
                             return;
-                        };
-
-                        let piece_reader = match task
-                            .piece
-                            .download_from_local_peer_into_async_read(
-                                task.piece
-                                    .id(message.task_id.as_str(), piece.number)
-                                    .as_str(),
-                                message.task_id.as_str(),
-                                piece.length,
-                                download_task_started_response.range,
-                                true,
-                            )
-                            .await
-                        {
-                            Ok(piece_reader) => piece_reader,
-                            Err(err) => {
-                                error!("download piece reader error: {}", err);
-                                writer.shutdown().await.unwrap_or_else(|err| {
-                                    error!("writer shutdown error: {}", err);
-                                });
-
-                                return;
-                            }
-                        };
-
-                        // Use a buffer to read the piece.
-                        let piece_reader = BufReader::with_capacity(read_buffer_size, piece_reader);
-
-                        // Write the piece data to the pipe in order.
-                        finished_piece_readers.insert(piece.number, piece_reader);
-                        while let Some(piece_reader) =
-                            finished_piece_readers.get_mut(&need_piece_number)
-                        {
-                            debug!("copy piece {} to stream", need_piece_number);
-                            if let Err(err) = tokio::io::copy(piece_reader, &mut writer).await {
-                                error!("download piece reader error: {}", err);
-                                writer.shutdown().await.unwrap_or_else(|err| {
-                                    error!("writer shutdown error: {}", err);
-                                });
-
-                                return;
-                            }
-
-                            need_piece_number += 1;
                         }
-                    } else {
-                        error!("response unknown message");
-                        writer.shutdown().await.unwrap_or_else(|err| {
-                            error!("writer shutdown error: {}", err);
-                        });
-
-                        return;
                     }
-                }
-                Ok(None) => {
-                    info!("message is none");
-                    if let Err(err) = writer.flush().await {
-                        error!("writer flush error: {}", err);
-                    }
-
-                    return;
-                }
-                Err(err) => {
-                    if initialized {
-                        error!("stream error: {}", err);
+                    Ok(None) => {
+                        info!("message is none");
                         if let Err(err) = writer.flush().await {
                             error!("writer flush error: {}", err);
                         }
 
                         return;
                     }
+                    Err(err) => {
+                        if initialized {
+                            error!("stream error: {}", err);
+                            if let Err(err) = writer.flush().await {
+                                error!("writer flush error: {}", err);
+                            }
 
-                    match serde_json::from_slice::<Backend>(err.details()) {
-                        Ok(backend) => {
-                            error!("download task failed: {:?}", backend);
-                            sender
-                                .send(Some(make_error_response(
-                                    http::StatusCode::from_u16(
-                                        backend.status_code.unwrap_or_default() as u16,
-                                    )
-                                    .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
-                                    Some(hashmap_to_headermap(&backend.header).unwrap_or_default()),
-                                )))
-                                .await
-                                .unwrap_or_default();
+                            return;
                         }
-                        Err(_) => {
-                            error!("download task failed: {}", err);
-                            sender
-                                .send(Some(make_error_response(
-                                    http::StatusCode::INTERNAL_SERVER_ERROR,
-                                    None,
-                                )))
-                                .await
-                                .unwrap_or_default();
+
+                        match serde_json::from_slice::<Backend>(err.details()) {
+                            Ok(backend) => {
+                                error!("download task failed: {:?}", backend);
+                                sender
+                                    .send(Some(make_error_response(
+                                        http::StatusCode::from_u16(
+                                            backend.status_code.unwrap_or_default() as u16,
+                                        )
+                                        .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
+                                        Some(
+                                            hashmap_to_headermap(&backend.header)
+                                                .unwrap_or_default(),
+                                        ),
+                                    )))
+                                    .await
+                                    .unwrap_or_default();
+                            }
+                            Err(_) => {
+                                error!("download task failed: {}", err);
+                                sender
+                                    .send(Some(make_error_response(
+                                        http::StatusCode::INTERNAL_SERVER_ERROR,
+                                        None,
+                                    )))
+                                    .await
+                                    .unwrap_or_default();
+                            }
                         }
+
+                        return;
                     }
-
-                    return;
-                }
-            };
+                };
+            }
         }
-    });
+        .in_current_span(),
+    );
 
     match receiver.recv().await {
-        Some(Some(response)) => return Ok(response),
-        Some(None) => Ok(response),
+        Some(Some(response)) => Ok(response),
+        Some(None) => return Ok(response),
         None => Ok(make_error_response(
             http::StatusCode::INTERNAL_SERVER_ERROR,
             None,
