@@ -125,14 +125,18 @@ impl super::Backend for HTTP {
 
         let header = response.headers().clone();
         let status_code = response.status();
+        let content_length = response.content_length();
         debug!(
-            "head response {} {}: {:?} {:?}",
-            request.task_id, request.url, status_code, header
+            "head response {} {}: {:?} {:?} {:?}",
+            request.task_id, request.url, status_code, content_length, header
         );
+
+        // Drop the response body to avoid reading it.
+        drop(response);
 
         Ok(super::HeadResponse {
             success: status_code.is_success(),
-            content_length: response.content_length(),
+            content_length,
             http_header: Some(header),
             http_status_code: Some(status_code),
             error_message: Some(status_code.to_string()),
