@@ -293,7 +293,7 @@ impl PersistentCacheTask {
     #[instrument(skip_all)]
     pub async fn hard_link_or_copy(
         &self,
-        task: metadata::PersistentCacheTask,
+        task: &metadata::PersistentCacheTask,
         to: &Path,
     ) -> ClientResult<()> {
         self.storage
@@ -306,7 +306,7 @@ impl PersistentCacheTask {
     #[instrument(skip_all)]
     pub async fn download(
         &self,
-        task: metadata::PersistentCacheTask,
+        task: &metadata::PersistentCacheTask,
         host_id: &str,
         peer_id: &str,
         request: DownloadPersistentCacheTaskRequest,
@@ -388,7 +388,7 @@ impl PersistentCacheTask {
         debug!("download the pieces from local peer");
         let finished_pieces = match self
             .download_partial_from_local_peer(
-                task.clone(),
+                task,
                 host_id,
                 peer_id,
                 interested_pieces.clone(),
@@ -430,7 +430,7 @@ impl PersistentCacheTask {
         // Download the pieces with scheduler.
         let finished_pieces = match self
             .download_partial_with_scheduler(
-                task.clone(),
+                task,
                 host_id,
                 peer_id,
                 interested_pieces.clone(),
@@ -485,7 +485,7 @@ impl PersistentCacheTask {
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler(
         &self,
-        task: metadata::PersistentCacheTask,
+        task: &metadata::PersistentCacheTask,
         host_id: &str,
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
@@ -686,7 +686,7 @@ impl PersistentCacheTask {
                     // Download the pieces from the remote peer.
                     let partial_finished_pieces = match self
                         .download_partial_with_scheduler_from_remote_peer(
-                            task.clone(),
+                            task,
                             host_id,
                             peer_id,
                             response.candidate_cache_parents.clone(),
@@ -792,7 +792,7 @@ impl PersistentCacheTask {
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler_from_remote_peer(
         &self,
-        task: metadata::PersistentCacheTask,
+        task: &metadata::PersistentCacheTask,
         host_id: &str,
         peer_id: &str,
         parents: Vec<PersistentCachePeer>,
@@ -1019,7 +1019,7 @@ impl PersistentCacheTask {
     #[instrument(skip_all)]
     async fn download_partial_from_local_peer(
         &self,
-        task: metadata::PersistentCacheTask,
+        task: &metadata::PersistentCacheTask,
         host_id: &str,
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,

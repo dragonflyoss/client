@@ -500,6 +500,12 @@ impl<E: StorageEngineOwned> Metadata<E> {
         self.db.get(id.as_bytes())
     }
 
+    /// is_task_exists checks if the task exists.
+    #[instrument(skip_all)]
+    pub fn is_task_exists(&self, id: &str) -> Result<bool> {
+        self.db.is_exist::<Task>(id.as_bytes())
+    }
+
     /// get_tasks gets the task metadatas.
     #[instrument(skip_all)]
     pub fn get_tasks(&self) -> Result<Vec<Task>> {
@@ -682,6 +688,12 @@ impl<E: StorageEngineOwned> Metadata<E> {
         self.db.get(id.as_bytes())
     }
 
+    /// is_persistent_cache_task_exists checks if the persistent cache task exists.
+    #[instrument(skip_all)]
+    pub fn is_persistent_cache_task_exists(&self, id: &str) -> Result<bool> {
+        self.db.is_exist::<PersistentCacheTask>(id.as_bytes())
+    }
+
     /// get_persistent_cache_tasks gets the persistent cache task metadatas.
     #[instrument(skip_all)]
     pub fn get_persistent_cache_tasks(&self) -> Result<Vec<PersistentCacheTask>> {
@@ -755,6 +767,12 @@ impl<E: StorageEngineOwned> Metadata<E> {
     #[instrument(skip_all)]
     pub fn get_piece(&self, piece_id: &str) -> Result<Option<Piece>> {
         self.db.get(piece_id.as_bytes())
+    }
+
+    /// is_piece_exists checks if the piece exists.
+    #[instrument(skip_all)]
+    pub fn is_piece_exists(&self, piece_id: &str) -> Result<bool> {
+        self.db.is_exist::<Piece>(piece_id.as_bytes())
     }
 
     /// get_pieces gets the piece metadatas.

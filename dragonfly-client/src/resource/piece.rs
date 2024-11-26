@@ -461,7 +461,8 @@ impl Piece {
         })?;
 
         // Record the finish of downloading piece.
-        self.storage
+        match self
+            .storage
             .download_piece_from_remote_peer_finished(
                 piece_id,
                 task_id,
@@ -471,30 +472,25 @@ impl Piece {
                 &mut content.as_slice(),
             )
             .await
-            .map_err(|err| {
-                // Record the failure of downloading piece,
-                // If storage fails to record piece.
-                error!("download piece finished: {}", err);
-                if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
-                    error!("set piece metadata failed: {}", err)
-                };
-
-                err
-            })?;
-
-        self.storage
-            .get_piece(piece_id)?
-            .ok_or_else(|| {
-                error!("piece not found");
-                Error::PieceNotFound(number.to_string())
-            })
-            .inspect(|_piece| {
+        {
+            Ok(piece) => {
                 collect_download_piece_traffic_metrics(
                     &TrafficType::RemotePeer,
                     self.id_generator.task_type(task_id) as i32,
                     length,
                 );
-            })
+
+                Ok(piece)
+            }
+            Err(err) => {
+                error!("download piece finished: {}", err);
+                if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
+                    error!("set piece metadata failed: {}", err)
+                };
+
+                Err(err)
+            }
+        }
     }
 
     /// download_from_source downloads a single piece from the source.
@@ -623,7 +619,8 @@ impl Piece {
         );
 
         // Record the finish of downloading piece.
-        self.storage
+        match self
+            .storage
             .download_piece_from_source_finished(
                 piece_id,
                 task_id,
@@ -632,30 +629,25 @@ impl Piece {
                 &mut response.reader,
             )
             .await
-            .map_err(|err| {
-                // Record the failure of downloading piece,
-                // If storage fails to record piece.
-                error!("download piece finished: {}", err);
-                if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
-                    error!("set piece metadata failed: {}", err)
-                };
-
-                err
-            })?;
-
-        self.storage
-            .get_piece(piece_id)?
-            .ok_or_else(|| {
-                error!("piece not found");
-                Error::PieceNotFound(number.to_string())
-            })
-            .inspect(|_piece| {
+        {
+            Ok(piece) => {
                 collect_download_piece_traffic_metrics(
                     &TrafficType::BackToSource,
                     self.id_generator.task_type(task_id) as i32,
                     length,
                 );
-            })
+
+                Ok(piece)
+            }
+            Err(err) => {
+                error!("download piece finished: {}", err);
+                if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
+                    error!("set piece metadata failed: {}", err)
+                };
+
+                Err(err)
+            }
+        }
     }
 }
 

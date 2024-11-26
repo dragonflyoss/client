@@ -66,7 +66,7 @@ impl Storage {
     #[instrument(skip_all)]
     pub async fn hard_link_or_copy_task(
         &self,
-        task: metadata::Task,
+        task: &metadata::Task,
         to: &Path,
         range: Option<Range>,
     ) -> Result<()> {
@@ -132,6 +132,12 @@ impl Storage {
         self.metadata.get_task(id)
     }
 
+    /// is_task_exists returns whether the task exists.
+    #[instrument(skip_all)]
+    pub fn is_task_exists(&self, id: &str) -> Result<bool> {
+        self.metadata.is_task_exists(id)
+    }
+
     /// get_tasks returns the task metadatas.
     #[instrument(skip_all)]
     pub fn get_tasks(&self) -> Result<Vec<metadata::Task>> {
@@ -158,7 +164,7 @@ impl Storage {
     #[instrument(skip_all)]
     pub async fn hard_link_or_copy_persistent_cache_task(
         &self,
-        task: metadata::PersistentCacheTask,
+        task: &metadata::PersistentCacheTask,
         to: &Path,
     ) -> Result<()> {
         self.content
@@ -248,6 +254,12 @@ impl Storage {
         id: &str,
     ) -> Result<Option<metadata::PersistentCacheTask>> {
         self.metadata.get_persistent_cache_task(id)
+    }
+
+    /// is_persistent_cache_task_exists returns whether the persistent cache task exists.
+    #[instrument(skip_all)]
+    pub fn is_persistent_cache_task_exists(&self, id: &str) -> Result<bool> {
+        self.metadata.is_persistent_cache_task_exists(id)
     }
 
     /// get_tasks returns the task metadatas.
@@ -415,6 +427,12 @@ impl Storage {
     #[instrument(skip_all)]
     pub fn get_piece(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
         self.metadata.get_piece(piece_id)
+    }
+
+    /// is_piece_exists returns whether the piece exists.
+    #[instrument(skip_all)]
+    pub fn is_piece_exists(&self, piece_id: &str) -> Result<bool> {
+        self.metadata.is_piece_exists(piece_id)
     }
 
     /// get_pieces returns the piece metadatas.

@@ -87,7 +87,7 @@ impl Content {
     #[instrument(skip_all)]
     pub async fn hard_link_or_copy_task(
         &self,
-        task: crate::metadata::Task,
+        task: &crate::metadata::Task,
         to: &Path,
         range: Option<Range>,
     ) -> Result<()> {
@@ -407,7 +407,7 @@ impl Content {
     #[instrument(skip_all)]
     pub async fn hard_link_or_copy_persistent_cache_task(
         &self,
-        task: crate::metadata::PersistentCacheTask,
+        task: &crate::metadata::PersistentCacheTask,
         to: &Path,
     ) -> Result<()> {
         // Ensure the parent directory of the destination exists.
