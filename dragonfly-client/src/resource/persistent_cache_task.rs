@@ -54,7 +54,7 @@ use tokio::task::JoinSet;
 use tokio::time::sleep;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Status};
-use tracing::{error, info, instrument, Instrument};
+use tracing::{debug, error, info, instrument, Instrument};
 
 use super::*;
 
@@ -385,7 +385,7 @@ impl PersistentCacheTask {
             })?;
 
         // Download the pieces from the local peer.
-        info!("download the pieces from local peer");
+        debug!("download the pieces from local peer");
         let finished_pieces = match self
             .download_partial_from_local_peer(
                 task.clone(),
@@ -425,7 +425,7 @@ impl PersistentCacheTask {
             info!("all pieces are downloaded from local peer");
             return Ok(());
         };
-        info!("download the pieces with scheduler");
+        debug!("download the pieces with scheduler");
 
         // Download the pieces with scheduler.
         let finished_pieces = match self

@@ -820,14 +820,12 @@ async fn get_entries(
             hdfs,
         })
         .await
-        .map_err(|err| {
+        .inspect_err(|_err| {
             // Collect backend request failure metrics.
             collect_backend_request_failure_metrics(
                 backend.scheme().as_str(),
                 http::Method::HEAD.as_str(),
             );
-
-            err
         })?;
 
     // Return error when response is failed.
@@ -838,11 +836,11 @@ async fn get_entries(
             http::Method::HEAD.as_str(),
         );
 
-        return Err(Error::BackendError(BackendError {
+        return Err(Error::BackendError(Box::new(BackendError {
             message: response.error_message.unwrap_or_default(),
             status_code: Some(response.http_status_code.unwrap_or_default()),
             header: Some(response.http_header.unwrap_or_default()),
-        }));
+        })));
     }
 
     // Collect backend request finished metrics.

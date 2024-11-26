@@ -183,7 +183,7 @@ pub enum DFError {
 
     /// BackendError is the error for backend.
     #[error(transparent)]
-    BackendError(BackendError),
+    BackendError(Box<BackendError>),
 
     /// HyperUtilClientLegacyError is the error for hyper util client legacy.
     #[error(transparent)]
