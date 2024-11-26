@@ -661,7 +661,7 @@ async fn proxy_by_dfdaemon(
     };
 
     // Write the task data to the reader.
-    let (reader, mut writer) = tokio::io::duplex(64 * 1024);
+    let (reader, mut writer) = tokio::io::duplex(256 * 1024);
 
     // Write the status code to the writer.
     let (sender, mut receiver) = mpsc::channel(10 * 1024);

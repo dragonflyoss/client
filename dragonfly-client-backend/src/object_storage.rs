@@ -201,11 +201,11 @@ impl ObjectStorage {
     ) -> ClientResult<Operator> {
         // If download backend is object storage, object_storage parameter is required.
         let Some(object_storage) = object_storage else {
-            return Err(ClientError::BackendError(BackendError {
+            return Err(ClientError::BackendError(Box::new(BackendError {
                 message: format!("{} need object_storage parameter", self.scheme),
                 status_code: None,
                 header: None,
-            }));
+            })));
         };
 
         match self.scheme {
@@ -232,7 +232,7 @@ impl ObjectStorage {
             &object_storage.access_key_secret,
             &object_storage.region,
         ) else {
-            return Err(ClientError::BackendError(BackendError {
+            return Err(ClientError::BackendError(Box::new(BackendError {
                 message: format!(
                     "{} {}",
                     self.scheme,
@@ -244,7 +244,7 @@ impl ObjectStorage {
                 ),
                 status_code: None,
                 header: None,
-            }));
+            })));
         };
 
         // Initialize the S3 operator with the object storage.
@@ -320,7 +320,7 @@ impl ObjectStorage {
             &object_storage.access_key_secret,
             &object_storage.endpoint,
         ) else {
-            return Err(ClientError::BackendError(BackendError {
+            return Err(ClientError::BackendError(Box::new(BackendError {
                 message: format!(
                     "{} {}",
                     self.scheme,
@@ -332,7 +332,7 @@ impl ObjectStorage {
                 ),
                 status_code: None,
                 header: None,
-            }));
+            })));
         };
 
         // Initialize the ABS operator with the object storage.
@@ -363,7 +363,7 @@ impl ObjectStorage {
             &object_storage.access_key_secret,
             &object_storage.endpoint,
         ) else {
-            return Err(ClientError::BackendError(BackendError {
+            return Err(ClientError::BackendError(Box::new(BackendError {
                 message: format!(
                     "{} {}",
                     self.scheme,
@@ -375,7 +375,7 @@ impl ObjectStorage {
                 ),
                 status_code: None,
                 header: None,
-            }));
+            })));
         };
 
         // Initialize the OSS operator with the object storage.
@@ -407,7 +407,7 @@ impl ObjectStorage {
             &object_storage.access_key_secret,
             &object_storage.endpoint,
         ) else {
-            return Err(ClientError::BackendError(BackendError {
+            return Err(ClientError::BackendError(Box::new(BackendError {
                 message: format!(
                     "{} {}",
                     self.scheme,
@@ -419,7 +419,7 @@ impl ObjectStorage {
                 ),
                 status_code: None,
                 header: None,
-            }));
+            })));
         };
 
         // Initialize the OBS operator with the object storage.
@@ -449,7 +449,7 @@ impl ObjectStorage {
             &object_storage.access_key_secret,
             &object_storage.endpoint,
         ) else {
-            return Err(ClientError::BackendError(BackendError {
+            return Err(ClientError::BackendError(Box::new(BackendError {
                 message: format!(
                     "{} {}",
                     self.scheme,
@@ -461,7 +461,7 @@ impl ObjectStorage {
                 ),
                 status_code: None,
                 header: None,
-            }));
+            })));
         };
 
         // Initialize the COS operator with the object storage.
@@ -524,11 +524,11 @@ impl crate::Backend for ObjectStorage {
                         "list request failed {} {}: {}",
                         request.task_id, request.url, err
                     );
-                    ClientError::BackendError(BackendError {
+                    ClientError::BackendError(Box::new(BackendError {
                         message: err.to_string(),
                         status_code: None,
                         header: None,
-                    })
+                    }))
                 })?
                 .into_iter()
                 .map(|entry| {
@@ -550,11 +550,11 @@ impl crate::Backend for ObjectStorage {
                 "stat request failed {} {}: {}",
                 request.task_id, request.url, err
             );
-            ClientError::BackendError(BackendError {
+            ClientError::BackendError(Box::new(BackendError {
                 message: err.to_string(),
                 status_code: None,
                 header: None,
-            })
+            }))
         })?;
 
         debug!(
@@ -608,11 +608,11 @@ impl crate::Backend for ObjectStorage {
                     "get request failed {} {}: {}",
                     request.piece_id, request.url, err
                 );
-                ClientError::BackendError(BackendError {
+                ClientError::BackendError(Box::new(BackendError {
                     message: err.to_string(),
                     status_code: None,
                     header: None,
-                })
+                }))
             })?;
 
         let stream = match request.range {
@@ -624,22 +624,22 @@ impl crate::Backend for ObjectStorage {
                         "get request failed {} {}: {}",
                         request.piece_id, request.url, err
                     );
-                    ClientError::BackendError(BackendError {
+                    ClientError::BackendError(Box::new(BackendError {
                         message: err.to_string(),
                         status_code: None,
                         header: None,
-                    })
+                    }))
                 })?,
             None => operator_reader.into_bytes_stream(..).await.map_err(|err| {
                 error!(
                     "get request failed {} {}: {}",
                     request.piece_id, request.url, err
                 );
-                ClientError::BackendError(BackendError {
+                ClientError::BackendError(Box::new(BackendError {
                     message: err.to_string(),
                     status_code: None,
                     header: None,
-                })
+                }))
             })?,
         };
 

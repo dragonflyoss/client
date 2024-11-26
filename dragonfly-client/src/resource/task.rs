@@ -161,13 +161,12 @@ impl Task {
                 hdfs: request.hdfs,
             })
             .await
-            .map_err(|err| {
+            .inspect_err(|_err| {
                 // Collect the backend request failure metrics.
                 collect_backend_request_failure_metrics(
                     backend.scheme().as_str(),
                     http::Method::HEAD.as_str(),
                 );
-                err
             })?;
 
         // Check if the status code is success.
@@ -178,11 +177,11 @@ impl Task {
                 http::Method::HEAD.as_str(),
             );
 
-            return Err(Error::BackendError(BackendError {
+            return Err(Error::BackendError(Box::new(BackendError {
                 message: response.error_message.unwrap_or_default(),
                 status_code: Some(response.http_status_code.unwrap_or_default()),
                 header: Some(response.http_header.unwrap_or_default()),
-            }));
+            })));
         }
 
         // Collect the backend request finished metrics.
@@ -336,7 +335,7 @@ impl Task {
             })?;
 
         // Download the pieces from the local peer.
-        info!("download the pieces from local peer");
+        debug!("download the pieces from local peer");
         let finished_pieces = match self
             .download_partial_from_local_peer(
                 task.clone(),
@@ -371,7 +370,7 @@ impl Task {
             info!("all pieces are downloaded from local peer");
             return Ok(());
         };
-        info!("download the pieces with scheduler");
+        debug!("download the pieces with scheduler");
 
         // Download the pieces with scheduler.
         let finished_pieces = match self
@@ -942,7 +941,7 @@ impl Task {
         while let Some(collect_piece) = piece_collector_rx.recv().await {
             if interrupt.load(Ordering::SeqCst) {
                 // If the interrupt is true, break the collector loop.
-                info!("interrupt the piece collector");
+                debug!("interrupt the piece collector");
                 drop(piece_collector_rx);
                 break;
             }

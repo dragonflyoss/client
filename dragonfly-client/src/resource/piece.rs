@@ -325,12 +325,11 @@ impl Piece {
         self.storage
             .upload_piece(piece_id, task_id, range)
             .await
-            .map(|reader| {
+            .inspect(|_reader| {
                 collect_upload_piece_traffic_metrics(
                     self.id_generator.task_type(task_id) as i32,
                     length,
                 );
-                reader
             })
     }
 
@@ -489,13 +488,12 @@ impl Piece {
                 error!("piece not found");
                 Error::PieceNotFound(number.to_string())
             })
-            .map(|piece| {
+            .inspect(|_piece| {
                 collect_download_piece_traffic_metrics(
                     &TrafficType::RemotePeer,
                     self.id_generator.task_type(task_id) as i32,
                     length,
                 );
-                piece
             })
     }
 
@@ -610,11 +608,11 @@ impl Piece {
             error!("backend get failed: {} {}", error_message, buffer.as_str());
 
             self.storage.download_piece_failed(piece_id)?;
-            return Err(Error::BackendError(BackendError {
+            return Err(Error::BackendError(Box::new(BackendError {
                 message: error_message,
                 status_code: Some(response.http_status_code.unwrap_or_default()),
                 header: Some(response.http_header.unwrap_or_default()),
-            }));
+            })));
         }
 
         // Collect the backend request finished metrics.
@@ -651,13 +649,12 @@ impl Piece {
                 error!("piece not found");
                 Error::PieceNotFound(number.to_string())
             })
-            .map(|piece| {
+            .inspect(|_piece| {
                 collect_download_piece_traffic_metrics(
                     &TrafficType::BackToSource,
                     self.id_generator.task_type(task_id) as i32,
                     length,
                 );
-                piece
             })
     }
 }
