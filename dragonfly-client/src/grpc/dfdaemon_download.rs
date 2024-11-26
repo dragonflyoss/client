@@ -359,7 +359,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             async move {
                 match task_manager_clone
                     .download(
-                        task_clone.clone(),
+                        &task_clone,
                         host_id.as_str(),
                         peer_id.as_str(),
                         download_clone.clone(),
@@ -399,7 +399,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             // Hard link or copy the task content to the destination.
                             if let Err(err) = task_manager_clone
                                 .hard_link_or_copy(
-                                    task_clone,
+                                    &task_clone,
                                     Path::new(output_path.as_str()),
                                     download_clone.range,
                                 )
@@ -748,7 +748,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             async move {
                 match task_manager_clone
                     .download(
-                        task_clone.clone(),
+                        &task_clone,
                         host_id.as_str(),
                         peer_id.as_str(),
                         request_clone.clone(),
@@ -778,7 +778,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         // Hard link or copy the persistent cache task content to the destination.
                         if let Err(err) = task_manager_clone
                             .hard_link_or_copy(
-                                task_clone,
+                                &task_clone,
                                 Path::new(request_clone.output_path.as_str()),
                             )
                             .await

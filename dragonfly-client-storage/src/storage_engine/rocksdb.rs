@@ -147,6 +147,16 @@ impl Operations for RocksdbStorageEngine {
         }
     }
 
+    /// is_exist checks if the object exists by key.
+    #[instrument(skip_all)]
+    fn is_exist<O: DatabaseObject>(&self, key: &[u8]) -> Result<bool> {
+        let cf = cf_handle::<O>(self)?;
+        Ok(self
+            .get_cf(cf, key)
+            .or_err(ErrorType::StorageError)?
+            .is_some())
+    }
+
     /// put puts the object by key.
     #[instrument(skip_all)]
     fn put<O: DatabaseObject>(&self, key: &[u8], value: &O) -> Result<()> {
