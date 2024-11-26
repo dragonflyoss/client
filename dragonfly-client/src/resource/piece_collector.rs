@@ -82,7 +82,7 @@ impl PieceCollector {
         interested_pieces: Vec<metadata::Piece>,
         parents: Vec<CollectedParent>,
     ) -> Self {
-        let collected_pieces = Arc::new(DashMap::new());
+        let collected_pieces = Arc::new(DashMap::with_capacity(interested_pieces.len()));
         for interested_piece in &interested_pieces {
             collected_pieces.insert(interested_piece.number, String::new());
         }
@@ -112,8 +112,8 @@ impl PieceCollector {
             async move {
                 Self::collect_from_remote_peers(
                     config,
-                    host_id.as_str(),
-                    task_id.as_str(),
+                    &host_id,
+                    &task_id,
                     parents,
                     interested_pieces,
                     collected_pieces,
@@ -267,7 +267,7 @@ impl PieceCollector {
                     info!("peer {} sync pieces finished", peer.id);
 
                     // If all pieces are collected, abort all tasks.
-                    if collected_pieces.len() == 0 {
+                    if collected_pieces.is_empty() {
                         info!("all pieces are collected, abort all tasks");
                         join_set.abort_all();
                     }

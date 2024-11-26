@@ -512,12 +512,12 @@ impl TaskSize {
 
 /// collect_upload_task_started_metrics collects the upload task started metrics.
 pub fn collect_upload_task_started_metrics(typ: i32, tag: &str, app: &str) {
-    UPLOAD_TASK_COUNT
-        .with_label_values(&[typ.to_string().as_str(), tag, app])
-        .inc();
+    let typ = typ.to_string();
+
+    UPLOAD_TASK_COUNT.with_label_values(&[&typ, tag, app]).inc();
 
     CONCURRENT_UPLOAD_TASK_GAUGE
-        .with_label_values(&[typ.to_string().as_str(), tag, app])
+        .with_label_values(&[&typ, tag, app])
         .inc();
 }
 
@@ -540,34 +540,41 @@ pub fn collect_upload_task_finished_metrics(
         );
     }
 
+    let typ = typ.to_string();
+    let task_size = task_size.to_string();
+
     UPLOAD_TASK_DURATION
-        .with_label_values(&[typ.to_string().as_str(), task_size.to_string().as_str()])
+        .with_label_values(&[&typ, &task_size])
         .observe(cost.as_millis() as f64);
 
     CONCURRENT_UPLOAD_TASK_GAUGE
-        .with_label_values(&[typ.to_string().as_str(), tag, app])
+        .with_label_values(&[&typ, tag, app])
         .dec();
 }
 
 /// collect_upload_task_failure_metrics collects the upload task failure metrics.
 pub fn collect_upload_task_failure_metrics(typ: i32, tag: &str, app: &str) {
+    let typ = typ.to_string();
+
     UPLOAD_TASK_FAILURE_COUNT
-        .with_label_values(&[typ.to_string().as_str(), tag, app])
+        .with_label_values(&[&typ, tag, app])
         .inc();
 
     CONCURRENT_UPLOAD_TASK_GAUGE
-        .with_label_values(&[typ.to_string().as_str(), tag, app])
+        .with_label_values(&[&typ, tag, app])
         .dec();
 }
 
 /// collect_download_task_started_metrics collects the download task started metrics.
 pub fn collect_download_task_started_metrics(typ: i32, tag: &str, app: &str, priority: &str) {
+    let typ = typ.to_string();
+
     DOWNLOAD_TASK_COUNT
-        .with_label_values(&[typ.to_string().as_str(), tag, app, priority])
+        .with_label_values(&[&typ, tag, app, priority])
         .inc();
 
     CONCURRENT_DOWNLOAD_TASK_GAUGE
-        .with_label_values(&[typ.to_string().as_str(), tag, app, priority])
+        .with_label_values(&[&typ, tag, app, priority])
         .inc();
 }
 
@@ -598,23 +605,28 @@ pub fn collect_download_task_finished_metrics(
         );
     }
 
+    let typ = typ.to_string();
+    let task_size = task_size.to_string();
+
     DOWNLOAD_TASK_DURATION
-        .with_label_values(&[typ.to_string().as_str(), task_size.to_string().as_str()])
+        .with_label_values(&[&typ, &task_size])
         .observe(cost.as_millis() as f64);
 
     CONCURRENT_DOWNLOAD_TASK_GAUGE
-        .with_label_values(&[typ.to_string().as_str(), tag, app, priority])
+        .with_label_values(&[&typ, tag, app, priority])
         .dec();
 }
 
 /// collect_download_task_failure_metrics collects the download task failure metrics.
 pub fn collect_download_task_failure_metrics(typ: i32, tag: &str, app: &str, priority: &str) {
+    let typ = typ.to_string();
+
     DOWNLOAD_TASK_FAILURE_COUNT
-        .with_label_values(&[typ.to_string().as_str(), tag, app, priority])
+        .with_label_values(&[&typ, tag, app, priority])
         .inc();
 
     CONCURRENT_DOWNLOAD_TASK_GAUGE
-        .with_label_values(&[typ.to_string().as_str(), tag, app, priority])
+        .with_label_values(&[&typ, tag, app, priority])
         .dec();
 }
 

@@ -340,14 +340,7 @@ pub async fn http_handler(
             request.method(),
             request_uri
         );
-        return proxy_by_dfdaemon(
-            config,
-            task,
-            rule.clone(),
-            request,
-            dfdaemon_download_client,
-        )
-        .await;
+        return proxy_by_dfdaemon(config, task, &rule, request, dfdaemon_download_client).await;
     }
 
     // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
@@ -361,7 +354,7 @@ pub async fn http_handler(
         return proxy_by_dfdaemon(
             config,
             task,
-            Rule::default(),
+            &Rule::default(),
             request,
             dfdaemon_download_client,
         )
@@ -543,14 +536,7 @@ pub async fn upgraded_handler(
             request.method(),
             request_uri
         );
-        return proxy_by_dfdaemon(
-            config,
-            task,
-            rule.clone(),
-            request,
-            dfdaemon_download_client,
-        )
-        .await;
+        return proxy_by_dfdaemon(config, task, &rule, request, dfdaemon_download_client).await;
     }
 
     // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
@@ -564,7 +550,7 @@ pub async fn upgraded_handler(
         return proxy_by_dfdaemon(
             config,
             task,
-            Rule::default(),
+            &Rule::default(),
             request,
             dfdaemon_download_client,
         )
@@ -593,7 +579,7 @@ pub async fn upgraded_handler(
 async fn proxy_by_dfdaemon(
     config: Arc<Config>,
     task: Arc<Task>,
-    rule: Rule,
+    rule: &Rule,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
 ) -> ClientResult<Response> {
@@ -675,7 +661,7 @@ async fn proxy_by_dfdaemon(
     };
 
     // Write the task data to the reader.
-    let (reader, mut writer) = tokio::io::duplex(10 * 1024);
+    let (reader, mut writer) = tokio::io::duplex(64 * 1024);
 
     // Write the status code to the writer.
     let (sender, mut receiver) = mpsc::channel(10 * 1024);
@@ -762,9 +748,9 @@ async fn proxy_by_dfdaemon(
                                 Ok(piece_reader) => piece_reader,
                                 Err(err) => {
                                     error!("download piece reader error: {}", err);
-                                    writer.shutdown().await.unwrap_or_else(|err| {
+                                    if let Err(err) = writer.shutdown().await {
                                         error!("writer shutdown error: {}", err);
-                                    });
+                                    }
 
                                     return;
                                 }
@@ -782,9 +768,9 @@ async fn proxy_by_dfdaemon(
                                 debug!("copy piece {} to stream", need_piece_number);
                                 if let Err(err) = tokio::io::copy(piece_reader, &mut writer).await {
                                     error!("download piece reader error: {}", err);
-                                    writer.shutdown().await.unwrap_or_else(|err| {
+                                    if let Err(err) = writer.shutdown().await {
                                         error!("writer shutdown error: {}", err);
-                                    });
+                                    }
 
                                     return;
                                 }
@@ -969,7 +955,7 @@ fn make_registry_mirror_request(
 #[instrument(skip_all)]
 fn make_download_task_request(
     config: Arc<Config>,
-    rule: Rule,
+    rule: &Rule,
     request: Request<hyper::body::Incoming>,
 ) -> ClientResult<DownloadTaskRequest> {
     // Convert the Reqwest header to the Hyper header.
@@ -1080,15 +1066,7 @@ fn make_response_headers(
 /// If the dfdaemon should be used, return the matched rule.
 #[instrument(skip_all)]
 fn find_matching_rule(rules: Option<&[Rule]>, url: &str) -> Option<Rule> {
-    if let Some(rules) = rules {
-        for rule in rules {
-            if rule.regex.is_match(url) {
-                return Some(rule.clone());
-            }
-        }
-    }
-
-    None
+    rules?.iter().find(|rule| rule.regex.is_match(url)).cloned()
 }
 
 /// make_error_response makes an error response with the given status and message.

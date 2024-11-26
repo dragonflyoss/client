@@ -95,6 +95,16 @@ impl Digest {
     pub fn encoded(&self) -> &str {
         &self.encoded
     }
+
+    // is_crc32_iso3309 checks if the crc32 encoded string uses the ISO 3309 polynomial.
+    pub fn is_crc32_iso3309(&self) -> bool {
+        self.algorithm == Algorithm::Crc32 && self.encoded.len() == 8
+    }
+
+    // is_crc32_castagnoli checks if the crc32 encoded string uses the Castagnoli polynomial.
+    pub fn is_crc32_castagnoli(&self) -> bool {
+        self.algorithm == Algorithm::Crc32 && self.encoded.len() == 10
+    }
 }
 
 /// Digest implements the Display.
@@ -135,19 +145,17 @@ pub fn calculate_file_hash(algorithm: Algorithm, path: &Path) -> ClientResult<Di
     let mut reader = std::io::BufReader::new(f);
     match algorithm {
         Algorithm::Crc32 => {
-            let mut hasher = crc32fast::Hasher::new();
+            let mut crc: u32 = 0;
             let mut buffer = [0; 4096];
             loop {
-                let count = reader.read(&mut buffer)?;
-                if count == 0 {
+                let n = reader.read(&mut buffer)?;
+                if n == 0 {
                     break;
                 }
-                hasher.update(&buffer[..count]);
+                crc = crc32c::crc32c_append(crc, &buffer[..n]);
             }
-            Ok(Digest::new(
-                algorithm,
-                base16ct::lower::encode_string(&hasher.finalize().to_be_bytes()),
-            ))
+
+            Ok(Digest::new(algorithm, crc.to_string()))
         }
         Algorithm::Blake3 => {
             let mut hasher = blake3::Hasher::new();
@@ -222,9 +230,31 @@ mod tests {
             calculate_file_hash(Algorithm::Sha512, path).expect("failed to calculate Sha512 hash");
         assert_eq!(digest.encoded(), expected_sha512);
 
-        let expected_crc32 = "57f4675d";
+        let expected_crc32 = "422618885";
         let digest =
             calculate_file_hash(Algorithm::Crc32, path).expect("failed to calculate Sha512 hash");
         assert_eq!(digest.encoded(), expected_crc32);
+    }
+
+    #[test]
+    fn test_is_crc32_iso3309() {
+        let mut hasher = crc32fast::Hasher::new();
+        hasher.update(b"test");
+        let hash = hasher.finalize();
+
+        let digest = Digest::new(
+            Algorithm::Crc32,
+            base16ct::lower::encode_string(&hash.to_be_bytes()),
+        );
+        assert!(digest.is_crc32_iso3309());
+    }
+
+    #[test]
+    fn test_is_crc32_castagnoli() {
+        let crc = crc32c::crc32c(b"test");
+        let encoded = crc.to_string();
+
+        let digest = Digest::new(Algorithm::Crc32, encoded);
+        assert!(digest.is_crc32_castagnoli());
     }
 }

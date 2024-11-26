@@ -16,7 +16,10 @@
 
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::{Error, Result};
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Error, Result,
+};
 use dragonfly_client_util::digest::{Algorithm, Digest};
 use reqwest::header::HeaderMap;
 use std::path::Path;
@@ -296,7 +299,10 @@ impl Storage {
         length: u64,
         reader: &mut R,
     ) -> Result<metadata::Piece> {
-        let response = self.content.write_piece(task_id, offset, reader).await?;
+        let response = self
+            .content
+            .write_piece_with_crc32_castagnoli(task_id, offset, reader)
+            .await?;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
 
         self.metadata.download_piece_finished(
@@ -319,7 +325,18 @@ impl Storage {
         parent_id: &str,
         reader: &mut R,
     ) -> Result<metadata::Piece> {
-        let response = self.content.write_piece(task_id, offset, reader).await?;
+        let digest: Digest = expected_digest.parse().or_err(ErrorType::ParseError)?;
+        let response = if digest.is_crc32_iso3309() {
+            // Compatible with the old version.
+            self.content
+                .write_piece_with_crc32_iso3309(task_id, offset, reader)
+                .await?
+        } else {
+            self.content
+                .write_piece_with_crc32_castagnoli(task_id, offset, reader)
+                .await?
+        };
+
         let length = response.length;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
 
@@ -361,13 +378,6 @@ impl Storage {
         // Start uploading the task.
         self.metadata.upload_task_started(task_id)?;
 
-        // Start uploading the piece.
-        if let Err(err) = self.metadata.upload_piece_started(piece_id) {
-            // Failed uploading the task.
-            self.metadata.upload_task_failed(task_id)?;
-            return Err(err);
-        }
-
         // Get the piece metadata and return the content of the piece.
         match self.metadata.get_piece(piece_id) {
             Ok(Some(piece)) => {
@@ -379,17 +389,11 @@ impl Storage {
                     Ok(reader) => {
                         // Finish uploading the task.
                         self.metadata.upload_task_finished(task_id)?;
-
-                        // Finish uploading the piece.
-                        self.metadata.upload_piece_finished(piece_id)?;
                         Ok(reader)
                     }
                     Err(err) => {
                         // Failed uploading the task.
                         self.metadata.upload_task_failed(task_id)?;
-
-                        // Failed uploading the piece.
-                        self.metadata.upload_piece_failed(piece_id)?;
                         Err(err)
                     }
                 }
@@ -397,17 +401,11 @@ impl Storage {
             Ok(None) => {
                 // Failed uploading the task.
                 self.metadata.upload_task_failed(task_id)?;
-
-                // Failed uploading the piece.
-                self.metadata.upload_piece_failed(piece_id)?;
                 Err(Error::PieceNotFound(piece_id.to_string()))
             }
             Err(err) => {
                 // Failed uploading the task.
                 self.metadata.upload_task_failed(task_id)?;
-
-                // Failed uploading the piece.
-                self.metadata.upload_piece_failed(piece_id)?;
                 Err(err)
             }
         }
