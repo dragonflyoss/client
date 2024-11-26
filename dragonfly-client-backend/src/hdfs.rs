@@ -119,11 +119,11 @@ impl super::Backend for Hdfs {
                         "list request failed {} {}: {}",
                         request.task_id, request.url, err
                     );
-                    ClientError::BackendError(BackendError {
+                    ClientError::BackendError(Box::new(BackendError {
                         message: err.to_string(),
                         status_code: None,
                         header: None,
-                    })
+                    }))
                 })?
                 .into_iter()
                 .map(|entry| {
@@ -150,11 +150,11 @@ impl super::Backend for Hdfs {
                     "stat request failed {} {}: {}",
                     request.task_id, request.url, err
                 );
-                ClientError::BackendError(BackendError {
+                ClientError::BackendError(Box::new(BackendError {
                     message: err.to_string(),
                     status_code: None,
                     header: None,
-                })
+                }))
             })?;
 
         info!(
@@ -202,11 +202,11 @@ impl super::Backend for Hdfs {
                     "get request failed {} {}: {}",
                     request.piece_id, request.url, err
                 );
-                ClientError::BackendError(BackendError {
+                ClientError::BackendError(Box::new(BackendError {
                     message: err.to_string(),
                     status_code: None,
                     header: None,
-                })
+                }))
             })?;
 
         let stream = match request.range {
@@ -218,22 +218,22 @@ impl super::Backend for Hdfs {
                         "get request failed {} {}: {}",
                         request.piece_id, request.url, err
                     );
-                    ClientError::BackendError(BackendError {
+                    ClientError::BackendError(Box::new(BackendError {
                         message: err.to_string(),
                         status_code: None,
                         header: None,
-                    })
+                    }))
                 })?,
             None => operator_reader.into_bytes_stream(..).await.map_err(|err| {
                 error!(
                     "get request failed {} {}: {}",
                     request.piece_id, request.url, err
                 );
-                ClientError::BackendError(BackendError {
+                ClientError::BackendError(Box::new(BackendError {
                     message: err.to_string(),
                     status_code: None,
                     header: None,
-                })
+                }))
             })?,
         };
 
