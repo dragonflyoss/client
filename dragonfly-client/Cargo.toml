@@ -62,8 +62,8 @@ bytesize.workspace = true
 uuid.workspace = true
 percent-encoding.workspace = true
 tokio-rustls.workspace = true
+serde_json.workspace = true
 lazy_static = "1.5"
-serde_json = "1.0"
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
 tracing-appender = "0.2.3"

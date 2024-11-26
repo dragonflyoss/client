@@ -1016,6 +1016,7 @@ dependencies = [
  "dragonfly-client",
  "dragonfly-client-config",
  "dragonfly-client-core",
+ "serde_json",
  "tempfile",
  "tokio",
  "toml",
