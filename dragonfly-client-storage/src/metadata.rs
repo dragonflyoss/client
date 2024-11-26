@@ -243,14 +243,13 @@ pub struct Piece {
     /// parent_id is the parent id of the piece.
     pub parent_id: Option<String>,
 
-    /// uploading_count is the count of the piece being uploaded by other peers.
+    /// DEPRECATED: uploading_count is the count of the piece being uploaded by other peers.
     pub uploading_count: i64,
 
-    /// uploaded_count is the count of the piece has been uploaded by other peers.
+    /// DEPRECATED: uploaded_count is the count of the piece has been uploaded by other peers.
     pub uploaded_count: u64,
 
-    /// updated_at is the time when the piece metadata is updated. If the piece is downloaded
-    /// by other peers, it will also update updated_at.
+    /// updated_at is the time when the piece metadata is updated.
     pub updated_at: NaiveDateTime,
 
     /// created_at is the time when the piece metadata is created.
@@ -752,55 +751,6 @@ impl<E: StorageEngineOwned> Metadata<E> {
         self.delete_piece(piece_id)
     }
 
-    /// upload_piece_started updates the metadata of the piece when piece uploads started.
-    #[instrument(skip_all)]
-    pub fn upload_piece_started(&self, piece_id: &str) -> Result<Piece> {
-        let piece = match self.db.get::<Piece>(piece_id.as_bytes())? {
-            Some(mut piece) => {
-                piece.uploading_count += 1;
-                piece.updated_at = Utc::now().naive_utc();
-                piece
-            }
-            None => return Err(Error::PieceNotFound(piece_id.to_string())),
-        };
-
-        self.db.put(piece_id.as_bytes(), &piece)?;
-        Ok(piece)
-    }
-
-    /// upload_piece_finished updates the metadata of the piece when piece uploads finished.
-    #[instrument(skip_all)]
-    pub fn upload_piece_finished(&self, piece_id: &str) -> Result<Piece> {
-        let piece = match self.db.get::<Piece>(piece_id.as_bytes())? {
-            Some(mut piece) => {
-                piece.uploading_count -= 1;
-                piece.uploaded_count += 1;
-                piece.updated_at = Utc::now().naive_utc();
-                piece
-            }
-            None => return Err(Error::PieceNotFound(piece_id.to_string())),
-        };
-
-        self.db.put(piece_id.as_bytes(), &piece)?;
-        Ok(piece)
-    }
-
-    /// upload_piece_failed updates the metadata of the piece when the piece uploads failed.
-    #[instrument(skip_all)]
-    pub fn upload_piece_failed(&self, piece_id: &str) -> Result<Piece> {
-        let piece = match self.db.get::<Piece>(piece_id.as_bytes())? {
-            Some(mut piece) => {
-                piece.uploading_count -= 1;
-                piece.updated_at = Utc::now().naive_utc();
-                piece
-            }
-            None => return Err(Error::PieceNotFound(piece_id.to_string())),
-        };
-
-        self.db.put(piece_id.as_bytes(), &piece)?;
-        Ok(piece)
-    }
-
     /// get_piece gets the piece metadata.
     #[instrument(skip_all)]
     pub fn get_piece(&self, piece_id: &str) -> Result<Option<Piece>> {
@@ -1012,26 +962,6 @@ mod tests {
         metadata.download_piece_failed(piece_id.as_str()).unwrap();
         let piece = metadata.get_piece(piece_id.as_str()).unwrap();
         assert!(piece.is_none());
-
-        // Test upload_piece_started.
-        let piece_id = metadata.piece_id(task_id, 3);
-        metadata.upload_piece_started(piece_id.as_str()).unwrap();
-        let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
-        assert_eq!(piece.uploading_count, 1);
-
-        // Test upload_piece_finished.
-        let piece_id = metadata.piece_id(task_id, 3);
-        metadata.upload_piece_finished(piece_id.as_str()).unwrap();
-        let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
-        assert_eq!(piece.uploading_count, 0);
-        assert_eq!(piece.uploaded_count, 1);
-
-        // Test upload_piece_failed.
-        let piece_id = metadata.piece_id(task_id, 3);
-        metadata.upload_piece_started(piece_id.as_str()).unwrap();
-        metadata.upload_piece_failed(piece_id.as_str()).unwrap();
-        let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
-        assert_eq!(piece.uploading_count, 0);
 
         // Test delete_pieces.
         metadata.delete_pieces(task_id).unwrap();

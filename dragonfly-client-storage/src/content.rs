@@ -21,7 +21,9 @@ use std::cmp::{max, min};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::{self, File, OpenOptions};
-use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt, BufReader, BufWriter, SeekFrom};
+use tokio::io::{
+    self, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter, SeekFrom,
+};
 use tokio_util::io::InspectReader;
 use tracing::{error, info, instrument, warn};
 
@@ -274,9 +276,63 @@ impl Content {
         Ok(f.take(target_length))
     }
 
-    /// write_piece writes the piece to the content.
+    /// write_piece_with_crc32_castagnoli writes the piece to the content with crc32 castagnoli.
+    /// Calculate the hash of the piece by crc32 castagnoli with hardware acceleration.
     #[instrument(skip_all)]
-    pub async fn write_piece<R: AsyncRead + Unpin + ?Sized>(
+    pub async fn write_piece_with_crc32_castagnoli<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        task_id: &str,
+        offset: u64,
+        reader: &mut R,
+    ) -> Result<WritePieceResponse> {
+        // Open the file and seek to the offset.
+        let task_path = self.create_or_get_task_path(task_id).await?;
+        let mut f = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(task_path.as_path())
+            .await
+            .map_err(|err| {
+                error!("open {:?} failed: {}", task_path, err);
+                err
+            })?;
+
+        f.seek(SeekFrom::Start(offset)).await.map_err(|err| {
+            error!("seek {:?} failed: {}", task_path, err);
+            err
+        })?;
+
+        // Copy the piece to the file while updating the CRC32C value.
+        let mut crc: u32 = 0;
+        let mut length = 0;
+        let mut buffer = vec![0; self.config.storage.write_buffer_size];
+        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
+        let mut reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
+
+        loop {
+            let n = reader.read(&mut buffer).await?;
+            if n == 0 {
+                break;
+            }
+
+            crc = crc32c::crc32c_append(crc, &buffer[..n]);
+            writer.write_all(&buffer[..n]).await?;
+            length += n as u64;
+        }
+        writer.flush().await?;
+
+        // Calculate the hash of the piece.
+        Ok(WritePieceResponse {
+            length,
+            hash: crc.to_string(),
+        })
+    }
+
+    /// write_piece_with_crc32_iso3309 writes the piece to the content with crc32 iso3309, there is
+    /// no hardware acceleration.
+    #[instrument(skip_all)]
+    pub async fn write_piece_with_crc32_iso3309<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
         offset: u64,
@@ -331,10 +387,8 @@ impl Content {
     fn get_task_path(&self, task_id: &str) -> PathBuf {
         // The task needs split by the first 3 characters of task id(sha256) to
         // avoid too many files in one directory.
-        self.dir
-            .join(DEFAULT_TASK_DIR)
-            .join(&task_id[..3])
-            .join(task_id)
+        let sub_dir = &task_id[..3];
+        self.dir.join(DEFAULT_TASK_DIR).join(sub_dir).join(task_id)
     }
 
     /// create_or_get_task_path creates parent directories or returns the task path by task id.
@@ -412,21 +466,10 @@ impl Content {
         // Open the file to copy the content.
         let from_f = File::open(from).await?;
 
-        // Use a buffer to read the content.
-        let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, from_f);
-
-        // Crc32 is used to calculate the hash of the content.
-        let mut hasher = crc32fast::Hasher::new();
-
-        // InspectReader is used to calculate the hash of the content.
-        let mut tee = InspectReader::new(reader, |bytes| {
-            hasher.update(bytes);
-        });
-
         let task_path = self
             .create_or_get_persistent_cache_task_path(task_id)
             .await?;
-        let mut to_f = OpenOptions::new()
+        let to_f = OpenOptions::new()
             .create(true)
             .truncate(true)
             .write(true)
@@ -437,17 +480,28 @@ impl Content {
                 err
             })?;
 
-        // Copy the content to the file.
-        let length = io::copy(&mut tee, &mut to_f).await.map_err(|err| {
-            error!("copy {:?} failed: {}", task_path, err);
-            err
-        })?;
+        // Copy the content to the file while updating the CRC32C value.
+        let mut crc: u32 = 0;
+        let mut length = 0;
+        let mut buffer = vec![0; self.config.storage.write_buffer_size];
+        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, to_f);
+        let mut reader = BufReader::with_capacity(self.config.storage.write_buffer_size, from_f);
 
-        // Calculate the hash of the content.
-        let hash = hasher.finalize();
+        loop {
+            let n = reader.read(&mut buffer).await?;
+            if n == 0 {
+                break;
+            }
+
+            crc = crc32c::crc32c_append(crc, &buffer[..n]);
+            writer.write_all(&buffer[..n]).await?;
+            length += n as u64;
+        }
+        writer.flush().await?;
+
         Ok(WritePersistentCacheTaskResponse {
             length,
-            hash: base16ct::lower::encode_string(&hash.to_be_bytes()),
+            hash: crc.to_string(),
         })
     }
 
