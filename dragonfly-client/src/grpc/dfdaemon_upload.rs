@@ -130,6 +130,7 @@ impl DfdaemonUploadServer {
         }
 
         let server = server_builder
+            .tcp_nodelay(true)
             .max_frame_size(super::MAX_FRAME_SIZE)
             .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
             .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
@@ -1110,6 +1111,7 @@ impl DfdaemonUploadClient {
             Some(client_tls_config) => {
                 Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
                     .tls_config(client_tls_config)?
+                    .tcp_nodelay(true)
                     .buffer_size(super::BUFFER_SIZE)
                     .connect_timeout(super::CONNECT_TIMEOUT)
                     .timeout(super::REQUEST_TIMEOUT)
@@ -1122,6 +1124,7 @@ impl DfdaemonUploadClient {
                     .or_err(ErrorType::ConnectError)?
             }
             None => Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
+                .tcp_nodelay(true)
                 .buffer_size(super::BUFFER_SIZE)
                 .connect_timeout(super::CONNECT_TIMEOUT)
                 .timeout(super::REQUEST_TIMEOUT)
