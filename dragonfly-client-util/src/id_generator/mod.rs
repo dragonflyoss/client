@@ -57,6 +57,7 @@ impl IDGenerator {
     }
 
     /// host_id generates the host id.
+    #[inline]
     #[instrument(skip_all)]
     pub fn host_id(&self) -> String {
         if self.is_seed_peer {
@@ -67,6 +68,7 @@ impl IDGenerator {
     }
 
     /// task_id generates the task id.
+    #[inline]
     #[instrument(skip_all)]
     pub fn task_id(
         &self,
@@ -116,6 +118,7 @@ impl IDGenerator {
     }
 
     /// persistent_cache_task_id generates the persistent cache task id.
+    #[inline]
     #[instrument(skip_all)]
     pub fn persistent_cache_task_id(
         &self,
@@ -145,6 +148,7 @@ impl IDGenerator {
     }
 
     /// peer_id generates the peer id.
+    #[inline]
     #[instrument(skip_all)]
     pub fn peer_id(&self) -> String {
         if self.is_seed_peer {

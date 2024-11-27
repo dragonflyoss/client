@@ -212,6 +212,13 @@ pub fn default_proxy_server_port() -> u16 {
     4001
 }
 
+/// default_proxy_cache_capacity is the default cache capacity for the proxy server, default is
+/// 150.
+#[inline]
+pub fn default_proxy_cache_capacity() -> usize {
+    150
+}
+
 /// default_proxy_read_buffer_size is the default buffer size for reading piece, default is 32KB.
 #[inline]
 pub fn default_proxy_read_buffer_size() -> usize {
@@ -1082,6 +1089,13 @@ pub struct Proxy {
     /// prefetch pre-downloads full of the task when download with range request.
     pub prefetch: bool,
 
+    /// cache_capacity is the capacity of the cache by LRU algorithm for HTTP proxy, default is 150.
+    /// The cache is used to store the hot piece content of the task, piece length is 4MB~16MB.
+    /// If the capacity is 150, the cache size is 600MB~2.4GB, need to adjust according to the
+    /// memory size of the host.
+    #[serde(default = "default_proxy_cache_capacity")]
+    pub cache_capacity: usize,
+
     /// read_buffer_size is the buffer size for reading piece from disk, default is 1KB.
     #[serde(default = "default_proxy_read_buffer_size")]
     pub read_buffer_size: usize,
@@ -1096,6 +1110,7 @@ impl Default for Proxy {
             registry_mirror: RegistryMirror::default(),
             disable_back_to_source: false,
             prefetch: false,
+            cache_capacity: default_proxy_cache_capacity(),
             read_buffer_size: default_proxy_read_buffer_size(),
         }
     }
