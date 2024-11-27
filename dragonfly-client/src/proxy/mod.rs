@@ -714,7 +714,7 @@ async fn proxy_by_dfdaemon(
                         {
                             // Sleep for a while to avoid the out stream is aborted. If the task is small, proxy read the piece
                             // before the task download is finished. It will cause `user body write aborted` error.
-                            sleep(Duration::from_millis(10)).await;
+                            sleep(Duration::from_millis(1)).await;
 
                             // Send the none response to the client, if the first piece is received.
                             if !initialized {
