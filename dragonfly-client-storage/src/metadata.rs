@@ -829,6 +829,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// piece_id returns the piece id.
+    #[inline]
     #[instrument(skip_all)]
     pub fn piece_id(&self, task_id: &str, number: u32) -> String {
         format!("{}-{}", task_id, number)

@@ -16,12 +16,15 @@
 
 use crate::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use crate::metrics::{
-    collect_proxy_request_failure_metrics, collect_proxy_request_started_metrics,
+    collect_download_piece_traffic_metrics, collect_proxy_request_failure_metrics,
+    collect_proxy_request_started_metrics,
+    collect_proxy_request_via_dfdaemon_and_cache_hits_metrics,
+    collect_proxy_request_via_dfdaemon_metrics,
 };
 use crate::resource::task::Task;
 use crate::shutdown;
 use bytes::Bytes;
-use dragonfly_api::common::v2::{Download, TaskType};
+use dragonfly_api::common::v2::{Download, TaskType, TrafficType};
 use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse,
 };
@@ -34,7 +37,7 @@ use dragonfly_client_util::{
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
 use futures_util::TryStreamExt;
-use http_body_util::{combinators::BoxBody, BodyExt, Empty, StreamBody};
+use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full, StreamBody};
 use hyper::body::Frame;
 use hyper::client::conn::http1::Builder as ClientBuilder;
 use hyper::server::conn::http1::Builder as ServerBuilder;
@@ -58,9 +61,10 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_rustls::TlsAcceptor;
-use tokio_util::io::ReaderStream;
+use tokio_util::io::{InspectReader, ReaderStream};
 use tracing::{debug, error, info, instrument, Instrument, Span};
 
+pub mod cache;
 pub mod header;
 
 /// Response is the response of the proxy server.
@@ -70,6 +74,9 @@ pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
 pub struct Proxy {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
+
+    /// cache is the cache manager for storing the piece content.
+    cache: Arc<cache::Cache>,
 
     /// task is the task manager.
     task: Arc<Task>,
@@ -103,6 +110,7 @@ impl Proxy {
     ) -> Self {
         let mut proxy = Self {
             config: config.clone(),
+            cache: Arc::new(cache::Cache::new(config.proxy.cache_capacity, task.clone()).unwrap()),
             task: task.clone(),
             addr: SocketAddr::new(config.proxy.server.ip.unwrap(), config.proxy.server.port),
             registry_cert: Arc::new(None),
@@ -163,6 +171,7 @@ impl Proxy {
                     debug!("accepted connection from {}", remote_address);
 
                     let config = self.config.clone();
+                    let cache = self.cache.clone();
                     let task = self.task.clone();
                     let dfdaemon_download_client = dfdaemon_download_client.clone();
 
@@ -175,7 +184,7 @@ impl Proxy {
                             .title_case_headers(true)
                             .serve_connection(
                                 io,
-                                service_fn(move |request| handler(config.clone(), task.clone(), request, dfdaemon_download_client.clone(), registry_cert.clone(), server_ca_cert.clone())),
+                                service_fn(move |request| handler(config.clone(), cache.clone(), task.clone(), request, dfdaemon_download_client.clone(), registry_cert.clone(), server_ca_cert.clone())),
                                 )
                             .with_upgrades()
                             .await
@@ -199,6 +208,7 @@ impl Proxy {
 #[instrument(skip_all, fields(uri, method))]
 pub async fn handler(
     config: Arc<Config>,
+    cache: Arc<cache::Cache>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -215,6 +225,7 @@ pub async fn handler(
         if Method::CONNECT == request.method() {
             return registry_mirror_https_handler(
                 config,
+                cache,
                 task,
                 request,
                 dfdaemon_download_client,
@@ -226,6 +237,7 @@ pub async fn handler(
 
         return registry_mirror_http_handler(
             config,
+            cache,
             task,
             request,
             dfdaemon_download_client,
@@ -242,6 +254,7 @@ pub async fn handler(
     if Method::CONNECT == request.method() {
         return https_handler(
             config,
+            cache,
             task,
             request,
             dfdaemon_download_client,
@@ -253,6 +266,7 @@ pub async fn handler(
 
     http_handler(
         config,
+        cache,
         task,
         request,
         dfdaemon_download_client,
@@ -265,6 +279,7 @@ pub async fn handler(
 #[instrument(skip_all)]
 pub async fn registry_mirror_http_handler(
     config: Arc<Config>,
+    cache: Arc<cache::Cache>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -273,6 +288,7 @@ pub async fn registry_mirror_http_handler(
     let request = make_registry_mirror_request(config.clone(), request)?;
     return http_handler(
         config,
+        cache,
         task,
         request,
         dfdaemon_download_client,
@@ -285,6 +301,7 @@ pub async fn registry_mirror_http_handler(
 #[instrument(skip_all)]
 pub async fn registry_mirror_https_handler(
     config: Arc<Config>,
+    cache: Arc<cache::Cache>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -294,6 +311,7 @@ pub async fn registry_mirror_https_handler(
     let request = make_registry_mirror_request(config.clone(), request)?;
     return https_handler(
         config,
+        cache,
         task,
         request,
         dfdaemon_download_client,
@@ -307,6 +325,7 @@ pub async fn registry_mirror_https_handler(
 #[instrument(skip_all)]
 pub async fn http_handler(
     config: Arc<Config>,
+    cache: Arc<cache::Cache>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -340,7 +359,15 @@ pub async fn http_handler(
             request.method(),
             request_uri
         );
-        return proxy_by_dfdaemon(config, task, &rule, request, dfdaemon_download_client).await;
+        return proxy_via_dfdaemon(
+            config,
+            cache,
+            task,
+            &rule,
+            request,
+            dfdaemon_download_client,
+        )
+        .await;
     }
 
     // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
@@ -351,8 +378,9 @@ pub async fn http_handler(
             request.method(),
             request_uri
         );
-        return proxy_by_dfdaemon(
+        return proxy_via_dfdaemon(
             config,
+            cache,
             task,
             &Rule::default(),
             request,
@@ -367,7 +395,7 @@ pub async fn http_handler(
             request.method(),
             request.uri()
         );
-        return proxy_https(request, registry_cert).await;
+        return proxy_via_https(request, registry_cert).await;
     }
 
     info!(
@@ -375,13 +403,14 @@ pub async fn http_handler(
         request.method(),
         request.uri()
     );
-    return proxy_http(request).await;
+    return proxy_via_http(request).await;
 }
 
 /// https_handler handles the https request by client.
 #[instrument(skip_all)]
 pub async fn https_handler(
     config: Arc<Config>,
+    cache: Arc<cache::Cache>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -398,6 +427,7 @@ pub async fn https_handler(
                 Ok(upgraded) => {
                     if let Err(e) = upgraded_tunnel(
                         config,
+                        cache,
                         task,
                         upgraded,
                         host,
@@ -423,9 +453,11 @@ pub async fn https_handler(
 /// upgraded_tunnel handles the upgraded connection. If the ca_cert is not set, use the
 /// self-signed certificate. Otherwise, use the CA certificate to sign the
 /// self-signed certificate.
+#[allow(clippy::too_many_arguments)]
 #[instrument(skip_all)]
 async fn upgraded_tunnel(
     config: Arc<Config>,
+    cache: Arc<cache::Cache>,
     task: Arc<Task>,
     upgraded: Upgraded,
     host: String,
@@ -473,6 +505,7 @@ async fn upgraded_tunnel(
             service_fn(move |request| {
                 upgraded_handler(
                     config.clone(),
+                    cache.clone(),
                     task.clone(),
                     host.clone(),
                     request,
@@ -494,6 +527,7 @@ async fn upgraded_tunnel(
 #[instrument(skip_all, fields(uri, method))]
 pub async fn upgraded_handler(
     config: Arc<Config>,
+    cache: Arc<cache::Cache>,
     task: Arc<Task>,
     host: String,
     mut request: Request<hyper::body::Incoming>,
@@ -536,7 +570,15 @@ pub async fn upgraded_handler(
             request.method(),
             request_uri
         );
-        return proxy_by_dfdaemon(config, task, &rule, request, dfdaemon_download_client).await;
+        return proxy_via_dfdaemon(
+            config,
+            cache,
+            task,
+            &rule,
+            request,
+            dfdaemon_download_client,
+        )
+        .await;
     }
 
     // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
@@ -547,8 +589,9 @@ pub async fn upgraded_handler(
             request.method(),
             request_uri
         );
-        return proxy_by_dfdaemon(
+        return proxy_via_dfdaemon(
             config,
+            cache,
             task,
             &Rule::default(),
             request,
@@ -563,7 +606,7 @@ pub async fn upgraded_handler(
             request.method(),
             request.uri()
         );
-        return proxy_https(request, registry_cert).await;
+        return proxy_via_https(request, registry_cert).await;
     }
 
     info!(
@@ -571,18 +614,22 @@ pub async fn upgraded_handler(
         request.method(),
         request.uri()
     );
-    return proxy_http(request).await;
+    return proxy_via_http(request).await;
 }
 
-/// proxy_by_dfdaemon proxies the request via the dfdaemon.
+/// proxy_via_dfdaemon proxies the request via the dfdaemon.
 #[instrument(skip_all, fields(host_id, task_id, peer_id))]
-async fn proxy_by_dfdaemon(
+async fn proxy_via_dfdaemon(
     config: Arc<Config>,
+    cache: Arc<cache::Cache>,
     task: Arc<Task>,
     rule: &Rule,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
 ) -> ClientResult<Response> {
+    // Collect the metrics for the proxy request via dfdaemon.
+    collect_proxy_request_via_dfdaemon_metrics();
+
     // Make the download task request.
     let download_task_request = match make_download_task_request(config.clone(), rule, request) {
         Ok(download_task_request) => download_task_request,
@@ -594,6 +641,35 @@ async fn proxy_by_dfdaemon(
             ));
         }
     };
+
+    // Get the content from the cache by the request.
+    match cache.get_by_request(&download_task_request).await {
+        Ok(None) => {
+            debug!("cache miss");
+        }
+        Ok(Some(content)) => {
+            debug!("cache hit");
+
+            // Collect the download piece traffic metrics and the proxy request via dfdaemon and
+            // cache hits metrics.
+            collect_proxy_request_via_dfdaemon_and_cache_hits_metrics();
+            collect_download_piece_traffic_metrics(
+                &TrafficType::LocalPeer,
+                TaskType::Standard as i32,
+                content.len() as u64,
+            );
+
+            let body_boxed = Full::new(content).map_err(ClientError::from).boxed();
+            return Ok(Response::new(body_boxed));
+        }
+        Err(err) => {
+            error!("get content from cache failed: {}", err);
+            return Ok(make_error_response(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                None,
+            ));
+        }
+    }
 
     // Download the task by the dfdaemon download client.
     let response = match dfdaemon_download_client
@@ -760,13 +836,21 @@ async fn proxy_by_dfdaemon(
                             let piece_reader =
                                 BufReader::with_capacity(read_buffer_size, piece_reader);
 
-                            // Write the piece data to the pipe in order.
+                            // Write the piece data to the pipe in order and store the piece reader
+                            // in the cache.
                             finished_piece_readers.insert(piece.number, piece_reader);
                             while let Some(piece_reader) =
                                 finished_piece_readers.get_mut(&need_piece_number)
                             {
                                 debug!("copy piece {} to stream", need_piece_number);
-                                if let Err(err) = tokio::io::copy(piece_reader, &mut writer).await {
+                                let mut content =
+                                    bytes::BytesMut::with_capacity(piece.length as usize);
+
+                                let mut tee = InspectReader::new(piece_reader, |bytes| {
+                                    content.extend_from_slice(bytes);
+                                });
+
+                                if let Err(err) = tokio::io::copy(&mut tee, &mut writer).await {
                                     error!("download piece reader error: {}", err);
                                     if let Err(err) = writer.shutdown().await {
                                         error!("writer shutdown error: {}", err);
@@ -774,6 +858,11 @@ async fn proxy_by_dfdaemon(
 
                                     return;
                                 }
+
+                                cache.add_piece(
+                                    &task.piece.id(&message.task_id, need_piece_number),
+                                    content.freeze(),
+                                );
 
                                 need_piece_number += 1;
                             }
@@ -851,9 +940,9 @@ async fn proxy_by_dfdaemon(
     }
 }
 
-/// proxy_http proxies the HTTP request directly to the remote server.
+/// proxy_via_http proxies the HTTP request directly to the remote server.
 #[instrument(skip_all)]
-async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
+async fn proxy_via_http(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
     let Some(host) = request.uri().host() else {
         error!("CONNECT host is not socket addr: {:?}", request.uri());
         return Ok(make_error_response(http::StatusCode::BAD_REQUEST, None));
@@ -878,9 +967,9 @@ async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Res
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }
 
-/// proxy_https proxies the HTTPS request directly to the remote server.
+/// proxy_via_https proxies the HTTPS request directly to the remote server.
 #[instrument(skip_all)]
-async fn proxy_https(
+async fn proxy_via_https(
     request: Request<hyper::body::Incoming>,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
@@ -935,7 +1024,6 @@ fn make_registry_mirror_request(
         .parse::<http::Uri>()
         .or_err(ErrorType::ParseError)?,
     };
-
     header::get_registry(&header);
 
     *request.uri_mut() = registry_mirror_uri.clone();

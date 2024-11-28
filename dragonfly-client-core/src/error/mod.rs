@@ -126,6 +126,11 @@ pub enum DFError {
     #[error("invalid parameter")]
     InvalidParameter,
 
+    /// Infallible is the error for infallible.
+    #[error(transparent)]
+    Infallible(#[from] std::convert::Infallible),
+
+    /// Utf8 is the error for utf8.
     #[error(transparent)]
     Utf8(#[from] std::str::Utf8Error),
 

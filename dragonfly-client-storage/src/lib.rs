@@ -441,6 +441,7 @@ impl Storage {
     }
 
     /// piece_id returns the piece id.
+    #[inline]
     #[instrument(skip_all)]
     pub fn piece_id(&self, task_id: &str, number: u32) -> String {
         self.metadata.piece_id(task_id, number)
