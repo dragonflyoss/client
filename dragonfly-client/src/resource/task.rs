@@ -116,6 +116,11 @@ impl Task {
         }
     }
 
+    /// get gets the metadata of the task.
+    pub async fn get(&self, id: &str) -> ClientResult<Option<metadata::Task>> {
+        self.storage.get_task(id)
+    }
+
     /// download_started updates the metadata of the task when the task downloads started.
     #[instrument(skip_all)]
     pub async fn download_started(

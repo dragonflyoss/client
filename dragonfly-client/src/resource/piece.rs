@@ -110,6 +110,7 @@ impl Piece {
     }
 
     /// id generates a new piece id.
+    #[inline]
     #[instrument(skip_all)]
     pub fn id(&self, task_id: &str, number: u32) -> String {
         self.storage.piece_id(task_id, number)
