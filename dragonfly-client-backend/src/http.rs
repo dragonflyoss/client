@@ -17,6 +17,9 @@
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::tls::NoVerifier;
 use futures::TryStreamExt;
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
+use reqwest_tracing::TracingMiddleware;
 use rustls_pki_types::CertificateDer;
 use std::io::{Error as IOError, ErrorKind};
 use tokio_util::io::StreamReader;
@@ -34,7 +37,7 @@ pub struct HTTP {
     scheme: String,
 
     /// client is the reqwest client.
-    client: reqwest::Client,
+    client: ClientWithMiddleware,
 }
 
 /// HTTP implements the http interface.
@@ -54,6 +57,13 @@ impl HTTP {
             .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
             .build()?;
 
+        let retry_policy =
+            ExponentialBackoff::builder().build_with_max_retries(super::MAX_RETRY_TIMES);
+        let client = ClientBuilder::new(client)
+            .with(TracingMiddleware::default())
+            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+            .build();
+
         Ok(Self {
             scheme: scheme.to_string(),
             client,
@@ -62,7 +72,10 @@ impl HTTP {
 
     /// client returns a new reqwest client.
     #[instrument(skip_all)]
-    fn client(&self, client_cert: Option<Vec<CertificateDer<'static>>>) -> Result<reqwest::Client> {
+    fn client(
+        &self,
+        client_cert: Option<Vec<CertificateDer<'static>>>,
+    ) -> Result<ClientWithMiddleware> {
         match client_cert.as_ref() {
             Some(client_cert) => {
                 let mut root_cert_store = rustls::RootCertStore::empty();
@@ -76,6 +89,14 @@ impl HTTP {
                 let client = reqwest::Client::builder()
                     .use_preconfigured_tls(client_config_builder)
                     .build()?;
+
+                let retry_policy =
+                    ExponentialBackoff::builder().build_with_max_retries(super::MAX_RETRY_TIMES);
+                let client = ClientBuilder::new(client)
+                    .with(TracingMiddleware::default())
+                    .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+                    .build();
+
                 Ok(client)
             }
             // Default TLS client config with no validation.

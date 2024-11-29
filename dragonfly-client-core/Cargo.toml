@@ -11,6 +11,7 @@ edition.workspace = true
 
 [dependencies]
 reqwest.workspace = true
+reqwest-middleware.workspace = true
 thiserror.workspace = true
 tonic.workspace = true
 tonic-reflection.workspace = true
