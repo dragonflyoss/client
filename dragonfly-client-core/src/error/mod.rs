@@ -178,6 +178,10 @@ pub enum DFError {
     #[error(transparent)]
     ReqwestError(#[from] reqwest::Error),
 
+    /// ReqwestMiddlewareError is the error for reqwest middleware.
+    #[error(transparent)]
+    ReqwestMiddlewareError(#[from] reqwest_middleware::Error),
+
     /// OpenDALError is the error for opendal.
     #[error(transparent)]
     OpenDALError(#[from] opendal::Error),
