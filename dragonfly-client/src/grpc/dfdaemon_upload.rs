@@ -38,9 +38,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error as ClientError, Result as ClientResult,
 };
-use dragonfly_client_util::http::{
-    get_range, hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap,
-};
+use dragonfly_client_util::http::{get_range, hashmap_to_headermap, headermap_to_hashmap};
 use tonic::service::interceptor::InterceptedService;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -1143,8 +1141,6 @@ impl DfdaemonUploadClient {
         };
 
         let client = DfdaemonUploadGRPCClient::with_interceptor(channel, TracingInterceptor)
-            .send_compressed(CompressionEncoding::Zstd)
-            .accept_compressed(CompressionEncoding::Zstd)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
