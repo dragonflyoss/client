@@ -27,10 +27,9 @@ use dragonfly_api::dfdaemon::{
 };
 use dragonfly_api::scheduler::v2::{
     announce_persistent_cache_peer_request, announce_persistent_cache_peer_response,
-    AnnouncePersistentCachePeerRequest, DeletePersistentCacheTaskRequest,
-    DownloadPersistentCachePeerFailedRequest, DownloadPersistentCachePeerFinishedRequest,
-    DownloadPersistentCachePeerStartedRequest, DownloadPieceFailedRequest,
-    DownloadPieceFinishedRequest, RegisterPersistentCachePeerRequest,
+    AnnouncePersistentCachePeerRequest, DownloadPersistentCachePeerFailedRequest,
+    DownloadPersistentCachePeerFinishedRequest, DownloadPersistentCachePeerStartedRequest,
+    DownloadPieceFailedRequest, DownloadPieceFinishedRequest, RegisterPersistentCachePeerRequest,
     ReschedulePersistentCachePeerRequest, StatPersistentCacheTaskRequest,
     UploadPersistentCacheTaskFailedRequest, UploadPersistentCacheTaskFinishedRequest,
     UploadPersistentCacheTaskStartedRequest,
@@ -55,7 +54,7 @@ use tokio::task::JoinSet;
 use tokio::time::sleep;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Status};
-use tracing::{error, info, instrument, Instrument};
+use tracing::{debug, error, info, instrument, Instrument};
 
 use super::*;
 
@@ -141,11 +140,15 @@ impl PersistentCacheTask {
                 task_id: task_id.to_string(),
                 peer_id: peer_id.to_string(),
                 persistent_replica_count: request.persistent_replica_count,
+                digest: digest.to_string(),
                 tag: request.tag.clone(),
                 application: request.application.clone(),
                 piece_length,
+                content_length,
+                piece_count: self
+                    .piece
+                    .calculate_piece_count(piece_length, content_length),
                 ttl: request.ttl,
-                timeout: request.timeout,
             })
             .await
             .map_err(|err| {
@@ -205,7 +208,8 @@ impl PersistentCacheTask {
                 Ok(CommonPersistentCacheTask {
                     id: task_id.to_string(),
                     persistent_replica_count: request.persistent_replica_count,
-                    replica_count: response.replica_count,
+                    current_persistent_replica_count: response.current_persistent_replica_count,
+                    current_replica_count: response.current_replica_count,
                     digest: digest.to_string(),
                     tag: request.tag,
                     application: request.application,
@@ -289,7 +293,7 @@ impl PersistentCacheTask {
     #[instrument(skip_all)]
     pub async fn hard_link_or_copy(
         &self,
-        task: metadata::PersistentCacheTask,
+        task: &metadata::PersistentCacheTask,
         to: &Path,
     ) -> ClientResult<()> {
         self.storage
@@ -302,7 +306,7 @@ impl PersistentCacheTask {
     #[instrument(skip_all)]
     pub async fn download(
         &self,
-        task: metadata::PersistentCacheTask,
+        task: &metadata::PersistentCacheTask,
         host_id: &str,
         peer_id: &str,
         request: DownloadPersistentCacheTaskRequest,
@@ -381,10 +385,10 @@ impl PersistentCacheTask {
             })?;
 
         // Download the pieces from the local peer.
-        info!("download the pieces from local peer");
+        debug!("download the pieces from local peer");
         let finished_pieces = match self
             .download_partial_from_local_peer(
-                task.clone(),
+                task,
                 host_id,
                 peer_id,
                 interested_pieces.clone(),
@@ -421,12 +425,12 @@ impl PersistentCacheTask {
             info!("all pieces are downloaded from local peer");
             return Ok(());
         };
-        info!("download the pieces with scheduler");
+        debug!("download the pieces with scheduler");
 
         // Download the pieces with scheduler.
         let finished_pieces = match self
             .download_partial_with_scheduler(
-                task.clone(),
+                task,
                 host_id,
                 peer_id,
                 interested_pieces.clone(),
@@ -481,7 +485,7 @@ impl PersistentCacheTask {
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler(
         &self,
-        task: metadata::PersistentCacheTask,
+        task: &metadata::PersistentCacheTask,
         host_id: &str,
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
@@ -495,7 +499,7 @@ impl PersistentCacheTask {
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
         // Initialize stream channel.
-        let (in_stream_tx, in_stream_rx) = mpsc::channel(1024 * 10);
+        let (in_stream_tx, in_stream_rx) = mpsc::channel(10 * 1024);
 
         // Send the register peer request.
         in_stream_tx
@@ -682,7 +686,7 @@ impl PersistentCacheTask {
                     // Download the pieces from the remote peer.
                     let partial_finished_pieces = match self
                         .download_partial_with_scheduler_from_remote_peer(
-                            task.clone(),
+                            task,
                             host_id,
                             peer_id,
                             response.candidate_cache_parents.clone(),
@@ -788,7 +792,7 @@ impl PersistentCacheTask {
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler_from_remote_peer(
         &self,
-        task: metadata::PersistentCacheTask,
+        task: &metadata::PersistentCacheTask,
         host_id: &str,
         peer_id: &str,
         parents: Vec<PersistentCachePeer>,
@@ -837,14 +841,16 @@ impl PersistentCacheTask {
                 // Limit the concurrent download count.
                 let _permit = semaphore.acquire().await.unwrap();
 
+                let piece_id = storage.piece_id(task_id.as_str(), number);
                 info!(
                     "start to download piece {} from remote peer {:?}",
-                    storage.piece_id(task_id.as_str(), number),
+                    piece_id,
                     parent.id.clone()
                 );
 
                 let metadata = piece_manager
                     .download_from_remote_peer(
+                        peer_id.as_str(),
                         host_id.as_str(),
                         task_id.as_str(),
                         number,
@@ -855,7 +861,7 @@ impl PersistentCacheTask {
                     .map_err(|err| {
                         error!(
                             "download piece {} from remote peer {:?} error: {:?}",
-                            storage.piece_id(task_id.as_str(), number),
+                            piece_id,
                             parent.id.clone(),
                             err
                         );
@@ -926,8 +932,7 @@ impl PersistentCacheTask {
 
                 info!(
                     "finished piece {} from remote peer {:?}",
-                    storage.piece_id(task_id.as_str(), metadata.number),
-                    metadata.parent_id
+                    piece_id, metadata.parent_id
                 );
 
                 Ok(metadata)
@@ -1014,7 +1019,7 @@ impl PersistentCacheTask {
     #[instrument(skip_all)]
     async fn download_partial_from_local_peer(
         &self,
-        task: metadata::PersistentCacheTask,
+        task: &metadata::PersistentCacheTask,
         host_id: &str,
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
@@ -1025,24 +1030,19 @@ impl PersistentCacheTask {
 
         // Download the piece from the local peer.
         for interested_piece in interested_pieces {
+            let piece_id = self
+                .storage
+                .piece_id(task.id.as_str(), interested_piece.number);
+
             // Get the piece metadata from the local storage.
-            let piece = match self.piece.get(task.id.as_str(), interested_piece.number) {
+            let piece = match self.piece.get(piece_id.as_str()) {
                 Ok(Some(piece)) => piece,
                 Ok(None) => {
-                    info!(
-                        "piece {} not found in local storage",
-                        self.storage
-                            .piece_id(task.id.as_str(), interested_piece.number)
-                    );
+                    info!("piece {} not found in local storage", piece_id);
                     continue;
                 }
                 Err(err) => {
-                    error!(
-                        "get piece {} from local storage error: {:?}",
-                        self.storage
-                            .piece_id(task.id.as_str(), interested_piece.number),
-                        err
-                    );
+                    error!("get piece {} from local storage error: {:?}", piece_id, err);
                     continue;
                 }
             };
@@ -1050,10 +1050,7 @@ impl PersistentCacheTask {
             // Fake the download from the local peer.
             self.piece
                 .download_from_local_peer(task.id.as_str(), piece.length);
-            info!(
-                "finished piece {} from local peer",
-                self.storage.piece_id(task.id.as_str(), piece.number)
-            );
+            info!("finished piece {} from local peer", piece_id);
 
             // Construct the piece.
             let piece = Piece {
@@ -1115,18 +1112,7 @@ impl PersistentCacheTask {
 
     /// delete_persistent_cache_task deletes a persistent cache task.
     #[instrument(skip_all)]
-    pub async fn delete(&self, task_id: &str, host_id: &str) -> ClientResult<()> {
-        self.scheduler_client
-            .delete_persistent_cache_task(DeletePersistentCacheTaskRequest {
-                host_id: host_id.to_string(),
-                task_id: task_id.to_string(),
-            })
-            .await
-            .map_err(|err| {
-                error!("delete persistent cache task: {}", err);
-                err
-            })?;
-
-        Ok(())
+    pub async fn delete(&self, task_id: &str) {
+        self.storage.delete_persistent_cache_task(task_id).await
     }
 }

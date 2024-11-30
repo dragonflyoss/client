@@ -119,7 +119,7 @@ fn default_download_rate_limit() -> ByteSize {
 /// default_download_piece_timeout is the default timeout for downloading a piece from source.
 #[inline]
 fn default_download_piece_timeout() -> Duration {
-    Duration::from_secs(60)
+    Duration::from_secs(10)
 }
 
 /// default_download_concurrent_piece_count is the default number of concurrent pieces to download.
@@ -212,6 +212,13 @@ pub fn default_proxy_server_port() -> u16 {
     4001
 }
 
+/// default_proxy_cache_capacity is the default cache capacity for the proxy server, default is
+/// 150.
+#[inline]
+pub fn default_proxy_cache_capacity() -> usize {
+    150
+}
+
 /// default_proxy_read_buffer_size is the default buffer size for reading piece, default is 32KB.
 #[inline]
 pub fn default_proxy_read_buffer_size() -> usize {
@@ -284,6 +291,12 @@ fn cos_filtered_query_params() -> Vec<String> {
     ]
 }
 
+/// containerd_filtered_query_params is the filtered query params with containerd to generate the task id.
+#[inline]
+fn containerd_filtered_query_params() -> Vec<String> {
+    vec!["ns".to_string()]
+}
+
 /// default_proxy_rule_filtered_query_params is the default filtered query params to generate the task id.
 #[inline]
 pub fn default_proxy_rule_filtered_query_params() -> Vec<String> {
@@ -305,6 +318,10 @@ pub fn default_proxy_rule_filtered_query_params() -> Vec<String> {
     }
 
     for query_param in cos_filtered_query_params() {
+        visited.insert(query_param);
+    }
+
+    for query_param in containerd_filtered_query_params() {
         visited.insert(query_param);
     }
 
@@ -795,11 +812,11 @@ pub struct Storage {
     #[serde(default = "default_storage_keep")]
     pub keep: bool,
 
-    /// write_buffer_size is the buffer size for writing piece to disk, default is 4KB.
+    /// write_buffer_size is the buffer size for writing piece to disk, default is 128KB.
     #[serde(default = "default_storage_write_buffer_size")]
     pub write_buffer_size: usize,
 
-    /// read_buffer_size is the buffer size for reading piece from disk, default is 4KB.
+    /// read_buffer_size is the buffer size for reading piece from disk, default is 128KB.
     #[serde(default = "default_storage_read_buffer_size")]
     pub read_buffer_size: usize,
 }
@@ -1072,6 +1089,13 @@ pub struct Proxy {
     /// prefetch pre-downloads full of the task when download with range request.
     pub prefetch: bool,
 
+    /// cache_capacity is the capacity of the cache by LRU algorithm for HTTP proxy, default is 150.
+    /// The cache is used to store the hot piece content of the task, piece length is 4MB~16MB.
+    /// If the capacity is 150, the cache size is 600MB~2.4GB, need to adjust according to the
+    /// memory size of the host.
+    #[serde(default = "default_proxy_cache_capacity")]
+    pub cache_capacity: usize,
+
     /// read_buffer_size is the buffer size for reading piece from disk, default is 1KB.
     #[serde(default = "default_proxy_read_buffer_size")]
     pub read_buffer_size: usize,
@@ -1086,6 +1110,7 @@ impl Default for Proxy {
             registry_mirror: RegistryMirror::default(),
             disable_back_to_source: false,
             prefetch: false,
+            cache_capacity: default_proxy_cache_capacity(),
             read_buffer_size: default_proxy_read_buffer_size(),
         }
     }

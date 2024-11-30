@@ -1,10 +1,10 @@
-FROM rust:1.80.0 AS builder
+FROM rust:1.82.0 AS builder
 
 WORKDIR /app/client
 
 RUN apt-get update && apt-get install -y \
-      openssl libclang-dev pkg-config protobuf-compiler git \
-      && rm -rf /var/lib/apt/lists/*
+    openssl libclang-dev pkg-config protobuf-compiler git \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY Cargo.toml Cargo.lock ./
 
@@ -63,7 +63,7 @@ COPY --from=builder /app/client/target/release/dfget /usr/local/bin/dfget
 COPY --from=builder /app/client/target/release/dfdaemon /usr/local/bin/dfdaemon
 COPY --from=builder /app/client/target/release/dfstore /usr/local/bin/dfstore
 COPY --from=builder /app/client/target/release/dfcache /usr/local/bin/dfcache
-COPY --from=health /bin/grpc_health_probe /bin/grpc_health_probe
 COPY --from=pprof /go/bin/pprof /bin/pprof
+COPY --from=health /bin/grpc_health_probe /bin/grpc_health_probe
 
 ENTRYPOINT ["/usr/local/bin/dfdaemon"]

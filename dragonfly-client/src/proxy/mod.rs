@@ -16,12 +16,15 @@
 
 use crate::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use crate::metrics::{
-    collect_proxy_request_failure_metrics, collect_proxy_request_started_metrics,
+    collect_download_piece_traffic_metrics, collect_proxy_request_failure_metrics,
+    collect_proxy_request_started_metrics,
+    collect_proxy_request_via_dfdaemon_and_cache_hits_metrics,
+    collect_proxy_request_via_dfdaemon_metrics,
 };
 use crate::resource::task::Task;
 use crate::shutdown;
 use bytes::Bytes;
-use dragonfly_api::common::v2::{Download, TaskType};
+use dragonfly_api::common::v2::{Download, TaskType, TrafficType};
 use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse,
 };
@@ -30,14 +33,11 @@ use dragonfly_client_config::dfdaemon::{Config, Rule};
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_util::{
-    http::{
-        hashmap_to_hyper_header_map, hyper_headermap_to_reqwest_headermap,
-        reqwest_headermap_to_hashmap,
-    },
+    http::{hashmap_to_headermap, headermap_to_hashmap},
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
 use futures_util::TryStreamExt;
-use http_body_util::{combinators::BoxBody, BodyExt, Empty, StreamBody};
+use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full, StreamBody};
 use hyper::body::Frame;
 use hyper::client::conn::http1::Builder as ClientBuilder;
 use hyper::server::conn::http1::Builder as ServerBuilder;
@@ -61,9 +61,10 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_rustls::TlsAcceptor;
-use tokio_util::io::ReaderStream;
-use tracing::{error, info, instrument, Span};
+use tokio_util::io::{InspectReader, ReaderStream};
+use tracing::{debug, error, info, instrument, Instrument, Span};
 
+pub mod cache;
 pub mod header;
 
 /// Response is the response of the proxy server.
@@ -73,6 +74,9 @@ pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
 pub struct Proxy {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
+
+    /// cache is the cache manager for storing the piece content.
+    cache: Arc<cache::Cache>,
 
     /// task is the task manager.
     task: Arc<Task>,
@@ -106,6 +110,7 @@ impl Proxy {
     ) -> Self {
         let mut proxy = Self {
             config: config.clone(),
+            cache: Arc::new(cache::Cache::new(config.proxy.cache_capacity, task.clone()).unwrap()),
             task: task.clone(),
             addr: SocketAddr::new(config.proxy.server.ip.unwrap(), config.proxy.server.port),
             registry_cert: Arc::new(None),
@@ -144,6 +149,10 @@ impl Proxy {
     /// run starts the proxy server.
     #[instrument(skip_all)]
     pub async fn run(&self) -> ClientResult<()> {
+        let dfdaemon_download_client =
+            DfdaemonDownloadClient::new_unix(self.config.download.server.socket_path.clone())
+                .await?;
+
         let listener = TcpListener::bind(self.addr).await?;
         info!("proxy server listening on {}", self.addr);
 
@@ -159,13 +168,12 @@ impl Proxy {
 
                     // Spawn a task to handle the connection.
                     let io = TokioIo::new(tcp);
-                    info!("accepted connection from {}", remote_address);
+                    debug!("accepted connection from {}", remote_address);
 
                     let config = self.config.clone();
+                    let cache = self.cache.clone();
                     let task = self.task.clone();
-                    let dfdaemon_download_client = DfdaemonDownloadClient::new_unix(
-                        config.download.server.socket_path.clone(),
-                    ).await?;
+                    let dfdaemon_download_client = dfdaemon_download_client.clone();
 
                     let registry_cert = self.registry_cert.clone();
                     let server_ca_cert = self.server_ca_cert.clone();
@@ -176,7 +184,7 @@ impl Proxy {
                             .title_case_headers(true)
                             .serve_connection(
                                 io,
-                                service_fn(move |request| handler(config.clone(), task.clone(), request, dfdaemon_download_client.clone(), registry_cert.clone(), server_ca_cert.clone())),
+                                service_fn(move |request| handler(config.clone(), cache.clone(), task.clone(), request, dfdaemon_download_client.clone(), registry_cert.clone(), server_ca_cert.clone())),
                                 )
                             .with_upgrades()
                             .await
@@ -200,6 +208,7 @@ impl Proxy {
 #[instrument(skip_all, fields(uri, method))]
 pub async fn handler(
     config: Arc<Config>,
+    cache: Arc<cache::Cache>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -216,6 +225,7 @@ pub async fn handler(
         if Method::CONNECT == request.method() {
             return registry_mirror_https_handler(
                 config,
+                cache,
                 task,
                 request,
                 dfdaemon_download_client,
@@ -227,6 +237,7 @@ pub async fn handler(
 
         return registry_mirror_http_handler(
             config,
+            cache,
             task,
             request,
             dfdaemon_download_client,
@@ -243,6 +254,7 @@ pub async fn handler(
     if Method::CONNECT == request.method() {
         return https_handler(
             config,
+            cache,
             task,
             request,
             dfdaemon_download_client,
@@ -254,6 +266,7 @@ pub async fn handler(
 
     http_handler(
         config,
+        cache,
         task,
         request,
         dfdaemon_download_client,
@@ -266,6 +279,7 @@ pub async fn handler(
 #[instrument(skip_all)]
 pub async fn registry_mirror_http_handler(
     config: Arc<Config>,
+    cache: Arc<cache::Cache>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -274,6 +288,7 @@ pub async fn registry_mirror_http_handler(
     let request = make_registry_mirror_request(config.clone(), request)?;
     return http_handler(
         config,
+        cache,
         task,
         request,
         dfdaemon_download_client,
@@ -286,6 +301,7 @@ pub async fn registry_mirror_http_handler(
 #[instrument(skip_all)]
 pub async fn registry_mirror_https_handler(
     config: Arc<Config>,
+    cache: Arc<cache::Cache>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -295,6 +311,7 @@ pub async fn registry_mirror_https_handler(
     let request = make_registry_mirror_request(config.clone(), request)?;
     return https_handler(
         config,
+        cache,
         task,
         request,
         dfdaemon_download_client,
@@ -308,6 +325,7 @@ pub async fn registry_mirror_https_handler(
 #[instrument(skip_all)]
 pub async fn http_handler(
     config: Arc<Config>,
+    cache: Arc<cache::Cache>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -332,18 +350,20 @@ pub async fn http_handler(
 
     // If find the matching rule, proxy the request via the dfdaemon.
     let request_uri = request.uri();
-    if let Some(rule) =
-        find_matching_rule(config.proxy.rules.clone(), request_uri.to_string().as_str())
-    {
+    if let Some(rule) = find_matching_rule(
+        config.proxy.rules.as_deref(),
+        request_uri.to_string().as_str(),
+    ) {
         info!(
             "proxy HTTP request via dfdaemon by rule config for method: {}, uri: {}",
             request.method(),
             request_uri
         );
-        return proxy_by_dfdaemon(
+        return proxy_via_dfdaemon(
             config,
+            cache,
             task,
-            rule.clone(),
+            &rule,
             request,
             dfdaemon_download_client,
         )
@@ -358,10 +378,11 @@ pub async fn http_handler(
             request.method(),
             request_uri
         );
-        return proxy_by_dfdaemon(
+        return proxy_via_dfdaemon(
             config,
+            cache,
             task,
-            Rule::default(),
+            &Rule::default(),
             request,
             dfdaemon_download_client,
         )
@@ -374,7 +395,7 @@ pub async fn http_handler(
             request.method(),
             request.uri()
         );
-        return proxy_https(request, registry_cert).await;
+        return proxy_via_https(request, registry_cert).await;
     }
 
     info!(
@@ -382,13 +403,14 @@ pub async fn http_handler(
         request.method(),
         request.uri()
     );
-    return proxy_http(request).await;
+    return proxy_via_http(request).await;
 }
 
 /// https_handler handles the https request by client.
 #[instrument(skip_all)]
 pub async fn https_handler(
     config: Arc<Config>,
+    cache: Arc<cache::Cache>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -405,6 +427,7 @@ pub async fn https_handler(
                 Ok(upgraded) => {
                     if let Err(e) = upgraded_tunnel(
                         config,
+                        cache,
                         task,
                         upgraded,
                         host,
@@ -430,9 +453,11 @@ pub async fn https_handler(
 /// upgraded_tunnel handles the upgraded connection. If the ca_cert is not set, use the
 /// self-signed certificate. Otherwise, use the CA certificate to sign the
 /// self-signed certificate.
+#[allow(clippy::too_many_arguments)]
 #[instrument(skip_all)]
 async fn upgraded_tunnel(
     config: Arc<Config>,
+    cache: Arc<cache::Cache>,
     task: Arc<Task>,
     upgraded: Upgraded,
     host: String,
@@ -480,6 +505,7 @@ async fn upgraded_tunnel(
             service_fn(move |request| {
                 upgraded_handler(
                     config.clone(),
+                    cache.clone(),
                     task.clone(),
                     host.clone(),
                     request,
@@ -501,6 +527,7 @@ async fn upgraded_tunnel(
 #[instrument(skip_all, fields(uri, method))]
 pub async fn upgraded_handler(
     config: Arc<Config>,
+    cache: Arc<cache::Cache>,
     task: Arc<Task>,
     host: String,
     mut request: Request<hyper::body::Incoming>,
@@ -534,18 +561,20 @@ pub async fn upgraded_handler(
 
     // If find the matching rule, proxy the request via the dfdaemon.
     let request_uri = request.uri();
-    if let Some(rule) =
-        find_matching_rule(config.proxy.rules.clone(), request_uri.to_string().as_str())
-    {
+    if let Some(rule) = find_matching_rule(
+        config.proxy.rules.as_deref(),
+        request_uri.to_string().as_str(),
+    ) {
         info!(
             "proxy HTTPS request via dfdaemon by rule config for method: {}, uri: {}",
             request.method(),
             request_uri
         );
-        return proxy_by_dfdaemon(
+        return proxy_via_dfdaemon(
             config,
+            cache,
             task,
-            rule.clone(),
+            &rule,
             request,
             dfdaemon_download_client,
         )
@@ -560,10 +589,11 @@ pub async fn upgraded_handler(
             request.method(),
             request_uri
         );
-        return proxy_by_dfdaemon(
+        return proxy_via_dfdaemon(
             config,
+            cache,
             task,
-            Rule::default(),
+            &Rule::default(),
             request,
             dfdaemon_download_client,
         )
@@ -576,7 +606,7 @@ pub async fn upgraded_handler(
             request.method(),
             request.uri()
         );
-        return proxy_https(request, registry_cert).await;
+        return proxy_via_https(request, registry_cert).await;
     }
 
     info!(
@@ -584,18 +614,22 @@ pub async fn upgraded_handler(
         request.method(),
         request.uri()
     );
-    return proxy_http(request).await;
+    return proxy_via_http(request).await;
 }
 
-/// proxy_by_dfdaemon proxies the request via the dfdaemon.
-#[instrument(skip_all)]
-async fn proxy_by_dfdaemon(
+/// proxy_via_dfdaemon proxies the request via the dfdaemon.
+#[instrument(skip_all, fields(host_id, task_id, peer_id))]
+async fn proxy_via_dfdaemon(
     config: Arc<Config>,
+    cache: Arc<cache::Cache>,
     task: Arc<Task>,
-    rule: Rule,
+    rule: &Rule,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
 ) -> ClientResult<Response> {
+    // Collect the metrics for the proxy request via dfdaemon.
+    collect_proxy_request_via_dfdaemon_metrics();
+
     // Make the download task request.
     let download_task_request = match make_download_task_request(config.clone(), rule, request) {
         Ok(download_task_request) => download_task_request,
@@ -607,6 +641,35 @@ async fn proxy_by_dfdaemon(
             ));
         }
     };
+
+    // Get the content from the cache by the request.
+    match cache.get_by_request(&download_task_request).await {
+        Ok(None) => {
+            debug!("cache miss");
+        }
+        Ok(Some(content)) => {
+            debug!("cache hit");
+
+            // Collect the download piece traffic metrics and the proxy request via dfdaemon and
+            // cache hits metrics.
+            collect_proxy_request_via_dfdaemon_and_cache_hits_metrics();
+            collect_download_piece_traffic_metrics(
+                &TrafficType::LocalPeer,
+                TaskType::Standard as i32,
+                content.len() as u64,
+            );
+
+            let body_boxed = Full::new(content).map_err(ClientError::from).boxed();
+            return Ok(Response::new(body_boxed));
+        }
+        Err(err) => {
+            error!("get content from cache failed: {}", err);
+            return Ok(make_error_response(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                None,
+            ));
+        }
+    }
 
     // Download the task by the dfdaemon download client.
     let response = match dfdaemon_download_client
@@ -624,7 +687,7 @@ async fn proxy_by_dfdaemon(
                                 backend.status_code.unwrap_or_default() as u16
                             )
                             .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
-                            Some(hashmap_to_hyper_header_map(&backend.header)?),
+                            Some(hashmap_to_headermap(&backend.header)?),
                         ));
                     }
                     Err(_) => {
@@ -656,6 +719,11 @@ async fn proxy_by_dfdaemon(
         ));
     };
 
+    // Span record the host_id, task_id, and peer_id.
+    Span::current().record("host_id", message.host_id.as_str());
+    Span::current().record("task_id", message.task_id.as_str());
+    Span::current().record("peer_id", message.peer_id.as_str());
+
     // Handle the download task started response.
     let Some(download_task_response::Response::DownloadTaskStartedResponse(
         download_task_started_response,
@@ -669,10 +737,10 @@ async fn proxy_by_dfdaemon(
     };
 
     // Write the task data to the reader.
-    let (reader, mut writer) = tokio::io::duplex(4096);
+    let (reader, mut writer) = tokio::io::duplex(256 * 1024);
 
     // Write the status code to the writer.
-    let (sender, mut receiver) = mpsc::channel(1024 * 10);
+    let (sender, mut receiver) = mpsc::channel(10 * 1024);
 
     // Construct the response body.
     let reader_stream = ReaderStream::new(reader);
@@ -692,158 +760,179 @@ async fn proxy_by_dfdaemon(
 
     // Write task data to pipe. If grpc received error message,
     // shutdown the writer.
-    tokio::spawn(async move {
-        // Initialize the hashmap of the finished piece readers and pieces.
-        let mut finished_piece_readers = HashMap::new();
+    tokio::spawn(
+        async move {
+            // Initialize the hashmap of the finished piece readers and pieces.
+            let mut finished_piece_readers = HashMap::new();
 
-        // Get the first piece number from the started response.
-        let Some(first_piece) = download_task_started_response.pieces.first() else {
-            error!("response pieces is empty");
-            if let Err(err) = writer.shutdown().await {
-                error!("writer shutdown error: {}", err);
-            }
+            // Get the first piece number from the started response.
+            let Some(first_piece) = download_task_started_response.pieces.first() else {
+                error!("response pieces is empty");
+                if let Err(err) = writer.shutdown().await {
+                    error!("writer shutdown error: {}", err);
+                }
 
-            return;
-        };
-        let mut need_piece_number = first_piece.number;
+                return;
+            };
+            let mut need_piece_number = first_piece.number;
 
-        // Read piece data from stream and write to pipe. If the piece data is
-        // not in order, store it in the hashmap, and write it to the pipe
-        // when the previous piece data is written.
-        loop {
-            match out_stream.message().await {
-                Ok(Some(message)) => {
-                    if let Some(download_task_response::Response::DownloadPieceFinishedResponse(
-                        download_task_response,
-                    )) = message.response
-                    {
-                        // Sleep for a while to avoid the out stream is aborted. If the task is small, proxy read the piece
-                        // before the task download is finished. It will cause `user body write aborted` error.
-                        sleep(Duration::from_millis(1)).await;
+            // Read piece data from stream and write to pipe. If the piece data is
+            // not in order, store it in the hashmap, and write it to the pipe
+            // when the previous piece data is written.
+            loop {
+                match out_stream.message().await {
+                    Ok(Some(message)) => {
+                        if let Some(
+                            download_task_response::Response::DownloadPieceFinishedResponse(
+                                download_task_response,
+                            ),
+                        ) = message.response
+                        {
+                            // Sleep for a while to avoid the out stream is aborted. If the task is small, proxy read the piece
+                            // before the task download is finished. It will cause `user body write aborted` error.
+                            sleep(Duration::from_millis(1)).await;
 
-                        // Send the none response to the client, if the first piece is received.
-                        if !initialized {
-                            info!("first piece received, send response");
-                            sender.send(None).await.unwrap_or_default();
-                            initialized = true;
-                        }
+                            // Send the none response to the client, if the first piece is received.
+                            if !initialized {
+                                debug!("first piece received, send response");
+                                sender.send(None).await.unwrap_or_default();
+                                initialized = true;
+                            }
 
-                        let Some(piece) = download_task_response.piece else {
-                            error!("response piece is empty");
+                            let Some(piece) = download_task_response.piece else {
+                                error!("response piece is empty");
+                                writer.shutdown().await.unwrap_or_else(|err| {
+                                    error!("writer shutdown error: {}", err);
+                                });
+
+                                return;
+                            };
+
+                            let piece_reader = match task
+                                .piece
+                                .download_from_local_peer_into_async_read(
+                                    task.piece
+                                        .id(message.task_id.as_str(), piece.number)
+                                        .as_str(),
+                                    message.task_id.as_str(),
+                                    piece.length,
+                                    download_task_started_response.range,
+                                    true,
+                                )
+                                .await
+                            {
+                                Ok(piece_reader) => piece_reader,
+                                Err(err) => {
+                                    error!("download piece reader error: {}", err);
+                                    if let Err(err) = writer.shutdown().await {
+                                        error!("writer shutdown error: {}", err);
+                                    }
+
+                                    return;
+                                }
+                            };
+
+                            // Use a buffer to read the piece.
+                            let piece_reader =
+                                BufReader::with_capacity(read_buffer_size, piece_reader);
+
+                            // Write the piece data to the pipe in order and store the piece reader
+                            // in the cache.
+                            finished_piece_readers.insert(piece.number, piece_reader);
+                            while let Some(piece_reader) =
+                                finished_piece_readers.get_mut(&need_piece_number)
+                            {
+                                debug!("copy piece {} to stream", need_piece_number);
+                                let mut content =
+                                    bytes::BytesMut::with_capacity(piece.length as usize);
+
+                                let mut tee = InspectReader::new(piece_reader, |bytes| {
+                                    content.extend_from_slice(bytes);
+                                });
+
+                                if let Err(err) = tokio::io::copy(&mut tee, &mut writer).await {
+                                    error!("download piece reader error: {}", err);
+                                    if let Err(err) = writer.shutdown().await {
+                                        error!("writer shutdown error: {}", err);
+                                    }
+
+                                    return;
+                                }
+
+                                cache.add_piece(
+                                    &task.piece.id(&message.task_id, need_piece_number),
+                                    content.freeze(),
+                                );
+
+                                need_piece_number += 1;
+                            }
+                        } else {
+                            error!("response unknown message");
                             writer.shutdown().await.unwrap_or_else(|err| {
                                 error!("writer shutdown error: {}", err);
                             });
 
                             return;
-                        };
-
-                        let piece_reader = match task
-                            .piece
-                            .download_from_local_peer_into_async_read(
-                                message.task_id.as_str(),
-                                piece.number,
-                                piece.length,
-                                download_task_started_response.range,
-                                true,
-                            )
-                            .await
-                        {
-                            Ok(piece_reader) => piece_reader,
-                            Err(err) => {
-                                error!("download piece reader error: {}", err);
-                                writer.shutdown().await.unwrap_or_else(|err| {
-                                    error!("writer shutdown error: {}", err);
-                                });
-
-                                return;
-                            }
-                        };
-
-                        // Use a buffer to read the piece.
-                        let piece_reader = BufReader::with_capacity(read_buffer_size, piece_reader);
-
-                        // Write the piece data to the pipe in order.
-                        finished_piece_readers.insert(piece.number, piece_reader);
-                        while let Some(piece_reader) =
-                            finished_piece_readers.get_mut(&need_piece_number)
-                        {
-                            info!("copy piece {} to stream", need_piece_number);
-                            if let Err(err) = tokio::io::copy(piece_reader, &mut writer).await {
-                                error!("download piece reader error: {}", err);
-                                writer.shutdown().await.unwrap_or_else(|err| {
-                                    error!("writer shutdown error: {}", err);
-                                });
-
-                                return;
-                            }
-
-                            need_piece_number += 1;
                         }
-                    } else {
-                        error!("response unknown message");
-                        writer.shutdown().await.unwrap_or_else(|err| {
-                            error!("writer shutdown error: {}", err);
-                        });
-
-                        return;
                     }
-                }
-                Ok(None) => {
-                    info!("message is none");
-                    if let Err(err) = writer.flush().await {
-                        error!("writer flush error: {}", err);
-                    }
-
-                    return;
-                }
-                Err(err) => {
-                    if initialized {
-                        error!("stream error: {}", err);
+                    Ok(None) => {
+                        info!("message is none");
                         if let Err(err) = writer.flush().await {
                             error!("writer flush error: {}", err);
                         }
 
                         return;
                     }
+                    Err(err) => {
+                        if initialized {
+                            error!("stream error: {}", err);
+                            if let Err(err) = writer.flush().await {
+                                error!("writer flush error: {}", err);
+                            }
 
-                    match serde_json::from_slice::<Backend>(err.details()) {
-                        Ok(backend) => {
-                            error!("download task failed: {:?}", backend);
-                            sender
-                                .send(Some(make_error_response(
-                                    http::StatusCode::from_u16(
-                                        backend.status_code.unwrap_or_default() as u16,
-                                    )
-                                    .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
-                                    Some(
-                                        hashmap_to_hyper_header_map(&backend.header)
-                                            .unwrap_or_default(),
-                                    ),
-                                )))
-                                .await
-                                .unwrap_or_default();
+                            return;
                         }
-                        Err(_) => {
-                            error!("download task failed: {}", err);
-                            sender
-                                .send(Some(make_error_response(
-                                    http::StatusCode::INTERNAL_SERVER_ERROR,
-                                    None,
-                                )))
-                                .await
-                                .unwrap_or_default();
+
+                        match serde_json::from_slice::<Backend>(err.details()) {
+                            Ok(backend) => {
+                                error!("download task failed: {:?}", backend);
+                                sender
+                                    .send(Some(make_error_response(
+                                        http::StatusCode::from_u16(
+                                            backend.status_code.unwrap_or_default() as u16,
+                                        )
+                                        .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
+                                        Some(
+                                            hashmap_to_headermap(&backend.header)
+                                                .unwrap_or_default(),
+                                        ),
+                                    )))
+                                    .await
+                                    .unwrap_or_default();
+                            }
+                            Err(_) => {
+                                error!("download task failed: {}", err);
+                                sender
+                                    .send(Some(make_error_response(
+                                        http::StatusCode::INTERNAL_SERVER_ERROR,
+                                        None,
+                                    )))
+                                    .await
+                                    .unwrap_or_default();
+                            }
                         }
+
+                        return;
                     }
-
-                    return;
-                }
-            };
+                };
+            }
         }
-    });
+        .in_current_span(),
+    );
 
     match receiver.recv().await {
-        Some(Some(response)) => return Ok(response),
-        Some(None) => Ok(response),
+        Some(Some(response)) => Ok(response),
+        Some(None) => return Ok(response),
         None => Ok(make_error_response(
             http::StatusCode::INTERNAL_SERVER_ERROR,
             None,
@@ -851,9 +940,9 @@ async fn proxy_by_dfdaemon(
     }
 }
 
-/// proxy_http proxies the HTTP request directly to the remote server.
+/// proxy_via_http proxies the HTTP request directly to the remote server.
 #[instrument(skip_all)]
-async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
+async fn proxy_via_http(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
     let Some(host) = request.uri().host() else {
         error!("CONNECT host is not socket addr: {:?}", request.uri());
         return Ok(make_error_response(http::StatusCode::BAD_REQUEST, None));
@@ -878,9 +967,9 @@ async fn proxy_http(request: Request<hyper::body::Incoming>) -> ClientResult<Res
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }
 
-/// proxy_https proxies the HTTPS request directly to the remote server.
+/// proxy_via_https proxies the HTTPS request directly to the remote server.
 #[instrument(skip_all)]
-async fn proxy_https(
+async fn proxy_via_https(
     request: Request<hyper::body::Incoming>,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
@@ -922,9 +1011,8 @@ fn make_registry_mirror_request(
     config: Arc<Config>,
     mut request: Request<hyper::body::Incoming>,
 ) -> ClientResult<Request<hyper::body::Incoming>> {
-    // Convert the Reqwest header to the Hyper header.
-    let reqwest_request_header = hyper_headermap_to_reqwest_headermap(request.headers());
-    let registry_mirror_uri = match header::get_registry(&reqwest_request_header) {
+    let header = request.headers().clone();
+    let registry_mirror_uri = match header::get_registry(&header) {
         Some(registry) => format!("{}{}", registry, request.uri().path())
             .parse::<http::Uri>()
             .or_err(ErrorType::ParseError)?,
@@ -936,8 +1024,7 @@ fn make_registry_mirror_request(
         .parse::<http::Uri>()
         .or_err(ErrorType::ParseError)?,
     };
-
-    header::get_registry(&reqwest_request_header);
+    header::get_registry(&header);
 
     *request.uri_mut() = registry_mirror_uri.clone();
     request.headers_mut().insert(
@@ -956,14 +1043,14 @@ fn make_registry_mirror_request(
 #[instrument(skip_all)]
 fn make_download_task_request(
     config: Arc<Config>,
-    rule: Rule,
+    rule: &Rule,
     request: Request<hyper::body::Incoming>,
 ) -> ClientResult<DownloadTaskRequest> {
     // Convert the Reqwest header to the Hyper header.
-    let mut reqwest_request_header = hyper_headermap_to_reqwest_headermap(request.headers());
+    let mut header = request.headers().clone();
 
     // Registry will return the 403 status code if the Host header is set.
-    reqwest_request_header.remove(reqwest::header::HOST);
+    header.remove(reqwest::header::HOST);
 
     Ok(DownloadTaskRequest {
         download: Some(Download {
@@ -972,22 +1059,23 @@ fn make_download_task_request(
             // Download range use header range in HTTP protocol.
             range: None,
             r#type: TaskType::Standard as i32,
-            tag: header::get_tag(&reqwest_request_header),
-            application: header::get_application(&reqwest_request_header),
-            priority: header::get_priority(&reqwest_request_header),
+            tag: header::get_tag(&header),
+            application: header::get_application(&header),
+            priority: header::get_priority(&header),
             filtered_query_params: header::get_filtered_query_params(
-                &reqwest_request_header,
+                &header,
                 rule.filtered_query_params.clone(),
             ),
-            request_header: reqwest_headermap_to_hashmap(&reqwest_request_header),
+            request_header: headermap_to_hashmap(&header),
             piece_length: None,
             output_path: None,
             timeout: None,
             need_back_to_source: false,
             disable_back_to_source: config.proxy.disable_back_to_source,
             certificate_chain: Vec::new(),
-            prefetch: need_prefetch(config.clone(), &reqwest_request_header),
+            prefetch: need_prefetch(config.clone(), &header),
             object_storage: None,
+            hdfs: None,
         }),
     })
 }
@@ -1018,7 +1106,7 @@ fn make_download_url(
     use_tls: bool,
     redirect: Option<String>,
 ) -> ClientResult<String> {
-    let mut parts = uri.clone().into_parts();
+    let mut parts = http::uri::Parts::from(uri.clone());
 
     // Set the scheme to https if the rule uses tls.
     if use_tls {
@@ -1027,9 +1115,8 @@ fn make_download_url(
 
     // Set the authority to the redirect address.
     if let Some(redirect) = redirect {
-        parts.authority = Some(http::uri::Authority::from_static(Box::leak(
-            redirect.into_boxed_str(),
-        )));
+        parts.authority =
+            Some(http::uri::Authority::try_from(redirect).or_err(ErrorType::ParseError)?);
     }
 
     Ok(http::Uri::from_parts(parts)
@@ -1060,13 +1147,13 @@ fn make_response_headers(
         );
     };
 
-    hashmap_to_hyper_header_map(&download_task_started_response.response_header)
+    hashmap_to_headermap(&download_task_started_response.response_header)
 }
 
 /// find_matching_rule returns whether the dfdaemon should be used to download the task.
 /// If the dfdaemon should be used, return the matched rule.
 #[instrument(skip_all)]
-fn find_matching_rule(rules: Option<Vec<Rule>>, url: &str) -> Option<Rule> {
+fn find_matching_rule(rules: Option<&[Rule]>, url: &str) -> Option<Rule> {
     rules?.iter().find(|rule| rule.regex.is_match(url)).cloned()
 }
 

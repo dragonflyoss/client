@@ -17,7 +17,7 @@
 use chrono::{NaiveDateTime, Utc};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_util::http::reqwest_headermap_to_hashmap;
+use dragonfly_client_util::http::headermap_to_hashmap;
 use rayon::prelude::*;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -46,7 +46,7 @@ pub struct Task {
     pub response_header: HashMap<String, String>,
 
     /// uploading_count is the count of the task being uploaded by other peers.
-    pub uploading_count: u64,
+    pub uploading_count: i64,
 
     /// uploaded_count is the count of the task has been uploaded by other peers.
     pub uploaded_count: u64,
@@ -81,7 +81,7 @@ impl Task {
         self.finished_at.is_none()
     }
 
-    /// is_downloading returns whether the task is downloading.
+    /// is_uploading returns whether the task is uploading.
     pub fn is_uploading(&self) -> bool {
         self.uploading_count > 0
     }
@@ -108,13 +108,10 @@ impl Task {
 
     /// is_empty returns whether the task is empty.
     pub fn is_empty(&self) -> bool {
-        if let Some(content_length) = self.content_length() {
-            if content_length == 0 {
-                return true;
-            }
+        match self.content_length() {
+            Some(content_length) => content_length == 0,
+            None => false,
         }
-
-        false
     }
 
     /// piece_length returns the piece length of the task.
@@ -184,7 +181,7 @@ impl PersistentCacheTask {
         self.finished_at.is_none()
     }
 
-    /// is_downloading returns whether the persistent cache task is downloading.
+    /// is_uploading returns whether the persistent cache task is uploading.
     pub fn is_uploading(&self) -> bool {
         self.uploading_count > 0
     }
@@ -209,11 +206,7 @@ impl PersistentCacheTask {
 
     /// is_empty returns whether the persistent cache task is empty.
     pub fn is_empty(&self) -> bool {
-        if self.content_length == 0 {
-            return true;
-        }
-
-        false
+        self.content_length == 0
     }
 
     /// is_persistent returns whether the persistent cache task is persistent.
@@ -250,14 +243,13 @@ pub struct Piece {
     /// parent_id is the parent id of the piece.
     pub parent_id: Option<String>,
 
-    /// uploading_count is the count of the piece being uploaded by other peers.
-    pub uploading_count: u64,
+    /// DEPRECATED: uploading_count is the count of the piece being uploaded by other peers.
+    pub uploading_count: i64,
 
-    /// uploaded_count is the count of the piece has been uploaded by other peers.
+    /// DEPRECATED: uploaded_count is the count of the piece has been uploaded by other peers.
     pub uploaded_count: u64,
 
-    /// updated_at is the time when the piece metadata is updated. If the piece is downloaded
-    /// by other peers, it will also update updated_at.
+    /// updated_at is the time when the piece metadata is updated.
     pub updated_at: NaiveDateTime,
 
     /// created_at is the time when the piece metadata is created.
@@ -339,7 +331,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         // Convert the response header to hashmap.
         let response_header = response_header
             .as_ref()
-            .map(reqwest_headermap_to_hashmap)
+            .map(headermap_to_hashmap)
             .unwrap_or_default();
 
         let task = match self.db.get::<Task>(id.as_bytes())? {
@@ -506,6 +498,12 @@ impl<E: StorageEngineOwned> Metadata<E> {
     #[instrument(skip_all)]
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         self.db.get(id.as_bytes())
+    }
+
+    /// is_task_exists checks if the task exists.
+    #[instrument(skip_all)]
+    pub fn is_task_exists(&self, id: &str) -> Result<bool> {
+        self.db.is_exist::<Task>(id.as_bytes())
     }
 
     /// get_tasks gets the task metadatas.
@@ -690,6 +688,12 @@ impl<E: StorageEngineOwned> Metadata<E> {
         self.db.get(id.as_bytes())
     }
 
+    /// is_persistent_cache_task_exists checks if the persistent cache task exists.
+    #[instrument(skip_all)]
+    pub fn is_persistent_cache_task_exists(&self, id: &str) -> Result<bool> {
+        self.db.is_exist::<PersistentCacheTask>(id.as_bytes())
+    }
+
     /// get_persistent_cache_tasks gets the persistent cache task metadatas.
     #[instrument(skip_all)]
     pub fn get_persistent_cache_tasks(&self) -> Result<Vec<PersistentCacheTask>> {
@@ -706,7 +710,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
     /// download_piece_started updates the metadata of the piece when the piece downloads started.
     #[instrument(skip_all)]
-    pub fn download_piece_started(&self, task_id: &str, number: u32) -> Result<Piece> {
+    pub fn download_piece_started(&self, piece_id: &str, number: u32) -> Result<Piece> {
         // Construct the piece metadata.
         let piece = Piece {
             number,
@@ -716,8 +720,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         };
 
         // Put the piece metadata.
-        self.db
-            .put(self.piece_id(task_id, number).as_bytes(), &piece)?;
+        self.db.put(piece_id.as_bytes(), &piece)?;
         Ok(piece)
     }
 
@@ -725,16 +728,13 @@ impl<E: StorageEngineOwned> Metadata<E> {
     #[instrument(skip_all)]
     pub fn download_piece_finished(
         &self,
-        task_id: &str,
-        number: u32,
+        piece_id: &str,
         offset: u64,
         length: u64,
         digest: &str,
         parent_id: Option<String>,
     ) -> Result<Piece> {
-        // Get the piece id.
-        let id = self.piece_id(task_id, number);
-        let piece = match self.db.get::<Piece>(id.as_bytes())? {
+        let piece = match self.db.get::<Piece>(piece_id.as_bytes())? {
             Some(mut piece) => {
                 piece.offset = offset;
                 piece.length = length;
@@ -744,84 +744,35 @@ impl<E: StorageEngineOwned> Metadata<E> {
                 piece.finished_at = Some(Utc::now().naive_utc());
                 piece
             }
-            None => return Err(Error::PieceNotFound(id)),
+            None => return Err(Error::PieceNotFound(piece_id.to_string())),
         };
 
-        self.db.put(id.as_bytes(), &piece)?;
+        self.db.put(piece_id.as_bytes(), &piece)?;
         Ok(piece)
     }
 
     /// download_piece_failed updates the metadata of the piece when the piece downloads failed.
     #[instrument(skip_all)]
-    pub fn download_piece_failed(&self, task_id: &str, number: u32) -> Result<()> {
-        self.delete_piece(task_id, number)
+    pub fn download_piece_failed(&self, piece_id: &str) -> Result<()> {
+        self.delete_piece(piece_id)
     }
 
     /// wait_for_piece_finished_failed waits for the piece to be finished or failed.
     #[instrument(skip_all)]
-    pub fn wait_for_piece_finished_failed(&self, task_id: &str, number: u32) -> Result<()> {
-        self.delete_piece(task_id, number)
-    }
-
-    /// upload_piece_started updates the metadata of the piece when piece uploads started.
-    #[instrument(skip_all)]
-    pub fn upload_piece_started(&self, task_id: &str, number: u32) -> Result<Piece> {
-        // Get the piece id.
-        let id = self.piece_id(task_id, number);
-        let piece = match self.db.get::<Piece>(id.as_bytes())? {
-            Some(mut piece) => {
-                piece.uploading_count += 1;
-                piece.updated_at = Utc::now().naive_utc();
-                piece
-            }
-            None => return Err(Error::PieceNotFound(id)),
-        };
-
-        self.db.put(id.as_bytes(), &piece)?;
-        Ok(piece)
-    }
-
-    /// upload_piece_finished updates the metadata of the piece when piece uploads finished.
-    #[instrument(skip_all)]
-    pub fn upload_piece_finished(&self, task_id: &str, number: u32) -> Result<Piece> {
-        // Get the piece id.
-        let id = self.piece_id(task_id, number);
-        let piece = match self.db.get::<Piece>(id.as_bytes())? {
-            Some(mut piece) => {
-                piece.uploading_count -= 1;
-                piece.uploaded_count += 1;
-                piece.updated_at = Utc::now().naive_utc();
-                piece
-            }
-            None => return Err(Error::PieceNotFound(id)),
-        };
-
-        self.db.put(id.as_bytes(), &piece)?;
-        Ok(piece)
-    }
-
-    /// upload_piece_failed updates the metadata of the piece when the piece uploads failed.
-    #[instrument(skip_all)]
-    pub fn upload_piece_failed(&self, task_id: &str, number: u32) -> Result<Piece> {
-        // Get the piece id.
-        let id = self.piece_id(task_id, number);
-        let piece = match self.db.get::<Piece>(id.as_bytes())? {
-            Some(mut piece) => {
-                piece.uploading_count -= 1;
-                piece.updated_at = Utc::now().naive_utc();
-                piece
-            }
-            None => return Err(Error::PieceNotFound(id)),
-        };
-
-        self.db.put(id.as_bytes(), &piece)?;
-        Ok(piece)
+    pub fn wait_for_piece_finished_failed(&self, piece_id: &str) -> Result<()> {
+        self.delete_piece(piece_id)
     }
 
     /// get_piece gets the piece metadata.
     #[instrument(skip_all)]
-    pub fn get_piece(&self, task_id: &str, number: u32) -> Result<Option<Piece>> {
-        self.db.get(self.piece_id(task_id, number).as_bytes())
+    pub fn get_piece(&self, piece_id: &str) -> Result<Option<Piece>> {
+        self.db.get(piece_id.as_bytes())
+    }
+
+    /// is_piece_exists checks if the piece exists.
+    #[instrument(skip_all)]
+    pub fn is_piece_exists(&self, piece_id: &str) -> Result<bool> {
+        self.db.is_exist::<Piece>(piece_id.as_bytes())
     }
 
     /// get_pieces gets the piece metadatas.
@@ -843,10 +794,9 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
     /// delete_piece deletes the piece metadata.
     #[instrument(skip_all)]
-    pub fn delete_piece(&self, task_id: &str, number: u32) -> Result<()> {
-        info!("delete piece metadata {}", self.piece_id(task_id, number));
-        self.db
-            .delete::<Piece>(self.piece_id(task_id, number).as_bytes())
+    pub fn delete_piece(&self, piece_id: &str) -> Result<()> {
+        info!("delete piece metadata {}", piece_id);
+        self.db.delete::<Piece>(piece_id.as_bytes())
     }
 
     /// delete_pieces deletes the piece metadatas.
@@ -879,6 +829,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// piece_id returns the piece id.
+    #[inline]
     #[instrument(skip_all)]
     pub fn piece_id(&self, task_id: &str, number: u32) -> String {
         format!("{}-{}", task_id, number)
@@ -947,47 +898,30 @@ mod tests {
         assert!(task.response_header.is_empty());
         assert_eq!(task.uploading_count, 0);
         assert_eq!(task.uploaded_count, 0);
+        assert!(!task.is_finished());
 
         // Test download_task_finished.
         metadata.download_task_finished(task_id).unwrap();
         let task = metadata.get_task(task_id).unwrap().unwrap();
-        assert!(
-            task.is_finished(),
-            "task should be finished after download_task_finished"
-        );
+        assert!(task.is_finished());
 
         // Test upload_task_started.
         metadata.upload_task_started(task_id).unwrap();
         let task = metadata.get_task(task_id).unwrap().unwrap();
-        assert_eq!(
-            task.uploading_count, 1,
-            "uploading_count should be increased by 1 after upload_task_started"
-        );
+        assert_eq!(task.uploading_count, 1);
 
         // Test upload_task_finished.
         metadata.upload_task_finished(task_id).unwrap();
         let task = metadata.get_task(task_id).unwrap().unwrap();
-        assert_eq!(
-            task.uploading_count, 0,
-            "uploading_count should be decreased by 1 after upload_task_finished"
-        );
-        assert_eq!(
-            task.uploaded_count, 1,
-            "uploaded_count should be increased by 1 after upload_task_finished"
-        );
+        assert_eq!(task.uploading_count, 0);
+        assert_eq!(task.uploaded_count, 1);
 
         // Test upload_task_failed.
         let task = metadata.upload_task_started(task_id).unwrap();
         assert_eq!(task.uploading_count, 1);
         let task = metadata.upload_task_failed(task_id).unwrap();
-        assert_eq!(
-            task.uploading_count, 0,
-            "uploading_count should be decreased by 1 after upload_task_failed"
-        );
-        assert_eq!(
-            task.uploaded_count, 1,
-            "uploaded_count should not be changed after upload_task_failed"
-        );
+        assert_eq!(task.uploading_count, 0);
+        assert_eq!(task.uploaded_count, 1);
 
         // Test get_tasks.
         let task_id = "a535b115f18d96870f0422ac891f91dd162f2f391e4778fb84279701fcd02dd1";
@@ -995,12 +929,12 @@ mod tests {
             .download_task_started(task_id, Some(1024), None, None)
             .unwrap();
         let tasks = metadata.get_tasks().unwrap();
-        assert_eq!(tasks.len(), 2, "should get 2 tasks in total");
+        assert_eq!(tasks.len(), 2);
 
         // Test delete_task.
         metadata.delete_task(task_id).unwrap();
         let task = metadata.get_task(task_id).unwrap();
-        assert!(task.is_none(), "task should be deleted after delete_task");
+        assert!(task.is_none());
     }
 
     #[test]
@@ -1009,77 +943,48 @@ mod tests {
         let log_dir = dir.path().join("log");
         let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
         let task_id = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
+        let piece_id = metadata.piece_id(task_id, 1);
 
         // Test download_piece_started.
-        metadata.download_piece_started(task_id, 1).unwrap();
-        let piece = metadata.get_piece(task_id, 1).unwrap().unwrap();
-        assert_eq!(
-            piece.number, 1,
-            "should get newly created piece with number specified"
-        );
+        metadata
+            .download_piece_started(piece_id.as_str(), 1)
+            .unwrap();
+        let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
+        assert_eq!(piece.number, 1);
 
         // Test download_piece_finished.
         metadata
-            .download_piece_finished(task_id, 1, 0, 1024, "digest1", None)
+            .download_piece_finished(piece_id.as_str(), 0, 1024, "digest1", None)
             .unwrap();
-        let piece = metadata.get_piece(task_id, 1).unwrap().unwrap();
-        assert_eq!(
-            piece.length, 1024,
-            "piece should be updated after download_piece_finished"
-        );
-        assert_eq!(
-            piece.digest, "digest1",
-            "piece should be updated after download_piece_finished"
-        );
+        let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
+        assert_eq!(piece.length, 1024);
+        assert_eq!(piece.digest, "digest1");
 
         // Test get_pieces.
-        metadata.download_piece_started(task_id, 2).unwrap();
-        metadata.download_piece_started(task_id, 3).unwrap();
+        metadata
+            .download_piece_started(metadata.piece_id(task_id, 2).as_str(), 2)
+            .unwrap();
+        metadata
+            .download_piece_started(metadata.piece_id(task_id, 3).as_str(), 3)
+            .unwrap();
         let pieces = metadata.get_pieces(task_id).unwrap();
-        assert_eq!(pieces.len(), 3, "should get 3 pieces in total");
+        assert_eq!(pieces.len(), 3);
 
         // Test download_piece_failed.
-        metadata.download_piece_started(task_id, 2).unwrap();
-        metadata.download_piece_started(task_id, 3).unwrap();
-        metadata.download_piece_failed(task_id, 2).unwrap();
-        let piece = metadata.get_piece(task_id, 2).unwrap();
-        assert!(
-            piece.is_none(),
-            "piece should be deleted after download_piece_failed"
-        );
-
-        // Test upload_piece_started.
-        metadata.upload_piece_started(task_id, 3).unwrap();
-        let piece = metadata.get_piece(task_id, 3).unwrap().unwrap();
-        assert_eq!(
-            piece.uploading_count, 1,
-            "piece should be updated after upload_piece_started"
-        );
-
-        // Test upload_piece_finished.
-        metadata.upload_piece_finished(task_id, 3).unwrap();
-        let piece = metadata.get_piece(task_id, 3).unwrap().unwrap();
-        assert_eq!(
-            piece.uploading_count, 0,
-            "piece should be updated after upload_piece_finished"
-        );
-        assert_eq!(
-            piece.uploaded_count, 1,
-            "piece should be updated after upload_piece_finished"
-        );
-
-        // Test upload_piece_failed.
-        metadata.upload_piece_started(task_id, 3).unwrap();
-        metadata.upload_piece_failed(task_id, 3).unwrap();
-        let piece = metadata.get_piece(task_id, 3).unwrap().unwrap();
-        assert_eq!(
-            piece.uploading_count, 0,
-            "piece should be updated after upload_piece_failed"
-        );
+        let piece_id = metadata.piece_id(task_id, 2);
+        metadata
+            .download_piece_started(piece_id.as_str(), 2)
+            .unwrap();
+        metadata
+            .download_piece_started(metadata.piece_id(task_id, 3).as_str(), 3)
+            .unwrap();
+        metadata.download_piece_failed(piece_id.as_str()).unwrap();
+        let piece = metadata.get_piece(piece_id.as_str()).unwrap();
+        assert!(piece.is_none());
 
         // Test delete_pieces.
         metadata.delete_pieces(task_id).unwrap();
         let pieces = metadata.get_pieces(task_id).unwrap();
-        assert!(pieces.is_empty(), "should get 0 pieces after delete_pieces");
+        assert!(pieces.is_empty());
     }
 }

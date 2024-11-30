@@ -203,8 +203,6 @@ impl StatCommand {
             piece_length: String,
             #[tabled(rename = "PERSISTENT REPLICA COUNT")]
             persistent_replica_count: u64,
-            #[tabled(rename = "REPLICA COUNT")]
-            replica_count: u64,
             ttl: String,
             #[tabled(rename = "CREATED")]
             created_at: String,
@@ -220,7 +218,6 @@ impl StatCommand {
             // Convert piece_length to human readable format.
             piece_length: bytesize::to_string(task.piece_length, true),
             persistent_replica_count: task.persistent_replica_count,
-            replica_count: task.replica_count,
             ..Default::default()
         };
 

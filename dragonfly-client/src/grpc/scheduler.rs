@@ -529,9 +529,10 @@ impl SchedulerClient {
     #[instrument(skip(self))]
     async fn update_available_scheduler_addrs(&self) -> Result<()> {
         // Get the endpoints of available schedulers.
-        let data = self.dynconfig.data.read().await;
-        let data_available_schedulers_clone = data.available_schedulers.clone();
-        drop(data);
+        let data_available_schedulers_clone = {
+            let data = self.dynconfig.data.read().await;
+            data.available_schedulers.clone()
+        };
 
         // Check if the available schedulers is empty.
         if data_available_schedulers_clone.is_empty() {
@@ -539,9 +540,10 @@ impl SchedulerClient {
         }
 
         // Get the available schedulers.
-        let available_schedulers = self.available_schedulers.read().await;
-        let available_schedulers_clone = available_schedulers.clone();
-        drop(available_schedulers);
+        let available_schedulers_clone = {
+            let available_schedulers = self.available_schedulers.read().await;
+            available_schedulers.clone()
+        };
 
         // Check if the available schedulers is not changed.
         if data_available_schedulers_clone.len() == available_schedulers_clone.len()
@@ -576,13 +578,11 @@ impl SchedulerClient {
             new_available_schedulers.push(available_scheduler.clone());
 
             // Add the scheduler address to the addresses of available schedulers.
-            new_available_scheduler_addrs
-                .push(SocketAddr::new(ip, available_scheduler.port as u16));
+            let socket_addr = SocketAddr::new(ip, available_scheduler.port as u16);
+            new_available_scheduler_addrs.push(socket_addr);
 
             // Add the scheduler to the hashring.
-            new_hashring.add(VNode {
-                addr: SocketAddr::new(ip, available_scheduler.port as u16),
-            });
+            new_hashring.add(VNode { addr: socket_addr });
         }
 
         // Update the available schedulers.

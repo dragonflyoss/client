@@ -17,14 +17,14 @@
 use dragonfly_api::common;
 use dragonfly_client_core::error::BackendError;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
-use opendal::{raw::HttpClient, Metakey, Operator};
+use opendal::{layers::TimeoutLayer, raw::HttpClient, Metakey, Operator};
 use percent_encoding::percent_decode_str;
 use std::fmt;
 use std::result::Result;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio_util::io::StreamReader;
-use tracing::{error, info, instrument};
+use tracing::{debug, error, instrument};
 use url::Url;
 
 /// Scheme is the scheme of the object storage.
@@ -68,7 +68,7 @@ impl fmt::Display for Scheme {
 impl FromStr for Scheme {
     type Err = String;
 
-    /// from_str parses an scheme string.
+    /// from_str parses a scheme string.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "s3" => Ok(Scheme::S3),
@@ -169,14 +169,26 @@ macro_rules! make_need_fields_message {
 pub struct ObjectStorage {
     /// scheme is the scheme of the object storage.
     scheme: Scheme,
+
+    /// client is the reqwest client.
+    client: reqwest::Client,
 }
 
 /// ObjectStorage implements the ObjectStorage trait.
 impl ObjectStorage {
     /// Returns ObjectStorage that implements the Backend trait.
     #[instrument(skip_all)]
-    pub fn new(scheme: Scheme) -> ObjectStorage {
-        Self { scheme }
+    pub fn new(scheme: Scheme) -> ClientResult<ObjectStorage> {
+        // Initialize the reqwest client.
+        let client = reqwest::Client::builder()
+            .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
+            .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
+            .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+            .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+            .http2_keep_alive_while_idle(true)
+            .build()?;
+
+        Ok(Self { scheme, client })
     }
 
     /// operator initializes the operator with the parsed URL and object storage.
@@ -189,11 +201,11 @@ impl ObjectStorage {
     ) -> ClientResult<Operator> {
         // If download backend is object storage, object_storage parameter is required.
         let Some(object_storage) = object_storage else {
-            return Err(ClientError::BackendError(BackendError {
+            return Err(ClientError::BackendError(Box::new(BackendError {
                 message: format!("{} need object_storage parameter", self.scheme),
                 status_code: None,
                 header: None,
-            }));
+            })));
         };
 
         match self.scheme {
@@ -214,16 +226,13 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Create a reqwest http client.
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
-
         // S3 requires the access key id and the secret access key.
         let (Some(access_key_id), Some(access_key_secret), Some(region)) = (
             &object_storage.access_key_id,
             &object_storage.access_key_secret,
             &object_storage.region,
         ) else {
-            return Err(ClientError::BackendError(BackendError {
+            return Err(ClientError::BackendError(Box::new(BackendError {
                 message: format!(
                     "{} {}",
                     self.scheme,
@@ -235,7 +244,7 @@ impl ObjectStorage {
                 ),
                 status_code: None,
                 header: None,
-            }));
+            })));
         };
 
         // Initialize the S3 operator with the object storage.
@@ -243,7 +252,7 @@ impl ObjectStorage {
         builder = builder
             .access_key_id(access_key_id)
             .secret_access_key(access_key_secret)
-            .http_client(HttpClient::with(client))
+            .http_client(HttpClient::with(self.client.clone()))
             .bucket(&parsed_url.bucket)
             .region(region);
 
@@ -257,7 +266,9 @@ impl ObjectStorage {
             builder = builder.session_token(session_token);
         }
 
-        Ok(Operator::new(builder)?.finish())
+        Ok(Operator::new(builder)?
+            .finish()
+            .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 
     /// gcs_operator initializes the GCS operator with the parsed URL and object storage.
@@ -268,16 +279,13 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Create a reqwest http client.
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
-
         // Initialize the GCS operator with the object storage.
         let mut builder = opendal::services::Gcs::default();
         builder = builder
-            .http_client(HttpClient::with(client))
+            .http_client(HttpClient::with(self.client.clone()))
             .bucket(&parsed_url.bucket);
 
-        // Configure the credentials using the local path to the crendential file if provided.
+        // Configure the credentials using the local path to the credential file if provided.
         // Otherwise, configure using the Application Default Credentials (ADC).
         if let Some(credential_path) = object_storage.credential_path.as_deref() {
             builder = builder.credential_path(credential_path);
@@ -293,7 +301,9 @@ impl ObjectStorage {
             builder = builder.predefined_acl(predefined_acl);
         }
 
-        Ok(Operator::new(builder)?.finish())
+        Ok(Operator::new(builder)?
+            .finish()
+            .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 
     /// abs_operator initializes the ABS operator with the parsed URL and object storage.
@@ -304,16 +314,13 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Create a reqwest http client.
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
-
         // ABS requires the account name and the account key.
         let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
             &object_storage.access_key_id,
             &object_storage.access_key_secret,
             &object_storage.endpoint,
         ) else {
-            return Err(ClientError::BackendError(BackendError {
+            return Err(ClientError::BackendError(Box::new(BackendError {
                 message: format!(
                     "{} {}",
                     self.scheme,
@@ -325,7 +332,7 @@ impl ObjectStorage {
                 ),
                 status_code: None,
                 header: None,
-            }));
+            })));
         };
 
         // Initialize the ABS operator with the object storage.
@@ -333,11 +340,13 @@ impl ObjectStorage {
         builder = builder
             .account_name(access_key_id)
             .account_key(access_key_secret)
-            .http_client(HttpClient::with(client))
+            .http_client(HttpClient::with(self.client.clone()))
             .container(&parsed_url.bucket)
             .endpoint(endpoint);
 
-        Ok(Operator::new(builder)?.finish())
+        Ok(Operator::new(builder)?
+            .finish()
+            .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 
     /// oss_operator initializes the OSS operator with the parsed URL and object storage.
@@ -348,16 +357,13 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Create a reqwest http client.
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
-
         // OSS requires the access key id, access key secret, and endpoint.
         let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
             &object_storage.access_key_id,
             &object_storage.access_key_secret,
             &object_storage.endpoint,
         ) else {
-            return Err(ClientError::BackendError(BackendError {
+            return Err(ClientError::BackendError(Box::new(BackendError {
                 message: format!(
                     "{} {}",
                     self.scheme,
@@ -369,7 +375,7 @@ impl ObjectStorage {
                 ),
                 status_code: None,
                 header: None,
-            }));
+            })));
         };
 
         // Initialize the OSS operator with the object storage.
@@ -378,11 +384,13 @@ impl ObjectStorage {
             .access_key_id(access_key_id)
             .access_key_secret(access_key_secret)
             .endpoint(endpoint)
-            .http_client(HttpClient::with(client))
+            .http_client(HttpClient::with(self.client.clone()))
             .root("/")
             .bucket(&parsed_url.bucket);
 
-        Ok(Operator::new(builder)?.finish())
+        Ok(Operator::new(builder)?
+            .finish()
+            .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 
     /// obs_operator initializes the OBS operator with the parsed URL and object storage.
@@ -393,16 +401,13 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Create a reqwest http client.
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
-
         // OBS requires the endpoint, access key id, and access key secret.
         let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
             &object_storage.access_key_id,
             &object_storage.access_key_secret,
             &object_storage.endpoint,
         ) else {
-            return Err(ClientError::BackendError(BackendError {
+            return Err(ClientError::BackendError(Box::new(BackendError {
                 message: format!(
                     "{} {}",
                     self.scheme,
@@ -414,7 +419,7 @@ impl ObjectStorage {
                 ),
                 status_code: None,
                 header: None,
-            }));
+            })));
         };
 
         // Initialize the OBS operator with the object storage.
@@ -423,10 +428,12 @@ impl ObjectStorage {
             .access_key_id(access_key_id)
             .secret_access_key(access_key_secret)
             .endpoint(endpoint)
-            .http_client(HttpClient::with(client))
+            .http_client(HttpClient::with(self.client.clone()))
             .bucket(&parsed_url.bucket);
 
-        Ok(Operator::new(builder)?.finish())
+        Ok(Operator::new(builder)?
+            .finish()
+            .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 
     /// cos_operator initializes the COS operator with the parsed URL and object storage.
@@ -436,16 +443,13 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Create a reqwest http client.
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
-
         // COS requires the access key id, the access key secret, and the endpoint.
         let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
             &object_storage.access_key_id,
             &object_storage.access_key_secret,
             &object_storage.endpoint,
         ) else {
-            return Err(ClientError::BackendError(BackendError {
+            return Err(ClientError::BackendError(Box::new(BackendError {
                 message: format!(
                     "{} {}",
                     self.scheme,
@@ -457,7 +461,7 @@ impl ObjectStorage {
                 ),
                 status_code: None,
                 header: None,
-            }));
+            })));
         };
 
         // Initialize the COS operator with the object storage.
@@ -466,10 +470,12 @@ impl ObjectStorage {
             .secret_id(access_key_id)
             .secret_key(access_key_secret)
             .endpoint(endpoint)
-            .http_client(HttpClient::with(client))
+            .http_client(HttpClient::with(self.client.clone()))
             .bucket(&parsed_url.bucket);
 
-        Ok(Operator::new(builder)?.finish())
+        Ok(Operator::new(builder)?
+            .finish()
+            .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 }
 
@@ -485,7 +491,7 @@ impl crate::Backend for ObjectStorage {
     /// head gets the header of the request.
     #[instrument(skip_all)]
     async fn head(&self, request: super::HeadRequest) -> ClientResult<super::HeadResponse> {
-        info!(
+        debug!(
             "head request {} {}: {:?}",
             request.task_id, request.url, request.http_header
         );
@@ -518,11 +524,11 @@ impl crate::Backend for ObjectStorage {
                         "list request failed {} {}: {}",
                         request.task_id, request.url, err
                     );
-                    ClientError::BackendError(BackendError {
+                    ClientError::BackendError(Box::new(BackendError {
                         message: err.to_string(),
                         status_code: None,
                         header: None,
-                    })
+                    }))
                 })?
                 .into_iter()
                 .map(|entry| {
@@ -544,14 +550,14 @@ impl crate::Backend for ObjectStorage {
                 "stat request failed {} {}: {}",
                 request.task_id, request.url, err
             );
-            ClientError::BackendError(BackendError {
+            ClientError::BackendError(Box::new(BackendError {
                 message: err.to_string(),
                 status_code: None,
                 header: None,
-            })
+            }))
         })?;
 
-        info!(
+        debug!(
             "head response {} {}: {}",
             request.task_id,
             request.url,
@@ -568,13 +574,13 @@ impl crate::Backend for ObjectStorage {
         })
     }
 
-    /// Returns content of requested file.
+    /// get returns content of requested file.
     #[instrument(skip_all)]
     async fn get(
         &self,
         request: super::GetRequest,
     ) -> ClientResult<super::GetResponse<super::Body>> {
-        info!(
+        debug!(
             "get request {} {}: {:?}",
             request.piece_id, request.url, request.http_header
         );
@@ -602,11 +608,11 @@ impl crate::Backend for ObjectStorage {
                     "get request failed {} {}: {}",
                     request.piece_id, request.url, err
                 );
-                ClientError::BackendError(BackendError {
+                ClientError::BackendError(Box::new(BackendError {
                     message: err.to_string(),
                     status_code: None,
                     header: None,
-                })
+                }))
             })?;
 
         let stream = match request.range {
@@ -618,22 +624,22 @@ impl crate::Backend for ObjectStorage {
                         "get request failed {} {}: {}",
                         request.piece_id, request.url, err
                     );
-                    ClientError::BackendError(BackendError {
+                    ClientError::BackendError(Box::new(BackendError {
                         message: err.to_string(),
                         status_code: None,
                         header: None,
-                    })
+                    }))
                 })?,
             None => operator_reader.into_bytes_stream(..).await.map_err(|err| {
                 error!(
                     "get request failed {} {}: {}",
                     request.piece_id, request.url, err
                 );
-                ClientError::BackendError(BackendError {
+                ClientError::BackendError(Box::new(BackendError {
                     message: err.to_string(),
                     status_code: None,
                     header: None,
-                })
+                }))
             })?,
         };
 
@@ -798,7 +804,7 @@ mod tests {
             let url: Url = format!("{}://test-bucket/file", scheme).parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            let result = ObjectStorage::new(scheme).operator(
+            let result = ObjectStorage::new(scheme).unwrap().operator(
                 &parsed_url,
                 Some(object_storage),
                 Duration::from_secs(3),
@@ -847,7 +853,7 @@ mod tests {
             let url: Url = "s3://test-bucket/file".parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            let result = ObjectStorage::new(Scheme::S3).operator(
+            let result = ObjectStorage::new(Scheme::S3).unwrap().operator(
                 &parsed_url,
                 Some(object_storage),
                 Duration::from_secs(3),
@@ -900,7 +906,7 @@ mod tests {
             let url: Url = "gs://test-bucket/file".parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            let result = ObjectStorage::new(Scheme::GCS).operator(
+            let result = ObjectStorage::new(Scheme::GCS).unwrap().operator(
                 &parsed_url,
                 Some(object_storage),
                 Duration::from_secs(3),
@@ -916,8 +922,11 @@ mod tests {
         let url: Url = "s3://test-bucket/file".parse().unwrap();
         let parsed_url: ParsedURL = url.try_into().unwrap();
 
-        let result =
-            ObjectStorage::new(Scheme::S3).operator(&parsed_url, None, Duration::from_secs(3));
+        let result = ObjectStorage::new(Scheme::S3).unwrap().operator(
+            &parsed_url,
+            None,
+            Duration::from_secs(3),
+        );
 
         assert!(result.is_err());
         assert_eq!(
@@ -984,7 +993,7 @@ mod tests {
             let url: Url = "s3://test-bucket/file".parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            let result = ObjectStorage::new(Scheme::S3).operator(
+            let result = ObjectStorage::new(Scheme::S3).unwrap().operator(
                 &parsed_url,
                 Some(object_storage),
                 Duration::from_secs(3),
@@ -1053,7 +1062,7 @@ mod tests {
             let url: Url = "abs://test-bucket/file".parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            let result = ObjectStorage::new(Scheme::ABS).operator(
+            let result = ObjectStorage::new(Scheme::ABS).unwrap().operator(
                 &parsed_url,
                 Some(object_storage),
                 Duration::from_secs(3),
@@ -1122,7 +1131,7 @@ mod tests {
             let url: Url = "oss://test-bucket/file".parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            let result = ObjectStorage::new(Scheme::OSS).operator(
+            let result = ObjectStorage::new(Scheme::OSS).unwrap().operator(
                 &parsed_url,
                 Some(object_storage),
                 Duration::from_secs(3),
@@ -1191,7 +1200,7 @@ mod tests {
             let url: Url = "obs://test-bucket/file".parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            let result = ObjectStorage::new(Scheme::OBS).operator(
+            let result = ObjectStorage::new(Scheme::OBS).unwrap().operator(
                 &parsed_url,
                 Some(object_storage),
                 Duration::from_secs(3),
@@ -1260,7 +1269,7 @@ mod tests {
             let url: Url = "cos://test-bucket/file".parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            let result = ObjectStorage::new(Scheme::COS).operator(
+            let result = ObjectStorage::new(Scheme::COS).unwrap().operator(
                 &parsed_url,
                 Some(object_storage),
                 Duration::from_secs(3),

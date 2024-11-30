@@ -38,6 +38,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::sync::Barrier;
 use tracing::{error, info, Level};
 
 #[cfg(not(target_env = "msvc"))]
@@ -292,6 +293,9 @@ async fn main() -> Result<(), anyhow::Error> {
     // Log dfdaemon started pid.
     info!("dfdaemon started at pid {}", std::process::id());
 
+    // grpc server started barrier.
+    let grpc_server_started_barrier = Arc::new(Barrier::new(3));
+
     // Wait for servers to exit or shutdown signal.
     tokio::select! {
         _ = tokio::spawn(async move { dynconfig.run().await }) => {
@@ -318,20 +322,37 @@ async fn main() -> Result<(), anyhow::Error> {
             info!("announcer scheduler exited");
         },
 
-        _ = tokio::spawn(async move { dfdaemon_upload_grpc.run().await.unwrap_or_else(|err| error!("dfdaemon upload grpc server failed: {}", err)) }) => {
+        _ = tokio::spawn(async move { gc.run().await }) => {
+            info!("garbage collector exited");
+        },
+
+        _ = {
+            let barrier = grpc_server_started_barrier.clone();
+            tokio::spawn(async move {
+                dfdaemon_upload_grpc.run(barrier).await.unwrap_or_else(|err| error!("dfdaemon upload grpc server failed: {}", err));
+            })
+        } => {
             info!("dfdaemon upload grpc server exited");
         },
 
-        _ = tokio::spawn(async move { dfdaemon_download_grpc.run().await.unwrap_or_else(|err| error!("dfdaemon download grpc server failed: {}", err)) }) => {
+        _ = {
+            let barrier = grpc_server_started_barrier.clone();
+            tokio::spawn(async move {
+                dfdaemon_download_grpc.run(barrier).await.unwrap_or_else(|err| error!("dfdaemon download grpc server failed: {}", err));
+            })
+        } => {
             info!("dfdaemon download grpc unix server exited");
         },
 
-        _ = tokio::spawn(async move { proxy.run().await.unwrap_or_else(|err| error!("proxy server failed: {}", err)) }) => {
+        _ = {
+            let barrier = grpc_server_started_barrier.clone();
+            tokio::spawn(async move {
+                // Wait for grpc server started.
+                barrier.wait().await;
+                proxy.run().await.unwrap_or_else(|err| error!("proxy server failed: {}", err));
+            })
+        } => {
             info!("proxy server exited");
-        },
-
-        _ = tokio::spawn(async move { gc.run().await }) => {
-            info!("garbage collector exited");
         },
 
         _ = shutdown::shutdown_signal() => {},

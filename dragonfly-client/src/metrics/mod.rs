@@ -26,8 +26,9 @@ use prometheus::{
 };
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
 use tokio::sync::mpsc;
 use tracing::{error, info, instrument, warn};
 use warp::{Filter, Rejection, Reply};
@@ -177,6 +178,21 @@ lazy_static! {
             &[]
         ).expect("metric can be created");
 
+    /// PROXY_REQUEST_VIA_DFDAEMON_COUNT is used to count the number of proxy requset via dfdaemon.
+    pub static ref PROXY_REQUEST_VIA_DFDAEMON_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("proxy_request_by_dfdaemon_total", "Counter of the number of the proxy request by dfdaemon.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &[]
+        ).expect("metric can be created");
+
+    /// PROXY_REQUEST_VIA_DFDAEMON_AND_CACHE_HITS_COUNT is used to count the number of proxy request via
+    /// dfdaemon and cache hits.
+    pub static ref PROXY_REQUEST_VIA_DFDAEMON_AND_CACHE_HITS_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("proxy_request_via_dfdaemon_and_cache_hits_total", "Counter of the number of cache hits of the proxy request via dfdaemon.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &[]
+        ).expect("metric can be created");
+
     /// STAT_TASK_COUNT is used to count the number of stat tasks.
     pub static ref STAT_TASK_COUNT: IntCounterVec =
         IntCounterVec::new(
@@ -232,6 +248,166 @@ lazy_static! {
             Opts::new("disk_usage_space_total", "Gauge of the disk usage space in bytes").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
             &[]
         ).expect("metric can be created");
+
+    /// DISK_WRITTEN_BYTES is used to count of the disk written bytes.
+    pub static ref DISK_WRITTEN_BYTES: IntGaugeVec =
+        IntGaugeVec::new(
+            Opts::new("disk_written_bytes", "Gauge of the disk written bytes.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &[]
+        ).expect("metric can be created");
+
+    /// DISK_READ_BYTES is used to count of the disk read bytes.
+    pub static ref DISK_READ_BYTES: IntGaugeVec =
+        IntGaugeVec::new(
+            Opts::new("disk_read_bytes", "Gauge of the disk read bytes.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &[]
+        ).expect("metric can be created");
+}
+
+/// register_custom_metrics registers all custom metrics.
+#[instrument(skip_all)]
+fn register_custom_metrics() {
+    REGISTRY
+        .register(Box::new(VERSION_GAUGE.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(DOWNLOAD_TASK_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(DOWNLOAD_TASK_FAILURE_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(PREFETCH_TASK_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(PREFETCH_TASK_FAILURE_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(CONCURRENT_DOWNLOAD_TASK_GAUGE.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(CONCURRENT_UPLOAD_PIECE_GAUGE.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(DOWNLOAD_TRAFFIC.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(UPLOAD_TRAFFIC.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(DOWNLOAD_TASK_DURATION.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(BACKEND_REQUEST_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(BACKEND_REQUEST_FAILURE_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(BACKEND_REQUEST_DURATION.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(PROXY_REQUEST_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(PROXY_REQUEST_FAILURE_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(PROXY_REQUEST_VIA_DFDAEMON_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(
+            PROXY_REQUEST_VIA_DFDAEMON_AND_CACHE_HITS_COUNT.clone(),
+        ))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(STAT_TASK_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(STAT_TASK_FAILURE_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(DELETE_TASK_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(DELETE_TASK_FAILURE_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(DELETE_HOST_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(DELETE_HOST_FAILURE_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(DISK_SPACE.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(DISK_USAGE_SPACE.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(DISK_WRITTEN_BYTES.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(DISK_READ_BYTES.clone()))
+        .expect("metric can be registered");
+}
+
+/// reset_custom_metrics resets all custom metrics.
+#[instrument(skip_all)]
+fn reset_custom_metrics() {
+    VERSION_GAUGE.reset();
+    DOWNLOAD_TASK_COUNT.reset();
+    DOWNLOAD_TASK_FAILURE_COUNT.reset();
+    PREFETCH_TASK_COUNT.reset();
+    PREFETCH_TASK_FAILURE_COUNT.reset();
+    CONCURRENT_DOWNLOAD_TASK_GAUGE.reset();
+    CONCURRENT_UPLOAD_PIECE_GAUGE.reset();
+    DOWNLOAD_TRAFFIC.reset();
+    UPLOAD_TRAFFIC.reset();
+    DOWNLOAD_TASK_DURATION.reset();
+    BACKEND_REQUEST_COUNT.reset();
+    BACKEND_REQUEST_FAILURE_COUNT.reset();
+    BACKEND_REQUEST_DURATION.reset();
+    PROXY_REQUEST_COUNT.reset();
+    PROXY_REQUEST_FAILURE_COUNT.reset();
+    PROXY_REQUEST_VIA_DFDAEMON_COUNT.reset();
+    PROXY_REQUEST_VIA_DFDAEMON_AND_CACHE_HITS_COUNT.reset();
+    STAT_TASK_COUNT.reset();
+    STAT_TASK_FAILURE_COUNT.reset();
+    DELETE_TASK_COUNT.reset();
+    DELETE_TASK_FAILURE_COUNT.reset();
+    DELETE_HOST_COUNT.reset();
+    DELETE_HOST_FAILURE_COUNT.reset();
+    DISK_SPACE.reset();
+    DISK_USAGE_SPACE.reset();
+    DISK_WRITTEN_BYTES.reset();
+    DISK_READ_BYTES.reset();
 }
 
 /// TaskSize represents the size of the task.
@@ -363,12 +539,12 @@ impl TaskSize {
 
 /// collect_upload_task_started_metrics collects the upload task started metrics.
 pub fn collect_upload_task_started_metrics(typ: i32, tag: &str, app: &str) {
-    UPLOAD_TASK_COUNT
-        .with_label_values(&[typ.to_string().as_str(), tag, app])
-        .inc();
+    let typ = typ.to_string();
+
+    UPLOAD_TASK_COUNT.with_label_values(&[&typ, tag, app]).inc();
 
     CONCURRENT_UPLOAD_TASK_GAUGE
-        .with_label_values(&[typ.to_string().as_str(), tag, app])
+        .with_label_values(&[&typ, tag, app])
         .inc();
 }
 
@@ -391,34 +567,41 @@ pub fn collect_upload_task_finished_metrics(
         );
     }
 
+    let typ = typ.to_string();
+    let task_size = task_size.to_string();
+
     UPLOAD_TASK_DURATION
-        .with_label_values(&[typ.to_string().as_str(), task_size.to_string().as_str()])
+        .with_label_values(&[&typ, &task_size])
         .observe(cost.as_millis() as f64);
 
     CONCURRENT_UPLOAD_TASK_GAUGE
-        .with_label_values(&[typ.to_string().as_str(), tag, app])
+        .with_label_values(&[&typ, tag, app])
         .dec();
 }
 
 /// collect_upload_task_failure_metrics collects the upload task failure metrics.
 pub fn collect_upload_task_failure_metrics(typ: i32, tag: &str, app: &str) {
+    let typ = typ.to_string();
+
     UPLOAD_TASK_FAILURE_COUNT
-        .with_label_values(&[typ.to_string().as_str(), tag, app])
+        .with_label_values(&[&typ, tag, app])
         .inc();
 
     CONCURRENT_UPLOAD_TASK_GAUGE
-        .with_label_values(&[typ.to_string().as_str(), tag, app])
+        .with_label_values(&[&typ, tag, app])
         .dec();
 }
 
 /// collect_download_task_started_metrics collects the download task started metrics.
 pub fn collect_download_task_started_metrics(typ: i32, tag: &str, app: &str, priority: &str) {
+    let typ = typ.to_string();
+
     DOWNLOAD_TASK_COUNT
-        .with_label_values(&[typ.to_string().as_str(), tag, app, priority])
+        .with_label_values(&[&typ, tag, app, priority])
         .inc();
 
     CONCURRENT_DOWNLOAD_TASK_GAUGE
-        .with_label_values(&[typ.to_string().as_str(), tag, app, priority])
+        .with_label_values(&[&typ, tag, app, priority])
         .inc();
 }
 
@@ -449,23 +632,28 @@ pub fn collect_download_task_finished_metrics(
         );
     }
 
+    let typ = typ.to_string();
+    let task_size = task_size.to_string();
+
     DOWNLOAD_TASK_DURATION
-        .with_label_values(&[typ.to_string().as_str(), task_size.to_string().as_str()])
+        .with_label_values(&[&typ, &task_size])
         .observe(cost.as_millis() as f64);
 
     CONCURRENT_DOWNLOAD_TASK_GAUGE
-        .with_label_values(&[typ.to_string().as_str(), tag, app, priority])
+        .with_label_values(&[&typ, tag, app, priority])
         .dec();
 }
 
 /// collect_download_task_failure_metrics collects the download task failure metrics.
 pub fn collect_download_task_failure_metrics(typ: i32, tag: &str, app: &str, priority: &str) {
+    let typ = typ.to_string();
+
     DOWNLOAD_TASK_FAILURE_COUNT
-        .with_label_values(&[typ.to_string().as_str(), tag, app, priority])
+        .with_label_values(&[&typ, tag, app, priority])
         .inc();
 
     CONCURRENT_DOWNLOAD_TASK_GAUGE
-        .with_label_values(&[typ.to_string().as_str(), tag, app, priority])
+        .with_label_values(&[&typ, tag, app, priority])
         .dec();
 }
 
@@ -543,6 +731,21 @@ pub fn collect_proxy_request_failure_metrics() {
     PROXY_REQUEST_FAILURE_COUNT.with_label_values(&[]).inc();
 }
 
+/// collect_proxy_request_via_dfdaemon_metrics collects the proxy request via dfdaemon metrics.
+pub fn collect_proxy_request_via_dfdaemon_metrics() {
+    PROXY_REQUEST_VIA_DFDAEMON_COUNT
+        .with_label_values(&[])
+        .inc();
+}
+
+/// collect_proxy_request_via_dfdaemon_and_cache_hits_metrics collects the proxy request via
+/// dfdaemon and cache hits metrics.
+pub fn collect_proxy_request_via_dfdaemon_and_cache_hits_metrics() {
+    PROXY_REQUEST_VIA_DFDAEMON_AND_CACHE_HITS_COUNT
+        .with_label_values(&[])
+        .inc();
+}
+
 /// collect_stat_task_started_metrics collects the stat task started metrics.
 pub fn collect_stat_task_started_metrics(typ: i32) {
     STAT_TASK_COUNT
@@ -581,8 +784,9 @@ pub fn collect_delete_host_failure_metrics() {
     DELETE_HOST_FAILURE_COUNT.with_label_values(&[]).inc();
 }
 
-/// collect_disk_space_metrics collects the disk space metrics.
-pub fn collect_disk_space_metrics(path: &Path) {
+/// collect_disk_metrics collects the disk metrics.
+pub fn collect_disk_metrics(path: &Path, system: &Arc<Mutex<System>>) {
+    // Collect disk space metrics.
     let stats = match fs2::statvfs(path) {
         Ok(stats) => stats,
         Err(err) => {
@@ -598,6 +802,24 @@ pub fn collect_disk_space_metrics(path: &Path) {
     DISK_USAGE_SPACE
         .with_label_values(&[])
         .set(usage_space as i64);
+
+    // Collect disk bandwidth metrics.
+    let mut sys = system.lock().unwrap();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::new()
+            .with_disk_usage()
+            .with_exe(UpdateKind::Always),
+    );
+
+    let process = sys.process(sysinfo::get_current_pid().unwrap()).unwrap();
+    DISK_WRITTEN_BYTES
+        .with_label_values(&[])
+        .set(process.disk_usage().written_bytes as i64);
+    DISK_READ_BYTES
+        .with_label_values(&[])
+        .set(process.disk_usage().read_bytes as i64);
 }
 
 /// Metrics is the metrics server.
@@ -605,6 +827,9 @@ pub fn collect_disk_space_metrics(path: &Path) {
 pub struct Metrics {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
+
+    // system is the system information, only used for collecting disk metrics.
+    system: Arc<Mutex<System>>,
 
     /// shutdown is used to shutdown the metrics server.
     shutdown: shutdown::Shutdown,
@@ -624,6 +849,13 @@ impl Metrics {
     ) -> Self {
         Self {
             config,
+            system: Arc::new(Mutex::new(System::new_with_specifics(
+                RefreshKind::new().with_processes(
+                    ProcessRefreshKind::new()
+                        .with_disk_usage()
+                        .with_exe(UpdateKind::Always),
+                ),
+            ))),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -636,7 +868,7 @@ impl Metrics {
         let mut shutdown = self.shutdown.clone();
 
         // Register custom metrics.
-        self.register_custom_metrics();
+        register_custom_metrics();
 
         // VERSION_GAUGE sets the version info of the service.
         VERSION_GAUGE
@@ -651,6 +883,7 @@ impl Metrics {
 
         // Clone the config.
         let config = self.config.clone();
+        let system = self.system.clone();
 
         // Create the metrics server address.
         let addr = SocketAddr::new(
@@ -658,16 +891,23 @@ impl Metrics {
             self.config.metrics.server.port,
         );
 
-        // Create the metrics route.
-        let metrics_route = warp::path!("metrics")
+        // Get the metrics route.
+        let get_metrics_route = warp::path!("metrics")
             .and(warp::get())
             .and(warp::path::end())
-            .and_then(move || Self::metrics_handler(config.clone()));
+            .and_then(move || Self::get_metrics_handler(config.clone(), system.clone()));
+
+        // Delete the metrics route.
+        let delete_metrics_route = warp::path!("metrics")
+            .and(warp::delete())
+            .and(warp::path::end())
+            .and_then(Self::delete_metrics_handler);
+        let metrics_routes = get_metrics_route.or(delete_metrics_route);
 
         // Start the metrics server and wait for it to finish.
         info!("metrics server listening on {}", addr);
         tokio::select! {
-            _ = warp::serve(metrics_route).run(addr) => {
+            _ = warp::serve(metrics_routes).run(addr) => {
                 // Metrics server ended.
                 info!("metrics server ended");
             }
@@ -679,107 +919,14 @@ impl Metrics {
         }
     }
 
-    /// register_custom_metrics registers all custom metrics.
+    /// get_metrics_handler handles the metrics request of getting.
     #[instrument(skip_all)]
-    fn register_custom_metrics(&self) {
-        REGISTRY
-            .register(Box::new(VERSION_GAUGE.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(DOWNLOAD_TASK_COUNT.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(DOWNLOAD_TASK_FAILURE_COUNT.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(PREFETCH_TASK_COUNT.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(PREFETCH_TASK_FAILURE_COUNT.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(CONCURRENT_DOWNLOAD_TASK_GAUGE.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(CONCURRENT_UPLOAD_PIECE_GAUGE.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(DOWNLOAD_TRAFFIC.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(UPLOAD_TRAFFIC.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(DOWNLOAD_TASK_DURATION.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(BACKEND_REQUEST_COUNT.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(BACKEND_REQUEST_FAILURE_COUNT.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(BACKEND_REQUEST_DURATION.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(PROXY_REQUEST_COUNT.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(PROXY_REQUEST_FAILURE_COUNT.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(STAT_TASK_COUNT.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(STAT_TASK_FAILURE_COUNT.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(DELETE_TASK_COUNT.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(DELETE_TASK_FAILURE_COUNT.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(DELETE_HOST_COUNT.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(DELETE_HOST_FAILURE_COUNT.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(DISK_SPACE.clone()))
-            .expect("metric can be registered");
-
-        REGISTRY
-            .register(Box::new(DISK_USAGE_SPACE.clone()))
-            .expect("metric can be registered");
-    }
-
-    /// metrics_handler handles the metrics request.
-    #[instrument(skip_all)]
-    async fn metrics_handler(config: Arc<Config>) -> Result<impl Reply, Rejection> {
+    async fn get_metrics_handler(
+        config: Arc<Config>,
+        system: Arc<Mutex<System>>,
+    ) -> Result<impl Reply, Rejection> {
         // Collect the disk space metrics.
-        collect_disk_space_metrics(config.storage.dir.as_path());
+        collect_disk_metrics(config.storage.dir.as_path(), &system);
 
         // Encode custom metrics.
         let encoder = TextEncoder::new();
@@ -814,5 +961,12 @@ impl Metrics {
 
         res.push_str(&res_custom);
         Ok(res)
+    }
+
+    /// delete_metrics_handler handles the metrics request of deleting.
+    #[instrument(skip_all)]
+    async fn delete_metrics_handler() -> Result<impl Reply, Rejection> {
+        reset_custom_metrics();
+        Ok(Vec::new())
     }
 }

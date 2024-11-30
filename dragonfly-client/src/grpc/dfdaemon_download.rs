@@ -43,7 +43,7 @@ use dragonfly_client_core::{
 };
 use dragonfly_client_util::{
     digest::{calculate_file_hash, Algorithm},
-    http::{get_range, hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap},
+    http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
 };
 use hyper_util::rt::TokioIo;
 use tonic::service::interceptor::InterceptedService;
@@ -53,14 +53,14 @@ use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
+use tokio::sync::Barrier;
 use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
-use tonic::codec::CompressionEncoding;
 use tonic::{
     transport::{Channel, Endpoint, Server, Uri},
     Code, Request, Response, Status,
 };
 use tower::service_fn;
-use tracing::{error, info, instrument, Instrument, Span};
+use tracing::{debug, error, info, instrument, Instrument, Span};
 
 use super::tracing_grpc::TracingInterceptor;
 
@@ -96,8 +96,6 @@ impl DfdaemonDownloadServer {
             task,
             persistent_cache_task,
         })
-        .send_compressed(CompressionEncoding::Zstd)
-        .accept_compressed(CompressionEncoding::Zstd)
         .max_decoding_message_size(usize::MAX)
         .max_encoding_message_size(usize::MAX);
 
@@ -111,7 +109,7 @@ impl DfdaemonDownloadServer {
 
     /// run starts the download server with unix domain socket.
     #[instrument(skip_all)]
-    pub async fn run(&mut self) -> ClientResult<()> {
+    pub async fn run(&mut self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         // Register the reflection service.
         let reflection = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
@@ -129,18 +127,15 @@ impl DfdaemonDownloadServer {
             .await;
 
         // Start download grpc server with unix domain socket.
-        info!(
-            "download server listening on {}",
-            self.socket_path.display()
-        );
         fs::create_dir_all(self.socket_path.parent().unwrap()).await?;
         let uds = UnixListener::bind(&self.socket_path)?;
         let uds_stream = UnixListenerStream::new(uds);
 
-        Server::builder()
+        let server = Server::builder()
             .max_frame_size(super::MAX_FRAME_SIZE)
-            .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
-            .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
+            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+            .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
+            .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
             .add_service(reflection.clone())
             .add_service(health_service)
             .add_service(self.service.clone())
@@ -148,8 +143,17 @@ impl DfdaemonDownloadServer {
                 // Download grpc server shutting down with signals.
                 let _ = shutdown.recv().await;
                 info!("download grpc server shutting down");
-            })
-            .await?;
+            });
+
+        // Notify the grpc server is started.
+        grpc_server_started_barrier.wait().await;
+
+        // Wait for the download grpc server to shutdown.
+        info!(
+            "download server listening on {}",
+            self.socket_path.display()
+        );
+        server.await?;
 
         // Remove the unix domain socket file.
         fs::remove_file(&self.socket_path).await?;
@@ -182,7 +186,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         &self,
         request: Request<DownloadTaskRequest>,
     ) -> Result<Response<Self::DownloadTaskStream>, Status> {
-        info!("download task in download server");
+        debug!("download task in download server");
 
         // Record the start time.
         let start_time = Instant::now();
@@ -238,7 +242,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
                 match serde_json::to_vec::<Backend>(&Backend {
                     message: err.message.clone(),
-                    header: reqwest_headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
+                    header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
                     status_code: err.status_code.map(|code| code.as_u16() as i32),
                 }) {
                     Ok(json) => {
@@ -304,7 +308,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // If download protocol is not http, use the range of the download.
         if download.range.is_none() {
             // Convert the header.
-            let request_header = match hashmap_to_reqwest_headermap(&download.request_header) {
+            let request_header = match hashmap_to_headermap(&download.request_header) {
                 Ok(header) => header,
                 Err(e) => {
                     // Download task failed.
@@ -353,12 +357,12 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let download_clone = download.clone();
         let task_manager_clone = task_manager.clone();
         let task_clone = task.clone();
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(1024 * 10);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
                 match task_manager_clone
                     .download(
-                        task_clone.clone(),
+                        &task_clone,
                         host_id.as_str(),
                         peer_id.as_str(),
                         download_clone.clone(),
@@ -398,7 +402,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             // Hard link or copy the task content to the destination.
                             if let Err(err) = task_manager_clone
                                 .hard_link_or_copy(
-                                    task_clone,
+                                    &task_clone,
                                     Path::new(output_path.as_str()),
                                     download_clone.range,
                                 )
@@ -434,9 +438,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
                         match serde_json::to_vec::<Backend>(&Backend {
                             message: err.message.clone(),
-                            header: reqwest_headermap_to_hashmap(
-                                &err.header.clone().unwrap_or_default(),
-                            ),
+                            header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
                             status_code: err.status_code.map(|code| code.as_u16() as i32),
                         }) {
                             Ok(json) => {
@@ -699,7 +701,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
                 match serde_json::to_vec::<Backend>(&Backend {
                     message: err.message.clone(),
-                    header: reqwest_headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
+                    header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
                     status_code: err.status_code.map(|code| code.as_u16() as i32),
                 }) {
                     Ok(json) => {
@@ -744,12 +746,12 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let request_clone = request.clone();
         let task_manager_clone = task_manager.clone();
         let task_clone = task.clone();
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(1024 * 10);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
                 match task_manager_clone
                     .download(
-                        task_clone.clone(),
+                        &task_clone,
                         host_id.as_str(),
                         peer_id.as_str(),
                         request_clone.clone(),
@@ -779,7 +781,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         // Hard link or copy the persistent cache task content to the destination.
                         if let Err(err) = task_manager_clone
                             .hard_link_or_copy(
-                                task_clone,
+                                &task_clone,
                                 Path::new(request_clone.output_path.as_str()),
                             )
                             .await
@@ -974,18 +976,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
         // Collect the delete persistent cache task started metrics.
         collect_delete_task_started_metrics(TaskType::PersistentCache as i32);
-
-        self.persistent_cache_task
-            .delete(task_id.as_str(), host_id.as_str())
-            .await
-            .map_err(|err| {
-                // Collect the delete persistent cache task failure metrics.
-                collect_delete_task_failure_metrics(TaskType::PersistentCache as i32);
-
-                error!("delete persistent cache task: {}", err);
-                Status::internal(err.to_string())
-            })?;
-
+        self.persistent_cache_task.delete(task_id.as_str()).await;
         Ok(Response::new(()))
     }
 }
@@ -1006,6 +997,12 @@ impl DfdaemonDownloadClient {
         let channel = Endpoint::try_from("http://[::]:50051")
             .unwrap()
             .buffer_size(super::BUFFER_SIZE)
+            .connect_timeout(super::CONNECT_TIMEOUT)
+            .timeout(super::REQUEST_TIMEOUT)
+            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+            .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+            .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+            .keep_alive_while_idle(true)
             .connect_with_connector(service_fn(move |_: Uri| {
                 let socket_path = socket_path.clone();
                 async move {
@@ -1020,6 +1017,7 @@ impl DfdaemonDownloadClient {
                 err
             })
             .or_err(ErrorType::ConnectError)?;
+
         let client = DfdaemonDownloadGRPCClient::with_interceptor(channel, TracingInterceptor)
             .send_compressed(CompressionEncoding::Zstd)
             .accept_compressed(CompressionEncoding::Zstd)

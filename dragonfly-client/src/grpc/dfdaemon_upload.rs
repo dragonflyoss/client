@@ -48,13 +48,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
+use tokio::sync::Barrier;
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::codec::CompressionEncoding;
 use tonic::{
     transport::{Channel, Server},
     Code, Request, Response, Status,
 };
-use tracing::{error, info, instrument, Instrument, Span};
+use tracing::{debug, error, info, instrument, Instrument, Span};
 use url::Url;
 
 use super::tracing_grpc::TracingInterceptor;
@@ -95,8 +95,6 @@ impl DfdaemonUploadServer {
             task,
             persistent_cache_task,
         })
-        .send_compressed(CompressionEncoding::Zstd)
-        .accept_compressed(CompressionEncoding::Zstd)
         .max_decoding_message_size(usize::MAX)
         .max_encoding_message_size(usize::MAX);
 
@@ -111,7 +109,7 @@ impl DfdaemonUploadServer {
 
     /// run starts the upload server.
     #[instrument(skip_all)]
-    pub async fn run(&mut self) -> ClientResult<()> {
+    pub async fn run(&mut self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         // Register the reflection service.
         let reflection = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
@@ -129,7 +127,6 @@ impl DfdaemonUploadServer {
             .await;
 
         // Start upload grpc server.
-        info!("upload server listening on {}", self.addr);
         let mut server_builder = Server::builder();
         if let Ok(Some(server_tls_config)) =
             self.config.upload.server.load_server_tls_config().await
@@ -137,7 +134,8 @@ impl DfdaemonUploadServer {
             server_builder = server_builder.tls_config(server_tls_config)?;
         }
 
-        Ok(server_builder
+        let server = server_builder
+            .tcp_nodelay(true)
             .max_frame_size(super::MAX_FRAME_SIZE)
             .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
             .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
@@ -148,8 +146,14 @@ impl DfdaemonUploadServer {
                 // Upload grpc server shutting down with signals.
                 let _ = shutdown.recv().await;
                 info!("upload grpc server shutting down");
-            })
-            .await?)
+            });
+
+        // Notify the grpc server is started.
+        grpc_server_started_barrier.wait().await;
+
+        // Wait for the upload grpc server to shutdown.
+        info!("upload server listening on {}", self.addr);
+        Ok(server.await?)
     }
 }
 
@@ -177,7 +181,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         request: Request<DownloadTaskRequest>,
     ) -> Result<Response<Self::DownloadTaskStream>, Status> {
-        info!("download task in upload server");
+        debug!("download task in upload server");
 
         // Record the start time.
         let start_time = Instant::now();
@@ -233,7 +237,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                 match serde_json::to_vec::<Backend>(&Backend {
                     message: err.message.clone(),
-                    header: reqwest_headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
+                    header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
                     status_code: err.status_code.map(|code| code.as_u16() as i32),
                 }) {
                     Ok(json) => {
@@ -300,7 +304,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // If download protocol is not http, use the range of the download.
         if download.range.is_none() {
             // Convert the header.
-            let request_header = match hashmap_to_reqwest_headermap(&download.request_header) {
+            let request_header = match hashmap_to_headermap(&download.request_header) {
                 Ok(header) => header,
                 Err(e) => {
                     // Download task failed.
@@ -349,12 +353,12 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let download_clone = download.clone();
         let task_manager_clone = task_manager.clone();
         let task_clone = task.clone();
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(1024 * 10);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
                 match task_manager_clone
                     .download(
-                        task_clone.clone(),
+                        &task_clone,
                         host_id.as_str(),
                         peer_id.as_str(),
                         download_clone.clone(),
@@ -394,7 +398,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             // Hard link or copy the task content to the destination.
                             if let Err(err) = task_manager_clone
                                 .hard_link_or_copy(
-                                    task_clone,
+                                    &task_clone,
                                     Path::new(output_path.as_str()),
                                     download_clone.range,
                                 )
@@ -432,9 +436,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                         match serde_json::to_vec::<Backend>(&Backend {
                             message: err.message.clone(),
-                            header: reqwest_headermap_to_hashmap(
-                                &err.header.clone().unwrap_or_default(),
-                            ),
+                            header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
                             status_code: err.status_code.map(|code| code.as_u16() as i32),
                         }) {
                             Ok(json) => {
@@ -648,17 +650,19 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let task_manager = self.task.clone();
 
         // Initialize stream channel.
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(1024 * 10);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
                 loop {
                     let mut has_started_piece = false;
                     let mut finished_piece_numbers = Vec::new();
                     for interested_piece_number in interested_piece_numbers.iter() {
-                        let piece = match task_manager
-                            .piece
-                            .get(task_id.as_str(), *interested_piece_number)
-                        {
+                        let piece = match task_manager.piece.get(
+                            task_manager
+                                .piece
+                                .id(task_id.as_str(), *interested_piece_number)
+                                .as_str(),
+                        ) {
                             Ok(Some(piece)) => piece,
                             Ok(None) => continue,
                             Err(err) => {
@@ -768,17 +772,20 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Get the interested piece number from the request.
         let piece_number = request.piece_number;
 
+        // Generate the piece id.
+        let piece_id = self.task.piece.id(task_id.as_str(), piece_number);
+
         // Span record the host id, task id and piece number.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("remote_host_id", remote_host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
-        Span::current().record("piece_id", format!("{}-{}", task_id, piece_number).as_str());
+        Span::current().record("piece_id", piece_id.as_str());
 
         // Get the piece metadata from the local storage.
         let piece = self
             .task
             .piece
-            .get(task_id.as_str(), piece_number)
+            .get(piece_id.as_str())
             .map_err(|err| {
                 error!("upload piece metadata from local storage: {}", err);
                 Status::internal(err.to_string())
@@ -797,8 +804,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             .task
             .piece
             .upload_from_local_peer_into_async_read(
+                piece_id.as_str(),
                 task_id.as_str(),
-                piece_number,
                 piece.length,
                 None,
                 false,
@@ -894,7 +901,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                 match serde_json::to_vec::<Backend>(&Backend {
                     message: err.message.clone(),
-                    header: reqwest_headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
+                    header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
                     status_code: err.status_code.map(|code| code.as_u16() as i32),
                 }) {
                     Ok(json) => {
@@ -939,12 +946,12 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let request_clone = request.clone();
         let task_manager_clone = task_manager.clone();
         let task_clone = task.clone();
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(1024 * 10);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
                 match task_manager_clone
                     .download(
-                        task_clone.clone(),
+                        &task_clone,
                         host_id.as_str(),
                         peer_id.as_str(),
                         request_clone.clone(),
@@ -974,7 +981,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         // Hard link or copy the persistent cache task content to the destination.
                         if let Err(err) = task_manager_clone
                             .hard_link_or_copy(
-                                task_clone,
+                                &task_clone,
                                 Path::new(request_clone.output_path.as_str()),
                             )
                             .await
@@ -1075,18 +1082,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
         // Collect the delete task started metrics.
         collect_delete_task_started_metrics(TaskType::PersistentCache as i32);
-
-        self.persistent_cache_task
-            .delete(task_id.as_str(), host_id.as_str())
-            .await
-            .map_err(|err| {
-                // Collect the delete task failure metrics.
-                collect_delete_task_failure_metrics(TaskType::PersistentCache as i32);
-
-                error!("delete persistent cache task: {}", err);
-                Status::internal(err.to_string())
-            })?;
-
+        self.persistent_cache_task.delete(task_id.as_str()).await;
         Ok(Response::new(()))
     }
 }
@@ -1120,6 +1116,7 @@ impl DfdaemonUploadClient {
             Some(client_tls_config) => {
                 Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
                     .tls_config(client_tls_config)?
+                    .tcp_nodelay(true)
                     .buffer_size(super::BUFFER_SIZE)
                     .connect_timeout(super::CONNECT_TIMEOUT)
                     .timeout(super::REQUEST_TIMEOUT)
@@ -1132,6 +1129,7 @@ impl DfdaemonUploadClient {
                     .or_err(ErrorType::ConnectError)?
             }
             None => Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
+                .tcp_nodelay(true)
                 .buffer_size(super::BUFFER_SIZE)
                 .connect_timeout(super::CONNECT_TIMEOUT)
                 .timeout(super::REQUEST_TIMEOUT)

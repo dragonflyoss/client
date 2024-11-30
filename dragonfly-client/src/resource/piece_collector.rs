@@ -82,13 +82,10 @@ impl PieceCollector {
         interested_pieces: Vec<metadata::Piece>,
         parents: Vec<CollectedParent>,
     ) -> Self {
-        let collected_pieces = Arc::new(DashMap::new());
-        interested_pieces
-            .clone()
-            .into_iter()
-            .for_each(|interested_piece| {
-                collected_pieces.insert(interested_piece.number, "".to_string());
-            });
+        let collected_pieces = Arc::new(DashMap::with_capacity(interested_pieces.len()));
+        for interested_piece in &interested_pieces {
+            collected_pieces.insert(interested_piece.number, String::new());
+        }
 
         Self {
             config,
@@ -110,13 +107,13 @@ impl PieceCollector {
         let interested_pieces = self.interested_pieces.clone();
         let collected_pieces = self.collected_pieces.clone();
         let collected_piece_timeout = self.config.download.piece_timeout;
-        let (collected_piece_tx, collected_piece_rx) = mpsc::channel(1024 * 10);
+        let (collected_piece_tx, collected_piece_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
                 Self::collect_from_remote_peers(
                     config,
-                    host_id,
-                    task_id,
+                    &host_id,
+                    &task_id,
                     parents,
                     interested_pieces,
                     collected_pieces,
@@ -139,8 +136,8 @@ impl PieceCollector {
     #[instrument(skip_all)]
     async fn collect_from_remote_peers(
         config: Arc<Config>,
-        host_id: String,
-        task_id: String,
+        host_id: &str,
+        task_id: &str,
         parents: Vec<CollectedParent>,
         interested_pieces: Vec<metadata::Piece>,
         collected_pieces: Arc<DashMap<u32, String>>,
@@ -250,8 +247,8 @@ impl PieceCollector {
             join_set.spawn(
                 sync_pieces(
                     config.clone(),
-                    host_id.clone(),
-                    task_id.clone(),
+                    host_id.to_string(),
+                    task_id.to_string(),
                     parent.clone(),
                     parents.clone(),
                     interested_pieces.clone(),
@@ -270,7 +267,7 @@ impl PieceCollector {
                     info!("peer {} sync pieces finished", peer.id);
 
                     // If all pieces are collected, abort all tasks.
-                    if collected_pieces.len() == 0 {
+                    if collected_pieces.is_empty() {
                         info!("all pieces are collected, abort all tasks");
                         join_set.abort_all();
                     }

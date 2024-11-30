@@ -24,29 +24,29 @@ use toml_edit::{value, Array, ArrayOfTables, Item, Table, Value};
 use tracing::{info, instrument};
 use url::Url;
 
-/// CRIO represents the cri-o runtime manager.
+/// Podman represents the podman runtime manager.
 #[derive(Debug, Clone)]
-pub struct CRIO {
+pub struct Podman {
     /// config is the configuration for initializing
     /// runtime environment for the dfdaemon.
-    config: dfinit::CRIO,
+    config: dfinit::Podman,
 
     /// proxy_config is the configuration for the dfdaemon's proxy server.
     proxy_config: dfinit::Proxy,
 }
 
-/// CRIO implements the cri-o runtime manager.
-impl CRIO {
-    /// new creates a new cri-o runtime manager.
+/// Podman implements the podman runtime manager.
+impl Podman {
+    /// new creates a new podman runtime manager.
     #[instrument(skip_all)]
-    pub fn new(config: dfinit::CRIO, proxy_config: dfinit::Proxy) -> Self {
+    pub fn new(config: dfinit::Podman, proxy_config: dfinit::Proxy) -> Self {
         Self {
             config,
             proxy_config,
         }
     }
 
-    /// run runs the cri-o runtime to initialize
+    /// run runs the podman runtime to initialize
     /// runtime environment for the dfdaemon.
     #[instrument(skip_all)]
     pub async fn run(&self) -> Result<()> {
@@ -117,30 +117,29 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_crio_config() {
+    async fn test_podman_config() {
         use tempfile::NamedTempFile;
 
-        let crio_config_file = NamedTempFile::new().unwrap();
-
-        let crio = CRIO::new(
-            dfinit::CRIO {
-                config_path: crio_config_file.path().to_path_buf(),
-                registries: vec![dfinit::CRIORegistry {
+        let podman_config_file = NamedTempFile::new().unwrap();
+        let podman = Podman::new(
+            dfinit::Podman {
+                config_path: podman_config_file.path().to_path_buf(),
+                registries: vec![dfinit::PodmanRegistry {
                     prefix: "registry.example.com".into(),
                     location: "registry.example.com".into(),
                 }],
                 unqualified_search_registries: vec!["registry.example.com".into()],
             },
             dfinit::Proxy {
-                addr: "http://127.0.0.1:65001".into(),
+                addr: "http://127.0.0.1:5000".into(),
             },
         );
-        let result = crio.run().await;
+        let result = podman.run().await;
 
         assert!(result.is_ok());
 
         // get the contents of the file
-        let contents = fs::read_to_string(crio_config_file.path().to_path_buf())
+        let contents = fs::read_to_string(podman_config_file.path().to_path_buf())
             .await
             .unwrap();
         let expected_contents = r#"unqualified-search-registries = ["registry.example.com"]
@@ -151,13 +150,13 @@ location = "registry.example.com"
 
 [[registry.mirror]]
 insecure = true
-location = "127.0.0.1:65001"
+location = "127.0.0.1:5000"
 "#;
         // assert that the contents of the file are as expected
         assert_eq!(contents, expected_contents);
 
         // clean up
-        fs::remove_file(crio_config_file.path().to_path_buf())
+        fs::remove_file(podman_config_file.path().to_path_buf())
             .await
             .unwrap();
     }

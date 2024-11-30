@@ -25,3 +25,5 @@ tracing.workspace = true
 toml_edit.workspace = true
 toml.workspace = true
 url.workspace = true
+tempfile.workspace = true
+serde_json.workspace = true

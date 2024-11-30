@@ -126,6 +126,11 @@ pub enum DFError {
     #[error("invalid parameter")]
     InvalidParameter,
 
+    /// Infallible is the error for infallible.
+    #[error(transparent)]
+    Infallible(#[from] std::convert::Infallible),
+
+    /// Utf8 is the error for utf8.
     #[error(transparent)]
     Utf8(#[from] std::str::Utf8Error),
 
@@ -173,6 +178,10 @@ pub enum DFError {
     #[error(transparent)]
     ReqwestError(#[from] reqwest::Error),
 
+    /// ReqwestMiddlewareError is the error for reqwest middleware.
+    #[error(transparent)]
+    ReqwestMiddlewareError(#[from] reqwest_middleware::Error),
+
     /// OpenDALError is the error for opendal.
     #[error(transparent)]
     OpenDALError(#[from] opendal::Error),
@@ -183,7 +192,7 @@ pub enum DFError {
 
     /// BackendError is the error for backend.
     #[error(transparent)]
-    BackendError(BackendError),
+    BackendError(Box<BackendError>),
 
     /// HyperUtilClientLegacyError is the error for hyper util client legacy.
     #[error(transparent)]

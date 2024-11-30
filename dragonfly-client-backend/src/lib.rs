@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use dragonfly_api::common::v2::{ObjectStorage, Range};
+use dragonfly_api::common::v2::{Hdfs, ObjectStorage, Range};
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -23,14 +23,31 @@ use libloading::Library;
 use reqwest::header::HeaderMap;
 use rustls_pki_types::CertificateDer;
 use std::path::Path;
+use std::str::FromStr;
 use std::{collections::HashMap, pin::Pin, time::Duration};
 use std::{fmt::Debug, fs};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{error, info, instrument, warn};
 use url::Url;
 
+pub mod hdfs;
 pub mod http;
 pub mod object_storage;
+
+/// POOL_MAX_IDLE_PER_HOST is the max idle connections per host.
+const POOL_MAX_IDLE_PER_HOST: usize = 1024;
+
+/// KEEP_ALIVE_INTERVAL is the keep alive interval for TCP connection.
+const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(60);
+
+/// HTTP2_KEEP_ALIVE_INTERVAL is the interval for HTTP2 keep alive.
+const HTTP2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(300);
+
+/// HTTP2_KEEP_ALIVE_TIMEOUT is the timeout for HTTP2 keep alive.
+const HTTP2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// MAX_RETRY_TIMES is the max retry times for the request.
+const MAX_RETRY_TIMES: u32 = 3;
 
 /// NAME is the name of the package.
 pub const NAME: &str = "backend";
@@ -57,6 +74,9 @@ pub struct HeadRequest {
 
     /// object_storage is the object storage related information.
     pub object_storage: Option<ObjectStorage>,
+
+    /// hdfs is the hdfs related information.
+    pub hdfs: Option<Hdfs>,
 }
 
 /// HeadResponse is the head response for backend.
@@ -106,6 +126,9 @@ pub struct GetRequest {
 
     /// the object storage related information.
     pub object_storage: Option<ObjectStorage>,
+
+    /// hdfs is the hdfs related information.
+    pub hdfs: Option<Hdfs>,
 }
 
 /// GetResponse is the get response for backend.
@@ -175,7 +198,7 @@ pub struct BackendFactory {
     /// backends is the backends of the factory, including the plugin backends and
     /// the builtin backends.
     backends: HashMap<String, Box<dyn Backend + Send + Sync>>,
-    /// libraries is used to store the plugin's dynamic library, because when not saving the `Library`,
+    /// libraries are used to store the plugin's dynamic library, because when not saving the `Library`,
     /// it will drop when out of scope, resulting in the null pointer error.
     libraries: Vec<Library>,
 }
@@ -183,7 +206,7 @@ pub struct BackendFactory {
 /// BackendFactory implements the factory of the backend. It supports loading builtin
 /// backends and plugin backends.
 ///
-/// The builtin backends are http, https, etc, which are implemented
+/// The builtin backends are http, https, etc., which are implemented
 /// by the HTTP struct.
 ///
 /// The plugin backends are shared libraries, which are loaded
@@ -207,7 +230,7 @@ impl BackendFactory {
     #[instrument(skip_all)]
     pub fn new(plugin_dir: Option<&Path>) -> Result<Self> {
         let mut backend_factory = Self::default();
-        backend_factory.load_builtin_backends();
+        backend_factory.load_builtin_backends()?;
         if let Some(plugin_dir) = plugin_dir {
             backend_factory
                 .load_plugin_backends(plugin_dir)
@@ -218,6 +241,12 @@ impl BackendFactory {
         }
 
         Ok(backend_factory)
+    }
+
+    /// supported_download_directory returns whether the scheme supports directory download.
+    #[instrument(skip_all)]
+    pub fn supported_download_directory(scheme: &str) -> bool {
+        object_storage::Scheme::from_str(scheme).is_ok() || scheme == hdfs::HDFS_SCHEME
     }
 
     /// build returns the backend by the scheme of the url.
@@ -233,20 +262,24 @@ impl BackendFactory {
 
     /// load_builtin_backends loads the builtin backends.
     #[instrument(skip_all)]
-    fn load_builtin_backends(&mut self) {
-        self.backends
-            .insert("http".to_string(), Box::new(http::HTTP::new("http")));
+    fn load_builtin_backends(&mut self) -> Result<()> {
+        self.backends.insert(
+            "http".to_string(),
+            Box::new(http::HTTP::new(http::HTTP_SCHEME)?),
+        );
         info!("load [http] builtin backend");
 
-        self.backends
-            .insert("https".to_string(), Box::new(http::HTTP::new("https")));
-        info!("load [https] builtin backend ");
+        self.backends.insert(
+            "https".to_string(),
+            Box::new(http::HTTP::new(http::HTTPS_SCHEME)?),
+        );
+        info!("load [https] builtin backend");
 
         self.backends.insert(
             "s3".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::S3,
-            )),
+            )?),
         );
         info!("load [s3] builtin backend");
 
@@ -254,7 +287,7 @@ impl BackendFactory {
             "gs".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::GCS,
-            )),
+            )?),
         );
         info!("load [gcs] builtin backend");
 
@@ -262,7 +295,7 @@ impl BackendFactory {
             "abs".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::ABS,
-            )),
+            )?),
         );
         info!("load [abs] builtin backend");
 
@@ -270,15 +303,15 @@ impl BackendFactory {
             "oss".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::OSS,
-            )),
+            )?),
         );
-        info!("load [oss] builtin backend ");
+        info!("load [oss] builtin backend");
 
         self.backends.insert(
             "obs".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::OBS,
-            )),
+            )?),
         );
         info!("load [obs] builtin backend");
 
@@ -286,9 +319,15 @@ impl BackendFactory {
             "cos".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::COS,
-            )),
+            )?),
         );
         info!("load [cos] builtin backend");
+
+        self.backends
+            .insert("hdfs".to_string(), Box::new(hdfs::Hdfs::new()));
+        info!("load [hdfs] builtin backend");
+
+        Ok(())
     }
 
     /// load_plugin_backends loads the plugin backends.
@@ -347,7 +386,9 @@ mod tests {
     #[test]
     fn should_load_builtin_backends() {
         let factory = BackendFactory::new(None).unwrap();
-        let expected_backends = vec!["http", "https", "s3", "gs", "abs", "oss", "obs", "cos"];
+        let expected_backends = vec![
+            "http", "https", "s3", "gs", "abs", "oss", "obs", "cos", "hdfs",
+        ];
         for backend in expected_backends {
             assert!(factory.backends.contains_key(backend));
         }
@@ -378,7 +419,7 @@ mod tests {
         let plugin_dir = dir.path().join("non_existent_plugin_dir");
 
         let factory = BackendFactory::new(Some(&plugin_dir)).unwrap();
-        assert_eq!(factory.backends.len(), 8);
+        assert_eq!(factory.backends.len(), 9);
     }
 
     #[test]

@@ -15,7 +15,7 @@
  */
 
 use clap::Parser;
-use dragonfly_api::common::v2::{Download, ObjectStorage, TaskType};
+use dragonfly_api::common::v2::{Download, Hdfs, ObjectStorage, TaskType};
 use dragonfly_api::dfdaemon::v2::{download_task_response, DownloadTaskRequest};
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
@@ -25,12 +25,12 @@ use dragonfly_client::metrics::{
     collect_backend_request_started_metrics,
 };
 use dragonfly_client::tracing::init_tracing;
-use dragonfly_client_backend::{object_storage, BackendFactory, DirEntry, HeadRequest};
+use dragonfly_client_backend::{hdfs, object_storage, BackendFactory, DirEntry, HeadRequest};
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{BackendError, ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_util::http::{header_vec_to_hashmap, header_vec_to_reqwest_headermap};
+use dragonfly_client_util::http::{header_vec_to_hashmap, header_vec_to_headermap};
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
 use path_absolutize::*;
 use percent_encoding::percent_decode_str;
@@ -55,6 +55,9 @@ The full documentation is here: https://d7y.io/docs/next/reference/commands/clie
 Examples:
   # Download a file from HTTP server.
   $ dfget https://<host>:<port>/<path> -O /tmp/file.txt
+
+  # Download a file from HDFS.
+  $ dfget hdfs://<host>:<port>/<path> -O /tmp/file.txt --hdfs-delegation-token=<delegation_token>
   
   # Download a file from Amazon Simple Storage Service(S3).
   $ dfget s3://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret>
@@ -199,6 +202,12 @@ struct Args {
         help = "Specify the predefined ACL for Google Cloud Storage Service(GCS)"
     )]
     storage_predefined_acl: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the delegation token for Hadoop Distributed File System(HDFS)"
+    )]
+    hdfs_delegation_token: Option<String>,
 
     #[arg(
         long,
@@ -564,15 +573,14 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
     args.output = Path::new(&args.output).absolutize()?.into();
     info!("download file to: {}", args.output.to_string_lossy());
 
-    // If download from object storage, the path has end with '/', then download all files in then
-    // directory. Otherwise, download the single file. Only object storage protocol supports
-    // directory download.
+    // If the path has end with '/' and the scheme supports directory download,
+    // then download all files in the directory. Otherwise, download the single file.
     let scheme = args.url.scheme();
-    if object_storage::Scheme::from_str(scheme).is_err() && args.url.path().ends_with('/') {
-        return Err(Error::Unsupported(format!("{} download directory", scheme)));
-    };
-
     if args.url.path().ends_with('/') {
+        if !BackendFactory::supported_download_directory(scheme) {
+            return Err(Error::Unsupported(format!("{} download directory", scheme)));
+        };
+
         return download_dir(args, dfdaemon_download_client).await;
     };
 
@@ -581,7 +589,7 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
 
 /// download_dir downloads all files in the directory.
 async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Result<()> {
-    // Initalize the object storage.
+    // Initialize the object storage config and the hdfs config.
     let object_storage = Some(ObjectStorage {
         access_key_id: args.storage_access_key_id.clone(),
         access_key_secret: args.storage_access_key_secret.clone(),
@@ -592,8 +600,12 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         predefined_acl: args.storage_predefined_acl.clone(),
     });
 
+    let hdfs = Some(Hdfs {
+        delegation_token: args.hdfs_delegation_token.clone(),
+    });
+
     // Get all entries in the directory. If the directory is empty, then return directly.
-    let entries = get_entries(args.clone(), object_storage.clone()).await?;
+    let entries = get_entries(args.clone(), object_storage, hdfs).await?;
     if entries.is_empty() {
         warn!("directory {} is empty", args.url);
         return Ok(());
@@ -689,6 +701,14 @@ async fn download(
         Err(_) => None,
     };
 
+    // Only initialize HDFS when the scheme is HDFS protocol.
+    let hdfs = match args.url.scheme() {
+        hdfs::HDFS_SCHEME => Some(Hdfs {
+            delegation_token: args.hdfs_delegation_token.clone(),
+        }),
+        _ => None,
+    };
+
     // If the `filtered_query_params` is not provided, then use the default value.
     let filtered_query_params = args
         .filtered_query_params
@@ -719,6 +739,7 @@ async fn download(
                 certificate_chain: Vec::new(),
                 prefetch: false,
                 object_storage,
+                hdfs,
             }),
         })
         .await
@@ -771,7 +792,11 @@ async fn download(
 }
 
 /// get_entries gets all entries in the directory.
-async fn get_entries(args: Args, object_storage: Option<ObjectStorage>) -> Result<Vec<DirEntry>> {
+async fn get_entries(
+    args: Args,
+    object_storage: Option<ObjectStorage>,
+    hdfs: Option<Hdfs>,
+) -> Result<Vec<DirEntry>> {
     // Initialize backend factory and build backend.
     let backend_factory = BackendFactory::new(None)?;
     let backend = backend_factory.build(args.url.as_str())?;
@@ -786,22 +811,21 @@ async fn get_entries(args: Args, object_storage: Option<ObjectStorage>) -> Resul
             // NOTE: Mock a task id for head request.
             task_id: Uuid::new_v4().to_string(),
             url: args.url.to_string(),
-            http_header: Some(header_vec_to_reqwest_headermap(
+            http_header: Some(header_vec_to_headermap(
                 args.header.clone().unwrap_or_default(),
             )?),
             timeout: args.timeout,
             client_cert: None,
             object_storage,
+            hdfs,
         })
         .await
-        .map_err(|err| {
+        .inspect_err(|_err| {
             // Collect backend request failure metrics.
             collect_backend_request_failure_metrics(
                 backend.scheme().as_str(),
                 http::Method::HEAD.as_str(),
             );
-
-            err
         })?;
 
     // Return error when response is failed.
@@ -812,11 +836,11 @@ async fn get_entries(args: Args, object_storage: Option<ObjectStorage>) -> Resul
             http::Method::HEAD.as_str(),
         );
 
-        return Err(Error::BackendError(BackendError {
+        return Err(Error::BackendError(Box::new(BackendError {
             message: response.error_message.unwrap_or_default(),
             status_code: Some(response.http_status_code.unwrap_or_default()),
             header: Some(response.http_header.unwrap_or_default()),
-        }));
+        })));
     }
 
     // Collect backend request finished metrics.
@@ -937,8 +961,8 @@ mod tests {
     #[test]
     fn should_return_error_when_args_is_not_valid() {
         let tempdir = tempfile::tempdir().unwrap();
-        let non_exist_dir_path = tempdir.path().join("non_exsit");
-        let non_exist_file_path = non_exist_dir_path.join("non_exsit.txt");
+        let non_exist_dir_path = tempdir.path().join("non_exist");
+        let non_exist_file_path = non_exist_dir_path.join("non_exist.txt");
 
         let file_path = tempdir.path().join("test.txt");
         std::fs::File::create(&file_path).unwrap();

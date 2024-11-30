@@ -28,6 +28,7 @@ hex.workspace = true
 openssl.workspace = true
 blake3.workspace = true
 crc32fast.workspace = true
+crc32c.workspace = true
 base16ct.workspace = true
 base64 = "0.22.1"
 

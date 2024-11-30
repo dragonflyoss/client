@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use super::*;
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::metrics::{
     collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
@@ -21,7 +22,7 @@ use crate::metrics::{
     collect_upload_piece_traffic_metrics,
 };
 use chrono::Utc;
-use dragonfly_api::common::v2::{ObjectStorage, Range, TrafficType};
+use dragonfly_api::common::v2::{Hdfs, ObjectStorage, Range, TrafficType};
 use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
 use dragonfly_client_backend::{BackendFactory, GetRequest};
 use dragonfly_client_config::dfdaemon::Config;
@@ -36,11 +37,9 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{error, info, instrument, Span};
 
-use super::*;
-
 /// MAX_PIECE_COUNT is the maximum piece count. If the piece count is upper
 /// than MAX_PIECE_COUNT, the piece length will be optimized by the file length.
-/// When piece length becames the MAX_PIECE_LENGTH, the piece piece count
+/// When piece length became the MAX_PIECE_LENGTH, the piece count
 /// probably will be upper than MAX_PIECE_COUNT.
 const MAX_PIECE_COUNT: u64 = 500;
 
@@ -110,10 +109,17 @@ impl Piece {
         }
     }
 
+    /// id generates a new piece id.
+    #[inline]
+    #[instrument(skip_all)]
+    pub fn id(&self, task_id: &str, number: u32) -> String {
+        self.storage.piece_id(task_id, number)
+    }
+
     /// get gets a piece from the local storage.
     #[instrument(skip_all)]
-    pub fn get(&self, task_id: &str, number: u32) -> Result<Option<metadata::Piece>> {
-        self.storage.get_piece(task_id, number)
+    pub fn get(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
+        self.storage.get_piece(piece_id)
     }
 
     /// calculate_interested calculates the interested pieces by content_length and range.
@@ -293,18 +299,23 @@ impl Piece {
         }
     }
 
+    /// calculate_piece_count calculates the piece count by piece_length and content_length.
+    pub fn calculate_piece_count(&self, piece_length: u64, content_length: u64) -> u32 {
+        (content_length as f64 / piece_length as f64).ceil() as u32
+    }
+
     /// upload_from_local_peer_into_async_read uploads a single piece from a local peer.
     #[instrument(skip_all, fields(piece_id))]
     pub async fn upload_from_local_peer_into_async_read(
         &self,
+        piece_id: &str,
         task_id: &str,
-        number: u32,
         length: u64,
         range: Option<Range>,
         disable_rate_limit: bool,
     ) -> Result<impl AsyncRead> {
         // Span record the piece_id.
-        Span::current().record("piece_id", self.storage.piece_id(task_id, number));
+        Span::current().record("piece_id", piece_id);
 
         // Acquire the upload rate limiter.
         if !disable_rate_limit {
@@ -313,14 +324,13 @@ impl Piece {
 
         // Upload the piece content.
         self.storage
-            .upload_piece(task_id, number, range)
+            .upload_piece(piece_id, task_id, range)
             .await
-            .map(|reader| {
+            .inspect(|_reader| {
                 collect_upload_piece_traffic_metrics(
                     self.id_generator.task_type(task_id) as i32,
                     length,
                 );
-                reader
             })
     }
 
@@ -328,14 +338,14 @@ impl Piece {
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_local_peer_into_async_read(
         &self,
+        piece_id: &str,
         task_id: &str,
-        number: u32,
         length: u64,
         range: Option<Range>,
         disable_rate_limit: bool,
     ) -> Result<impl AsyncRead> {
         // Span record the piece_id.
-        Span::current().record("piece_id", self.storage.piece_id(task_id, number));
+        Span::current().record("piece_id", piece_id);
 
         // Acquire the download rate limiter.
         if !disable_rate_limit {
@@ -343,7 +353,7 @@ impl Piece {
         }
 
         // Upload the piece content.
-        self.storage.upload_piece(task_id, number, range).await
+        self.storage.upload_piece(piece_id, task_id, range).await
     }
 
     /// download_from_local_peer downloads a single piece from a local peer. Fake the download piece
@@ -361,6 +371,7 @@ impl Piece {
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_remote_peer(
         &self,
+        piece_id: &str,
         host_id: &str,
         task_id: &str,
         number: u32,
@@ -368,13 +379,16 @@ impl Piece {
         parent: piece_collector::CollectedParent,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
-        Span::current().record("piece_id", self.storage.piece_id(task_id, number));
+        Span::current().record("piece_id", piece_id);
 
         // Acquire the download rate limiter.
         self.download_rate_limiter.acquire(length as usize).await;
 
         // Record the start of downloading piece.
-        let piece = self.storage.download_piece_started(task_id, number).await?;
+        let piece = self
+            .storage
+            .download_piece_started(piece_id, number)
+            .await?;
 
         // If the piece is downloaded by the other thread,
         // return the piece directly.
@@ -385,7 +399,7 @@ impl Piece {
         // Create a dfdaemon client.
         let host = parent.host.clone().ok_or_else(|| {
             error!("peer host is empty");
-            if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                 error!("set piece metadata failed: {}", err)
             };
 
@@ -401,7 +415,7 @@ impl Piece {
                 "create dfdaemon upload client from {}:{} failed: {}",
                 host.ip, host.port, err
             );
-            if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                 error!("set piece metadata failed: {}", err)
             };
 
@@ -421,7 +435,7 @@ impl Piece {
             .await
             .map_err(|err| {
                 error!("download piece failed: {}", err);
-                if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                     error!("set piece metadata failed: {}", err)
                 };
 
@@ -430,7 +444,7 @@ impl Piece {
 
         let piece = response.piece.ok_or_else(|| {
             error!("piece is empty");
-            if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                 error!("set piece metadata failed: {}", err)
             };
 
@@ -440,7 +454,7 @@ impl Piece {
         // Get the piece content.
         let content = piece.content.ok_or_else(|| {
             error!("piece content is empty");
-            if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                 error!("set piece metadata failed: {}", err)
             };
 
@@ -448,41 +462,36 @@ impl Piece {
         })?;
 
         // Record the finish of downloading piece.
-        self.storage
+        match self
+            .storage
             .download_piece_from_remote_peer_finished(
+                piece_id,
                 task_id,
-                number,
                 piece.offset,
                 piece.digest.as_str(),
                 parent.id.as_str(),
                 &mut content.as_slice(),
             )
             .await
-            .map_err(|err| {
-                // Record the failure of downloading piece,
-                // If storage fails to record piece.
-                error!("download piece finished: {}", err);
-                if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
-                    error!("set piece metadata failed: {}", err)
-                };
-
-                err
-            })?;
-
-        self.storage
-            .get_piece(task_id, number)?
-            .ok_or_else(|| {
-                error!("piece not found");
-                Error::PieceNotFound(number.to_string())
-            })
-            .map(|piece| {
+        {
+            Ok(piece) => {
                 collect_download_piece_traffic_metrics(
                     &TrafficType::RemotePeer,
                     self.id_generator.task_type(task_id) as i32,
                     length,
                 );
-                piece
-            })
+
+                Ok(piece)
+            }
+            Err(err) => {
+                error!("download piece finished: {}", err);
+                if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
+                    error!("set piece metadata failed: {}", err)
+                };
+
+                Err(err)
+            }
+        }
     }
 
     /// download_from_source downloads a single piece from the source.
@@ -490,6 +499,7 @@ impl Piece {
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_source(
         &self,
+        piece_id: &str,
         task_id: &str,
         number: u32,
         url: &str,
@@ -497,15 +507,19 @@ impl Piece {
         length: u64,
         request_header: HeaderMap,
         object_storage: Option<ObjectStorage>,
+        hdfs: Option<Hdfs>,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
-        Span::current().record("piece_id", self.storage.piece_id(task_id, number));
+        Span::current().record("piece_id", piece_id);
 
         // Acquire the download rate limiter.
         self.download_rate_limiter.acquire(length as usize).await;
 
         // Record the start of downloading piece.
-        let piece = self.storage.download_piece_started(task_id, number).await?;
+        let piece = self
+            .storage
+            .download_piece_started(piece_id, number)
+            .await?;
 
         // If the piece is downloaded by the other thread,
         // return the piece directly.
@@ -525,7 +539,7 @@ impl Piece {
         // Download the piece from the source.
         let backend = self.backend_factory.build(url).map_err(|err| {
             error!("build backend failed: {}", err);
-            if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                 error!("set piece metadata failed: {}", err)
             };
 
@@ -543,7 +557,7 @@ impl Piece {
         let mut response = backend
             .get(GetRequest {
                 task_id: task_id.to_string(),
-                piece_id: self.storage.piece_id(task_id, number),
+                piece_id: piece_id.to_string(),
                 url: url.to_string(),
                 range: Some(Range {
                     start: offset,
@@ -553,6 +567,7 @@ impl Piece {
                 timeout: self.config.download.piece_timeout,
                 client_cert: None,
                 object_storage,
+                hdfs,
             })
             .await
             .map_err(|err| {
@@ -564,7 +579,7 @@ impl Piece {
 
                 // if the request is failed.
                 error!("backend get failed: {}", err);
-                if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
+                if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                     error!("set piece metadata failed: {}", err)
                 };
 
@@ -589,12 +604,12 @@ impl Piece {
             let error_message = response.error_message.unwrap_or_default();
             error!("backend get failed: {} {}", error_message, buffer.as_str());
 
-            self.storage.download_piece_failed(task_id, number)?;
-            return Err(Error::BackendError(BackendError {
+            self.storage.download_piece_failed(piece_id)?;
+            return Err(Error::BackendError(Box::new(BackendError {
                 message: error_message,
                 status_code: Some(response.http_status_code.unwrap_or_default()),
                 header: Some(response.http_header.unwrap_or_default()),
-            }));
+            })));
         }
 
         // Collect the backend request finished metrics.
@@ -605,40 +620,35 @@ impl Piece {
         );
 
         // Record the finish of downloading piece.
-        self.storage
+        match self
+            .storage
             .download_piece_from_source_finished(
+                piece_id,
                 task_id,
-                number,
                 offset,
                 length,
                 &mut response.reader,
             )
             .await
-            .map_err(|err| {
-                // Record the failure of downloading piece,
-                // If storage fails to record piece.
-                error!("download piece finished: {}", err);
-                if let Some(err) = self.storage.download_piece_failed(task_id, number).err() {
-                    error!("set piece metadata failed: {}", err)
-                };
-
-                err
-            })?;
-
-        self.storage
-            .get_piece(task_id, number)?
-            .ok_or_else(|| {
-                error!("piece not found");
-                Error::PieceNotFound(number.to_string())
-            })
-            .map(|piece| {
+        {
+            Ok(piece) => {
                 collect_download_piece_traffic_metrics(
                     &TrafficType::BackToSource,
                     self.id_generator.task_type(task_id) as i32,
                     length,
                 );
-                piece
-            })
+
+                Ok(piece)
+            }
+            Err(err) => {
+                error!("download piece finished: {}", err);
+                if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
+                    error!("set piece metadata failed: {}", err)
+                };
+
+                Err(err)
+            }
+        }
     }
 }
 

@@ -17,51 +17,91 @@
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::tls::NoVerifier;
 use futures::TryStreamExt;
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
+use reqwest_tracing::TracingMiddleware;
 use rustls_pki_types::CertificateDer;
 use std::io::{Error as IOError, ErrorKind};
 use tokio_util::io::StreamReader;
-use tracing::{error, info, instrument};
+use tracing::{debug, error, instrument};
+
+/// HTTP_SCHEME is the HTTP scheme.
+pub const HTTP_SCHEME: &str = "http";
+
+/// HTTPS_SCHEME is the HTTPS scheme.
+pub const HTTPS_SCHEME: &str = "https";
 
 /// HTTP is the HTTP backend.
 pub struct HTTP {
     /// scheme is the scheme of the HTTP backend.
     scheme: String,
+
+    /// client is the reqwest client.
+    client: ClientWithMiddleware,
 }
 
 /// HTTP implements the http interface.
 impl HTTP {
     /// new returns a new HTTP.
     #[instrument(skip_all)]
-    pub fn new(scheme: &str) -> HTTP {
-        Self {
+    pub fn new(scheme: &str) -> Result<HTTP> {
+        // Default TLS client config with no validation.
+        let client_config_builder = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(NoVerifier::new())
+            .with_no_client_auth();
+
+        let client = reqwest::Client::builder()
+            .use_preconfigured_tls(client_config_builder)
+            .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
+            .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
+            .build()?;
+
+        let retry_policy =
+            ExponentialBackoff::builder().build_with_max_retries(super::MAX_RETRY_TIMES);
+        let client = ClientBuilder::new(client)
+            .with(TracingMiddleware::default())
+            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+            .build();
+
+        Ok(Self {
             scheme: scheme.to_string(),
-        }
+            client,
+        })
     }
 
     /// client returns a new reqwest client.
     #[instrument(skip_all)]
-    fn client(&self, client_cert: Option<Vec<CertificateDer<'static>>>) -> Result<reqwest::Client> {
-        let client_config_builder = match client_cert.as_ref() {
+    fn client(
+        &self,
+        client_cert: Option<Vec<CertificateDer<'static>>>,
+    ) -> Result<ClientWithMiddleware> {
+        match client_cert.as_ref() {
             Some(client_cert) => {
                 let mut root_cert_store = rustls::RootCertStore::empty();
                 root_cert_store.add_parsable_certificates(client_cert.to_owned());
 
                 // TLS client config using the custom CA store for lookups.
-                rustls::ClientConfig::builder()
+                let client_config_builder = rustls::ClientConfig::builder()
                     .with_root_certificates(root_cert_store)
-                    .with_no_client_auth()
-            }
-            // Default TLS client config with native roots.
-            None => rustls::ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(NoVerifier::new())
-                .with_no_client_auth(),
-        };
+                    .with_no_client_auth();
 
-        let client = reqwest::Client::builder()
-            .use_preconfigured_tls(client_config_builder)
-            .build()?;
-        Ok(client)
+                let client = reqwest::Client::builder()
+                    .use_preconfigured_tls(client_config_builder)
+                    .build()?;
+
+                let retry_policy =
+                    ExponentialBackoff::builder().build_with_max_retries(super::MAX_RETRY_TIMES);
+                let client = ClientBuilder::new(client)
+                    .with(TracingMiddleware::default())
+                    .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+                    .build();
+
+                Ok(client)
+            }
+            // Default TLS client config with no validation.
+            None => Ok(self.client.clone()),
+        }
     }
 }
 
@@ -77,7 +117,7 @@ impl super::Backend for HTTP {
     /// head gets the header of the request.
     #[instrument(skip_all)]
     async fn head(&self, request: super::HeadRequest) -> Result<super::HeadResponse> {
-        info!(
+        debug!(
             "head request {} {}: {:?}",
             request.task_id, request.url, request.http_header
         );
@@ -106,14 +146,18 @@ impl super::Backend for HTTP {
 
         let header = response.headers().clone();
         let status_code = response.status();
-        info!(
-            "head response {} {}: {:?} {:?}",
-            request.task_id, request.url, status_code, header
+        let content_length = response.content_length();
+        debug!(
+            "head response {} {}: {:?} {:?} {:?}",
+            request.task_id, request.url, status_code, content_length, header
         );
+
+        // Drop the response body to avoid reading it.
+        drop(response);
 
         Ok(super::HeadResponse {
             success: status_code.is_success(),
-            content_length: response.content_length(),
+            content_length,
             http_header: Some(header),
             http_status_code: Some(status_code),
             error_message: Some(status_code.to_string()),
@@ -124,7 +168,7 @@ impl super::Backend for HTTP {
     /// get gets the content of the request.
     #[instrument(skip_all)]
     async fn get(&self, request: super::GetRequest) -> Result<super::GetResponse<super::Body>> {
-        info!(
+        debug!(
             "get request {} {} {}: {:?}",
             request.task_id, request.piece_id, request.url, request.http_header
         );
@@ -153,7 +197,8 @@ impl super::Backend for HTTP {
                 .bytes_stream()
                 .map_err(|err| IOError::new(ErrorKind::Other, err)),
         ));
-        info!(
+
+        debug!(
             "get response {} {}: {:?} {:?}",
             request.task_id, request.piece_id, status_code, header
         );
@@ -168,17 +213,12 @@ impl super::Backend for HTTP {
     }
 }
 
-/// Default implements the Default trait.
-impl Default for HTTP {
-    /// default returns a new default HTTP.
-    fn default() -> Self {
-        Self::new("http")
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::{http::HTTP, Backend, GetRequest, HeadRequest};
+    use crate::{
+        http::{HTTP, HTTPS_SCHEME, HTTP_SCHEME},
+        Backend, GetRequest, HeadRequest,
+    };
     use dragonfly_client_util::tls::{load_certs_from_pem, load_key_from_pem};
     use hyper_util::rt::{TokioExecutor, TokioIo};
     use reqwest::{header::HeaderMap, StatusCode};
@@ -347,7 +387,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let resp = HTTP::new("http")
+        let resp = HTTP::new(HTTP_SCHEME)
+            .unwrap()
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: format!("{}/head", server.uri()),
@@ -355,6 +396,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: std::time::Duration::from_secs(5),
                 client_cert: None,
                 object_storage: None,
+                hdfs: None,
             })
             .await
             .unwrap();
@@ -374,7 +416,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let resp = HTTP::new("http")
+        let resp = HTTP::new(HTTP_SCHEME)
+            .unwrap()
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: format!("{}/head", server.uri()),
@@ -382,6 +425,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: std::time::Duration::from_secs(5),
                 client_cert: None,
                 object_storage: None,
+                hdfs: None,
             })
             .await;
 
@@ -401,7 +445,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let mut resp = HTTP::new("http")
+        let mut resp = HTTP::new(HTTP_SCHEME)
+            .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
                 piece_id: "test".to_string(),
@@ -411,6 +456,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: std::time::Duration::from_secs(5),
                 client_cert: None,
                 object_storage: None,
+                hdfs: None,
             })
             .await
             .unwrap();
@@ -422,7 +468,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_get_head_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new("https")
+        let resp = HTTP::new(HTTPS_SCHEME)
+            .unwrap()
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
@@ -430,6 +477,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: Duration::from_secs(5),
                 client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
                 object_storage: None,
+                hdfs: None,
             })
             .await
             .unwrap();
@@ -440,7 +488,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_return_error_response_when_head_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new("https")
+        let resp = HTTP::new(HTTPS_SCHEME)
+            .unwrap()
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
@@ -448,6 +497,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: Duration::from_secs(5),
                 client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
                 object_storage: None,
+                hdfs: None,
             })
             .await;
 
@@ -457,7 +507,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_get_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let mut resp = HTTP::new("https")
+        let mut resp = HTTP::new(HTTPS_SCHEME)
+            .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
                 piece_id: "test".to_string(),
@@ -467,6 +518,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: std::time::Duration::from_secs(5),
                 client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
                 object_storage: None,
+                hdfs: None,
             })
             .await
             .unwrap();
@@ -478,7 +530,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_return_error_response_when_get_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new("https")
+        let resp = HTTP::new(HTTPS_SCHEME)
+            .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
                 piece_id: "test".to_string(),
@@ -488,6 +541,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: std::time::Duration::from_secs(5),
                 client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
                 object_storage: None,
+                hdfs: None,
             })
             .await;
 
@@ -497,7 +551,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_get_head_response_with_no_verifier() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new("https")
+        let resp = HTTP::new(HTTPS_SCHEME)
+            .unwrap()
             .head(HeadRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
@@ -505,6 +560,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: Duration::from_secs(5),
                 client_cert: None,
                 object_storage: None,
+                hdfs: None,
             })
             .await
             .unwrap();
@@ -515,8 +571,9 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_get_response_with_no_verifier() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let http_backend = HTTP::new("https");
+        let http_backend = HTTP::new(HTTPS_SCHEME);
         let mut resp = http_backend
+            .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
                 piece_id: "test".to_string(),
@@ -526,6 +583,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 timeout: std::time::Duration::from_secs(5),
                 client_cert: None,
                 object_storage: None,
+                hdfs: None,
             })
             .await
             .unwrap();
