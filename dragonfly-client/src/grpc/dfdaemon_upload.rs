@@ -41,6 +41,7 @@ use dragonfly_client_core::{
 use dragonfly_client_util::http::{
     get_range, hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap,
 };
+use tonic::service::interceptor::InterceptedService;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -55,6 +56,8 @@ use tonic::{
 };
 use tracing::{error, info, instrument, Instrument, Span};
 use url::Url;
+
+use super::tracing_grpc::TracingInterceptor;
 
 /// DfdaemonUploadServer is the grpc server of the upload.
 pub struct DfdaemonUploadServer {
@@ -1092,7 +1095,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 #[derive(Clone)]
 pub struct DfdaemonUploadClient {
     /// client is the grpc client of the dfdaemon upload.
-    pub client: DfdaemonUploadGRPCClient<Channel>,
+    pub client: DfdaemonUploadGRPCClient<InterceptedService<Channel, TracingInterceptor>>,
 }
 
 /// DfdaemonUploadClient implements the dfdaemon upload grpc client.
@@ -1141,7 +1144,7 @@ impl DfdaemonUploadClient {
                 .or_err(ErrorType::ConnectError)?,
         };
 
-        let client = DfdaemonUploadGRPCClient::new(channel)
+        let client = DfdaemonUploadGRPCClient::with_interceptor(channel, TracingInterceptor)
             .send_compressed(CompressionEncoding::Zstd)
             .accept_compressed(CompressionEncoding::Zstd)
             .max_decoding_message_size(usize::MAX)

@@ -46,6 +46,7 @@ use dragonfly_client_util::{
     http::{get_range, hashmap_to_reqwest_headermap, reqwest_headermap_to_hashmap},
 };
 use hyper_util::rt::TokioIo;
+use tonic::service::interceptor::InterceptedService;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -60,6 +61,8 @@ use tonic::{
 };
 use tower::service_fn;
 use tracing::{error, info, instrument, Instrument, Span};
+
+use super::tracing_grpc::TracingInterceptor;
 
 /// DfdaemonDownloadServer is the grpc unix server of the download.
 pub struct DfdaemonDownloadServer {
@@ -991,7 +994,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 #[derive(Clone)]
 pub struct DfdaemonDownloadClient {
     /// client is the grpc client of the dfdaemon.
-    pub client: DfdaemonDownloadGRPCClient<Channel>,
+    pub client: DfdaemonDownloadGRPCClient<InterceptedService<Channel, TracingInterceptor>>,
 }
 
 /// DfdaemonDownloadClient implements the grpc client of the dfdaemon download.
@@ -1017,7 +1020,7 @@ impl DfdaemonDownloadClient {
                 err
             })
             .or_err(ErrorType::ConnectError)?;
-        let client = DfdaemonDownloadGRPCClient::new(channel)
+        let client = DfdaemonDownloadGRPCClient::with_interceptor(channel, TracingInterceptor)
             .send_compressed(CompressionEncoding::Zstd)
             .accept_compressed(CompressionEncoding::Zstd)
             .max_decoding_message_size(usize::MAX)
