@@ -25,16 +25,18 @@ use dragonfly_client_core::{
     Error, Result,
 };
 use std::sync::Arc;
-use tonic::transport::Channel;
+use tonic::{service::interceptor::InterceptedService, transport::Channel};
 use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{error, instrument, warn};
 use url::Url;
+
+use super::tracing_grpc::TracingInterceptor;
 
 /// ManagerClient is a wrapper of ManagerGRPCClient.
 #[derive(Clone)]
 pub struct ManagerClient {
     /// client is the grpc client of the manager.
-    pub client: ManagerGRPCClient<Channel>,
+    pub client: ManagerGRPCClient<InterceptedService<Channel, TracingInterceptor>>,
 }
 
 /// ManagerClient implements the grpc client of the manager.
@@ -99,7 +101,7 @@ impl ManagerClient {
                 .or_err(ErrorType::ConnectError)?,
         };
 
-        let client = ManagerGRPCClient::new(channel)
+        let client = ManagerGRPCClient::with_interceptor(channel, TracingInterceptor)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);
         Ok(Self { client })

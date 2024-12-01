@@ -54,12 +54,15 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
 use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
+use tonic::service::interceptor::InterceptedService;
 use tonic::{
     transport::{Channel, Endpoint, Server, Uri},
     Code, Request, Response, Status,
 };
 use tower::service_fn;
 use tracing::{debug, error, info, instrument, Instrument, Span};
+
+use super::tracing_grpc::TracingInterceptor;
 
 /// DfdaemonDownloadServer is the grpc unix server of the download.
 pub struct DfdaemonDownloadServer {
@@ -982,7 +985,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 #[derive(Clone)]
 pub struct DfdaemonDownloadClient {
     /// client is the grpc client of the dfdaemon.
-    pub client: DfdaemonDownloadGRPCClient<Channel>,
+    pub client: DfdaemonDownloadGRPCClient<InterceptedService<Channel, TracingInterceptor>>,
 }
 
 /// DfdaemonDownloadClient implements the grpc client of the dfdaemon download.
@@ -1014,7 +1017,8 @@ impl DfdaemonDownloadClient {
                 err
             })
             .or_err(ErrorType::ConnectError)?;
-        let client = DfdaemonDownloadGRPCClient::new(channel)
+
+        let client = DfdaemonDownloadGRPCClient::with_interceptor(channel, TracingInterceptor)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
