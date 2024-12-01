@@ -21,8 +21,8 @@ use dragonfly_client_core::{
 use hyper_util::rt::TokioIo;
 use std::path::PathBuf;
 use tokio::net::UnixStream;
-use tonic::{service::interceptor::InterceptedService, transport::ClientTlsConfig};
 use tonic::transport::{Channel, Endpoint, Uri};
+use tonic::{service::interceptor::InterceptedService, transport::ClientTlsConfig};
 use tonic_health::pb::{
     health_client::HealthClient as HealthGRPCClient, HealthCheckRequest, HealthCheckResponse,
 };

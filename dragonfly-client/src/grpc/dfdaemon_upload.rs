@@ -39,7 +39,6 @@ use dragonfly_client_core::{
     Error as ClientError, Result as ClientResult,
 };
 use dragonfly_client_util::http::{get_range, hashmap_to_headermap, headermap_to_hashmap};
-use tonic::service::interceptor::InterceptedService;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -48,6 +47,7 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
 use tokio_stream::wrappers::ReceiverStream;
+use tonic::service::interceptor::InterceptedService;
 use tonic::{
     transport::{Channel, Server},
     Code, Request, Response, Status,

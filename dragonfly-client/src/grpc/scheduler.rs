@@ -32,12 +32,12 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
 use hashring::HashRing;
-use tonic::service::interceptor::InterceptedService;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
+use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 use tracing::{error, info, instrument, Instrument};
 use url::Url;
@@ -520,9 +520,11 @@ impl SchedulerClient {
                 .or_err(ErrorType::ConnectError)?,
         };
 
-        Ok(SchedulerGRPCClient::with_interceptor(channel, TracingInterceptor)
-            .max_decoding_message_size(usize::MAX)
-            .max_encoding_message_size(usize::MAX))
+        Ok(
+            SchedulerGRPCClient::with_interceptor(channel, TracingInterceptor)
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX),
+        )
     }
 
     /// update_available_scheduler_addrs updates the addresses of available schedulers.

@@ -46,7 +46,6 @@ use dragonfly_client_util::{
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
 };
 use hyper_util::rt::TokioIo;
-use tonic::service::interceptor::InterceptedService;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -55,6 +54,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
 use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
+use tonic::service::interceptor::InterceptedService;
 use tonic::{
     transport::{Channel, Endpoint, Server, Uri},
     Code, Request, Response, Status,
