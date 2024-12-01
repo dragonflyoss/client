@@ -47,12 +47,15 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
 use tokio_stream::wrappers::ReceiverStream;
+use tonic::service::interceptor::InterceptedService;
 use tonic::{
     transport::{Channel, Server},
     Code, Request, Response, Status,
 };
 use tracing::{debug, error, info, instrument, Instrument, Span};
 use url::Url;
+
+use super::tracing_grpc::TracingInterceptor;
 
 /// DfdaemonUploadServer is the grpc server of the upload.
 pub struct DfdaemonUploadServer {
@@ -1086,7 +1089,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 #[derive(Clone)]
 pub struct DfdaemonUploadClient {
     /// client is the grpc client of the dfdaemon upload.
-    pub client: DfdaemonUploadGRPCClient<Channel>,
+    pub client: DfdaemonUploadGRPCClient<InterceptedService<Channel, TracingInterceptor>>,
 }
 
 /// DfdaemonUploadClient implements the dfdaemon upload grpc client.
@@ -1137,7 +1140,7 @@ impl DfdaemonUploadClient {
                 .or_err(ErrorType::ConnectError)?,
         };
 
-        let client = DfdaemonUploadGRPCClient::new(channel)
+        let client = DfdaemonUploadGRPCClient::with_interceptor(channel, TracingInterceptor)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);
         Ok(Self { client })

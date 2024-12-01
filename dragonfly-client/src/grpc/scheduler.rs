@@ -16,6 +16,7 @@
 
 // use crate::dynconfig::Dynconfig;
 use crate::dynconfig::Dynconfig;
+use crate::grpc::tracing_grpc::TracingInterceptor;
 use dragonfly_api::common::v2::{Peer, PersistentCachePeer, PersistentCacheTask, Task};
 use dragonfly_api::manager::v2::Scheduler;
 use dragonfly_api::scheduler::v2::{
@@ -36,6 +37,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
+use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 use tracing::{error, info, instrument, Instrument};
 use url::Url;
@@ -191,7 +193,7 @@ impl SchedulerClient {
                     })
                     .or_err(ErrorType::ConnectError)?;
 
-                let mut client = SchedulerGRPCClient::new(channel)
+                let mut client = SchedulerGRPCClient::with_interceptor(channel, TracingInterceptor)
                     .max_decoding_message_size(usize::MAX)
                     .max_encoding_message_size(usize::MAX);
                 client.announce_host(request).await?;
@@ -245,7 +247,7 @@ impl SchedulerClient {
                     })
                     .or_err(ErrorType::ConnectError)?;
 
-                let mut client = SchedulerGRPCClient::new(channel)
+                let mut client = SchedulerGRPCClient::with_interceptor(channel, TracingInterceptor)
                     .max_decoding_message_size(usize::MAX)
                     .max_encoding_message_size(usize::MAX);
                 client.announce_host(request).await?;
@@ -304,7 +306,7 @@ impl SchedulerClient {
                     })
                     .or_err(ErrorType::ConnectError)?;
 
-                let mut client = SchedulerGRPCClient::new(channel)
+                let mut client = SchedulerGRPCClient::with_interceptor(channel, TracingInterceptor)
                     .max_decoding_message_size(usize::MAX)
                     .max_encoding_message_size(usize::MAX);
                 client.delete_host(request).await?;
@@ -458,7 +460,7 @@ impl SchedulerClient {
         &self,
         task_id: &str,
         peer_id: Option<&str>,
-    ) -> Result<SchedulerGRPCClient<Channel>> {
+    ) -> Result<SchedulerGRPCClient<InterceptedService<Channel, TracingInterceptor>>> {
         // Update scheduler addresses of the client.
         self.update_available_scheduler_addrs().await?;
 
@@ -518,9 +520,11 @@ impl SchedulerClient {
                 .or_err(ErrorType::ConnectError)?,
         };
 
-        Ok(SchedulerGRPCClient::new(channel)
-            .max_decoding_message_size(usize::MAX)
-            .max_encoding_message_size(usize::MAX))
+        Ok(
+            SchedulerGRPCClient::with_interceptor(channel, TracingInterceptor)
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX),
+        )
     }
 
     /// update_available_scheduler_addrs updates the addresses of available schedulers.

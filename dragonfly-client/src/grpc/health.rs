@@ -21,19 +21,21 @@ use dragonfly_client_core::{
 use hyper_util::rt::TokioIo;
 use std::path::PathBuf;
 use tokio::net::UnixStream;
-use tonic::transport::ClientTlsConfig;
 use tonic::transport::{Channel, Endpoint, Uri};
+use tonic::{service::interceptor::InterceptedService, transport::ClientTlsConfig};
 use tonic_health::pb::{
     health_client::HealthClient as HealthGRPCClient, HealthCheckRequest, HealthCheckResponse,
 };
 use tower::service_fn;
 use tracing::{error, instrument};
 
+use super::tracing_grpc::TracingInterceptor;
+
 /// HealthClient is a wrapper of HealthGRPCClient.
 #[derive(Clone)]
 pub struct HealthClient {
     /// client is the grpc client of the certificate.
-    client: HealthGRPCClient<Channel>,
+    client: HealthGRPCClient<InterceptedService<Channel, TracingInterceptor>>,
 }
 
 /// HealthClient implements the grpc client of the health.
@@ -73,7 +75,7 @@ impl HealthClient {
                 .or_err(ErrorType::ConnectError)?,
         };
 
-        let client = HealthGRPCClient::new(channel)
+        let client = HealthGRPCClient::with_interceptor(channel, TracingInterceptor)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
@@ -99,7 +101,7 @@ impl HealthClient {
                 err
             })
             .or_err(ErrorType::ConnectError)?;
-        let client = HealthGRPCClient::new(channel)
+        let client = HealthGRPCClient::with_interceptor(channel, TracingInterceptor)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
