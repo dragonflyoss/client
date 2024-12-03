@@ -62,7 +62,7 @@ use tonic::{
 use tower::service_fn;
 use tracing::{debug, error, info, instrument, Instrument, Span};
 
-use super::tracing_grpc::TracingInterceptor;
+use super::interceptor::TracingInterceptor;
 
 /// DfdaemonDownloadServer is the grpc unix server of the download.
 pub struct DfdaemonDownloadServer {
