@@ -55,7 +55,7 @@ use tonic::{
 use tracing::{debug, error, info, instrument, Instrument, Span};
 use url::Url;
 
-use super::tracing_grpc::TracingInterceptor;
+use super::interceptor::TracingInterceptor;
 
 /// DfdaemonUploadServer is the grpc server of the upload.
 pub struct DfdaemonUploadServer {

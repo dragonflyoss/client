@@ -30,7 +30,7 @@ use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{error, instrument, warn};
 use url::Url;
 
-use super::tracing_grpc::TracingInterceptor;
+use super::interceptor::TracingInterceptor;
 
 /// ManagerClient is a wrapper of ManagerGRPCClient.
 #[derive(Clone)]

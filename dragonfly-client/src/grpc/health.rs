@@ -29,7 +29,7 @@ use tonic_health::pb::{
 use tower::service_fn;
 use tracing::{error, instrument};
 
-use super::tracing_grpc::TracingInterceptor;
+use super::interceptor::TracingInterceptor;
 
 /// HealthClient is a wrapper of HealthGRPCClient.
 #[derive(Clone)]
