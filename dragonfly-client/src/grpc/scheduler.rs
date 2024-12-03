@@ -14,9 +14,7 @@
  * limitations under the License.
  */
 
-// use crate::dynconfig::Dynconfig;
 use crate::dynconfig::Dynconfig;
-use crate::grpc::tracing_grpc::TracingInterceptor;
 use dragonfly_api::common::v2::{Peer, PersistentCachePeer, PersistentCacheTask, Task};
 use dragonfly_api::manager::v2::Scheduler;
 use dragonfly_api::scheduler::v2::{
@@ -41,6 +39,8 @@ use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 use tracing::{error, info, instrument, Instrument};
 use url::Url;
+
+use super::interceptor::TracingInterceptor;
 
 /// VNode is the virtual node of the hashring.
 #[derive(Debug, Copy, Clone, Hash, PartialEq)]
