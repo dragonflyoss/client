@@ -74,7 +74,7 @@ jobs:
       - name: Build archive client(DEB)
         shell: bash
         run: |
-          binary_name="client"
+          binary_name="dragonfly-client"
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
           cargo deb -p dragonfly-client --no-build --target ${{ matrix.target }} --variant ${{ matrix.target }} --compress-type gzip --output $dirname.deb
           echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
@@ -82,15 +82,15 @@ jobs:
       - name: Build archive client(RPM)
         shell: bash
         run: |
-          binary_name="client"
+          binary_name="dragonfly-client"
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --payload-compress gzip --output $dirname.rpm
+          cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --payload-compress none --output $dirname.rpm
           echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
 
       - name: Build archive client(TAR)
         shell: bash
         run: |
-          binary_name="client"
+          binary_name="dragonfly-client"
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
           mkdir -p "$dirname"
           mv "target/${{ matrix.target }}/release/dfget" "$dirname"

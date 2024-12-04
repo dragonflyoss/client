@@ -334,6 +334,7 @@ assets = [
   { source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true },
   { source = "../README.md", dest = "/usr/share/doc/client/README.md", mode = "644", doc = true },
 ]
+auto-req = "no"
 
 [package.metadata.generate-rpm.variants.aarch64-unknown-linux-gnu]
 assets = [
@@ -360,3 +361,4 @@ assets = [
   { source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true },
   { source = "../README.md", dest = "/usr/share/doc/client/README.md", mode = "644", doc = true },
 ]
+auto-req = "no"
