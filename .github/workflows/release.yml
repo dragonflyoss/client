@@ -69,7 +69,7 @@ jobs:
       - name: Build binaries
         shell: bash
         run: |
-            cargo build --release --bins --target ${{ matrix.target }}
+            cargo build --release --bins --workspace --exclude hdfs --target ${{ matrix.target }}
 
       - name: Build archive client(DEB)
         shell: bash

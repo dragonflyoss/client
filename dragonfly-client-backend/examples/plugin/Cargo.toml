@@ -11,7 +11,7 @@ edition.workspace = true
 publish = false
 
 [lib]
-crate-type = ["lib"]
+crate-type = ["dylib"]
 
 [dependencies]
 dragonfly-client-core.workspace = true
