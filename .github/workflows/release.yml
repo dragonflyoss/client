@@ -76,7 +76,7 @@ jobs:
         run: |
           binary_name="client"
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          cargo deb -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.deb
+          cargo deb -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --compress-type gzip --output $dirname.deb
           echo "CLIENT_DEB_ASSET=$dirname.deb" >> $GITHUB_ENV
 
       - name: Build archive client(RPM)
@@ -84,7 +84,7 @@ jobs:
         run: |
           binary_name="client"
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
-          cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --output $dirname.rpm
+          cargo generate-rpm -p dragonfly-client --target ${{ matrix.target }} --variant ${{ matrix.target }} --payload-compress gzip --output $dirname.rpm
           echo "CLIENT_RPM_ASSET=$dirname.rpm" >> $GITHUB_ENV
 
       - name: Build archive client(TAR)
