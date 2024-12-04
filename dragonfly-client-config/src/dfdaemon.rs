@@ -225,6 +225,14 @@ pub fn default_proxy_read_buffer_size() -> usize {
     32 * 1024
 }
 
+/// default_prefetch_rate_limit is the default rate limit of the prefetch speed in GiB/Mib/Kib per second.
+/// The prefetch request has lower priority so limit the rate to avoid occupying the bandwidth impact other download tasks.
+#[inline]
+fn default_prefetch_rate_limit() -> ByteSize {
+    // Default rate limit is 2GiB/s.
+    ByteSize::gib(2)
+}
+
 /// default_s3_filtered_query_params is the default filtered query params with s3 protocol to generate the task id.
 #[inline]
 fn s3_filtered_query_params() -> Vec<String> {
@@ -1089,6 +1097,10 @@ pub struct Proxy {
     /// prefetch pre-downloads full of the task when download with range request.
     pub prefetch: bool,
 
+    /// rate_limit is the rate limit of the prefetch speed in GiB/Mib/Kib per second.
+    #[serde(with = "bytesize_serde", default = "default_prefetch_rate_limit")]
+    pub prefetch_rate_limit: ByteSize,
+
     /// cache_capacity is the capacity of the cache by LRU algorithm for HTTP proxy, default is 150.
     /// The cache is used to store the hot piece content of the task, piece length is 4MB~16MB.
     /// If the capacity is 150, the cache size is 600MB~2.4GB, need to adjust according to the
@@ -1110,6 +1122,7 @@ impl Default for Proxy {
             registry_mirror: RegistryMirror::default(),
             disable_back_to_source: false,
             prefetch: false,
+            prefetch_rate_limit: default_prefetch_rate_limit(),
             cache_capacity: default_proxy_cache_capacity(),
             read_buffer_size: default_proxy_read_buffer_size(),
         }
