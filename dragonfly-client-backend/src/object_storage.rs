@@ -181,6 +181,10 @@ impl ObjectStorage {
     pub fn new(scheme: Scheme) -> ClientResult<ObjectStorage> {
         // Initialize the reqwest client.
         let client = reqwest::Client::builder()
+            .gzip(true)
+            .brotli(true)
+            .zstd(true)
+            .deflate(true)
             .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
             .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
             .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
