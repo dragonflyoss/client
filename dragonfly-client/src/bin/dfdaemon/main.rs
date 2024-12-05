@@ -37,6 +37,7 @@ use dragonfly_client_util::id_generator::IDGenerator;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use termion::{color, style};
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
 use tracing::{error, info, Level};
@@ -115,7 +116,32 @@ async fn main() -> Result<(), anyhow::Error> {
     let args = Args::parse();
 
     // Load config.
-    let config = dfdaemon::Config::load(&args.config).await?;
+    let config = match dfdaemon::Config::load(&args.config).await {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!(
+                "{}{}Load config {} error: {}{}\n",
+                color::Fg(color::Red),
+                style::Bold,
+                args.config.display(),
+                err,
+                style::Reset
+            );
+
+            eprintln!(
+                "{}{}If the file does not exist, you need to new a default config file refer to: {}{}{}{}https://d7y.io/docs/next/reference/configuration/client/dfdaemon/{}",
+                color::Fg(color::Yellow),
+                style::Bold,
+                style::Reset,
+                color::Fg(color::Cyan),
+                style::Underline,
+                style::Italic,
+                style::Reset,
+            );
+            std::process::exit(1);
+        }
+    };
+
     let config = Arc::new(config);
 
     // Initialize tracing.
