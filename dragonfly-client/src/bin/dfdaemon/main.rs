@@ -347,9 +347,7 @@ async fn main() -> Result<(), anyhow::Error> {
         _ = {
             let barrier = grpc_server_started_barrier.clone();
             tokio::spawn(async move {
-                // Wait for grpc server started.
-                barrier.wait().await;
-                proxy.run().await.unwrap_or_else(|err| error!("proxy server failed: {}", err));
+                proxy.run(barrier).await.unwrap_or_else(|err| error!("proxy server failed: {}", err));
             })
         } => {
             info!("proxy server exited");

@@ -140,13 +140,19 @@ impl DfdaemonDownloadServer {
             .add_service(health_service)
             .add_service(self.service.clone())
             .serve_with_incoming_shutdown(uds_stream, async move {
-                // Download grpc server shutting down with signals.
+                tokio::select! {
+                    // Notify the download grpc server is started.
+                    _ = grpc_server_started_barrier.wait() => {
+                        info!("proxy download server is ready to start");
+                    }
+                    // Wait for shutdown signal.
+                    _ = shutdown.recv() => {
+                        info!("download grpc server stop to wait");
+                    }
+                }
                 let _ = shutdown.recv().await;
                 info!("download grpc server shutting down");
             });
-
-        // Notify the grpc server is started.
-        grpc_server_started_barrier.wait().await;
 
         // Wait for the download grpc server to shutdown.
         info!(

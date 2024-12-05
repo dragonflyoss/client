@@ -141,13 +141,19 @@ impl DfdaemonUploadServer {
             .add_service(health_service)
             .add_service(self.service.clone())
             .serve_with_shutdown(self.addr, async move {
-                // Upload grpc server shutting down with signals.
+                tokio::select! {
+                    // Notify the upload grpc server is started.
+                    _ = grpc_server_started_barrier.wait() => {
+                        info!("upload server is ready");
+                    }
+                    // Wait for shutdown signal.
+                    _ = shutdown.recv() => {
+                        info!("download grpc server stop to wait");
+                    }
+                }
                 let _ = shutdown.recv().await;
-                info!("upload grpc server shutting down");
+                info!("download grpc server shutting down");
             });
-
-        // Notify the grpc server is started.
-        grpc_server_started_barrier.wait().await;
 
         // Wait for the upload grpc server to shutdown.
         info!("upload server listening on {}", self.addr);
