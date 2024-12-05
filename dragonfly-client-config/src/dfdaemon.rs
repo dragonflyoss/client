@@ -37,7 +37,7 @@ use tokio::fs;
 use tonic::transport::{
     Certificate as TonicCertificate, ClientTlsConfig, Identity, ServerTlsConfig,
 };
-use tracing::{error, info, instrument};
+use tracing::{error, instrument};
 use validator::Validate;
 
 /// NAME is the name of dfdaemon.
@@ -1314,7 +1314,6 @@ impl Config {
         // Load configuration from file.
         let content = fs::read_to_string(path).await?;
         let mut config: Config = serde_yaml::from_str(&content).or_err(ErrorType::ConfigError)?;
-        info!("load config from {}", path.display());
 
         // Convert configuration.
         config.convert();
