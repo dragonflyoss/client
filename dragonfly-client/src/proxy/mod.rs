@@ -151,6 +151,8 @@ impl Proxy {
     pub async fn run(&self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         let mut shutdown = self.shutdown.clone();
 
+        // When the grpc server is started, notify the barrier. If the shutdown signal is received
+        // before barrier is waited successfully, the server will shutdown immediately.
         tokio::select! {
             // Wait for starting the proxy server
             _ = grpc_server_started_barrier.wait() => {
@@ -171,9 +173,6 @@ impl Proxy {
         info!("proxy server listening on {}", self.addr);
 
         loop {
-            // Clone the shutdown channel.
-            let mut shutdown = self.shutdown.clone();
-
             // Wait for a client connection.
             tokio::select! {
                 tcp_accepted = listener.accept() => {

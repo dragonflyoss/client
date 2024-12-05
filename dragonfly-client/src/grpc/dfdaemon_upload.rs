@@ -141,6 +141,8 @@ impl DfdaemonUploadServer {
             .add_service(health_service)
             .add_service(self.service.clone())
             .serve_with_shutdown(self.addr, async move {
+                // When the grpc server is started, notify the barrier. If the shutdown signal is received
+                // before barrier is waited successfully, the server will shutdown immediately.
                 tokio::select! {
                     // Notify the upload grpc server is started.
                     _ = grpc_server_started_barrier.wait() => {
@@ -148,11 +150,14 @@ impl DfdaemonUploadServer {
                     }
                     // Wait for shutdown signal.
                     _ = shutdown.recv() => {
-                        info!("download grpc server stop to wait");
+                        info!("upload grpc server stop to wait");
                     }
                 }
+
+                // Wait for the shutdown signal to shutdown the upload grpc server,
+                // when server is started.
                 let _ = shutdown.recv().await;
-                info!("download grpc server shutting down");
+                info!("upload grpc server shutting down");
             });
 
         // Wait for the upload grpc server to shutdown.
