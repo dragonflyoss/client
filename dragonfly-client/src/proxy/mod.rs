@@ -58,7 +58,7 @@ use std::time::Duration;
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Barrier};
 use tokio::time::sleep;
 use tokio_rustls::TlsAcceptor;
 use tokio_util::io::{InspectReader, ReaderStream};
@@ -148,7 +148,21 @@ impl Proxy {
 
     /// run starts the proxy server.
     #[instrument(skip_all)]
-    pub async fn run(&self) -> ClientResult<()> {
+    pub async fn run(&self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
+        let mut shutdown = self.shutdown.clone();
+
+        tokio::select! {
+            // Wait for starting the proxy server
+            _ = grpc_server_started_barrier.wait() => {
+                info!("proxy server is ready to start");
+            }
+            _ = shutdown.recv() => {
+                // Proxy server shutting down with signals.
+                info!("proxy server shutting down");
+                return Ok(());
+            }
+        }
+
         let dfdaemon_download_client =
             DfdaemonDownloadClient::new_unix(self.config.download.server.socket_path.clone())
                 .await?;
