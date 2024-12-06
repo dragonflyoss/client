@@ -831,6 +831,7 @@ async fn proxy_via_dfdaemon(
                                     piece.length,
                                     download_task_started_response.range,
                                     true,
+                                    false,
                                 )
                                 .await
                             {
@@ -1089,6 +1090,7 @@ fn make_download_task_request(
             prefetch: need_prefetch(config.clone(), &header),
             object_storage: None,
             hdfs: None,
+            is_prefetch: false,
         }),
     })
 }

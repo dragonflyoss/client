@@ -74,6 +74,9 @@ pub struct Piece {
 
     /// upload_rate_limiter is the rate limiter of the upload speed in bps(bytes per second).
     upload_rate_limiter: Arc<RateLimiter>,
+
+    /// prefetch_rate_limiter is the rate limiter of the prefetch speed in bps(bytes per second).
+    prefetch_rate_limiter: Arc<RateLimiter>,
 }
 
 /// Piece implements the piece manager.
@@ -103,6 +106,13 @@ impl Piece {
                 RateLimiter::builder()
                     .initial(config.upload.rate_limit.as_u64() as usize)
                     .refill(config.upload.rate_limit.as_u64() as usize)
+                    .interval(Duration::from_secs(1))
+                    .build(),
+            ),
+            prefetch_rate_limiter: Arc::new(
+                RateLimiter::builder()
+                    .initial(config.proxy.prefetch_rate_limit.as_u64() as usize)
+                    .refill(config.proxy.prefetch_rate_limit.as_u64() as usize)
                     .interval(Duration::from_secs(1))
                     .build(),
             ),
@@ -343,13 +353,20 @@ impl Piece {
         length: u64,
         range: Option<Range>,
         disable_rate_limit: bool,
+        is_prefetch: bool,
     ) -> Result<impl AsyncRead> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
 
         // Acquire the download rate limiter.
         if !disable_rate_limit {
-            self.download_rate_limiter.acquire(length as usize).await;
+            if is_prefetch {
+                // Acquire the prefetch rate limiter.
+                self.prefetch_rate_limiter.acquire(length as usize).await;
+            } else {
+                // Acquire the download rate limiter.
+                self.download_rate_limiter.acquire(length as usize).await;
+            }
         }
 
         // Upload the piece content.
@@ -368,6 +385,7 @@ impl Piece {
     }
 
     /// download_from_remote_peer downloads a single piece from a remote peer.
+    #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_remote_peer(
         &self,
@@ -377,12 +395,18 @@ impl Piece {
         number: u32,
         length: u64,
         parent: piece_collector::CollectedParent,
+        is_prefetch: bool,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
 
-        // Acquire the download rate limiter.
-        self.download_rate_limiter.acquire(length as usize).await;
+        if is_prefetch {
+            // Acquire the prefetch rate limiter.
+            self.prefetch_rate_limiter.acquire(length as usize).await;
+        } else {
+            // Acquire the download rate limiter.
+            self.download_rate_limiter.acquire(length as usize).await;
+        }
 
         // Record the start of downloading piece.
         let piece = self
@@ -506,14 +530,20 @@ impl Piece {
         offset: u64,
         length: u64,
         request_header: HeaderMap,
+        is_prefetch: bool,
         object_storage: Option<ObjectStorage>,
         hdfs: Option<Hdfs>,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
 
-        // Acquire the download rate limiter.
-        self.download_rate_limiter.acquire(length as usize).await;
+        if is_prefetch {
+            // Acquire the prefetch rate limiter.
+            self.prefetch_rate_limiter.acquire(length as usize).await;
+        } else {
+            // Acquire the download rate limiter.
+            self.download_rate_limiter.acquire(length as usize).await;
+        }
 
         // Record the start of downloading piece.
         let piece = self

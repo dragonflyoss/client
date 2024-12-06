@@ -77,6 +77,9 @@ pub async fn prefetch_task(
     // Remove the prefetch flag for prevent the infinite loop.
     download.prefetch = false;
 
+    // Mark the is_prefetch flag as true to represents it is a prefetch request.
+    download.is_prefetch = true;
+
     // Remove the range header for download full task.
     download
         .request_header

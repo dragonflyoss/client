@@ -675,6 +675,7 @@ impl Task {
                             peer_id,
                             response.candidate_parents.clone(),
                             remaining_interested_pieces.clone(),
+                            request.is_prefetch,
                             download_progress_tx.clone(),
                             in_stream_tx.clone(),
                         )
@@ -916,6 +917,7 @@ impl Task {
         peer_id: &str,
         parents: Vec<Peer>,
         interested_pieces: Vec<metadata::Piece>,
+        is_prefetch: bool,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
         in_stream_tx: Sender<AnnouncePeerRequest>,
     ) -> ClientResult<Vec<metadata::Piece>> {
@@ -974,6 +976,7 @@ impl Task {
                 in_stream_tx: Sender<AnnouncePeerRequest>,
                 interrupt: Arc<AtomicBool>,
                 finished_pieces: Arc<Mutex<Vec<metadata::Piece>>>,
+                is_prefetch: bool,
             ) -> ClientResult<metadata::Piece> {
                 // Limit the concurrent piece count.
                 let _permit = semaphore.acquire().await.unwrap();
@@ -993,6 +996,7 @@ impl Task {
                         number,
                         length,
                         parent.clone(),
+                        is_prefetch,
                     )
                     .await
                     .map_err(|err| {
@@ -1101,6 +1105,7 @@ impl Task {
                     in_stream_tx.clone(),
                     interrupt.clone(),
                     finished_pieces.clone(),
+                    is_prefetch,
                 )
                 .in_current_span(),
             );
@@ -1212,6 +1217,7 @@ impl Task {
                 offset: u64,
                 length: u64,
                 request_header: HeaderMap,
+                is_prefetch: bool,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
@@ -1235,6 +1241,7 @@ impl Task {
                         offset,
                         length,
                         request_header,
+                        is_prefetch,
                         object_storage,
                         hdfs,
                     )
@@ -1315,6 +1322,7 @@ impl Task {
                     interested_piece.offset,
                     interested_piece.length,
                     request_header.clone(),
+                    request.is_prefetch,
                     self.piece.clone(),
                     self.storage.clone(),
                     semaphore.clone(),
@@ -1551,6 +1559,7 @@ impl Task {
                 offset: u64,
                 length: u64,
                 request_header: HeaderMap,
+                is_prefetch: bool,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
@@ -1573,6 +1582,7 @@ impl Task {
                         offset,
                         length,
                         request_header,
+                        is_prefetch,
                         object_storage,
                         hdfs,
                     )
@@ -1631,6 +1641,7 @@ impl Task {
                     interested_piece.offset,
                     interested_piece.length,
                     request_header.clone(),
+                    request.is_prefetch,
                     self.piece.clone(),
                     self.storage.clone(),
                     semaphore.clone(),

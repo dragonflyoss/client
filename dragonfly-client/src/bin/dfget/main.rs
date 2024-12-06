@@ -61,19 +61,19 @@ Examples:
   
   # Download a file from Amazon Simple Storage Service(S3).
   $ dfget s3://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret>
-  
+
   # Download a file from Google Cloud Storage Service(GCS).
   $ dfget gs://<bucket>/<path> -O /tmp/file.txt --storage-credential-path=<credential_path>
-  
+
   # Download a file from Azure Blob Storage Service(ABS).
   $ dfget abs://<container>/<path> -O /tmp/file.txt --storage-access-key-id=<account_name> --storage-access-key-secret=<account_key>
-  
+
   # Download a file from Aliyun Object Storage Service(OSS).
   $ dfget oss://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret> --storage-endpoint=<endpoint>
-  
+
   # Download a file from Huawei Cloud Object Storage Service(OBS).
   $ dfget obs://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret> --storage-endpoint=<endpoint>
-  
+
   # Download a file from Tencent Cloud Object Storage Service(COS).
   $ dfget cos://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret> --storage-endpoint=<endpoint>
 "#;
@@ -738,6 +738,7 @@ async fn download(
                 disable_back_to_source: args.disable_back_to_source,
                 certificate_chain: Vec::new(),
                 prefetch: false,
+                is_prefetch: false,
                 object_storage,
                 hdfs,
             }),
