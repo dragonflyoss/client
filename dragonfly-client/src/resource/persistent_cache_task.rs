@@ -856,6 +856,7 @@ impl PersistentCacheTask {
                         number,
                         length,
                         parent.clone(),
+                        false,
                     )
                     .await
                     .map_err(|err| {
