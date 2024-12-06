@@ -225,8 +225,8 @@ pub fn default_proxy_read_buffer_size() -> usize {
     32 * 1024
 }
 
-/// default_prefetch_rate_limit is the default rate limit of the prefetch speed in GiB/Mib/Kib per second.
-/// The prefetch request has lower priority so limit the rate to avoid occupying the bandwidth impact other download tasks.
+/// default_prefetch_rate_limit is the default rate limit of the prefetch speed in GiB/Mib/Kib per second. The prefetch request
+/// has lower priority so limit the rate to avoid occupying the bandwidth impact other download tasks.
 #[inline]
 fn default_prefetch_rate_limit() -> ByteSize {
     // Default rate limit is 2GiB/s.
@@ -1097,7 +1097,8 @@ pub struct Proxy {
     /// prefetch pre-downloads full of the task when download with range request.
     pub prefetch: bool,
 
-    /// rate_limit is the rate limit of the prefetch speed in GiB/Mib/Kib per second.
+    /// prefetch_rate_limit is the rate limit of the prefetch speed in GiB/Mib/Kib per second. The prefetch request
+    /// has lower priority so limit the rate to avoid occupying the bandwidth impact other download tasks.
     #[serde(with = "bytesize_serde", default = "default_prefetch_rate_limit")]
     pub prefetch_rate_limit: ByteSize,
 
