@@ -17,4 +17,5 @@
 pub mod persistent_cache_task;
 pub mod piece;
 pub mod piece_collector;
+pub mod piece_downloader;
 pub mod task;
