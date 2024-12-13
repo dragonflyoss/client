@@ -78,6 +78,12 @@ fn default_dfdaemon_cache_dir() -> PathBuf {
     crate::default_cache_dir().join(NAME)
 }
 
+/// default_upload_protocol is the default protocol of the upload server.
+#[inline]
+fn default_upload_protocol() -> String {
+    "grpc".to_string()
+}
+
 /// default_upload_grpc_server_port is the default port of the upload grpc server.
 #[inline]
 fn default_upload_grpc_server_port() -> u16 {
@@ -450,6 +456,11 @@ impl Default for Download {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UploadServer {
+    /// protocol is the protocol of the upload server. The protocol used for downloading pieces
+    /// between different peers, now only support grpc.
+    #[serde(default = "default_upload_protocol")]
+    pub protocol: String,
+
     /// ip is the listen ip of the grpc server.
     pub ip: Option<IpAddr>,
 
@@ -474,6 +485,7 @@ pub struct UploadServer {
 impl Default for UploadServer {
     fn default() -> Self {
         UploadServer {
+            protocol: default_upload_protocol(),
             ip: None,
             port: default_upload_grpc_server_port(),
             ca_cert: None,

@@ -661,7 +661,7 @@ async fn proxy_via_dfdaemon(
             debug!("cache miss");
         }
         Ok(Some(content)) => {
-            debug!("cache hit");
+            info!("cache hit");
 
             // Collect the download piece traffic metrics and the proxy request via dfdaemon and
             // cache hits metrics.

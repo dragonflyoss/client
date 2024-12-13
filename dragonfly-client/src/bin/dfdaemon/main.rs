@@ -223,7 +223,7 @@ async fn main() -> Result<(), anyhow::Error> {
         storage.clone(),
         scheduler_client.clone(),
         backend_factory.clone(),
-    );
+    )?;
     let task = Arc::new(task);
 
     // Initialize persistent cache task manager.
@@ -233,7 +233,7 @@ async fn main() -> Result<(), anyhow::Error> {
         storage.clone(),
         scheduler_client.clone(),
         backend_factory.clone(),
-    );
+    )?;
     let persistent_cache_task = Arc::new(persistent_cache_task);
 
     // Initialize health server.

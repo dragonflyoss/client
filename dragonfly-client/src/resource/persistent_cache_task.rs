@@ -86,22 +86,22 @@ impl PersistentCacheTask {
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
-    ) -> Self {
+    ) -> ClientResult<Self> {
         let piece = piece::Piece::new(
             config.clone(),
             id_generator.clone(),
             storage.clone(),
             backend_factory.clone(),
-        );
+        )?;
         let piece = Arc::new(piece);
 
-        PersistentCacheTask {
+        Ok(Self {
             config,
             id_generator,
             storage,
             scheduler_client,
             piece: piece.clone(),
-        }
+        })
     }
 
     /// create_persistent creates a persistent cache task from local.

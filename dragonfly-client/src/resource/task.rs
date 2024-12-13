@@ -97,23 +97,23 @@ impl Task {
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
-    ) -> Self {
+    ) -> ClientResult<Self> {
         let piece = piece::Piece::new(
             config.clone(),
             id_generator.clone(),
             storage.clone(),
             backend_factory.clone(),
-        );
+        )?;
         let piece = Arc::new(piece);
 
-        Self {
+        Ok(Self {
             config,
             id_generator,
             storage: storage.clone(),
             scheduler_client: scheduler_client.clone(),
             backend_factory: backend_factory.clone(),
             piece: piece.clone(),
-        }
+        })
     }
 
     /// get gets the metadata of the task.
