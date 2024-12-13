@@ -15,7 +15,6 @@
  */
 
 use super::*;
-use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::metrics::{
     collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
     collect_backend_request_started_metrics, collect_download_piece_traffic_metrics,
@@ -23,7 +22,6 @@ use crate::metrics::{
 };
 use chrono::Utc;
 use dragonfly_api::common::v2::{Hdfs, ObjectStorage, Range, TrafficType};
-use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
 use dragonfly_client_backend::{BackendFactory, GetRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{error::BackendError, Error, Result};
@@ -66,6 +64,9 @@ pub struct Piece {
     /// storage is the local storage.
     storage: Arc<Storage>,
 
+    /// downloader_factory is the piece downloader factory.
+    downloader_factory: Arc<piece_downloader::DownloaderFactory>,
+
     /// backend_factory is the backend factory.
     backend_factory: Arc<BackendFactory>,
 
@@ -88,11 +89,15 @@ impl Piece {
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
         backend_factory: Arc<BackendFactory>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        Ok(Self {
             config: config.clone(),
             id_generator,
             storage,
+            downloader_factory: Arc::new(piece_downloader::DownloaderFactory::new(
+                config.upload.server.protocol.as_str(),
+                config.clone(),
+            )?),
             backend_factory,
             download_rate_limiter: Arc::new(
                 RateLimiter::builder()
@@ -116,7 +121,7 @@ impl Piece {
                     .interval(Duration::from_secs(1))
                     .build(),
             ),
-        }
+        })
     }
 
     /// id generates a new piece id.
@@ -429,61 +434,23 @@ impl Piece {
 
             Error::InvalidPeer(parent.id.clone())
         })?;
-        let dfdaemon_upload_client = DfdaemonUploadClient::new(
-            self.config.clone(),
-            format!("http://{}:{}", host.ip, host.port),
-        )
-        .await
-        .map_err(|err| {
-            error!(
-                "create dfdaemon upload client from {}:{} failed: {}",
-                host.ip, host.port, err
-            );
-            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
-                error!("set piece metadata failed: {}", err)
-            };
 
-            err
-        })?;
-
-        // Send the interested pieces request.
-        let response = dfdaemon_upload_client
+        let (content, offset, digest) = self
+            .downloader_factory
+            .build()
             .download_piece(
-                DownloadPieceRequest {
-                    host_id: host_id.to_string(),
-                    task_id: task_id.to_string(),
-                    piece_number: number,
-                },
-                self.config.download.piece_timeout,
+                format!("{}:{}", host.ip, host.port).as_str(),
+                number,
+                host_id,
+                task_id,
             )
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("download piece failed: {}", err);
                 if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                     error!("set piece metadata failed: {}", err)
                 };
-
-                err
             })?;
-
-        let piece = response.piece.ok_or_else(|| {
-            error!("piece is empty");
-            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
-                error!("set piece metadata failed: {}", err)
-            };
-
-            Error::InvalidParameter
-        })?;
-
-        // Get the piece content.
-        let content = piece.content.ok_or_else(|| {
-            error!("piece content is empty");
-            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
-                error!("set piece metadata failed: {}", err)
-            };
-
-            Error::InvalidParameter
-        })?;
 
         // Record the finish of downloading piece.
         match self
@@ -491,8 +458,8 @@ impl Piece {
             .download_piece_from_remote_peer_finished(
                 piece_id,
                 task_id,
-                piece.offset,
-                piece.digest.as_str(),
+                offset,
+                digest.as_str(),
                 parent.id.as_str(),
                 &mut content.as_slice(),
             )
@@ -715,7 +682,8 @@ mod tests {
             id_generator.clone(),
             storage.clone(),
             backend_factory.clone(),
-        );
+        )
+        .unwrap();
 
         let test_cases = vec![
             (1000, 1, None, 1, vec![0], 0, 1),
