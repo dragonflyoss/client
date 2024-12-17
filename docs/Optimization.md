@@ -8,7 +8,7 @@
 
 ## Flow
 
-![architecture](../image/client_bencmark.png)
+![architecture](images/client_bencmark.png)
 
 ## Preparation
 
