@@ -95,7 +95,7 @@ impl Piece {
             id_generator,
             storage,
             downloader_factory: Arc::new(piece_downloader::DownloaderFactory::new(
-                config.upload.server.protocol.as_str(),
+                config.storage.server.protocol.as_str(),
                 config.clone(),
             )?),
             backend_factory,
