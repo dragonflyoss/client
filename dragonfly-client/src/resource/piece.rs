@@ -389,10 +389,10 @@ impl Piece {
         );
     }
 
-    /// download_from_remote_peer downloads a single piece from a remote peer.
+    /// download_from_parent downloads a single piece from a parent.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all, fields(piece_id))]
-    pub async fn download_from_remote_peer(
+    pub async fn download_from_parent(
         &self,
         piece_id: &str,
         host_id: &str,
@@ -455,7 +455,7 @@ impl Piece {
         // Record the finish of downloading piece.
         match self
             .storage
-            .download_piece_from_remote_peer_finished(
+            .download_piece_from_parent_finished(
                 piece_id,
                 task_id,
                 offset,

@@ -29,7 +29,7 @@ use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 use tracing::{error, info, instrument, Instrument};
 
-/// CollectedParent is the parent peer collected from the remote peer.
+/// CollectedParent is the parent peer collected from the parent.
 #[derive(Clone, Debug)]
 pub struct CollectedParent {
     /// id is the id of the parent.
@@ -110,7 +110,7 @@ impl PieceCollector {
         let (collected_piece_tx, collected_piece_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
-                Self::collect_from_remote_peers(
+                Self::collect_from_parents(
                     config,
                     &host_id,
                     &task_id,
@@ -131,10 +131,10 @@ impl PieceCollector {
         collected_piece_rx
     }
 
-    /// collect_from_remote_peers collects pieces from remote peers.
+    /// collect_from_parents collects pieces from parents.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
-    async fn collect_from_remote_peers(
+    async fn collect_from_parents(
         config: Arc<Config>,
         host_id: &str,
         task_id: &str,

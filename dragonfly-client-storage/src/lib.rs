@@ -326,9 +326,9 @@ impl Storage {
         )
     }
 
-    /// download_piece_from_remote_peer_finished is used for downloading piece from remote peer.
+    /// download_piece_from_parent_finished is used for downloading piece from parent.
     #[instrument(skip_all)]
-    pub async fn download_piece_from_remote_peer_finished<R: AsyncRead + Unpin + ?Sized>(
+    pub async fn download_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
         task_id: &str,

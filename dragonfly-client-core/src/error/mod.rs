@@ -21,7 +21,7 @@ pub use errors::ErrorType;
 pub use errors::ExternalError;
 
 pub use errors::OrErr;
-pub use errors::{BackendError, DownloadFromRemotePeerFailed};
+pub use errors::{BackendError, DownloadFromParentFailed};
 
 /// DFError is the error for dragonfly.
 #[derive(thiserror::Error, Debug)]
@@ -70,9 +70,9 @@ pub enum DFError {
     #[error{"available schedulers not found"}]
     AvailableSchedulersNotFound,
 
-    /// DownloadFromRemotePeerFailed is the error when the download from remote peer is failed.
+    /// DownloadFromParentFailed is the error when the download from parent is failed.
     #[error(transparent)]
-    DownloadFromRemotePeerFailed(DownloadFromRemotePeerFailed),
+    DownloadFromParentFailed(DownloadFromParentFailed),
 
     /// ColumnFamilyNotFound is the error when the column family is not found.
     #[error{"column family {0} not found"}]

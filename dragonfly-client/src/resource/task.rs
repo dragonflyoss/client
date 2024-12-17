@@ -39,7 +39,7 @@ use dragonfly_api::scheduler::v2::{
 use dragonfly_client_backend::{BackendFactory, HeadRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
-    error::{BackendError, DownloadFromRemotePeerFailed, ErrorType, OrErr},
+    error::{BackendError, DownloadFromParentFailed, ErrorType, OrErr},
     Error, Result as ClientResult,
 };
 use dragonfly_client_storage::{metadata, Storage};
@@ -627,7 +627,7 @@ impl Task {
                     return Ok(Vec::new());
                 }
                 announce_peer_response::Response::NormalTaskResponse(response) => {
-                    // If the task is normal, download the pieces from the remote peer.
+                    // If the task is normal, download the pieces from the parent.
                     info!(
                         "normal task response: {:?}",
                         response
@@ -667,9 +667,9 @@ impl Task {
                         interested_pieces.clone(),
                     );
 
-                    // Download the pieces from the remote peer.
+                    // Download the pieces from the parent.
                     let partial_finished_pieces = match self
-                        .download_partial_with_scheduler_from_remote_peer(
+                        .download_partial_with_scheduler_from_parent(
                             task,
                             host_id,
                             peer_id,
@@ -683,7 +683,7 @@ impl Task {
                     {
                         Ok(partial_finished_pieces) => {
                             info!(
-                                "schedule {} finished {} pieces from remote peer",
+                                "schedule {} finished {} pieces from parent",
                                 schedule_count,
                                 partial_finished_pieces.len()
                             );
@@ -691,7 +691,7 @@ impl Task {
                             partial_finished_pieces
                         }
                         Err(err) => {
-                            error!("download from remote peer error: {:?}", err);
+                            error!("download from parent error: {:?}", err);
                             return Ok(finished_pieces);
                         }
                     };
@@ -747,7 +747,7 @@ impl Task {
                                         ReschedulePeerRequest {
                                             candidate_parents: response.candidate_parents,
                                             description: Some(
-                                                "not all pieces are downloaded from remote peer"
+                                                "not all pieces are downloaded from parent"
                                                     .to_string(),
                                             ),
                                         },
@@ -907,10 +907,10 @@ impl Task {
         Ok(finished_pieces)
     }
 
-    /// download_partial_with_scheduler_from_remote_peer downloads a partial task with scheduler from a remote peer.
+    /// download_partial_with_scheduler_from_parent downloads a partial task with scheduler from a parent.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
-    async fn download_partial_with_scheduler_from_remote_peer(
+    async fn download_partial_with_scheduler_from_parent(
         &self,
         task: &metadata::Task,
         host_id: &str,
@@ -940,7 +940,7 @@ impl Task {
         );
         let mut piece_collector_rx = piece_collector.run().await;
 
-        // Initialize the interrupt. If download from remote peer failed with scheduler or download
+        // Initialize the interrupt. If download from parent failed with scheduler or download
         // progress, interrupt the collector and return the finished pieces.
         let interrupt = Arc::new(AtomicBool::new(false));
 
@@ -953,7 +953,7 @@ impl Task {
             self.config.download.concurrent_piece_count as usize,
         ));
 
-        // Download the pieces from the remote peers.
+        // Download the pieces from the parents.
         while let Some(collect_piece) = piece_collector_rx.recv().await {
             if interrupt.load(Ordering::SeqCst) {
                 // If the interrupt is true, break the collector loop.
@@ -962,7 +962,7 @@ impl Task {
                 break;
             }
 
-            async fn download_from_remote_peer(
+            async fn download_from_parent(
                 task_id: String,
                 host_id: String,
                 peer_id: String,
@@ -983,13 +983,13 @@ impl Task {
 
                 let piece_id = storage.piece_id(task_id.as_str(), number);
                 info!(
-                    "start to download piece {} from remote peer {:?}",
+                    "start to download piece {} from parent {:?}",
                     piece_id,
                     parent.id.clone()
                 );
 
                 let metadata = piece_manager
-                    .download_from_remote_peer(
+                    .download_from_parent(
                         piece_id.as_str(),
                         host_id.as_str(),
                         task_id.as_str(),
@@ -1001,12 +1001,12 @@ impl Task {
                     .await
                     .map_err(|err| {
                         error!(
-                            "download piece {} from remote peer {:?} error: {:?}",
+                            "download piece {} from parent {:?} error: {:?}",
                             piece_id,
                             parent.id.clone(),
                             err
                         );
-                        Error::DownloadFromRemotePeerFailed(DownloadFromRemotePeerFailed {
+                        Error::DownloadFromParentFailed(DownloadFromParentFailed {
                             piece_number: number,
                             parent_id: parent.id.clone(),
                         })
@@ -1080,7 +1080,7 @@ impl Task {
                     })?;
 
                 info!(
-                    "finished piece {} from remote peer {:?}",
+                    "finished piece {} from parent {:?}",
                     piece_id, metadata.parent_id
                 );
 
@@ -1091,7 +1091,7 @@ impl Task {
             }
 
             join_set.spawn(
-                download_from_remote_peer(
+                download_from_parent(
                     task_id.to_string(),
                     host_id.to_string(),
                     peer_id.to_string(),
@@ -1120,7 +1120,7 @@ impl Task {
         {
             match message {
                 Ok(_) => {}
-                Err(Error::DownloadFromRemotePeerFailed(err)) => {
+                Err(Error::DownloadFromParentFailed(err)) => {
                     let (piece_number, parent_id) = (err.piece_number, err.parent_id);
 
                     // Send the download piece failed request.
@@ -1151,7 +1151,7 @@ impl Task {
                             )
                         });
 
-                    // If the download failed from the remote peer, continue to download the next
+                    // If the download failed from the parent, continue to download the next
                     // piece and ignore the error.
                     continue;
                 }
@@ -1159,13 +1159,13 @@ impl Task {
                     join_set.detach_all();
 
                     // If the send timeout with scheduler or download progress, return the finished pieces.
-                    // It will stop the download from the remote peer with scheduler
+                    // It will stop the download from the parent with scheduler
                     // and download from the source directly from middle.
                     let finished_pieces = finished_pieces.lock().unwrap().clone();
                     return Ok(finished_pieces);
                 }
                 Err(err) => {
-                    error!("download from remote peer error: {:?}", err);
+                    error!("download from parent error: {:?}", err);
 
                     // If the unknown error occurred, continue to download the next piece and
                     // ignore the error.

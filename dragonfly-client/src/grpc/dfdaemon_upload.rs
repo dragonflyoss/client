@@ -629,7 +629,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     /// SyncPiecesStream is the stream of the sync pieces response.
     type SyncPiecesStream = ReceiverStream<Result<SyncPiecesResponse, Status>>;
 
-    /// sync_pieces provides the piece metadata for remote peer.
+    /// sync_pieces provides the piece metadata for parent.
     #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
     async fn sync_pieces(
         &self,
@@ -760,7 +760,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// download_piece provides the piece content for remote peer.
+    /// download_piece provides the piece content for parent.
     #[instrument(skip_all, fields(host_id, remote_host_id, task_id, piece_id))]
     async fn download_piece(
         &self,
@@ -1183,7 +1183,7 @@ impl DfdaemonUploadClient {
         Ok(response)
     }
 
-    /// sync_pieces provides the piece metadata for remote peer.
+    /// sync_pieces provides the piece metadata for parent.
     #[instrument(skip_all)]
     pub async fn sync_pieces(
         &self,
@@ -1194,7 +1194,7 @@ impl DfdaemonUploadClient {
         Ok(response)
     }
 
-    /// download_piece provides the piece content for remote peer.
+    /// download_piece provides the piece content for parent.
     #[instrument(skip_all)]
     pub async fn download_piece(
         &self,
