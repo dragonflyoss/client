@@ -66,6 +66,9 @@ impl Containerd {
             .and_then(|config_path| config_path.as_str())
             .filter(|config_path| !config_path.is_empty())
         {
+            // Rebind config_path to the first entry if multiple paths are present
+            let config_path = config_path.split(':').next().unwrap_or(config_path);
+
             info!(
                 "containerd supports config_path mode, config_path: {}",
                 config_path.to_string()
