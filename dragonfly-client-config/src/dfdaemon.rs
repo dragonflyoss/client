@@ -55,7 +55,7 @@ pub fn default_dfdaemon_log_dir() -> PathBuf {
     crate::default_log_dir().join(NAME)
 }
 
-/// default_download_unix_socket_path is the default unix socket path for download GRPC service.
+/// default_download_unix_socket_path is the default unix socket path for download gRPC service.
 pub fn default_download_unix_socket_path() -> PathBuf {
     crate::default_root_dir().join("dfdaemon.sock")
 }
@@ -78,13 +78,7 @@ fn default_dfdaemon_cache_dir() -> PathBuf {
     crate::default_cache_dir().join(NAME)
 }
 
-/// default_upload_protocol is the default protocol of the upload server.
-#[inline]
-fn default_upload_protocol() -> String {
-    "grpc".to_string()
-}
-
-/// default_upload_grpc_server_port is the default port of the upload grpc server.
+/// default_upload_grpc_server_port is the default port of the upload gRPC server.
 #[inline]
 fn default_upload_grpc_server_port() -> u16 {
     4000
@@ -156,6 +150,12 @@ fn default_scheduler_schedule_timeout() -> Duration {
 #[inline]
 fn default_dynconfig_refresh_interval() -> Duration {
     Duration::from_secs(300)
+}
+
+/// default_storage_server_protocol is the default protocol of the storage server.
+#[inline]
+fn default_storage_server_protocol() -> String {
+    "grpc".to_string()
 }
 
 /// default_storage_keep is the default keep of the task's metadata and content when the dfdaemon restarts.
@@ -405,7 +405,7 @@ impl Default for Server {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DownloadServer {
-    /// socket_path is the unix socket path for dfdaemon GRPC service.
+    /// socket_path is the unix socket path for dfdaemon gRPC service.
     #[serde(default = "default_download_unix_socket_path")]
     pub socket_path: PathBuf,
 }
@@ -456,15 +456,10 @@ impl Default for Download {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UploadServer {
-    /// protocol is the protocol of the upload server. The protocol used for downloading pieces
-    /// between different peers, now only support grpc.
-    #[serde(default = "default_upload_protocol")]
-    pub protocol: String,
-
-    /// ip is the listen ip of the grpc server.
+    /// ip is the listen ip of the gRPC server.
     pub ip: Option<IpAddr>,
 
-    /// port is the port to the grpc server.
+    /// port is the port to the gRPC server.
     #[serde(default = "default_upload_grpc_server_port")]
     pub port: u16,
 
@@ -485,7 +480,6 @@ pub struct UploadServer {
 impl Default for UploadServer {
     fn default() -> Self {
         UploadServer {
-            protocol: default_upload_protocol(),
             ip: None,
             port: default_upload_grpc_server_port(),
             ca_cert: None,
@@ -820,10 +814,35 @@ impl Default for Dynconfig {
     }
 }
 
+/// StorageServer is the storage server configuration for dfdaemon.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct StorageServer {
+    /// protocol is the protocol of the storage server. The protocol used for downloading pieces
+    /// between different peers, now only support gRPC.
+    ///
+    /// gRPC Protocol: The storage server will start a gRPC service in the DfdaemonUploadServer,
+    /// refer to https://github.com/dragonflyoss/api/blob/main/proto/dfdaemon.proto#L185.
+    #[serde(default = "default_storage_server_protocol")]
+    pub protocol: String,
+}
+
+/// Storage implements Default.
+impl Default for StorageServer {
+    fn default() -> Self {
+        StorageServer {
+            protocol: default_storage_server_protocol(),
+        }
+    }
+}
+
 /// Storage is the storage configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Storage {
+    /// server is the storage server configuration for dfdaemon.
+    pub server: StorageServer,
+
     /// dir is the directory to store task's metadata and content.
     #[serde(default = "crate::default_storage_dir")]
     pub dir: PathBuf,
@@ -845,6 +864,7 @@ pub struct Storage {
 impl Default for Storage {
     fn default() -> Self {
         Storage {
+            server: StorageServer::default(),
             dir: crate::default_storage_dir(),
             keep: default_storage_keep(),
             write_buffer_size: default_storage_write_buffer_size(),
@@ -1361,7 +1381,7 @@ impl Config {
             }
         }
 
-        // Convert upload grpc server listen ip.
+        // Convert upload gRPC server listen ip.
         if self.upload.server.ip.is_none() {
             self.upload.server.ip = if self.network.enable_ipv6 {
                 Some(Ipv6Addr::UNSPECIFIED.into())
