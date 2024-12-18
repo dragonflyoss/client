@@ -1,31 +1,31 @@
 # Performance Optimization Guidance
 
-> This is a reference benchmark process document designed to
-> assist in performance analysis and optimization for **client**.
-> This document provides as general a testing framework as possible,
-> allowing developers with needs to adjust it
-> according to their specific circumstances across various platform.
+This is a reference benchmark process document designed to
+assist in performance analysis and optimization for **client**.
+This document provides as general a testing framework as possible,
+allowing developers with needs to adjust it
+according to their specific circumstances across various platform.
 
 ## Flow
 
-![architecture](images/client_bencmark.png)
+![architecture](images/performance-testing-arch.png)
 
 ## Preparation
 
-### 1. Set up Dragonfly cluster
+### Step 1: Setup Dragonfly
 
 - Please refer to [official doc](https://d7y.io/docs/next/getting-started/installation/helm-charts/).
 
-### 2. Start a file server
+### Step 2: Start a file server
 
-- start with docker:
+- Start with docker:
 
 ```bash
 export FILE_SERVER_PORT=12345
 docker run -d  --rm -p ${FILE_SERVER_PORT}:80 --name dragonfly-fs dragonflyoss/file-server:latest
 ```
 
-- check
+- Check the file server is ready:
 
 ```bash
 # return success if ready
@@ -37,11 +37,11 @@ curl -s -o /dev/null \
 || echo "Failed"
 ```
 
-- optional:
+- Optional:
 
 > you can build your own image, take a reference from [**Dockerfile**](https://github.com/dragonflyoss/perf-tests/blob/main/tools/file-server/Dockerfile).
 
-### 3. Prepare related tools
+### Step 3: Install test tools
 
 - Request Generator: [**oha**](https://github.com/hatoo/oha)
 
@@ -55,15 +55,17 @@ brew install oha
 cargo install flamegraph
 ```
 
-### 4. start the target client
+### Step 4: Setup Dragonfly Peer
 
-- compile the target binary
+> Document: [Install with binary](https://d7y.io/docs/next/getting-started/installation/binaries/).
+
+- Compile the target binary
 
 ```bash
-cargo build --release   --bin dfdaemon
+cargo build --release --bin dfdaemon
 ```
 
-- connect to dragonfly cluster
+- Connect to Dragonfly
 
 ```bash
 # prepare client.yaml by yourself.
@@ -77,16 +79,16 @@ Now, let's start benchmark with the following params:
 - $FILE_SERVER_ADDRESS
 - $CLIENT_PROXY_ADDRESS
 
-### collect flamegraph
+### Collect Flamegraph
 
-- capture the flamegraph:
+- Capture the flamegraph:
 
 ```bash
 ## stop after all requests done.
 sudo flamegraph -o my_flamegraph.svg --pid 3442
 ```
 
-- make the request:
+- Make the request:
 
 ```bash
 oha -c 1000 \
