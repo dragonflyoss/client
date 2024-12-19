@@ -342,10 +342,10 @@ impl Task {
                 err
             })?;
 
-        // Download the pieces from the local peer.
-        debug!("download the pieces from local peer");
+        // Download the pieces from the local.
+        debug!("download the pieces from local");
         let finished_pieces = match self
-            .download_partial_from_local_peer(
+            .download_partial_from_local(
                 task,
                 host_id,
                 peer_id,
@@ -356,7 +356,7 @@ impl Task {
         {
             Ok(finished_pieces) => finished_pieces,
             Err(err) => {
-                error!("download from local peer error: {:?}", err);
+                error!("download from local error: {:?}", err);
                 return Err(err);
             }
         };
@@ -375,7 +375,7 @@ impl Task {
 
         // Check if all pieces are downloaded.
         if interested_pieces.is_empty() {
-            info!("all pieces are downloaded from local peer");
+            info!("all pieces are downloaded from local");
             return Ok(());
         };
         debug!("download the pieces with scheduler");
@@ -1202,7 +1202,7 @@ impl Task {
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
-        // Download the piece from the local peer.
+        // Download the piece from the local.
         let mut join_set = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.concurrent_piece_count as usize,
@@ -1436,10 +1436,10 @@ impl Task {
         Ok(finished_pieces)
     }
 
-    /// download_partial_from_local_peer downloads a partial task from a local peer.
+    /// download_partial_from_local downloads a partial task from a local.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
-    async fn download_partial_from_local_peer(
+    async fn download_partial_from_local(
         &self,
         task: &metadata::Task,
         host_id: &str,
@@ -1453,7 +1453,7 @@ impl Task {
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
-        // Download the piece from the local peer.
+        // Download the piece from the local.
         for interested_piece in interested_pieces {
             let piece_id = self.storage.piece_id(task_id, interested_piece.number);
 
@@ -1470,9 +1470,9 @@ impl Task {
                 }
             };
 
-            // Fake the download from the local peer.
-            self.piece.download_from_local_peer(task_id, piece.length);
-            info!("finished piece {} from local peer", piece_id,);
+            // Fake the download from the local.
+            self.piece.download_from_local(task_id, piece.length);
+            info!("finished piece {} from local", piece_id,);
 
             // Construct the piece.
             let piece = Piece {

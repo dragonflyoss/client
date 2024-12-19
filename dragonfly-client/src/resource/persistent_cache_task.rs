@@ -384,10 +384,10 @@ impl PersistentCacheTask {
                 err
             })?;
 
-        // Download the pieces from the local peer.
-        debug!("download the pieces from local peer");
+        // Download the pieces from the local.
+        debug!("download the pieces from local");
         let finished_pieces = match self
-            .download_partial_from_local_peer(
+            .download_partial_from_local(
                 task,
                 host_id,
                 peer_id,
@@ -398,7 +398,7 @@ impl PersistentCacheTask {
         {
             Ok(finished_pieces) => finished_pieces,
             Err(err) => {
-                error!("download from local peer error: {:?}", err);
+                error!("download from local error: {:?}", err);
                 download_progress_tx
                     .send_timeout(Err(Status::internal(err.to_string())), REQUEST_TIMEOUT)
                     .await
@@ -422,7 +422,7 @@ impl PersistentCacheTask {
 
         // Check if all pieces are downloaded.
         if interested_pieces.is_empty() {
-            info!("all pieces are downloaded from local peer");
+            info!("all pieces are downloaded from local");
             return Ok(());
         };
         debug!("download the pieces with scheduler");
@@ -1015,10 +1015,10 @@ impl PersistentCacheTask {
         Ok(finished_pieces)
     }
 
-    /// download_partial_from_local_peer downloads a partial persistent cache task from a local peer.
+    /// download_partial_from_local downloads a partial persistent cache task from a local.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
-    async fn download_partial_from_local_peer(
+    async fn download_partial_from_local(
         &self,
         task: &metadata::PersistentCacheTask,
         host_id: &str,
@@ -1029,7 +1029,7 @@ impl PersistentCacheTask {
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
-        // Download the piece from the local peer.
+        // Download the piece from the local.
         for interested_piece in interested_pieces {
             let piece_id = self
                 .storage
@@ -1048,10 +1048,10 @@ impl PersistentCacheTask {
                 }
             };
 
-            // Fake the download from the local peer.
+            // Fake the download from the local.
             self.piece
-                .download_from_local_peer(task.id.as_str(), piece.length);
-            info!("finished piece {} from local peer", piece_id);
+                .download_from_local(task.id.as_str(), piece.length);
+            info!("finished piece {} from local", piece_id);
 
             // Construct the piece.
             let piece = Piece {

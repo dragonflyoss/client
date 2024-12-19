@@ -423,6 +423,54 @@ impl Storage {
         }
     }
 
+    /// upload_piece_with_dual_read returns the dual reader of the piece, one is the range reader, and the other is the
+    /// full reader of the piece. It is used for cache the piece content to the proxy cache.
+    #[instrument(skip_all)]
+    pub async fn upload_piece_with_dual_read(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        range: Option<Range>,
+    ) -> Result<(impl AsyncRead, impl AsyncRead)> {
+        // Wait for the piece to be finished.
+        self.wait_for_piece_finished(piece_id).await?;
+
+        // Start uploading the task.
+        self.metadata.upload_task_started(task_id)?;
+
+        // Get the piece metadata and return the content of the piece.
+        match self.metadata.get_piece(piece_id) {
+            Ok(Some(piece)) => {
+                match self
+                    .content
+                    .read_piece_with_dual_read(task_id, piece.offset, piece.length, range)
+                    .await
+                {
+                    Ok(dual_reader) => {
+                        // Finish uploading the task.
+                        self.metadata.upload_task_finished(task_id)?;
+                        Ok(dual_reader)
+                    }
+                    Err(err) => {
+                        // Failed uploading the task.
+                        self.metadata.upload_task_failed(task_id)?;
+                        Err(err)
+                    }
+                }
+            }
+            Ok(None) => {
+                // Failed uploading the task.
+                self.metadata.upload_task_failed(task_id)?;
+                Err(Error::PieceNotFound(piece_id.to_string()))
+            }
+            Err(err) => {
+                // Failed uploading the task.
+                self.metadata.upload_task_failed(task_id)?;
+                Err(err)
+            }
+        }
+    }
+
     /// get_piece returns the piece metadata.
     #[instrument(skip_all)]
     pub fn get_piece(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
