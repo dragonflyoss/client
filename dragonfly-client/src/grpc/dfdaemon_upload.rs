@@ -812,7 +812,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let mut reader = self
             .task
             .piece
-            .upload_from_local_peer_into_async_read(
+            .upload_from_local_into_async_read(
                 piece_id.as_str(),
                 task_id.as_str(),
                 piece.length,
