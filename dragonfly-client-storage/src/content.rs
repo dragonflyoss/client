@@ -212,12 +212,13 @@ impl Content {
     #[instrument(skip_all)]
     pub async fn read_task_by_range(&self, task_id: &str, range: Range) -> Result<impl AsyncRead> {
         let task_path = self.get_task_path(task_id);
-        let mut from_f = File::open(task_path.as_path()).await.map_err(|err| {
+        let from_f = File::open(task_path.as_path()).await.map_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
             err
         })?;
+        let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, from_f);
 
-        from_f
+        f_reader
             .seek(SeekFrom::Start(range.start))
             .await
             .map_err(|err| {
@@ -225,7 +226,7 @@ impl Content {
                 err
             })?;
 
-        let range_reader = from_f.take(range.length);
+        let range_reader = f_reader.take(range.length);
         Ok(range_reader)
     }
 
@@ -251,10 +252,11 @@ impl Content {
         range: Option<Range>,
     ) -> Result<impl AsyncRead> {
         let task_path = self.get_task_path(task_id);
-        let mut f = File::open(task_path.as_path()).await.map_err(|err| {
+        let f = File::open(task_path.as_path()).await.map_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
             err
         })?;
+        let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
 
         // Calculate the target offset and length based on the range.
         let (target_offset, target_length) = if let Some(range) = range {
@@ -266,14 +268,71 @@ impl Content {
             (offset, length)
         };
 
-        f.seek(SeekFrom::Start(target_offset))
+        f_reader
+            .seek(SeekFrom::Start(target_offset))
             .await
             .map_err(|err| {
                 error!("seek {:?} failed: {}", task_path, err);
                 err
             })?;
 
-        Ok(f.take(target_length))
+        Ok(f_reader.take(target_length))
+    }
+
+    /// read_piece_with_dual_read return two readers, one is the range reader, and the other is the
+    /// full reader of the piece. It is used for cache the piece content to the proxy cache.
+    #[instrument(skip_all)]
+    pub async fn read_piece_with_dual_read(
+        &self,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+        range: Option<Range>,
+    ) -> Result<(impl AsyncRead, impl AsyncRead)> {
+        let task_path = self.get_task_path(task_id);
+
+        // Calculate the target offset and length based on the range.
+        let (target_offset, target_length) = if let Some(range) = range {
+            let target_offset = max(offset, range.start);
+            let target_length =
+                min(offset + length - 1, range.start + range.length - 1) - target_offset + 1;
+            (target_offset, target_length)
+        } else {
+            (offset, length)
+        };
+
+        let f = File::open(task_path.as_path()).await.map_err(|err| {
+            error!("open {:?} failed: {}", task_path, err);
+            err
+        })?;
+        let mut f_range_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
+
+        f_range_reader
+            .seek(SeekFrom::Start(target_offset))
+            .await
+            .map_err(|err| {
+                error!("seek {:?} failed: {}", task_path, err);
+                err
+            })?;
+        let range_reader = f_range_reader.take(target_length);
+
+        // Create full reader of the piece.
+        let f = File::open(task_path.as_path()).await.map_err(|err| {
+            error!("open {:?} failed: {}", task_path, err);
+            err
+        })?;
+        let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
+
+        f_reader
+            .seek(SeekFrom::Start(offset))
+            .await
+            .map_err(|err| {
+                error!("seek {:?} failed: {}", task_path, err);
+                err
+            })?;
+        let reader = f_reader.take(length);
+
+        Ok((range_reader, reader))
     }
 
     /// write_piece_with_crc32_castagnoli writes the piece to the content with crc32 castagnoli.
