@@ -887,6 +887,8 @@ async fn proxy_via_dfdaemon(
                                             }
                                         };
 
+                                        // When the piece reader reads to the end, add the piece
+                                        // to the cache.
                                         if n == 0 {
                                             cache.add_piece(&piece_id, content.freeze());
                                             break;
