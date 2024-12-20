@@ -93,11 +93,11 @@ impl Cache {
             };
 
             // Calculate the target offset and length based on the range.
-            let (target_offset, target_length) =
-                self.calculate_piece_range(interested_piece.offset, interested_piece.length, range);
+            let (piece_target_offset, piece_target_length) =
+                calculate_piece_range(interested_piece.offset, interested_piece.length, range);
 
-            let begin = target_offset;
-            let end = target_offset + target_length;
+            let begin = piece_target_offset;
+            let end = piece_target_offset + piece_target_length;
             if begin >= piece_content.len() || end > piece_content.len() {
                 return Err(Error::InvalidParameter);
             }
@@ -107,28 +107,6 @@ impl Cache {
         }
 
         Ok(Some(content.freeze()))
-    }
-
-    /// calculate_piece_range calculates the target offset and length based on the piece range and
-    /// request range.
-    fn calculate_piece_range(
-        &self,
-        piece_offset: u64,
-        piece_length: u64,
-        range: Option<Range>,
-    ) -> (usize, usize) {
-        if let Some(range) = range {
-            let target_offset = max(piece_offset, range.start) - piece_offset;
-
-            let interested_piece_end = piece_offset + piece_length - 1;
-            let range_end = range.start + range.length - 1;
-            let target_length =
-                min(interested_piece_end, range_end) - target_offset - piece_offset + 1;
-
-            (target_offset as usize, target_length as usize)
-        } else {
-            (0, piece_length as usize)
-        }
     }
 
     /// get_piece gets the piece content from the cache.
@@ -152,5 +130,98 @@ impl Cache {
     pub fn contains_piece(&self, id: &str) -> bool {
         let pieces = self.pieces.lock().unwrap();
         pieces.contains(id)
+    }
+}
+
+/// calculate_piece_range calculates the target offset and length based on the piece range and
+/// request range.
+pub fn calculate_piece_range(offset: u64, length: u64, range: Option<Range>) -> (usize, usize) {
+    if let Some(range) = range {
+        let target_offset = max(offset, range.start) - offset;
+        let target_length =
+            min(offset + length - 1, range.start + range.length - 1) - target_offset - offset + 1;
+
+        (target_offset as usize, target_length as usize)
+    } else {
+        (0, length as usize)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn should_calculate_piece_range() {
+        let test_cases = vec![
+            (1, 4, None, 0, 4),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 1,
+                    length: 4,
+                }),
+                0,
+                4,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 2,
+                    length: 1,
+                }),
+                1,
+                1,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 1,
+                    length: 1,
+                }),
+                0,
+                1,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 4,
+                    length: 1,
+                }),
+                3,
+                1,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 0,
+                    length: 2,
+                }),
+                0,
+                1,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 4,
+                    length: 3,
+                }),
+                3,
+                1,
+            ),
+        ];
+
+        for (piece_offset, piece_length, range, expected_offset, expected_length) in test_cases {
+            let (target_offset, target_length) =
+                calculate_piece_range(piece_offset, piece_length, range);
+            assert_eq!(target_offset, expected_offset);
+            assert_eq!(target_length, expected_length);
+        }
     }
 }

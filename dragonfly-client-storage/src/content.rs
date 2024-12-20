@@ -252,21 +252,15 @@ impl Content {
         range: Option<Range>,
     ) -> Result<impl AsyncRead> {
         let task_path = self.get_task_path(task_id);
+
+        // Calculate the target offset and length based on the range.
+        let (target_offset, target_length) = calculate_piece_range(offset, length, range);
+
         let f = File::open(task_path.as_path()).await.map_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
             err
         })?;
         let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
-
-        // Calculate the target offset and length based on the range.
-        let (target_offset, target_length) = if let Some(range) = range {
-            let target_offset = max(offset, range.start);
-            let target_length =
-                min(offset + length - 1, range.start + range.length - 1) - target_offset + 1;
-            (target_offset, target_length)
-        } else {
-            (offset, length)
-        };
 
         f_reader
             .seek(SeekFrom::Start(target_offset))
@@ -292,14 +286,7 @@ impl Content {
         let task_path = self.get_task_path(task_id);
 
         // Calculate the target offset and length based on the range.
-        let (target_offset, target_length) = if let Some(range) = range {
-            let target_offset = max(offset, range.start);
-            let target_length =
-                min(offset + length - 1, range.start + range.length - 1) - target_offset + 1;
-            (target_offset, target_length)
-        } else {
-            (offset, length)
-        };
+        let (target_offset, target_length) = calculate_piece_range(offset, length, range);
 
         let f = File::open(task_path.as_path()).await.map_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
@@ -603,5 +590,97 @@ impl Content {
         })?;
 
         Ok(task_dir.join(task_id))
+    }
+}
+
+/// calculate_piece_range calculates the target offset and length based on the piece range and
+/// request range.
+pub fn calculate_piece_range(offset: u64, length: u64, range: Option<Range>) -> (u64, u64) {
+    if let Some(range) = range {
+        let target_offset = max(offset, range.start);
+        let target_length =
+            min(offset + length - 1, range.start + range.length - 1) - target_offset + 1;
+        (target_offset, target_length)
+    } else {
+        (offset, length)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn should_calculate_piece_range() {
+        let test_cases = vec![
+            (1, 4, None, 1, 4),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 1,
+                    length: 4,
+                }),
+                1,
+                4,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 2,
+                    length: 1,
+                }),
+                2,
+                1,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 1,
+                    length: 1,
+                }),
+                1,
+                1,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 4,
+                    length: 1,
+                }),
+                4,
+                1,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 0,
+                    length: 2,
+                }),
+                1,
+                1,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 4,
+                    length: 3,
+                }),
+                4,
+                1,
+            ),
+        ];
+
+        for (piece_offset, piece_length, range, expected_offset, expected_length) in test_cases {
+            let (target_offset, target_length) =
+                calculate_piece_range(piece_offset, piece_length, range);
+            assert_eq!(target_offset, expected_offset);
+            assert_eq!(target_length, expected_length);
+        }
     }
 }
