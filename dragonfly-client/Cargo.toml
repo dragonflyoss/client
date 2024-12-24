@@ -76,7 +76,7 @@ opentelemetry-jaeger = { version = "0.17.0", features = ["rt-tokio"] }
 pprof = { version = "0.14", features = ["flamegraph", "protobuf-codec"] }
 prometheus = { version = "0.13", features = ["process"] }
 tonic-health = "0.12.3"
-bytes = "1.8"
+bytes = "1.9"
 sysinfo = "0.32.1"
 tower = "0.4.13"
 indicatif = "0.17.9"
