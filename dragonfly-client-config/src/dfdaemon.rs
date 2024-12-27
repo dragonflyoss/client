@@ -134,6 +134,12 @@ fn default_download_max_schedule_count() -> u32 {
     5
 }
 
+/// default_host_syncer_interval is the default interval to sync host state.
+#[inline]
+fn default_host_syncer_interval() -> Duration {
+    Duration::from_secs(3)
+}
+
 /// default_scheduler_announce_interval is the default interval to announce peer to the scheduler.
 #[inline]
 fn default_scheduler_announce_interval() -> Duration {
@@ -216,6 +222,13 @@ fn default_gc_policy_dist_low_threshold_percent() -> u8 {
 #[inline]
 pub fn default_proxy_server_port() -> u16 {
     4001
+}
+
+/// default_host_syncer_cache_capacity is the default cache capacity for the host syncer, default is
+/// 50.
+#[inline]
+pub fn default_host_syncer_cache_capacity() -> usize {
+    50
 }
 
 /// default_proxy_cache_capacity is the default cache capacity for the proxy server, default is
@@ -561,6 +574,26 @@ impl UploadClient {
     }
 }
 
+/// HostSyncer is the host syncer configuration for dfdaemon.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HostSyncer {
+    /// enable indicates whether enable host syncer.
+    pub enable: bool,
+
+    /// interval is the interval to sync hosts' info.
+    #[serde(
+        default = "default_host_syncer_interval",
+        with = "humantime_serde"
+    )]
+    pub interval: Duration,
+
+    /// cache_capacity is the capacity of the cache by LRU algorithm for HostSyncer grpc connection,
+    /// default is 50.
+    #[serde(default = "default_host_syncer_cache_capacity")]
+    pub cache_capacity: usize,
+}
+
 /// Upload is the upload configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -570,6 +603,9 @@ pub struct Upload {
 
     /// client is the upload client configuration for dfdaemon.
     pub client: UploadClient,
+
+    /// syncer is the host syncer configuration for dfdaemon.
+    pub syncer: HostSyncer,
 
     /// disable_shared indicates whether disable to share data for other peers.
     pub disable_shared: bool,
@@ -585,6 +621,7 @@ impl Default for Upload {
         Upload {
             server: UploadServer::default(),
             client: UploadClient::default(),
+            syncer: HostSyncer::default(),
             disable_shared: false,
             rate_limit: default_upload_rate_limit(),
         }
