@@ -134,9 +134,9 @@ fn default_download_max_schedule_count() -> u32 {
     5
 }
 
-/// default_host_syncer_interval is the default interval to sync host state.
+/// default_parent_selector_sync_interval is the default interval to sync host state.
 #[inline]
-fn default_host_syncer_interval() -> Duration {
+fn default_parent_selector_sync_interval() -> Duration {
     Duration::from_secs(3)
 }
 
@@ -224,10 +224,10 @@ pub fn default_proxy_server_port() -> u16 {
     4001
 }
 
-/// default_host_syncer_cache_capacity is the default cache capacity for the host syncer, default is
+/// default_parent_selector_capacity is the default cache capacity for the host syncer, default is
 /// 50.
 #[inline]
-pub fn default_host_syncer_cache_capacity() -> usize {
+pub fn default_parent_selector_capacity() -> usize {
     50
 }
 
@@ -574,24 +574,24 @@ impl UploadClient {
     }
 }
 
-/// HostSyncer is the host syncer configuration for dfdaemon.
+/// ParentSelector is the parent selector configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct HostSyncer {
-    /// enable indicates whether enable host syncer.
+pub struct ParentSelector {
+    /// enable indicates whether enable parent selector.
     pub enable: bool,
 
-    /// interval is the interval to sync hosts' info.
+    /// sync_interval is the interval to sync parents' host info.
     #[serde(
-        default = "default_host_syncer_interval",
+        default = "default_parent_selector_sync_interval",
         with = "humantime_serde"
     )]
-    pub interval: Duration,
+    pub sync_interval: Duration,
 
-    /// cache_capacity is the capacity of the cache by LRU algorithm for HostSyncer grpc connection,
+    /// capacity is the capacity of the cache by LRU algorithm for HostSyncer grpc connection,
     /// default is 50.
-    #[serde(default = "default_host_syncer_cache_capacity")]
-    pub cache_capacity: usize,
+    #[serde(default = "default_parent_selector_capacity")]
+    pub capacity: usize,
 }
 
 /// Upload is the upload configuration for dfdaemon.
@@ -604,8 +604,8 @@ pub struct Upload {
     /// client is the upload client configuration for dfdaemon.
     pub client: UploadClient,
 
-    /// syncer is the host syncer configuration for dfdaemon.
-    pub syncer: HostSyncer,
+    /// parent_selector is the host syncer configuration for dfdaemon.
+    pub parent_selector: ParentSelector,
 
     /// disable_shared indicates whether disable to share data for other peers.
     pub disable_shared: bool,
@@ -621,7 +621,7 @@ impl Default for Upload {
         Upload {
             server: UploadServer::default(),
             client: UploadClient::default(),
-            syncer: HostSyncer::default(),
+            parent_selector: ParentSelector::default(),
             disable_shared: false,
             rate_limit: default_upload_rate_limit(),
         }
