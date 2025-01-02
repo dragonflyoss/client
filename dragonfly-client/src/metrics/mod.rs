@@ -181,7 +181,7 @@ lazy_static! {
     /// PROXY_REQUEST_VIA_DFDAEMON_COUNT is used to count the number of proxy requset via dfdaemon.
     pub static ref PROXY_REQUEST_VIA_DFDAEMON_COUNT: IntCounterVec =
         IntCounterVec::new(
-            Opts::new("proxy_request_by_dfdaemon_total", "Counter of the number of the proxy request by dfdaemon.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            Opts::new("proxy_request_via_dfdaemon_total", "Counter of the number of the proxy request via dfdaemon.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
             &[]
         ).expect("metric can be created");
 
