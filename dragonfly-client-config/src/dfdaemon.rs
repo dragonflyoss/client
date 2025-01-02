@@ -439,6 +439,9 @@ pub struct Download {
     /// server is the download server configuration for dfdaemon.
     pub server: DownloadServer,
 
+    /// parent_selector is the download parent selector configuration for dfdaemon.
+    pub parent_selector: ParentSelector,
+
     /// rate_limit is the rate limit of the download speed in GiB/Mib/Kib per second.
     #[serde(with = "bytesize_serde", default = "default_download_rate_limit")]
     pub rate_limit: ByteSize,
@@ -458,6 +461,7 @@ impl Default for Download {
     fn default() -> Self {
         Download {
             server: DownloadServer::default(),
+            parent_selector: ParentSelector::default(),
             rate_limit: default_download_rate_limit(),
             piece_timeout: default_download_piece_timeout(),
             concurrent_piece_count: default_download_concurrent_piece_count(),
@@ -574,22 +578,36 @@ impl UploadClient {
     }
 }
 
-/// ParentSelector is the parent selector configuration for dfdaemon.
+/// ParentSelector is the download parent selector configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ParentSelector {
-    /// enable indicates whether enable parent selector.
+    /// enable indicates whether enable download piece parent selector.
+    ///
+    /// If enable is true, syncer::host_syncer::HostSyncer will start, and Dragonfly will
+    /// periodically synchronize the host state from parents. Then the
+    /// resources::piece_collector::PieceCollector will use this data to select
+    /// the most suitable parent's piece for downloading.
+    ///
+    /// If enable is false, syncer::host_syncer::HostSyncer will not start, and
+    /// the resources::piece_collector::PieceCollector will degrade to normal mode,
+    /// which means evenly distributing pieces to each parent.
     pub enable: bool,
 
-    /// sync_interval is the interval to sync parents' host info.
+    /// sync_interval is the interval to sync parents' host state.
+    ///
+    /// The period for syncer::host_state::HostState to obtain the local state, the period for
+    /// syncer::host_syncer::HostSyncer to synchronize the remote parents' host state, and
+    /// the period for resources::piece_collector::PieceCollector to obtain the parent node state
+    /// of this task from syncer::host_syncer::HostSyncer will all be set as sync_interval.
     #[serde(
         default = "default_parent_selector_sync_interval",
         with = "humantime_serde"
     )]
     pub sync_interval: Duration,
 
-    /// capacity is the capacity of the cache by LRU algorithm for HostSyncer grpc connection,
-    /// default is 50.
+    /// capacity is the maximum number of grpc connection DfdaemonUpload.SyncHost maintained
+    /// by LRU cache in syncer::host_syncer::HostSyncer, default is 50.
     #[serde(default = "default_parent_selector_capacity")]
     pub capacity: usize,
 }
@@ -603,9 +621,6 @@ pub struct Upload {
 
     /// client is the upload client configuration for dfdaemon.
     pub client: UploadClient,
-
-    /// parent_selector is the host syncer configuration for dfdaemon.
-    pub parent_selector: ParentSelector,
 
     /// disable_shared indicates whether disable to share data for other peers.
     pub disable_shared: bool,
@@ -621,7 +636,6 @@ impl Default for Upload {
         Upload {
             server: UploadServer::default(),
             client: UploadClient::default(),
-            parent_selector: ParentSelector::default(),
             disable_shared: false,
             rate_limit: default_upload_rate_limit(),
         }
