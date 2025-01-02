@@ -95,9 +95,8 @@ pub async fn prefetch_task(
     let response = dfdaemon_download_client
         .download_task(request)
         .await
-        .map_err(|err| {
+        .inspect_err(|err| {
             error!("prefetch task failed: {}", err);
-            err
         })?;
 
     // Collect the prefetch task started metrics.

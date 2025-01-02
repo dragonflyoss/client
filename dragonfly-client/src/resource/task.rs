@@ -54,6 +54,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::time::{Duration, Instant};
+use tokio::io::AsyncReadExt;
 use tokio::sync::{
     mpsc::{self, Sender},
     Semaphore,
@@ -134,10 +135,10 @@ impl Task {
         }
 
         // Handle the request header.
-        let mut request_header = hashmap_to_headermap(&request.request_header).map_err(|err| {
-            error!("convert header: {}", err);
-            err
-        })?;
+        let mut request_header =
+            hashmap_to_headermap(&request.request_header).inspect_err(|err| {
+                error!("convert header: {}", err);
+            })?;
 
         // Remove the range header to prevent the server from
         // returning a 206 partial content and returning
@@ -337,9 +338,8 @@ impl Task {
                 REQUEST_TIMEOUT,
             )
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("send DownloadTaskStartedResponse failed: {:?}", err);
-                err
             })?;
 
         // Download the pieces from the local.
@@ -349,6 +349,7 @@ impl Task {
                 task,
                 host_id,
                 peer_id,
+                request.need_piece_content,
                 interested_pieces.clone(),
                 download_progress_tx.clone(),
             )
@@ -512,9 +513,8 @@ impl Task {
                 REQUEST_TIMEOUT,
             )
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("send RegisterPeerRequest failed: {:?}", err);
-                err
             })?;
         info!("sent RegisterPeerRequest");
 
@@ -525,9 +525,8 @@ impl Task {
             .scheduler_client
             .announce_peer(task_id, peer_id, request_stream)
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("announce peer failed: {:?}", err);
-                err
             })?;
         info!("announced peer has been connected");
 
@@ -591,9 +590,8 @@ impl Task {
                             REQUEST_TIMEOUT,
                         )
                         .await
-                        .map_err(|err| {
+                        .inspect_err(|err| {
                             error!("send DownloadPeerStartedRequest failed: {:?}", err);
-                            err
                         })?;
                     info!("sent DownloadPeerStartedRequest");
 
@@ -616,9 +614,8 @@ impl Task {
                             REQUEST_TIMEOUT,
                         )
                         .await
-                        .map_err(|err| {
+                        .inspect_err(|err| {
                             error!("send DownloadPeerFinishedRequest failed: {:?}", err);
-                            err
                         })?;
                     info!("sent DownloadPeerFinishedRequest");
 
@@ -676,6 +673,7 @@ impl Task {
                             response.candidate_parents.clone(),
                             remaining_interested_pieces.clone(),
                             request.is_prefetch,
+                            request.need_piece_content,
                             download_progress_tx.clone(),
                             in_stream_tx.clone(),
                         )
@@ -918,6 +916,7 @@ impl Task {
         parents: Vec<Peer>,
         interested_pieces: Vec<metadata::Piece>,
         is_prefetch: bool,
+        need_piece_content: bool,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
         in_stream_tx: Sender<AnnouncePeerRequest>,
     ) -> ClientResult<Vec<metadata::Piece>> {
@@ -977,6 +976,7 @@ impl Task {
                 interrupt: Arc<AtomicBool>,
                 finished_pieces: Arc<Mutex<Vec<metadata::Piece>>>,
                 is_prefetch: bool,
+                need_piece_content: bool,
             ) -> ClientResult<metadata::Piece> {
                 // Limit the concurrent piece count.
                 let _permit = semaphore.acquire().await.unwrap();
@@ -1013,7 +1013,7 @@ impl Task {
                     })?;
 
                 // Construct the piece.
-                let piece = Piece {
+                let mut piece = Piece {
                     number: metadata.number,
                     parent_id: metadata.parent_id.clone(),
                     offset: metadata.offset,
@@ -1024,6 +1024,32 @@ impl Task {
                     cost: metadata.prost_cost(),
                     created_at: Some(prost_wkt_types::Timestamp::from(metadata.created_at)),
                 };
+
+                // If need_piece_content is true, read the piece content from the local.
+                if need_piece_content {
+                    let mut reader = piece_manager
+                        .download_from_local_into_async_read(
+                            piece_id.as_str(),
+                            task_id.as_str(),
+                            metadata.length,
+                            None,
+                            true,
+                            false,
+                        )
+                        .await
+                        .inspect_err(|err| {
+                            error!("read piece {} failed: {:?}", piece_id, err);
+                            interrupt.store(true, Ordering::SeqCst);
+                        })?;
+
+                    let mut content = vec![0; metadata.length as usize];
+                    reader.read_exact(&mut content).await.inspect_err(|err| {
+                        error!("read piece {} failed: {:?}", piece_id, err);
+                        interrupt.store(true, Ordering::SeqCst);
+                    })?;
+
+                    piece.content = Some(content);
+                }
 
                 // Send the download piece finished request.
                 in_stream_tx
@@ -1043,13 +1069,12 @@ impl Task {
                         REQUEST_TIMEOUT,
                     )
                     .await
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         error!(
                             "send DownloadPieceFinishedRequest for piece {} failed: {:?}",
                             piece_id, err
                         );
                         interrupt.store(true, Ordering::SeqCst);
-                        err
                     })?;
 
                 // Send the download progress.
@@ -1070,13 +1095,12 @@ impl Task {
                         REQUEST_TIMEOUT,
                     )
                     .await
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         error!(
                             "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
                             piece_id, err
                         );
                         interrupt.store(true, Ordering::SeqCst);
-                        err
                     })?;
 
                 info!(
@@ -1106,6 +1130,7 @@ impl Task {
                     interrupt.clone(),
                     finished_pieces.clone(),
                     is_prefetch,
+                    need_piece_content,
                 )
                 .in_current_span(),
             );
@@ -1218,6 +1243,7 @@ impl Task {
                 length: u64,
                 request_header: HeaderMap,
                 is_prefetch: bool,
+                need_piece_content: bool,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
@@ -1248,7 +1274,7 @@ impl Task {
                     .await?;
 
                 // Construct the piece.
-                let piece = Piece {
+                let mut piece = Piece {
                     number: metadata.number,
                     parent_id: metadata.parent_id.clone(),
                     offset: metadata.offset,
@@ -1259,6 +1285,30 @@ impl Task {
                     cost: metadata.prost_cost(),
                     created_at: Some(prost_wkt_types::Timestamp::from(metadata.created_at)),
                 };
+
+                // If need_piece_content is true, read the piece content from the local.
+                if need_piece_content {
+                    let mut reader = piece_manager
+                        .download_from_local_into_async_read(
+                            piece_id.as_str(),
+                            task_id.as_str(),
+                            metadata.length,
+                            None,
+                            true,
+                            false,
+                        )
+                        .await
+                        .inspect_err(|err| {
+                            error!("read piece {} failed: {:?}", piece_id, err);
+                        })?;
+
+                    let mut content = vec![0; metadata.length as usize];
+                    reader.read_exact(&mut content).await.inspect_err(|err| {
+                        error!("read piece {} failed: {:?}", piece_id, err);
+                    })?;
+
+                    piece.content = Some(content);
+                }
 
                 // Send the download piece finished request.
                 in_stream_tx
@@ -1277,9 +1327,8 @@ impl Task {
                             },
                             REQUEST_TIMEOUT,
                         )
-                        .await.map_err(|err| {
+                        .await.inspect_err(|err| {
                             error!("send DownloadPieceBackToSourceFinishedRequest for piece {} failed: {:?}", piece_id, err);
-                            err
                         })?;
 
                 // Send the download progress.
@@ -1300,12 +1349,11 @@ impl Task {
                         REQUEST_TIMEOUT,
                     )
                     .await
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         error!(
                             "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
                             piece_id, err
                         );
-                        err
                     })?;
 
                 info!("finished piece {} from source", piece_id);
@@ -1323,6 +1371,7 @@ impl Task {
                     interested_piece.length,
                     request_header.clone(),
                     request.is_prefetch,
+                    request.need_piece_content,
                     self.piece.clone(),
                     self.storage.clone(),
                     semaphore.clone(),
@@ -1444,6 +1493,7 @@ impl Task {
         task: &metadata::Task,
         host_id: &str,
         peer_id: &str,
+        need_piece_content: bool,
         interested_pieces: Vec<metadata::Piece>,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<Vec<metadata::Piece>> {
@@ -1475,7 +1525,7 @@ impl Task {
             info!("finished piece {} from local", piece_id,);
 
             // Construct the piece.
-            let piece = Piece {
+            let mut piece = Piece {
                 number: piece.number,
                 parent_id: None,
                 offset: piece.offset,
@@ -1486,6 +1536,31 @@ impl Task {
                 cost: piece.prost_cost(),
                 created_at: Some(prost_wkt_types::Timestamp::from(piece.created_at)),
             };
+
+            // If need_piece_content is true, read the piece content from the local.
+            if need_piece_content {
+                let mut reader = self
+                    .piece
+                    .download_from_local_into_async_read(
+                        piece_id.as_str(),
+                        task_id,
+                        piece.length,
+                        None,
+                        true,
+                        false,
+                    )
+                    .await
+                    .inspect_err(|err| {
+                        error!("read piece {} failed: {:?}", piece_id, err);
+                    })?;
+
+                let mut content = vec![0; piece.length as usize];
+                reader.read_exact(&mut content).await.inspect_err(|err| {
+                    error!("read piece {} failed: {:?}", piece_id, err);
+                })?;
+
+                piece.content = Some(content);
+            }
 
             // Send the download progress.
             download_progress_tx
@@ -1505,12 +1580,11 @@ impl Task {
                     REQUEST_TIMEOUT,
                 )
                 .await
-                .map_err(|err| {
+                .inspect_err(|err| {
                     error!(
                         "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
                         piece_id, err
                     );
-                    err
                 })?;
 
             // Store the finished piece.
@@ -1619,12 +1693,11 @@ impl Task {
                         REQUEST_TIMEOUT,
                     )
                     .await
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         error!(
                             "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
                             piece_id, err
                         );
-                        err
                     })?;
 
                 info!("finished piece {} from source", piece_id);
@@ -1696,9 +1769,8 @@ impl Task {
                 task_id: task_id.to_string(),
             })
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("stat task failed: {}", err);
-                err
             })?;
 
         Ok(task)
@@ -1707,9 +1779,8 @@ impl Task {
     /// Delete a task and reclaim local storage.
     #[instrument(skip_all)]
     pub async fn delete(&self, task_id: &str, host_id: &str) -> ClientResult<()> {
-        let task = self.storage.get_task(task_id).map_err(|err| {
+        let task = self.storage.get_task(task_id).inspect_err(|err| {
             error!("get task {} from local storage error: {:?}", task_id, err);
-            err
         })?;
 
         match task {
@@ -1722,9 +1793,8 @@ impl Task {
                         task_id: task_id.to_string(),
                     })
                     .await
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         error!("delete task {} failed from scheduler: {:?}", task_id, err);
-                        err
                     })?;
 
                 info!("delete task {} from local storage", task.id);

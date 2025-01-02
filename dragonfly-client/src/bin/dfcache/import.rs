@@ -81,7 +81,7 @@ impl ImportCommand {
     pub async fn execute(&self, endpoint: &Path) -> Result<()> {
         // Validate the command line arguments.
         if let Err(err) = self.validate_args() {
-            eprintln!(
+            println!(
                 "{}{}{}Validating Failed!{}",
                 color::Fg(color::Red),
                 style::Italic,
@@ -89,7 +89,7 @@ impl ImportCommand {
                 style::Reset
             );
 
-            eprintln!(
+            println!(
                 "{}{}{}****************************************{}",
                 color::Fg(color::Black),
                 style::Italic,
@@ -97,7 +97,7 @@ impl ImportCommand {
                 style::Reset
             );
 
-            eprintln!(
+            println!(
                 "{}{}{}Message:{} {}",
                 color::Fg(color::Cyan),
                 style::Italic,
@@ -106,7 +106,7 @@ impl ImportCommand {
                 err,
             );
 
-            eprintln!(
+            println!(
                 "{}{}{}****************************************{}",
                 color::Fg(color::Black),
                 style::Italic,
@@ -122,7 +122,7 @@ impl ImportCommand {
             match get_dfdaemon_download_client(endpoint.to_path_buf()).await {
                 Ok(client) => client,
                 Err(err) => {
-                    eprintln!(
+                    println!(
                         "{}{}{}Connect Dfdaemon Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -130,7 +130,7 @@ impl ImportCommand {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -138,7 +138,7 @@ impl ImportCommand {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}Message:{}, can not connect {}, please check the unix socket {}",
                         color::Fg(color::Cyan),
                         style::Italic,
@@ -148,7 +148,7 @@ impl ImportCommand {
                         endpoint.to_string_lossy(),
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -164,7 +164,7 @@ impl ImportCommand {
         if let Err(err) = self.run(dfdaemon_download_client).await {
             match err {
                 Error::TonicStatus(status) => {
-                    eprintln!(
+                    println!(
                         "{}{}{}Importing Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -172,7 +172,7 @@ impl ImportCommand {
                         style::Reset,
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}*********************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -180,7 +180,7 @@ impl ImportCommand {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}Bad Code:{} {}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -189,7 +189,7 @@ impl ImportCommand {
                         status.code()
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}Message:{} {}",
                         color::Fg(color::Cyan),
                         style::Italic,
@@ -198,7 +198,7 @@ impl ImportCommand {
                         status.message()
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}Details:{} {}",
                         color::Fg(color::Cyan),
                         style::Italic,
@@ -207,7 +207,7 @@ impl ImportCommand {
                         std::str::from_utf8(status.details()).unwrap()
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}*********************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -216,7 +216,7 @@ impl ImportCommand {
                     );
                 }
                 err => {
-                    eprintln!(
+                    println!(
                         "{}{}{}Importing Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -224,7 +224,7 @@ impl ImportCommand {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -232,7 +232,7 @@ impl ImportCommand {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}Message:{} {}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -241,7 +241,7 @@ impl ImportCommand {
                         err
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,
