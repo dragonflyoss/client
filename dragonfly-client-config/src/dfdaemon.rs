@@ -586,7 +586,7 @@ impl UploadClient {
 ///                              +----------+
 ///              ----------------|  parent  |---------------
 ///              |               +----------+              |
-///          host info                                piece matedata
+///          host info                                piece metadata
 /// +------------|-----------------------------------------|------------+
 /// |            |                                         |            |
 /// |            |                 peer                    |            |
@@ -595,13 +595,13 @@ impl UploadClient {
 /// |  |  ParentSelector  | ---optimal parent---> |  PieceCollector  |  |
 /// |  +------------------+                       +------------------+  |
 /// |                                                      |            |
-/// +------------------------------------------------------|------------+
-///                                                   piece metadata
-///                                                        v
-///                                                  +------------+
-///                                                  |  download  |
-///                                                  +------------+
-///
+/// |                                                 piece metadata    |
+/// |                                                      |            |
+/// |                                                      v            |
+/// |                                                +------------+     |
+/// |                                                |  download  |     |
+/// |                                                +------------+     |
+/// +-------------------------------------------------------------------+
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ParentSelector {
