@@ -578,36 +578,54 @@ impl UploadClient {
     }
 }
 
-/// ParentSelector is the download parent selector configuration for dfdaemon.
+/// ParentSelector is the download parent selector configuration for dfdaemon. It will synchronize
+/// the host info in real-time from the parents and then select the optimal parent for downloading.
+///
+/// The workflow diagram is as follows:
+///
+///                              +----------+
+///              ----------------|  parent  |---------------
+///              |               +----------+              |
+///          host info                                piece matedata
+/// +------------|-----------------------------------------|------------+
+/// |            |                                         |            |
+/// |            |                 peer                    |            |
+/// |            v                                         v            |
+/// |  +------------------+                       +------------------+  |
+/// |  |  ParentSelector  | ---optimal parent---> |  PieceCollector  |  |
+/// |  +------------------+                       +------------------+  |
+/// |                                                      |            |
+/// +------------------------------------------------------|------------+
+///                                                   piece metadata
+///                                                        v
+///                                                  +------------+
+///                                                  |  download  |
+///                                                  +------------+
+///
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ParentSelector {
-    /// enable indicates whether enable download piece parent selector.
+    /// enable indicates whether enable download parent selector.
     ///
-    /// If enable is true, syncer::host_syncer::HostSyncer will start, and Dragonfly will
-    /// periodically synchronize the host state from parents. Then the
-    /// resources::piece_collector::PieceCollector will use this data to select
-    /// the most suitable parent's piece for downloading.
+    /// If enable is true, `ParentSelector`'s sync loop be started. It will periodically fetch
+    /// host info from parent and use this data to calculate the optimal parent for each task.
     ///
-    /// If enable is false, syncer::host_syncer::HostSyncer will not start, and
-    /// the resources::piece_collector::PieceCollector will degrade to normal mode,
-    /// which means evenly distributing pieces to each parent.
+    /// If enable is false, `ParentSelector`'s sync loop will not run. Instead, it will operate
+    /// in a default mode, where each parent is selected with equal probability.
     pub enable: bool,
 
-    /// sync_interval is the interval to sync parents' host state.
+    /// sync_interval is the interval to sync parents' host info.
     ///
-    /// The period for syncer::host_state::HostState to obtain the local state, the period for
-    /// syncer::host_syncer::HostSyncer to synchronize the remote parents' host state, and
-    /// the period for resources::piece_collector::PieceCollector to obtain the parent node state
-    /// of this task from syncer::host_syncer::HostSyncer will all be set as sync_interval.
+    /// This interval applies to both the `syncer::host_info::HostInfo`'s loop for obtaining local
+    /// host info and the `ParentSelector`'s loop for synchronizing parents' host info.
     #[serde(
         default = "default_parent_selector_sync_interval",
         with = "humantime_serde"
     )]
     pub sync_interval: Duration,
 
-    /// capacity is the maximum number of grpc connection DfdaemonUpload.SyncHost maintained
-    /// by LRU cache in syncer::host_syncer::HostSyncer, default is 50.
+    /// capacity is the maximum number of gRPC connection `DfdaemonUpload.SyncHost` maintained
+    /// in `ParentSelector`'s LRU cache, default is 50.
     #[serde(default = "default_parent_selector_capacity")]
     pub capacity: usize,
 }
