@@ -29,7 +29,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{cmp::min, fmt::Write};
 use termion::{color, style};
-use tracing::{error, info};
+use tokio::fs::{self, OpenOptions};
+use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
+use tracing::{debug, error, info};
 
 use super::*;
 
@@ -38,6 +40,13 @@ use super::*;
 pub struct ExportCommand {
     #[arg(help = "Specify the persistent cache task ID to export")]
     id: String,
+
+    #[arg(
+        long = "transfer-from-dfdaemon",
+        default_value_t = false,
+        help = "Specify whether to transfer the content of downloading file from dfdaemon's unix domain socket. If it is true, dfcache will call dfdaemon to download the file, and dfdaemon will return the content of downloading file to dfcache via unix domain socket, and dfcache will copy the content to the output path. If it is false, dfdaemon will download the file and hardlink or copy the file to the output path."
+    )]
+    transfer_from_dfdaemon: bool,
 
     #[arg(
         long = "application",
@@ -75,7 +84,7 @@ impl ExportCommand {
     pub async fn execute(&self, endpoint: &Path) -> Result<()> {
         // Validate the command line arguments.
         if let Err(err) = self.validate_args() {
-            eprintln!(
+            println!(
                 "{}{}{}Validating Failed!{}",
                 color::Fg(color::Red),
                 style::Italic,
@@ -83,7 +92,7 @@ impl ExportCommand {
                 style::Reset
             );
 
-            eprintln!(
+            println!(
                 "{}{}{}****************************************{}",
                 color::Fg(color::Black),
                 style::Italic,
@@ -91,7 +100,7 @@ impl ExportCommand {
                 style::Reset
             );
 
-            eprintln!(
+            println!(
                 "{}{}{}Message:{} {}",
                 color::Fg(color::Cyan),
                 style::Italic,
@@ -100,7 +109,7 @@ impl ExportCommand {
                 err,
             );
 
-            eprintln!(
+            println!(
                 "{}{}{}****************************************{}",
                 color::Fg(color::Black),
                 style::Italic,
@@ -116,7 +125,7 @@ impl ExportCommand {
             match get_dfdaemon_download_client(endpoint.to_path_buf()).await {
                 Ok(client) => client,
                 Err(err) => {
-                    eprintln!(
+                    println!(
                         "{}{}{}Connect Dfdaemon Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -124,7 +133,7 @@ impl ExportCommand {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -132,7 +141,7 @@ impl ExportCommand {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}Message:{}, can not connect {}, please check the unix socket {}",
                         color::Fg(color::Cyan),
                         style::Italic,
@@ -142,7 +151,7 @@ impl ExportCommand {
                         endpoint.to_string_lossy(),
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -160,7 +169,7 @@ impl ExportCommand {
                 Error::TonicStatus(status) => {
                     let details = status.details();
                     if let Ok(backend_err) = serde_json::from_slice::<Backend>(details) {
-                        eprintln!(
+                        println!(
                             "{}{}{}Exporting Failed!{}",
                             color::Fg(color::Red),
                             style::Italic,
@@ -168,7 +177,7 @@ impl ExportCommand {
                             style::Reset
                         );
 
-                        eprintln!(
+                        println!(
                             "{}{}{}****************************************{}",
                             color::Fg(color::Black),
                             style::Italic,
@@ -177,7 +186,7 @@ impl ExportCommand {
                         );
 
                         if let Some(status_code) = backend_err.status_code {
-                            eprintln!(
+                            println!(
                                 "{}{}{}Bad Status Code:{} {}",
                                 color::Fg(color::Red),
                                 style::Italic,
@@ -187,7 +196,7 @@ impl ExportCommand {
                             );
                         }
 
-                        eprintln!(
+                        println!(
                             "{}{}{}Message:{} {}",
                             color::Fg(color::Cyan),
                             style::Italic,
@@ -197,7 +206,7 @@ impl ExportCommand {
                         );
 
                         if !backend_err.header.is_empty() {
-                            eprintln!(
+                            println!(
                                 "{}{}{}Header:{}",
                                 color::Fg(color::Cyan),
                                 style::Italic,
@@ -205,11 +214,11 @@ impl ExportCommand {
                                 style::Reset
                             );
                             for (key, value) in backend_err.header.iter() {
-                                eprintln!("  [{}]: {}", key.as_str(), value.as_str());
+                                println!("  [{}]: {}", key.as_str(), value.as_str());
                             }
                         }
 
-                        eprintln!(
+                        println!(
                             "{}{}{}****************************************{}",
                             color::Fg(color::Black),
                             style::Italic,
@@ -217,7 +226,7 @@ impl ExportCommand {
                             style::Reset
                         );
                     } else {
-                        eprintln!(
+                        println!(
                             "{}{}{}Exporting Failed!{}",
                             color::Fg(color::Red),
                             style::Italic,
@@ -225,7 +234,7 @@ impl ExportCommand {
                             style::Reset
                         );
 
-                        eprintln!(
+                        println!(
                             "{}{}{}*********************************{}",
                             color::Fg(color::Black),
                             style::Italic,
@@ -233,7 +242,7 @@ impl ExportCommand {
                             style::Reset
                         );
 
-                        eprintln!(
+                        println!(
                             "{}{}{}Bad Code:{} {}",
                             color::Fg(color::Red),
                             style::Italic,
@@ -242,7 +251,7 @@ impl ExportCommand {
                             status.code()
                         );
 
-                        eprintln!(
+                        println!(
                             "{}{}{}Message:{} {}",
                             color::Fg(color::Cyan),
                             style::Italic,
@@ -252,7 +261,7 @@ impl ExportCommand {
                         );
 
                         if !status.details().is_empty() {
-                            eprintln!(
+                            println!(
                                 "{}{}{}Details:{} {}",
                                 color::Fg(color::Cyan),
                                 style::Italic,
@@ -262,7 +271,7 @@ impl ExportCommand {
                             );
                         }
 
-                        eprintln!(
+                        println!(
                             "{}{}{}*********************************{}",
                             color::Fg(color::Black),
                             style::Italic,
@@ -272,7 +281,7 @@ impl ExportCommand {
                     }
                 }
                 Error::BackendError(err) => {
-                    eprintln!(
+                    println!(
                         "{}{}{}Exporting Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -280,7 +289,7 @@ impl ExportCommand {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -288,7 +297,7 @@ impl ExportCommand {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}Message:{} {}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -298,7 +307,7 @@ impl ExportCommand {
                     );
 
                     if err.header.is_some() {
-                        eprintln!(
+                        println!(
                             "{}{}{}Header:{}",
                             color::Fg(color::Cyan),
                             style::Italic,
@@ -306,11 +315,11 @@ impl ExportCommand {
                             style::Reset
                         );
                         for (key, value) in err.header.unwrap_or_default().iter() {
-                            eprintln!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
+                            println!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
                         }
                     }
 
-                    eprintln!(
+                    println!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -319,7 +328,7 @@ impl ExportCommand {
                     );
                 }
                 err => {
-                    eprintln!(
+                    println!(
                         "{}{}{}Exporting Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -327,7 +336,7 @@ impl ExportCommand {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -335,7 +344,7 @@ impl ExportCommand {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}Message:{} {}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -344,7 +353,7 @@ impl ExportCommand {
                         err
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -362,9 +371,16 @@ impl ExportCommand {
 
     /// run runs the export command.
     async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
-        // Get the absolute path of the output file.
-        let absolute_path = Path::new(&self.output).absolutize()?;
-        info!("download file to: {}", absolute_path.to_string_lossy());
+        // Dfcache needs to notify dfdaemon to transfer the piece content of downloading file via unix domain socket
+        // when the `transfer_from_dfdaemon` is true. Otherwise, dfdaemon will download the file and hardlink or
+        // copy the file to the output path.
+        let (output_path, need_piece_content) = if self.transfer_from_dfdaemon {
+            (None, true)
+        } else {
+            let absolute_path = Path::new(&self.output).absolutize()?;
+            info!("download file to: {}", absolute_path.to_string_lossy());
+            (Some(absolute_path.to_string_lossy().to_string()), false)
+        };
 
         // Create dfdaemon client.
         let response = dfdaemon_download_client
@@ -375,17 +391,43 @@ impl ExportCommand {
                 persistent: false,
                 tag: Some(self.tag.clone()),
                 application: Some(self.application.clone()),
-                output_path: absolute_path.to_string_lossy().to_string(),
+                output_path,
                 timeout: Some(
                     prost_wkt_types::Duration::try_from(self.timeout)
                         .or_err(ErrorType::ParseError)?,
                 ),
+                need_piece_content,
             })
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("download persistent cache task failed: {}", err);
-                err
             })?;
+
+        // If transfer_from_dfdaemon is true, then dfcache needs to create the output file and write the
+        // piece content to the output file.
+        let mut f = if self.transfer_from_dfdaemon {
+            if let Some(parent) = self.output.parent() {
+                if !parent.exists() {
+                    fs::create_dir_all(parent).await.inspect_err(|err| {
+                        error!("failed to create directory {:?}: {}", parent, err);
+                    })?;
+                }
+            }
+
+            let f = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(dfcache::DEFAULT_OUTPUT_FILE_MODE)
+                .open(&self.output)
+                .await
+                .inspect_err(|err| {
+                    error!("open file {:?} failed: {}", self.output, err);
+                })?;
+
+            Some(f)
+        } else {
+            None
+        };
 
         // Initialize progress bar.
         let pb = ProgressBar::new(0);
@@ -403,9 +445,8 @@ impl ExportCommand {
         //  Download file.
         let mut downloaded = 0;
         let mut out_stream = response.into_inner();
-        while let Some(message) = out_stream.message().await.map_err(|err| {
+        while let Some(message) = out_stream.message().await.inspect_err(|err| {
             error!("get message failed: {}", err);
-            err
         })? {
             match message.response {
                 Some(download_persistent_cache_task_response::Response::DownloadPersistentCacheTaskStartedResponse(
@@ -417,6 +458,22 @@ impl ExportCommand {
                     response,
                 )) => {
                     let piece = response.piece.ok_or(Error::InvalidParameter)?;
+
+                    // Dfcache needs to write the piece content to the output file.
+                    if let Some(f) = &mut f {
+                        f.seek(SeekFrom::Start(piece.offset))
+                            .await
+                            .inspect_err(|err| {
+                                error!("seek {:?} failed: {}", self.output, err);
+                            })?;
+
+                        let content = piece.content.ok_or(Error::InvalidParameter)?;
+                        f.write_all(&content).await.inspect_err(|err| {
+                            error!("write {:?} failed: {}", self.output, err);
+                        })?;
+
+                        debug!("copy piece {} to {:?} success", piece.number, self.output);
+                    };
 
                     downloaded += piece.length;
                     let position = min(downloaded + piece.length, pb.length().unwrap_or(0));

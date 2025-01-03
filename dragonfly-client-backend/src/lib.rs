@@ -234,9 +234,8 @@ impl BackendFactory {
         if let Some(plugin_dir) = plugin_dir {
             backend_factory
                 .load_plugin_backends(plugin_dir)
-                .map_err(|err| {
+                .inspect_err(|err| {
                     error!("failed to load plugin backends: {}", err);
-                    err
                 })?;
         }
 

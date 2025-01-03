@@ -1029,9 +1029,8 @@ async fn proxy_via_https(
         .build();
 
     let client = Client::builder(TokioExecutor::new()).build(https);
-    let response = client.request(request).await.map_err(|err| {
+    let response = client.request(request).await.inspect_err(|err| {
         error!("request failed: {:?}", err);
-        err
     })?;
 
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
@@ -1109,6 +1108,7 @@ fn make_download_task_request(
             object_storage: None,
             hdfs: None,
             is_prefetch: false,
+            need_piece_content: false,
         }),
     })
 }

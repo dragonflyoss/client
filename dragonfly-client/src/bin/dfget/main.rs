@@ -40,10 +40,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp::min, fmt::Write};
 use termion::{color, style};
-use tokio::fs;
+use tokio::fs::{self, OpenOptions};
+use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
-use tracing::{error, info, warn, Level};
+use tracing::{debug, error, info, warn, Level};
 use url::Url;
 use uuid::Uuid;
 
@@ -90,6 +91,13 @@ Examples:
 struct Args {
     #[arg(help = "Specify the URL to download")]
     url: Url,
+
+    #[arg(
+        long = "transfer-from-dfdaemon",
+        default_value_t = false,
+        help = "Specify whether to transfer the content of downloading file from dfdaemon's unix domain socket. If it is true, dfget will call dfdaemon to download the file, and dfdaemon will return the content of downloading file to dfget via unix domain socket, and dfget will copy the content to the output path. If it is false, dfdaemon will download the file and hardlink or copy the file to the output path."
+    )]
+    transfer_from_dfdaemon: bool,
 
     #[arg(
         short = 'O',
@@ -281,7 +289,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Validate command line arguments.
     if let Err(err) = validate_args(&args) {
-        eprintln!(
+        println!(
             "{}{}{}Validating Failed!{}",
             color::Fg(color::Red),
             style::Italic,
@@ -289,7 +297,7 @@ async fn main() -> anyhow::Result<()> {
             style::Reset
         );
 
-        eprintln!(
+        println!(
             "{}{}{}****************************************{}",
             color::Fg(color::Black),
             style::Italic,
@@ -297,7 +305,7 @@ async fn main() -> anyhow::Result<()> {
             style::Reset
         );
 
-        eprintln!(
+        println!(
             "{}{}{}Message:{} {}",
             color::Fg(color::Cyan),
             style::Italic,
@@ -306,7 +314,7 @@ async fn main() -> anyhow::Result<()> {
             err,
         );
 
-        eprintln!(
+        println!(
             "{}{}{}****************************************{}",
             color::Fg(color::Black),
             style::Italic,
@@ -322,7 +330,7 @@ async fn main() -> anyhow::Result<()> {
         match get_dfdaemon_download_client(args.endpoint.to_path_buf()).await {
             Ok(client) => client,
             Err(err) => {
-                eprintln!(
+                println!(
                     "{}{}{}Connect Dfdaemon Failed!{}",
                     color::Fg(color::Red),
                     style::Italic,
@@ -330,7 +338,7 @@ async fn main() -> anyhow::Result<()> {
                     style::Reset
                 );
 
-                eprintln!(
+                println!(
                     "{}{}{}****************************************{}",
                     color::Fg(color::Black),
                     style::Italic,
@@ -338,7 +346,7 @@ async fn main() -> anyhow::Result<()> {
                     style::Reset
                 );
 
-                eprintln!(
+                println!(
                     "{}{}{}Message:{}, can not connect {}, please check the unix socket {}",
                     color::Fg(color::Cyan),
                     style::Italic,
@@ -348,7 +356,7 @@ async fn main() -> anyhow::Result<()> {
                     args.endpoint.to_string_lossy(),
                 );
 
-                eprintln!(
+                println!(
                     "{}{}{}****************************************{}",
                     color::Fg(color::Black),
                     style::Italic,
@@ -366,7 +374,7 @@ async fn main() -> anyhow::Result<()> {
             Error::TonicStatus(status) => {
                 let details = status.details();
                 if let Ok(backend_err) = serde_json::from_slice::<Backend>(details) {
-                    eprintln!(
+                    println!(
                         "{}{}{}Downloading Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -374,7 +382,7 @@ async fn main() -> anyhow::Result<()> {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -383,7 +391,7 @@ async fn main() -> anyhow::Result<()> {
                     );
 
                     if let Some(status_code) = backend_err.status_code {
-                        eprintln!(
+                        println!(
                             "{}{}{}Bad Status Code:{} {}",
                             color::Fg(color::Red),
                             style::Italic,
@@ -393,7 +401,7 @@ async fn main() -> anyhow::Result<()> {
                         );
                     }
 
-                    eprintln!(
+                    println!(
                         "{}{}{}Message:{} {}",
                         color::Fg(color::Cyan),
                         style::Italic,
@@ -403,7 +411,7 @@ async fn main() -> anyhow::Result<()> {
                     );
 
                     if !backend_err.header.is_empty() {
-                        eprintln!(
+                        println!(
                             "{}{}{}Header:{}",
                             color::Fg(color::Cyan),
                             style::Italic,
@@ -411,11 +419,11 @@ async fn main() -> anyhow::Result<()> {
                             style::Reset
                         );
                         for (key, value) in backend_err.header.iter() {
-                            eprintln!("  [{}]: {}", key.as_str(), value.as_str());
+                            println!("  [{}]: {}", key.as_str(), value.as_str());
                         }
                     }
 
-                    eprintln!(
+                    println!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -423,7 +431,7 @@ async fn main() -> anyhow::Result<()> {
                         style::Reset
                     );
                 } else {
-                    eprintln!(
+                    println!(
                         "{}{}{}Downloading Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -431,7 +439,7 @@ async fn main() -> anyhow::Result<()> {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}*********************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -439,7 +447,7 @@ async fn main() -> anyhow::Result<()> {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}Bad Code:{} {}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -448,7 +456,7 @@ async fn main() -> anyhow::Result<()> {
                         status.code()
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}Message:{} {}",
                         color::Fg(color::Cyan),
                         style::Italic,
@@ -458,7 +466,7 @@ async fn main() -> anyhow::Result<()> {
                     );
 
                     if !status.details().is_empty() {
-                        eprintln!(
+                        println!(
                             "{}{}{}Details:{} {}",
                             color::Fg(color::Cyan),
                             style::Italic,
@@ -468,7 +476,7 @@ async fn main() -> anyhow::Result<()> {
                         );
                     }
 
-                    eprintln!(
+                    println!(
                         "{}{}{}*********************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -478,7 +486,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             Error::BackendError(err) => {
-                eprintln!(
+                println!(
                     "{}{}{}Downloading Failed!{}",
                     color::Fg(color::Red),
                     style::Italic,
@@ -486,7 +494,7 @@ async fn main() -> anyhow::Result<()> {
                     style::Reset
                 );
 
-                eprintln!(
+                println!(
                     "{}{}{}****************************************{}",
                     color::Fg(color::Black),
                     style::Italic,
@@ -494,7 +502,7 @@ async fn main() -> anyhow::Result<()> {
                     style::Reset
                 );
 
-                eprintln!(
+                println!(
                     "{}{}{}Message:{} {}",
                     color::Fg(color::Red),
                     style::Italic,
@@ -504,7 +512,7 @@ async fn main() -> anyhow::Result<()> {
                 );
 
                 if err.header.is_some() {
-                    eprintln!(
+                    println!(
                         "{}{}{}Header:{}",
                         color::Fg(color::Cyan),
                         style::Italic,
@@ -512,11 +520,11 @@ async fn main() -> anyhow::Result<()> {
                         style::Reset
                     );
                     for (key, value) in err.header.unwrap_or_default().iter() {
-                        eprintln!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
+                        println!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
                     }
                 }
 
-                eprintln!(
+                println!(
                     "{}{}{}****************************************{}",
                     color::Fg(color::Black),
                     style::Italic,
@@ -525,7 +533,7 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
             err => {
-                eprintln!(
+                println!(
                     "{}{}{}Downloading Failed!{}",
                     color::Fg(color::Red),
                     style::Italic,
@@ -533,7 +541,7 @@ async fn main() -> anyhow::Result<()> {
                     style::Reset
                 );
 
-                eprintln!(
+                println!(
                     "{}{}{}****************************************{}",
                     color::Fg(color::Black),
                     style::Italic,
@@ -541,7 +549,7 @@ async fn main() -> anyhow::Result<()> {
                     style::Reset
                 );
 
-                eprintln!(
+                println!(
                     "{}{}{}Message:{} {}",
                     color::Fg(color::Red),
                     style::Italic,
@@ -550,7 +558,7 @@ async fn main() -> anyhow::Result<()> {
                     err
                 );
 
-                eprintln!(
+                println!(
                     "{}{}{}****************************************{}",
                     color::Fg(color::Black),
                     style::Italic,
@@ -631,9 +639,8 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         // then download the file to the output directory.
         if entry.is_dir {
             let output_dir = make_output_by_entry(args.url.clone(), &args.output, entry)?;
-            fs::create_dir_all(&output_dir).await.map_err(|err| {
+            fs::create_dir_all(&output_dir).await.inspect_err(|err| {
                 error!("create {} failed: {}", output_dir.to_string_lossy(), err);
-                err
             })?;
         } else {
             let mut entry_args = args.clone();
@@ -713,6 +720,15 @@ async fn download(
         .filtered_query_params
         .unwrap_or_else(dfdaemon::default_proxy_rule_filtered_query_params);
 
+    // Dfget needs to notify dfdaemon to transfer the piece content of downloading file via unix domain socket
+    // when the `transfer_from_dfdaemon` is true. Otherwise, dfdaemon will download the file and hardlink or
+    // copy the file to the output path.
+    let (output_path, need_piece_content) = if args.transfer_from_dfdaemon {
+        (None, true)
+    } else {
+        (Some(args.output.to_string_lossy().to_string()), false)
+    };
+
     // Create dfdaemon client.
     let response = download_client
         .download_task(DownloadTaskRequest {
@@ -728,7 +744,7 @@ async fn download(
                 filtered_query_params,
                 request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
                 piece_length: None,
-                output_path: Some(args.output.to_string_lossy().to_string()),
+                output_path,
                 timeout: Some(
                     prost_wkt_types::Duration::try_from(args.timeout)
                         .or_err(ErrorType::ParseError)?,
@@ -738,15 +754,41 @@ async fn download(
                 certificate_chain: Vec::new(),
                 prefetch: false,
                 is_prefetch: false,
+                need_piece_content,
                 object_storage,
                 hdfs,
             }),
         })
         .await
-        .map_err(|err| {
+        .inspect_err(|err| {
             error!("download task failed: {}", err);
-            err
         })?;
+
+    // If transfer_from_dfdaemon is true, then dfget needs to create the output file and write the
+    // piece content to the output file.
+    let mut f = if args.transfer_from_dfdaemon {
+        if let Some(parent) = args.output.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).await.inspect_err(|err| {
+                    error!("failed to create directory {:?}: {}", parent, err);
+                })?;
+            }
+        }
+
+        let f = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(dfget::DEFAULT_OUTPUT_FILE_MODE)
+            .open(&args.output)
+            .await
+            .inspect_err(|err| {
+                error!("open file {:?} failed: {}", args.output, err);
+            })?;
+
+        Some(f)
+    } else {
+        None
+    };
 
     // Get actual path rather than percentage encoded path as download path.
     let download_path = percent_decode_str(args.url.path()).decode_utf8_lossy();
@@ -765,9 +807,8 @@ async fn download(
     // Download file.
     let mut downloaded = 0;
     let mut out_stream = response.into_inner();
-    while let Some(message) = out_stream.message().await.map_err(|err| {
+    while let Some(message) = out_stream.message().await.inspect_err(|err| {
         error!("get message failed: {}", err);
-        err
     })? {
         match message.response {
             Some(download_task_response::Response::DownloadTaskStartedResponse(response)) => {
@@ -775,6 +816,22 @@ async fn download(
             }
             Some(download_task_response::Response::DownloadPieceFinishedResponse(response)) => {
                 let piece = response.piece.ok_or(Error::InvalidParameter)?;
+
+                // Dfget needs to write the piece content to the output file.
+                if let Some(f) = &mut f {
+                    f.seek(SeekFrom::Start(piece.offset))
+                        .await
+                        .inspect_err(|err| {
+                            error!("seek {:?} failed: {}", args.output, err);
+                        })?;
+
+                    let content = piece.content.ok_or(Error::InvalidParameter)?;
+                    f.write_all(&content).await.inspect_err(|err| {
+                        error!("write {:?} failed: {}", args.output, err);
+                    })?;
+
+                    debug!("copy piece {} to {:?} success", piece.number, args.output);
+                }
 
                 downloaded += piece.length;
                 let position = min(

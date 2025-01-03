@@ -79,9 +79,8 @@ impl ManagerClient {
                 .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
                 .connect()
                 .await
-                .map_err(|err| {
+                .inspect_err(|err| {
                     error!("connect to {} failed: {}", addr.to_string(), err);
-                    err
                 })
                 .or_err(ErrorType::ConnectError)?,
             None => Channel::from_shared(addr.clone())
@@ -94,9 +93,8 @@ impl ManagerClient {
                 .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
                 .connect()
                 .await
-                .map_err(|err| {
+                .inspect_err(|err| {
                     error!("connect to {} failed: {}", addr.to_string(), err);
-                    err
                 })
                 .or_err(ErrorType::ConnectError)?,
         };

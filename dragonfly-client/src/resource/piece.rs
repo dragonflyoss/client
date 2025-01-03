@@ -597,13 +597,11 @@ impl Piece {
         );
 
         // Download the piece from the source.
-        let backend = self.backend_factory.build(url).map_err(|err| {
+        let backend = self.backend_factory.build(url).inspect_err(|err| {
             error!("build backend failed: {}", err);
             if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                 error!("set piece metadata failed: {}", err)
             };
-
-            err
         })?;
 
         // Record the start time.
@@ -630,7 +628,7 @@ impl Piece {
                 hdfs,
             })
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 // Collect the backend request failure metrics.
                 collect_backend_request_failure_metrics(
                     backend.scheme().as_str(),
@@ -642,8 +640,6 @@ impl Piece {
                 if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                     error!("set piece metadata failed: {}", err)
                 };
-
-                err
             })?;
 
         if !response.success {

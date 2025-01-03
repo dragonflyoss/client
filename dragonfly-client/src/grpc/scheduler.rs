@@ -187,9 +187,8 @@ impl SchedulerClient {
                     .timeout(super::REQUEST_TIMEOUT)
                     .connect()
                     .await
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         error!("connect to {} failed: {}", addr.to_string(), err);
-                        err
                     })
                     .or_err(ErrorType::ConnectError)?;
 
@@ -241,9 +240,8 @@ impl SchedulerClient {
                     .timeout(super::REQUEST_TIMEOUT)
                     .connect()
                     .await
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         error!("connect to {} failed: {}", addr.to_string(), err);
-                        err
                     })
                     .or_err(ErrorType::ConnectError)?;
 
@@ -300,9 +298,8 @@ impl SchedulerClient {
                     .timeout(super::REQUEST_TIMEOUT)
                     .connect()
                     .await
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         error!("connect to {} failed: {}", addr.to_string(), err);
-                        err
                     })
                     .or_err(ErrorType::ConnectError)?;
 
@@ -498,9 +495,8 @@ impl SchedulerClient {
                 .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
                 .connect()
                 .await
-                .map_err(|err| {
+                .inspect_err(|err| {
                     error!("connect to {} failed: {}", addr.to_string(), err);
-                    err
                 })
                 .or_err(ErrorType::ConnectError)?,
             None => Channel::from_shared(addr.clone())
@@ -513,9 +509,8 @@ impl SchedulerClient {
                 .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
                 .connect()
                 .await
-                .map_err(|err| {
+                .inspect_err(|err| {
                     error!("connect to {} failed: {}", addr.to_string(), err);
-                    err
                 })
                 .or_err(ErrorType::ConnectError)?,
         };

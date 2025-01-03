@@ -505,12 +505,11 @@ impl crate::Backend for ObjectStorage {
             .url
             .parse()
             .map_err(|_| ClientError::InvalidURI(request.url.clone()))?;
-        let parsed_url: super::object_storage::ParsedURL = url.try_into().map_err(|err| {
+        let parsed_url: super::object_storage::ParsedURL = url.try_into().inspect_err(|err| {
             error!(
                 "parse head request url failed {} {}: {}",
                 request.task_id, request.url, err
             );
-            err
         })?;
 
         // Initialize the operator with the parsed URL, object storage, and timeout.
@@ -594,12 +593,11 @@ impl crate::Backend for ObjectStorage {
             .url
             .parse()
             .map_err(|_| ClientError::InvalidURI(request.url.clone()))?;
-        let parsed_url: super::object_storage::ParsedURL = url.try_into().map_err(|err| {
+        let parsed_url: super::object_storage::ParsedURL = url.try_into().inspect_err(|err| {
             error!(
                 "parse get request url failed {} {}: {}",
                 request.piece_id, request.url, err
             );
-            err
         })?;
 
         // Initialize the operator with the parsed URL, object storage, and timeout.

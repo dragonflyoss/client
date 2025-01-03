@@ -171,12 +171,11 @@ impl PieceCollector {
                 let dfdaemon_upload_client =
                     DfdaemonUploadClient::new(config, format!("http://{}:{}", host.ip, host.port))
                         .await
-                        .map_err(|err| {
+                        .inspect_err(|err| {
                             error!(
                                 "create dfdaemon upload client from parent {} failed: {}",
                                 parent.id, err
                             );
-                            err
                         })?;
 
                 let response = dfdaemon_upload_client
@@ -189,9 +188,8 @@ impl PieceCollector {
                             .collect(),
                     })
                     .await
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         error!("sync pieces from parent {} failed: {}", parent.id, err);
-                        err
                     })?;
 
                 // If the response repeating timeout exceeds the piece download timeout, the stream will return error.
@@ -229,9 +227,8 @@ impl PieceCollector {
                             parent: parent.clone(),
                         })
                         .await
-                        .map_err(|err| {
+                        .inspect_err(|err| {
                             error!("send CollectedPiece failed: {}", err);
-                            err
                         })?;
 
                     // Release the lock of the piece with parent_id.

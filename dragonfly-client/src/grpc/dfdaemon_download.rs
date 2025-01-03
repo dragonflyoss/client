@@ -790,21 +790,20 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         info!("download persistent cache task succeeded");
 
                         // Hard link or copy the persistent cache task content to the destination.
-                        if let Err(err) = task_manager_clone
-                            .hard_link_or_copy(
-                                &task_clone,
-                                Path::new(request_clone.output_path.as_str()),
-                            )
-                            .await
-                        {
-                            error!("hard link or copy persistent cache task: {}", err);
-                            out_stream_tx
-                                .send(Err(Status::internal(err.to_string())))
+                        if let Some(output_path) = request_clone.output_path {
+                            if let Err(err) = task_manager_clone
+                                .hard_link_or_copy(&task_clone, Path::new(output_path.as_str()))
                                 .await
-                                .unwrap_or_else(|err| {
-                                    error!("send download progress error: {:?}", err)
-                                });
-                        };
+                            {
+                                error!("hard link or copy persistent cache task: {}", err);
+                                out_stream_tx
+                                    .send(Err(Status::internal(err.to_string())))
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        error!("send download progress error: {:?}", err)
+                                    });
+                            };
+                        }
                     }
                     Err(e) => {
                         // Download task failed.
@@ -1023,9 +1022,8 @@ impl DfdaemonDownloadClient {
                 }
             }))
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("connect failed: {}", err);
-                err
             })
             .or_err(ErrorType::ConnectError)?;
 

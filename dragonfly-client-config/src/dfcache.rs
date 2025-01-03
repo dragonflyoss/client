@@ -19,6 +19,10 @@ use std::path::PathBuf;
 /// NAME is the name of dfcache.
 pub const NAME: &str = "dfcache";
 
+// DEFAULT_OUTPUT_FILE_MODE defines the default file mode for output files when downloading with dfcache
+// using the `--transfer-from-dfdaemon=true` option.
+pub const DEFAULT_OUTPUT_FILE_MODE: u32 = 0o644;
+
 /// default_dfcache_log_dir is the default log directory for dfcache.
 #[inline]
 pub fn default_dfcache_log_dir() -> PathBuf {
