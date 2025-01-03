@@ -225,10 +225,10 @@ pub fn default_proxy_server_port() -> u16 {
 }
 
 /// default_parent_selector_capacity is the default cache capacity for the host syncer, default is
-/// 50.
+/// 20.
 #[inline]
 pub fn default_parent_selector_capacity() -> usize {
-    50
+    20
 }
 
 /// default_proxy_cache_capacity is the default cache capacity for the proxy server, default is
@@ -625,7 +625,7 @@ pub struct ParentSelector {
     pub sync_interval: Duration,
 
     /// capacity is the maximum number of gRPC connection `DfdaemonUpload.SyncHost` maintained
-    /// in `ParentSelector`'s LRU cache, default is 50.
+    /// in `ParentSelector`'s LRU cache, default is 20.
     #[serde(default = "default_parent_selector_capacity")]
     pub capacity: usize,
 }
