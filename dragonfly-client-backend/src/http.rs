@@ -144,12 +144,11 @@ impl super::Backend for HTTP {
             .timeout(request.timeout)
             .send()
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!(
                     "head request failed {} {}: {}",
                     request.task_id, request.url, err
                 );
-                err
             })?;
 
         let header = response.headers().clone();
@@ -190,12 +189,11 @@ impl super::Backend for HTTP {
             .timeout(request.timeout)
             .send()
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!(
                     "get request failed {} {} {}: {}",
                     request.task_id, request.piece_id, request.url, err
                 );
-                err
             })?;
 
         let header = response.headers().clone();

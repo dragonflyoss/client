@@ -23,14 +23,14 @@ use crate::metrics::{
 };
 use crate::resource::{persistent_cache_task, task};
 use crate::shutdown;
-use dragonfly_api::common::v2::{PersistentCacheTask, Piece, Priority, Task, TaskType};
+use dragonfly_api::common::v2::{Host, PersistentCacheTask, Piece, Priority, Task, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient,
     dfdaemon_upload_server::{DfdaemonUpload, DfdaemonUploadServer as DfdaemonUploadGRPCServer},
     DeletePersistentCacheTaskRequest, DeleteTaskRequest, DownloadPersistentCacheTaskRequest,
     DownloadPersistentCacheTaskResponse, DownloadPieceRequest, DownloadPieceResponse,
     DownloadTaskRequest, DownloadTaskResponse, StatPersistentCacheTaskRequest, StatTaskRequest,
-    SyncPiecesRequest, SyncPiecesResponse,
+    SyncHostRequest, SyncPiecesRequest, SyncPiecesResponse,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_config::dfdaemon::Config;
@@ -858,6 +858,18 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         }))
     }
 
+    /// SyncHostStream is the stream of the sync host response.
+    type SyncHostStream = ReceiverStream<Result<Host, Status>>;
+
+    /// sync_host syncs the host information.
+    #[instrument(skip_all)]
+    async fn sync_host(
+        &self,
+        _request: Request<SyncHostRequest>,
+    ) -> Result<Response<Self::SyncHostStream>, Status> {
+        unimplemented!()
+    }
+
     /// DownloadPersistentCacheTaskStream is the stream of the download persistent cache task response.
     type DownloadPersistentCacheTaskStream =
         ReceiverStream<Result<DownloadPersistentCacheTaskResponse, Status>>;
@@ -988,21 +1000,20 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         info!("download persistent cache task succeeded");
 
                         // Hard link or copy the persistent cache task content to the destination.
-                        if let Err(err) = task_manager_clone
-                            .hard_link_or_copy(
-                                &task_clone,
-                                Path::new(request_clone.output_path.as_str()),
-                            )
-                            .await
-                        {
-                            error!("hard link or copy persistent cache task: {}", err);
-                            out_stream_tx
-                                .send(Err(Status::internal(err.to_string())))
+                        if let Some(output_path) = request_clone.output_path {
+                            if let Err(err) = task_manager_clone
+                                .hard_link_or_copy(&task_clone, Path::new(output_path.as_str()))
                                 .await
-                                .unwrap_or_else(|err| {
-                                    error!("send download progress error: {:?}", err)
-                                });
-                        };
+                            {
+                                error!("hard link or copy persistent cache task: {}", err);
+                                out_stream_tx
+                                    .send(Err(Status::internal(err.to_string())))
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        error!("send download progress error: {:?}", err)
+                                    });
+                            };
+                        }
                     }
                     Err(e) => {
                         // Download task failed.
@@ -1131,9 +1142,8 @@ impl DfdaemonUploadClient {
                     .timeout(super::REQUEST_TIMEOUT)
                     .connect()
                     .await
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         error!("connect to {} failed: {}", addr, err);
-                        err
                     })
                     .or_err(ErrorType::ConnectError)?
             }
@@ -1144,9 +1154,8 @@ impl DfdaemonUploadClient {
                 .timeout(super::REQUEST_TIMEOUT)
                 .connect()
                 .await
-                .map_err(|err| {
+                .inspect_err(|err| {
                     error!("connect to {} failed: {}", addr, err);
-                    err
                 })
                 .or_err(ErrorType::ConnectError)?,
         };
