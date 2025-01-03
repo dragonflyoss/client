@@ -134,6 +134,12 @@ fn default_download_max_schedule_count() -> u32 {
     5
 }
 
+/// default_parent_selector_sync_interval is the default interval to sync host state.
+#[inline]
+fn default_parent_selector_sync_interval() -> Duration {
+    Duration::from_secs(3)
+}
+
 /// default_scheduler_announce_interval is the default interval to announce peer to the scheduler.
 #[inline]
 fn default_scheduler_announce_interval() -> Duration {
@@ -216,6 +222,13 @@ fn default_gc_policy_dist_low_threshold_percent() -> u8 {
 #[inline]
 pub fn default_proxy_server_port() -> u16 {
     4001
+}
+
+/// default_parent_selector_capacity is the default cache capacity for the host syncer, default is
+/// 20.
+#[inline]
+pub fn default_parent_selector_capacity() -> usize {
+    20
 }
 
 /// default_proxy_cache_capacity is the default cache capacity for the proxy server, default is
@@ -426,6 +439,9 @@ pub struct Download {
     /// server is the download server configuration for dfdaemon.
     pub server: DownloadServer,
 
+    /// parent_selector is the download parent selector configuration for dfdaemon.
+    pub parent_selector: ParentSelector,
+
     /// rate_limit is the rate limit of the download speed in GiB/Mib/Kib per second.
     #[serde(with = "bytesize_serde", default = "default_download_rate_limit")]
     pub rate_limit: ByteSize,
@@ -445,6 +461,7 @@ impl Default for Download {
     fn default() -> Self {
         Download {
             server: DownloadServer::default(),
+            parent_selector: ParentSelector::default(),
             rate_limit: default_download_rate_limit(),
             piece_timeout: default_download_piece_timeout(),
             concurrent_piece_count: default_download_concurrent_piece_count(),
@@ -559,6 +576,58 @@ impl UploadClient {
 
         Ok(None)
     }
+}
+
+/// ParentSelector is the download parent selector configuration for dfdaemon. It will synchronize
+/// the host info in real-time from the parents and then select the optimal parent for downloading.
+///
+/// The workflow diagram is as follows:
+///
+///                              +----------+
+///              ----------------|  parent  |---------------
+///              |               +----------+              |
+///          host info                                piece metadata
+/// +------------|-----------------------------------------|------------+
+/// |            |                                         |            |
+/// |            |                 peer                    |            |
+/// |            v                                         v            |
+/// |  +------------------+                       +------------------+  |
+/// |  |  ParentSelector  | ---optimal parent---> |  PieceCollector  |  |
+/// |  +------------------+                       +------------------+  |
+/// |                                                      |            |
+/// |                                                 piece metadata    |
+/// |                                                      |            |
+/// |                                                      v            |
+/// |                                                +------------+     |
+/// |                                                |  download  |     |
+/// |                                                +------------+     |
+/// +-------------------------------------------------------------------+
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ParentSelector {
+    /// enable indicates whether enable download parent selector.
+    ///
+    /// If enable is true, `ParentSelector`'s sync loop be started. It will periodically fetch
+    /// host info from parent and use this data to calculate the optimal parent for each task.
+    ///
+    /// If enable is false, `ParentSelector`'s sync loop will not run. Instead, it will operate
+    /// in a default mode, where each parent is selected with equal probability.
+    pub enable: bool,
+
+    /// sync_interval is the interval to sync parents' host info.
+    ///
+    /// This interval applies to both the `syncer::host_info::HostInfo`'s loop for obtaining local
+    /// host info and the `ParentSelector`'s loop for synchronizing parents' host info.
+    #[serde(
+        default = "default_parent_selector_sync_interval",
+        with = "humantime_serde"
+    )]
+    pub sync_interval: Duration,
+
+    /// capacity is the maximum number of gRPC connection `DfdaemonUpload.SyncHost` maintained
+    /// in `ParentSelector`'s LRU cache, default is 20.
+    #[serde(default = "default_parent_selector_capacity")]
+    pub capacity: usize,
 }
 
 /// Upload is the upload configuration for dfdaemon.
