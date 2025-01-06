@@ -49,7 +49,7 @@ pub struct Storage {
     content: content::Content,
 
     /// cache implements the cache for preheat task.
-    cache: cache::Cache,
+    cache: Option<cache::Cache>,
 }
 
 /// Storage implements the storage.
@@ -59,7 +59,12 @@ impl Storage {
     pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf) -> Result<Self> {
         let metadata = metadata::Metadata::new(config.clone(), dir, &log_dir)?;
         let content = content::Content::new(config.clone(), dir).await?;
-        let cache = cache::Cache::new(config.storage.cache_capacity)?;
+        let cache = if config.storage.cache.enable {
+            Some(cache::Cache::new(config.storage.cache.capacity)?)
+        } else {
+            None
+        };
+
         Ok(Storage {
             config,
             metadata,

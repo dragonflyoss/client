@@ -349,31 +349,6 @@ impl Piece {
             })
     }
 
-    /// upload_piece_from_cache uploads a single piece from the cache of a local peer.
-    #[instrument(skip_all, fields(piece_id))]
-    pub async fn upload_piece_from_cache(
-        &self,
-        piece_id: &str,
-        offset: u64,
-        length: u64,
-        range: Option<Range<u64>>,
-    ) -> Result<Option<Vec<u8>>> {
-        let Some(piece_content) = self.get_piece(piece_id) else {
-            return Ok(None);
-        };
-    
-        let (target_offset, target_length) = if let Some(range) = range {
-            let target_offset = max(offset, range.start);
-            let target_length = min(offset + length - 1, range.start + range.length - 1) - target_offset + 1;
-            (target_offset, target_length)
-        } else {
-            (offset, length)
-        };
-    
-        let content_slice = &piece_content[target_offset as usize..(target_offset + target_length) as usize];
-        Ok(Some(content_slice.to_vec()))
-    }
-
     /// download_from_local_peer_into_async_read downloads a single piece from a local peer.
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_local_peer_into_async_read(

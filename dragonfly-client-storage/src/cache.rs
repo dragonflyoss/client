@@ -15,6 +15,7 @@
  */
 
 use dragonfly_client_core::{Error, Result};
+use dragonfly_api::common::v2::Range;
 use lru::LruCache;
 use std::cmp::{max, min};
 use std::num::NonZeroUsize;
@@ -36,12 +37,13 @@ impl Cache {
         Ok(Cache { pieces })
     }
 
-    pub async fn upload_piece_from_cache(
+    /// read_piece reads the piece from the cache.
+    pub async fn read_piece(
         &self,
         piece_id: &str,
         offset: u64,
         length: u64,
-        range: Option<Range<u64>>,
+        range: Option<Range>,
     ) -> Result<Option<Vec<u8>>> {
         // Try to get the piece content from the cache
         let Some(piece_content) = self.get_piece(piece_id) else {
