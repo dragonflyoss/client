@@ -32,6 +32,7 @@ use tracing::{debug, error, instrument};
 pub mod content;
 pub mod metadata;
 pub mod storage_engine;
+pub mod cache;
 
 /// DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.
 pub const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(100);
@@ -46,6 +47,9 @@ pub struct Storage {
 
     /// content implements the content storage.
     content: content::Content,
+
+    /// cache implements the cache for preheat task.
+    cache: cache::Cache,
 }
 
 /// Storage implements the storage.
@@ -55,10 +59,12 @@ impl Storage {
     pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf) -> Result<Self> {
         let metadata = metadata::Metadata::new(config.clone(), dir, &log_dir)?;
         let content = content::Content::new(config.clone(), dir).await?;
+        let cache = cache::Cache::new(config.storage.cache_capacity)?;
         Ok(Storage {
             config,
             metadata,
             content,
+            cache,
         })
     }
 

@@ -1094,6 +1094,7 @@ version = "0.1.125"
 dependencies = [
  "base16ct",
  "bincode",
+ "bytes",
  "chrono",
  "crc32c",
  "crc32fast",
@@ -1101,6 +1102,7 @@ dependencies = [
  "dragonfly-client-config",
  "dragonfly-client-core",
  "dragonfly-client-util",
+ "lru",
  "num_cpus",
  "prost-wkt-types",
  "rayon",
