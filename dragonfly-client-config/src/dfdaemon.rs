@@ -188,6 +188,19 @@ fn default_storage_read_buffer_size() -> usize {
     128 * 1024
 }
 
+/// default_storage_cache_enable is the default value for the cache enable flag.
+/// The cache is disabled by default.
+#[inline]
+fn default_storage_cache_enable() -> bool {
+    false
+}
+/// default_storage_cache_capacity is the default cache capacity for the preheat task, default is
+/// 100.
+#[inline]
+fn default_storage_cache_capacity() -> usize {
+    100
+}
+
 /// default_seed_peer_cluster_id is the default cluster id of seed peer.
 #[inline]
 fn default_seed_peer_cluster_id() -> u64 {
@@ -898,12 +911,34 @@ impl Default for StorageServer {
     }
 }
 
+/// CacheConfig represents the configuration settings for the cache.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CacheConfig {
+    /// enable determines whether the cache is enabled.
+    pub enable: bool,
+    /// capacity specifies the maximum number of entries the cache can hold.
+    pub capacity: usize,
+}
+/// Default implementation for CacheConfig.
+impl Default for CacheConfig {
+    fn default() -> Self {
+        CacheConfig {
+            enable: default_storage_cache_enable(),
+            capacity: default_storage_cache_capacity(),
+        }
+    }
+}
+
 /// Storage is the storage configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Storage {
     /// server is the storage server configuration for dfdaemon.
     pub server: StorageServer,
+
+    /// cache is the configuration for the cache.
+    pub cache: CacheConfig,
 
     /// dir is the directory to store task's metadata and content.
     #[serde(default = "crate::default_storage_dir")]
@@ -927,6 +962,7 @@ impl Default for Storage {
     fn default() -> Self {
         Storage {
             server: StorageServer::default(),
+            cache: CacheConfig::default(),
             dir: crate::default_storage_dir(),
             keep: default_storage_keep(),
             write_buffer_size: default_storage_write_buffer_size(),
