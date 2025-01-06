@@ -171,10 +171,10 @@ pub struct BackendError {
     pub header: Option<reqwest::header::HeaderMap>,
 }
 
-/// DownloadFromRemotePeerFailed is the error when the download from remote peer is failed.
+/// DownloadFromParentFailed is the error when the download from parent is failed.
 #[derive(Debug, thiserror::Error)]
-#[error("download piece {piece_number} from remote peer {parent_id} failed")]
-pub struct DownloadFromRemotePeerFailed {
+#[error("download piece {piece_number} from parent {parent_id} failed")]
+pub struct DownloadFromParentFailed {
     /// piece_number is the number of the piece.
     pub piece_number: u32,
 

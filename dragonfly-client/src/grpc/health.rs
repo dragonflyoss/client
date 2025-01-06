@@ -54,9 +54,8 @@ impl HealthClient {
                 .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
                 .connect()
                 .await
-                .map_err(|err| {
+                .inspect_err(|err| {
                     error!("connect to {} failed: {}", addr, err);
-                    err
                 })
                 .or_err(ErrorType::ConnectError)?,
             None => Channel::from_shared(addr.to_string())
@@ -68,9 +67,8 @@ impl HealthClient {
                 .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
                 .connect()
                 .await
-                .map_err(|err| {
+                .inspect_err(|err| {
                     error!("connect to {} failed: {}", addr, err);
-                    err
                 })
                 .or_err(ErrorType::ConnectError)?,
         };
@@ -96,9 +94,8 @@ impl HealthClient {
                 }
             }))
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("connect failed: {}", err);
-                err
             })
             .or_err(ErrorType::ConnectError)?;
         let client = HealthGRPCClient::with_interceptor(channel, TracingInterceptor)

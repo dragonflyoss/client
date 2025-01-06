@@ -66,7 +66,7 @@ struct Args {
 
     #[arg(
         long = "verbose",
-        default_value_t = false,
+        default_value_t = true,
         help = "Specify whether to print log"
     )]
     verbose: bool,
@@ -126,7 +126,6 @@ fn main() {
         args.log_level,
         args.log_max_files,
         None,
-        false,
         false,
         args.verbose,
     );

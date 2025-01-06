@@ -95,21 +95,18 @@ async fn main() -> Result<(), anyhow::Error> {
         args.log_max_files,
         None,
         false,
-        false,
         args.verbose,
     );
 
     // Load config.
-    let config = dfinit::Config::load(&args.config).map_err(|err| {
+    let config = dfinit::Config::load(&args.config).inspect_err(|err| {
         error!("failed to load config: {}", err);
-        err
     })?;
 
     // Handle features of the container runtime.
     let container_runtime = container_runtime::ContainerRuntime::new(&config);
-    container_runtime.run().await.map_err(|err| {
+    container_runtime.run().await.inspect_err(|err| {
         error!("failed to run container runtime: {}", err);
-        err
     })?;
 
     Ok(())

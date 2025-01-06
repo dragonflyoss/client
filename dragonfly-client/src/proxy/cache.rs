@@ -15,8 +15,10 @@
  */
 
 use crate::resource::task::Task;
+use dragonfly_api::common::v2::Range;
 use dragonfly_api::dfdaemon::v2::DownloadTaskRequest;
 use dragonfly_client_core::{Error, Result};
+use dragonfly_client_util::http::{get_range, hashmap_to_headermap};
 use lru::LruCache;
 use std::cmp::{max, min};
 use std::num::NonZeroUsize;
@@ -67,7 +69,14 @@ impl Cache {
             return Ok(None);
         };
 
-        let range = download.range;
+        let Ok(request_header) = hashmap_to_headermap(&download.request_header) else {
+            return Ok(None);
+        };
+
+        let Ok(range) = get_range(&request_header, content_length) else {
+            return Ok(None);
+        };
+
         let interested_pieces =
             self.task
                 .piece
@@ -84,38 +93,135 @@ impl Cache {
             };
 
             // Calculate the target offset and length based on the range.
-            let (target_offset, target_length) = if let Some(range) = range {
-                let target_offset =
-                    max(interested_piece.offset, range.start) - interested_piece.offset;
-                let target_length = min(
-                    interested_piece.offset + interested_piece.length - 1,
-                    range.start + range.length - 1,
-                ) - target_offset
-                    + 1;
-                (target_offset as usize, target_length as usize)
-            } else {
-                (0, interested_piece.length as usize)
-            };
+            let (piece_target_offset, piece_target_length) =
+                calculate_piece_range(interested_piece.offset, interested_piece.length, range);
 
-            let piece_content = piece_content.slice(target_offset..target_offset + target_length);
+            let begin = piece_target_offset;
+            let end = piece_target_offset + piece_target_length;
+            if begin >= piece_content.len() || end > piece_content.len() {
+                return Err(Error::InvalidParameter);
+            }
+
+            let piece_content = piece_content.slice(begin..end);
             content.extend_from_slice(&piece_content);
         }
 
         Ok(Some(content.freeze()))
     }
 
-    /// get gets the piece content from the cache.
+    /// get_piece gets the piece content from the cache.
     pub fn get_piece(&self, id: &str) -> Option<bytes::Bytes> {
         let mut pieces = self.pieces.lock().unwrap();
         pieces.get(id).cloned()
     }
 
-    /// add create the piece content into the cache, if the key already exists, no operation will
+    /// add_piece create the piece content into the cache, if the key already exists, no operation will
     /// be performed.
     pub fn add_piece(&self, id: &str, content: bytes::Bytes) {
         let mut pieces = self.pieces.lock().unwrap();
-        if !pieces.contains(id) {
-            pieces.put(id.to_string(), content);
+        if pieces.contains(id) {
+            return;
+        }
+
+        pieces.put(id.to_string(), content);
+    }
+
+    /// contains_piece checks whether the piece exists in the cache.
+    pub fn contains_piece(&self, id: &str) -> bool {
+        let pieces = self.pieces.lock().unwrap();
+        pieces.contains(id)
+    }
+}
+
+/// calculate_piece_range calculates the target offset and length based on the piece range and
+/// request range.
+pub fn calculate_piece_range(offset: u64, length: u64, range: Option<Range>) -> (usize, usize) {
+    if let Some(range) = range {
+        let target_offset = max(offset, range.start) - offset;
+        let target_length =
+            min(offset + length - 1, range.start + range.length - 1) - target_offset - offset + 1;
+
+        (target_offset as usize, target_length as usize)
+    } else {
+        (0, length as usize)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn should_calculate_piece_range() {
+        let test_cases = vec![
+            (1, 4, None, 0, 4),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 1,
+                    length: 4,
+                }),
+                0,
+                4,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 2,
+                    length: 1,
+                }),
+                1,
+                1,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 1,
+                    length: 1,
+                }),
+                0,
+                1,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 4,
+                    length: 1,
+                }),
+                3,
+                1,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 0,
+                    length: 2,
+                }),
+                0,
+                1,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 4,
+                    length: 3,
+                }),
+                3,
+                1,
+            ),
+        ];
+
+        for (piece_offset, piece_length, range, expected_offset, expected_length) in test_cases {
+            let (target_offset, target_length) =
+                calculate_piece_range(piece_offset, piece_length, range);
+            assert_eq!(target_offset, expected_offset);
+            assert_eq!(target_length, expected_length);
         }
     }
 }

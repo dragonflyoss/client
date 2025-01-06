@@ -55,9 +55,21 @@ pub fn default_dfdaemon_log_dir() -> PathBuf {
     crate::default_log_dir().join(NAME)
 }
 
-/// default_download_unix_socket_path is the default unix socket path for download GRPC service.
+/// default_download_unix_socket_path is the default unix socket path for download gRPC service.
 pub fn default_download_unix_socket_path() -> PathBuf {
     crate::default_root_dir().join("dfdaemon.sock")
+}
+
+/// default_parent_selector_sync_interval is the default interval to sync host information.
+#[inline]
+fn default_parent_selector_sync_interval() -> Duration {
+    Duration::from_secs(3)
+}
+
+/// default_parent_selector_capacity is the default capacity of the parent selector's gRPC connections.
+#[inline]
+pub fn default_parent_selector_capacity() -> usize {
+    20
 }
 
 /// default_host_hostname is the default hostname of the host.
@@ -78,13 +90,7 @@ fn default_dfdaemon_cache_dir() -> PathBuf {
     crate::default_cache_dir().join(NAME)
 }
 
-/// default_upload_protocol is the default protocol of the upload server.
-#[inline]
-fn default_upload_protocol() -> String {
-    "grpc".to_string()
-}
-
-/// default_upload_grpc_server_port is the default port of the upload grpc server.
+/// default_upload_grpc_server_port is the default port of the upload gRPC server.
 #[inline]
 fn default_upload_grpc_server_port() -> u16 {
     4000
@@ -156,6 +162,12 @@ fn default_scheduler_schedule_timeout() -> Duration {
 #[inline]
 fn default_dynconfig_refresh_interval() -> Duration {
     Duration::from_secs(300)
+}
+
+/// default_storage_server_protocol is the default protocol of the storage server.
+#[inline]
+fn default_storage_server_protocol() -> String {
+    "grpc".to_string()
 }
 
 /// default_storage_keep is the default keep of the task's metadata and content when the dfdaemon restarts.
@@ -232,8 +244,7 @@ pub fn default_proxy_server_port() -> u16 {
     4001
 }
 
-/// default_proxy_cache_capacity is the default cache capacity for the proxy server, default is
-/// 150.
+/// default_proxy_cache_capacity is the default cache capacity for the proxy server, default is 150.
 #[inline]
 pub fn default_proxy_cache_capacity() -> usize {
     150
@@ -419,7 +430,7 @@ impl Default for Server {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DownloadServer {
-    /// socket_path is the unix socket path for dfdaemon GRPC service.
+    /// socket_path is the unix socket path for dfdaemon gRPC service.
     #[serde(default = "default_download_unix_socket_path")]
     pub socket_path: PathBuf,
 }
@@ -440,6 +451,9 @@ pub struct Download {
     /// server is the download server configuration for dfdaemon.
     pub server: DownloadServer,
 
+    /// parent_selector is the download parent selector configuration for dfdaemon.
+    pub parent_selector: ParentSelector,
+
     /// rate_limit is the rate limit of the download speed in GiB/Mib/Kib per second.
     #[serde(with = "bytesize_serde", default = "default_download_rate_limit")]
     pub rate_limit: ByteSize,
@@ -459,6 +473,7 @@ impl Default for Download {
     fn default() -> Self {
         Download {
             server: DownloadServer::default(),
+            parent_selector: ParentSelector::default(),
             rate_limit: default_download_rate_limit(),
             piece_timeout: default_download_piece_timeout(),
             concurrent_piece_count: default_download_concurrent_piece_count(),
@@ -470,15 +485,10 @@ impl Default for Download {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UploadServer {
-    /// protocol is the protocol of the upload server. The protocol used for downloading pieces
-    /// between different peers, now only support grpc.
-    #[serde(default = "default_upload_protocol")]
-    pub protocol: String,
-
-    /// ip is the listen ip of the grpc server.
+    /// ip is the listen ip of the gRPC server.
     pub ip: Option<IpAddr>,
 
-    /// port is the port to the grpc server.
+    /// port is the port to the gRPC server.
     #[serde(default = "default_upload_grpc_server_port")]
     pub port: u16,
 
@@ -499,7 +509,6 @@ pub struct UploadServer {
 impl Default for UploadServer {
     fn default() -> Self {
         UploadServer {
-            protocol: default_upload_protocol(),
             ip: None,
             port: default_upload_grpc_server_port(),
             ca_cert: None,
@@ -579,6 +588,53 @@ impl UploadClient {
 
         Ok(None)
     }
+}
+
+/// ParentSelector is the download parent selector configuration for dfdaemon. It will synchronize
+/// the host info in real-time from the parents and then select the parents for downloading.
+///
+/// The workflow diagram is as follows:
+///
+///                              +----------+
+///              ----------------|  parent  |---------------
+///              |               +----------+              |
+///          host info                                piece metadata
+/// +------------|-----------------------------------------|------------+
+/// |            |                                         |            |
+/// |            |                 peer                    |            |
+/// |            v                                         v            |
+/// |  +------------------+                       +------------------+  |
+/// |  |  ParentSelector  | ---optimal parent---> |  PieceCollector  |  |
+/// |  +------------------+                       +------------------+  |
+/// |                                                      |            |
+/// |                                                 piece metadata    |
+/// |                                                      |            |
+/// |                                                      v            |
+/// |                                                +------------+     |
+/// |                                                |  download  |     |
+/// |                                                +------------+     |
+/// +-------------------------------------------------------------------+
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ParentSelector {
+    /// enable indicates whether enable parent selector for downloading.
+    ///
+    /// If `enable` is true, the `ParentSelector`'s sync loop will start. It will periodically fetch
+    /// host information from parents and use this information to calculate scores for selecting the
+    /// parents for downloading.
+    pub enable: bool,
+
+    /// sync_interval is the interval to sync parents' host info by gRPC streaming.
+    #[serde(
+        default = "default_parent_selector_sync_interval",
+        with = "humantime_serde"
+    )]
+    pub sync_interval: Duration,
+
+    /// capacity is the maximum number of gRPC connections that `DfdaemonUpload.SyncHost` maintains
+    /// in the `ParentSelector`, the default value is 20.
+    #[serde(default = "default_parent_selector_capacity")]
+    pub capacity: usize,
 }
 
 /// Upload is the upload configuration for dfdaemon.
@@ -834,6 +890,28 @@ impl Default for Dynconfig {
     }
 }
 
+/// StorageServer is the storage server configuration for dfdaemon.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct StorageServer {
+    /// protocol is the protocol of the storage server. The protocol used for downloading pieces
+    /// between different peers, now only support gRPC.
+    ///
+    /// gRPC Protocol: The storage server will start a gRPC service in the DfdaemonUploadServer,
+    /// refer to https://github.com/dragonflyoss/api/blob/main/proto/dfdaemon.proto#L185.
+    #[serde(default = "default_storage_server_protocol")]
+    pub protocol: String,
+}
+
+/// Storage implements Default.
+impl Default for StorageServer {
+    fn default() -> Self {
+        StorageServer {
+            protocol: default_storage_server_protocol(),
+        }
+    }
+}
+
 /// CacheConfig represents the configuration settings for the cache.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -859,6 +937,9 @@ impl Default for CacheConfig {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Storage {
+    /// server is the storage server configuration for dfdaemon.
+    pub server: StorageServer,
+
     /// dir is the directory to store task's metadata and content.
     #[serde(default = "crate::default_storage_dir")]
     pub dir: PathBuf,
@@ -883,6 +964,7 @@ pub struct Storage {
 impl Default for Storage {
     fn default() -> Self {
         Storage {
+            server: StorageServer::default(),
             dir: crate::default_storage_dir(),
             keep: default_storage_keep(),
             write_buffer_size: default_storage_write_buffer_size(),
@@ -1400,7 +1482,7 @@ impl Config {
             }
         }
 
-        // Convert upload grpc server listen ip.
+        // Convert upload gRPC server listen ip.
         if self.upload.server.ip.is_none() {
             self.upload.server.ip = if self.network.enable_ipv6 {
                 Some(Ipv6Addr::UNSPECIFIED.into())

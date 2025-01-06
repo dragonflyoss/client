@@ -337,9 +337,9 @@ impl Storage {
         )
     }
 
-    /// download_piece_from_remote_peer_finished is used for downloading piece from remote peer.
+    /// download_piece_from_parent_finished is used for downloading piece from parent.
     #[instrument(skip_all)]
-    pub async fn download_piece_from_remote_peer_finished<R: AsyncRead + Unpin + ?Sized>(
+    pub async fn download_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
         task_id: &str,
@@ -413,6 +413,54 @@ impl Storage {
                         // Finish uploading the task.
                         self.metadata.upload_task_finished(task_id)?;
                         Ok(reader)
+                    }
+                    Err(err) => {
+                        // Failed uploading the task.
+                        self.metadata.upload_task_failed(task_id)?;
+                        Err(err)
+                    }
+                }
+            }
+            Ok(None) => {
+                // Failed uploading the task.
+                self.metadata.upload_task_failed(task_id)?;
+                Err(Error::PieceNotFound(piece_id.to_string()))
+            }
+            Err(err) => {
+                // Failed uploading the task.
+                self.metadata.upload_task_failed(task_id)?;
+                Err(err)
+            }
+        }
+    }
+
+    /// upload_piece_with_dual_read returns the dual reader of the piece, one is the range reader, and the other is the
+    /// full reader of the piece. It is used for cache the piece content to the proxy cache.
+    #[instrument(skip_all)]
+    pub async fn upload_piece_with_dual_read(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        range: Option<Range>,
+    ) -> Result<(impl AsyncRead, impl AsyncRead)> {
+        // Wait for the piece to be finished.
+        self.wait_for_piece_finished(piece_id).await?;
+
+        // Start uploading the task.
+        self.metadata.upload_task_started(task_id)?;
+
+        // Get the piece metadata and return the content of the piece.
+        match self.metadata.get_piece(piece_id) {
+            Ok(Some(piece)) => {
+                match self
+                    .content
+                    .read_piece_with_dual_read(task_id, piece.offset, piece.length, range)
+                    .await
+                {
+                    Ok(dual_reader) => {
+                        // Finish uploading the task.
+                        self.metadata.upload_task_finished(task_id)?;
+                        Ok(dual_reader)
                     }
                     Err(err) => {
                         // Failed uploading the task.

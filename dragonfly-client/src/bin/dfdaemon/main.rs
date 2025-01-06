@@ -94,7 +94,7 @@ struct Args {
 
     #[arg(
         long = "verbose",
-        default_value_t = false,
+        default_value_t = true,
         help = "Specify whether to print log"
     )]
     verbose: bool,
@@ -119,7 +119,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let config = match dfdaemon::Config::load(&args.config).await {
         Ok(config) => config,
         Err(err) => {
-            eprintln!(
+            println!(
                 "{}{}Load config {} error: {}{}\n",
                 color::Fg(color::Red),
                 style::Bold,
@@ -128,7 +128,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 style::Reset
             );
 
-            eprintln!(
+            println!(
                 "{}{}If the file does not exist, you need to new a default config file refer to: {}{}{}{}https://d7y.io/docs/next/reference/configuration/client/dfdaemon/{}",
                 color::Fg(color::Yellow),
                 style::Bold,
@@ -152,16 +152,14 @@ async fn main() -> Result<(), anyhow::Error> {
         args.log_max_files,
         config.tracing.addr.to_owned(),
         config.tracing.flamegraph,
-        true,
         args.verbose,
     );
 
     // Initialize storage.
     let storage = Storage::new(config.clone(), config.storage.dir.as_path(), args.log_dir)
         .await
-        .map_err(|err| {
+        .inspect_err(|err| {
             error!("initialize storage failed: {}", err);
-            err
         })?;
     let storage = Arc::new(storage);
 
@@ -176,9 +174,8 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize manager client.
     let manager_client = ManagerClient::new(config.clone(), config.manager.addr.clone())
         .await
-        .map_err(|err| {
+        .inspect_err(|err| {
             error!("initialize manager client failed: {}", err);
-            err
         })?;
     let manager_client = Arc::new(manager_client);
 
@@ -194,25 +191,22 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     )
     .await
-    .map_err(|err| {
+    .inspect_err(|err| {
         error!("initialize dynconfig server failed: {}", err);
-        err
     })?;
     let dynconfig = Arc::new(dynconfig);
 
     // Initialize scheduler client.
     let scheduler_client = SchedulerClient::new(config.clone(), dynconfig.clone())
         .await
-        .map_err(|err| {
+        .inspect_err(|err| {
             error!("initialize scheduler client failed: {}", err);
-            err
         })?;
     let scheduler_client = Arc::new(scheduler_client);
 
-    let backend_factory =
-        BackendFactory::new(Some(config.server.plugin_dir.as_path())).map_err(|err| {
+    let backend_factory = BackendFactory::new(Some(config.server.plugin_dir.as_path()))
+        .inspect_err(|err| {
             error!("initialize backend factory failed: {}", err);
-            err
         })?;
     let backend_factory = Arc::new(backend_factory);
 
@@ -282,9 +276,8 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     )
     .await
-    .map_err(|err| {
+    .inspect_err(|err| {
         error!("initialize scheduler announcer failed: {}", err);
-        err
     })?;
 
     // Initialize upload grpc server.

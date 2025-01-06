@@ -48,7 +48,7 @@ impl StatCommand {
             match get_dfdaemon_download_client(endpoint.to_path_buf()).await {
                 Ok(client) => client,
                 Err(err) => {
-                    eprintln!(
+                    println!(
                         "{}{}{}Connect Dfdaemon Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -56,7 +56,7 @@ impl StatCommand {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -64,7 +64,7 @@ impl StatCommand {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}Message:{}, can not connect {}, please check the unix socket {}",
                         color::Fg(color::Cyan),
                         style::Italic,
@@ -74,7 +74,7 @@ impl StatCommand {
                         endpoint.to_string_lossy(),
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -90,7 +90,7 @@ impl StatCommand {
         if let Err(err) = self.run(dfdaemon_download_client).await {
             match err {
                 Error::TonicStatus(status) => {
-                    eprintln!(
+                    println!(
                         "{}{}{}Stating Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -98,7 +98,7 @@ impl StatCommand {
                         style::Reset,
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}*********************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -106,7 +106,7 @@ impl StatCommand {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}Bad Code:{} {}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -115,7 +115,7 @@ impl StatCommand {
                         status.code()
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}Message:{} {}",
                         color::Fg(color::Cyan),
                         style::Italic,
@@ -124,7 +124,7 @@ impl StatCommand {
                         status.message()
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}Details:{} {}",
                         color::Fg(color::Cyan),
                         style::Italic,
@@ -133,7 +133,7 @@ impl StatCommand {
                         std::str::from_utf8(status.details()).unwrap()
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}*********************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -142,7 +142,7 @@ impl StatCommand {
                     );
                 }
                 err => {
-                    eprintln!(
+                    println!(
                         "{}{}{}Stating Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -150,7 +150,7 @@ impl StatCommand {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,
@@ -158,7 +158,7 @@ impl StatCommand {
                         style::Reset
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}Message:{} {}",
                         color::Fg(color::Red),
                         style::Italic,
@@ -167,7 +167,7 @@ impl StatCommand {
                         err
                     );
 
-                    eprintln!(
+                    println!(
                         "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,

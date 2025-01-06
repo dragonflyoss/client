@@ -36,7 +36,7 @@ use dragonfly_api::scheduler::v2::{
 };
 use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::{error::DownloadFromRemotePeerFailed, Error};
+use dragonfly_client_core::{error::DownloadFromParentFailed, Error};
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Result as ClientResult,
@@ -46,6 +46,7 @@ use dragonfly_client_util::id_generator::IDGenerator;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use tokio::sync::{
     mpsc::{self, Sender},
     Semaphore,
@@ -121,9 +122,8 @@ impl PersistentCacheTask {
 
         // Get the content length of the file.
         let content_length = std::fs::metadata(path)
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("get file metadata error: {}", err);
-                err
             })?
             .len();
 
@@ -151,9 +151,8 @@ impl PersistentCacheTask {
                 ttl: request.ttl,
             })
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("upload persistent cache task started: {}", err);
-                err
             })?;
 
         // Create the persistent cache task.
@@ -194,9 +193,8 @@ impl PersistentCacheTask {
                                 },
                             )
                             .await
-                            .map_err(|err| {
+                            .inspect_err(|err| {
                                 error!("upload persistent cache task failed: {}", err);
-                                err
                             })?;
 
                         // Delete the persistent cache task.
@@ -232,9 +230,8 @@ impl PersistentCacheTask {
                         description: Some(err.to_string()),
                     })
                     .await
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         error!("upload persistent cache task failed: {}", err);
-                        err
                     })?;
 
                 // Delete the persistent cache task.
@@ -379,18 +376,18 @@ impl PersistentCacheTask {
                 REQUEST_TIMEOUT,
             )
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("send DownloadPersistentCacheTaskStartedResponse failed: {:?}", err);
-                err
             })?;
 
-        // Download the pieces from the local peer.
-        debug!("download the pieces from local peer");
+        // Download the pieces from the local.
+        debug!("download the pieces from local");
         let finished_pieces = match self
-            .download_partial_from_local_peer(
+            .download_partial_from_local(
                 task,
                 host_id,
                 peer_id,
+                request.need_piece_content,
                 interested_pieces.clone(),
                 download_progress_tx.clone(),
             )
@@ -398,7 +395,7 @@ impl PersistentCacheTask {
         {
             Ok(finished_pieces) => finished_pieces,
             Err(err) => {
-                error!("download from local peer error: {:?}", err);
+                error!("download from local error: {:?}", err);
                 download_progress_tx
                     .send_timeout(Err(Status::internal(err.to_string())), REQUEST_TIMEOUT)
                     .await
@@ -422,7 +419,7 @@ impl PersistentCacheTask {
 
         // Check if all pieces are downloaded.
         if interested_pieces.is_empty() {
-            info!("all pieces are downloaded from local peer");
+            info!("all pieces are downloaded from local");
             return Ok(());
         };
         debug!("download the pieces with scheduler");
@@ -525,9 +522,8 @@ impl PersistentCacheTask {
                 REQUEST_TIMEOUT,
             )
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("send RegisterPersistentCachePeerRequest failed: {:?}", err);
-                err
             })?;
         info!("sent RegisterPersistentCachePeerRequest");
 
@@ -538,9 +534,8 @@ impl PersistentCacheTask {
             .scheduler_client
             .announce_persistent_cache_peer(task.id.as_str(), peer_id, request_stream)
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("announce peer failed: {:?}", err);
-                err
             })?;
         info!("announced peer has been connected");
 
@@ -606,9 +601,8 @@ impl PersistentCacheTask {
                             REQUEST_TIMEOUT,
                         )
                         .await
-                        .map_err(|err| {
+                        .inspect_err(|err| {
                             error!("send DownloadPersistentCachePeerStartedRequest failed: {:?}", err);
-                            err
                         })?;
                     info!("sent DownloadPersistentCachePeerStartedRequest");
 
@@ -630,9 +624,8 @@ impl PersistentCacheTask {
                             REQUEST_TIMEOUT,
                         )
                         .await
-                        .map_err(|err| {
+                        .inspect_err(|err| {
                             error!("send DownloadPersistentCachePeerFinishedRequest failed: {:?}", err);
-                            err
                         })?;
                     info!("sent DownloadPersistentCachePeerFinishedRequest");
 
@@ -643,7 +636,7 @@ impl PersistentCacheTask {
                 announce_persistent_cache_peer_response::Response::NormalPersistentCacheTaskResponse(
                     response,
                 ) => {
-                    // If the persistent cache task is normal, download the pieces from the remote peer.
+                    // If the persistent cache task is normal, download the pieces from the parent.
                     info!(
                         "normal persistent cache task response: {:?}",
                         response
@@ -683,13 +676,14 @@ impl PersistentCacheTask {
                         interested_pieces.clone(),
                     );
 
-                    // Download the pieces from the remote peer.
+                    // Download the pieces from the parent.
                     let partial_finished_pieces = match self
-                        .download_partial_with_scheduler_from_remote_peer(
+                        .download_partial_with_scheduler_from_parent(
                             task,
                             host_id,
                             peer_id,
                             response.candidate_cache_parents.clone(),
+                            request.need_piece_content,
                             remaining_interested_pieces.clone(),
                             download_progress_tx.clone(),
                             in_stream_tx.clone(),
@@ -698,7 +692,7 @@ impl PersistentCacheTask {
                     {
                         Ok(partial_finished_pieces) => {
                             info!(
-                                "schedule {} finished {} pieces from remote peer",
+                                "schedule {} finished {} pieces from parent",
                                 schedule_count,
                                 partial_finished_pieces.len()
                             );
@@ -706,7 +700,7 @@ impl PersistentCacheTask {
                             partial_finished_pieces
                         }
                         Err(err) => {
-                            error!("download from remote peer error: {:?}", err);
+                            error!("download from parent error: {:?}", err);
                             return Ok(finished_pieces);
                         }
                     };
@@ -761,7 +755,7 @@ impl PersistentCacheTask {
                                         ReschedulePersistentCachePeerRequest {
                                             candidate_parents: response.candidate_cache_parents,
                                             description: Some(
-                                                "not all pieces are downloaded from remote peer"
+                                                "not all pieces are downloaded from parent"
                                                     .to_string(),
                                             ),
                                         },
@@ -787,15 +781,16 @@ impl PersistentCacheTask {
         Ok(finished_pieces)
     }
 
-    /// download_partial_with_scheduler_from_remote_peer downloads a partial persistent cache task with scheduler from a remote peer.
+    /// download_partial_with_scheduler_from_parent downloads a partial persistent cache task with scheduler from a parent.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
-    async fn download_partial_with_scheduler_from_remote_peer(
+    async fn download_partial_with_scheduler_from_parent(
         &self,
         task: &metadata::PersistentCacheTask,
         host_id: &str,
         peer_id: &str,
         parents: Vec<PersistentCachePeer>,
+        need_piece_content: bool,
         interested_pieces: Vec<metadata::Piece>,
         download_progress_tx: Sender<Result<DownloadPersistentCacheTaskResponse, Status>>,
         in_stream_tx: Sender<AnnouncePersistentCachePeerRequest>,
@@ -823,14 +818,15 @@ impl PersistentCacheTask {
             self.config.download.concurrent_piece_count as usize,
         ));
 
-        // Download the pieces from the remote peers.
+        // Download the pieces from the parents.
         while let Some(collect_piece) = piece_collector_rx.recv().await {
-            async fn download_from_remote_peer(
+            async fn download_from_parent(
                 task_id: String,
                 host_id: String,
                 peer_id: String,
                 number: u32,
                 length: u64,
+                need_piece_content: bool,
                 parent: piece_collector::CollectedParent,
                 piece_manager: Arc<super::piece::Piece>,
                 storage: Arc<Storage>,
@@ -843,13 +839,13 @@ impl PersistentCacheTask {
 
                 let piece_id = storage.piece_id(task_id.as_str(), number);
                 info!(
-                    "start to download piece {} from remote peer {:?}",
+                    "start to download piece {} from parent {:?}",
                     piece_id,
                     parent.id.clone()
                 );
 
                 let metadata = piece_manager
-                    .download_from_remote_peer(
+                    .download_from_parent(
                         peer_id.as_str(),
                         host_id.as_str(),
                         task_id.as_str(),
@@ -861,19 +857,19 @@ impl PersistentCacheTask {
                     .await
                     .map_err(|err| {
                         error!(
-                            "download piece {} from remote peer {:?} error: {:?}",
+                            "download piece {} from parent {:?} error: {:?}",
                             piece_id,
                             parent.id.clone(),
                             err
                         );
-                        Error::DownloadFromRemotePeerFailed(DownloadFromRemotePeerFailed {
+                        Error::DownloadFromParentFailed(DownloadFromParentFailed {
                             piece_number: number,
                             parent_id: parent.id.clone(),
                         })
                     })?;
 
                 // Construct the piece.
-                let piece = Piece {
+                let mut piece = Piece {
                     number: metadata.number,
                     parent_id: metadata.parent_id.clone(),
                     offset: metadata.offset,
@@ -884,6 +880,30 @@ impl PersistentCacheTask {
                     cost: metadata.prost_cost(),
                     created_at: Some(prost_wkt_types::Timestamp::from(metadata.created_at)),
                 };
+
+                // If need_piece_content is true, read the piece content from the local.
+                if need_piece_content {
+                    let mut reader = piece_manager
+                        .download_from_local_into_async_read(
+                            piece_id.as_str(),
+                            task_id.as_str(),
+                            metadata.length,
+                            None,
+                            true,
+                            false,
+                        )
+                        .await
+                        .inspect_err(|err| {
+                            error!("read piece {} failed: {:?}", piece_id, err);
+                        })?;
+
+                    let mut content = vec![0; metadata.length as usize];
+                    reader.read_exact(&mut content).await.inspect_err(|err| {
+                        error!("read piece {} failed: {:?}", piece_id, err);
+                    })?;
+
+                    piece.content = Some(content);
+                }
 
                 // Send the download piece finished request.
                 in_stream_tx
@@ -903,9 +923,8 @@ impl PersistentCacheTask {
                         REQUEST_TIMEOUT,
                     )
                     .await
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         error!("send DownloadPieceFinishedRequest failed: {:?}", err);
-                        err
                     })?;
 
                 // Send the download progress.
@@ -926,13 +945,12 @@ impl PersistentCacheTask {
                         REQUEST_TIMEOUT,
                     )
                     .await
-                    .map_err(|err| {
+                    .inspect_err(|err| {
                         error!("send DownloadPieceFinishedResponse failed: {:?}", err);
-                        err
                     })?;
 
                 info!(
-                    "finished piece {} from remote peer {:?}",
+                    "finished piece {} from parent {:?}",
                     piece_id, metadata.parent_id
                 );
 
@@ -940,12 +958,13 @@ impl PersistentCacheTask {
             }
 
             join_set.spawn(
-                download_from_remote_peer(
+                download_from_parent(
                     task.id.clone(),
                     host_id.to_string(),
                     peer_id.to_string(),
                     collect_piece.number,
                     collect_piece.length,
+                    need_piece_content,
                     collect_piece.parent.clone(),
                     self.piece.clone(),
                     self.storage.clone(),
@@ -972,9 +991,9 @@ impl PersistentCacheTask {
                     // Store the finished piece.
                     finished_pieces.push(metadata.clone());
                 }
-                Err(Error::DownloadFromRemotePeerFailed(err)) => {
+                Err(Error::DownloadFromParentFailed(err)) => {
                     error!(
-                        "download piece {} from remote peer {} error: {:?}",
+                        "download piece {} from parent {} error: {:?}",
                         self.storage.piece_id(task.id.as_str(), err.piece_number),
                         err.parent_id,
                         err
@@ -1007,7 +1026,7 @@ impl PersistentCacheTask {
                     continue;
                 }
                 Err(err) => {
-                    error!("download from remote peer error: {:?}", err);
+                    error!("download from parent error: {:?}", err);
                     continue;
                 }
             }
@@ -1015,21 +1034,22 @@ impl PersistentCacheTask {
         Ok(finished_pieces)
     }
 
-    /// download_partial_from_local_peer downloads a partial persistent cache task from a local peer.
+    /// download_partial_from_local downloads a partial persistent cache task from a local.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
-    async fn download_partial_from_local_peer(
+    async fn download_partial_from_local(
         &self,
         task: &metadata::PersistentCacheTask,
         host_id: &str,
         peer_id: &str,
+        need_piece_content: bool,
         interested_pieces: Vec<metadata::Piece>,
         download_progress_tx: Sender<Result<DownloadPersistentCacheTaskResponse, Status>>,
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
-        // Download the piece from the local peer.
+        // Download the piece from the local.
         for interested_piece in interested_pieces {
             let piece_id = self
                 .storage
@@ -1048,13 +1068,13 @@ impl PersistentCacheTask {
                 }
             };
 
-            // Fake the download from the local peer.
+            // Fake the download from the local.
             self.piece
-                .download_from_local_peer(task.id.as_str(), piece.length);
-            info!("finished piece {} from local peer", piece_id);
+                .download_from_local(task.id.as_str(), piece.length);
+            info!("finished piece {} from local", piece_id);
 
             // Construct the piece.
-            let piece = Piece {
+            let mut piece = Piece {
                 number: piece.number,
                 parent_id: None,
                 offset: piece.offset,
@@ -1065,6 +1085,31 @@ impl PersistentCacheTask {
                 cost: piece.prost_cost(),
                 created_at: Some(prost_wkt_types::Timestamp::from(piece.created_at)),
             };
+
+            // If need_piece_content is true, read the piece content from the local.
+            if need_piece_content {
+                let mut reader = self
+                    .piece
+                    .download_from_local_into_async_read(
+                        piece_id.as_str(),
+                        task.id.as_str(),
+                        piece.length,
+                        None,
+                        true,
+                        false,
+                    )
+                    .await
+                    .inspect_err(|err| {
+                        error!("read piece {} failed: {:?}", piece_id, err);
+                    })?;
+
+                let mut content = vec![0; piece.length as usize];
+                reader.read_exact(&mut content).await.inspect_err(|err| {
+                    error!("read piece {} failed: {:?}", piece_id, err);
+                })?;
+
+                piece.content = Some(content);
+            }
 
             // Send the download progress.
             download_progress_tx
@@ -1084,9 +1129,8 @@ impl PersistentCacheTask {
                     REQUEST_TIMEOUT,
                 )
                 .await
-                .map_err(|err| {
+                .inspect_err(|err| {
                     error!("send DownloadPieceFinishedResponse failed: {:?}", err);
-                    err
                 })?;
 
             // Store the finished piece.

@@ -100,9 +100,8 @@ impl Content {
             // ensure the file exists.
             if range.length == 0 {
                 info!("range length is 0, no need to copy");
-                File::create(to).await.map_err(|err| {
+                File::create(to).await.inspect_err(|err| {
                     error!("create {:?} failed: {}", to, err);
-                    err
                 })?;
 
                 return Ok(());
@@ -110,9 +109,8 @@ impl Content {
 
             self.copy_task_by_range(task.id.as_str(), to, range)
                 .await
-                .map_err(|err| {
+                .inspect_err(|err| {
                     error!("copy range {:?} to {:?} failed: {}", task_path, to, err);
-                    err
                 })?;
 
             info!("copy range {:?} to {:?} success", task_path, to);
@@ -131,18 +129,18 @@ impl Content {
             // ensure the file exists.
             if task.is_empty() {
                 info!("task is empty, no need to copy");
-                File::create(to).await.map_err(|err| {
+                File::create(to).await.inspect_err(|err| {
                     error!("create {:?} failed: {}", to, err);
-                    err
                 })?;
 
                 return Ok(());
             }
 
-            self.copy_task(task.id.as_str(), to).await.map_err(|err| {
-                error!("copy {:?} to {:?} failed: {}", task_path, to, err);
-                err
-            })?;
+            self.copy_task(task.id.as_str(), to)
+                .await
+                .inspect_err(|err| {
+                    error!("copy {:?} to {:?} failed: {}", task_path, to, err);
+                })?;
 
             info!("copy {:?} to {:?} success", task_path, to);
             return Ok(());
@@ -165,9 +163,8 @@ impl Content {
         // Ensure the parent directory of the destination exists.
         if let Some(parent) = to.parent() {
             if !parent.exists() {
-                fs::create_dir_all(parent).await.map_err(|err| {
+                fs::create_dir_all(parent).await.inspect_err(|err| {
                     error!("failed to create directory {:?}: {}", parent, err);
-                    err
                 })?;
             }
         }
@@ -182,9 +179,8 @@ impl Content {
         // Ensure the parent directory of the destination exists.
         if let Some(parent) = to.parent() {
             if !parent.exists() {
-                fs::create_dir_all(parent).await.map_err(|err| {
+                fs::create_dir_all(parent).await.inspect_err(|err| {
                     error!("failed to create directory {:?}: {}", parent, err);
-                    err
                 })?;
             }
         }
@@ -212,20 +208,19 @@ impl Content {
     #[instrument(skip_all)]
     pub async fn read_task_by_range(&self, task_id: &str, range: Range) -> Result<impl AsyncRead> {
         let task_path = self.get_task_path(task_id);
-        let mut from_f = File::open(task_path.as_path()).await.map_err(|err| {
+        let from_f = File::open(task_path.as_path()).await.inspect_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
-            err
         })?;
+        let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, from_f);
 
-        from_f
+        f_reader
             .seek(SeekFrom::Start(range.start))
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("seek {:?} failed: {}", task_path, err);
-                err
             })?;
 
-        let range_reader = from_f.take(range.length);
+        let range_reader = f_reader.take(range.length);
         Ok(range_reader)
     }
 
@@ -234,10 +229,11 @@ impl Content {
     pub async fn delete_task(&self, task_id: &str) -> Result<()> {
         info!("delete task content: {}", task_id);
         let task_path = self.get_task_path(task_id);
-        fs::remove_file(task_path.as_path()).await.map_err(|err| {
-            error!("remove {:?} failed: {}", task_path, err);
-            err
-        })?;
+        fs::remove_file(task_path.as_path())
+            .await
+            .inspect_err(|err| {
+                error!("remove {:?} failed: {}", task_path, err);
+            })?;
         Ok(())
     }
 
@@ -251,29 +247,68 @@ impl Content {
         range: Option<Range>,
     ) -> Result<impl AsyncRead> {
         let task_path = self.get_task_path(task_id);
-        let mut f = File::open(task_path.as_path()).await.map_err(|err| {
-            error!("open {:?} failed: {}", task_path, err);
-            err
-        })?;
 
         // Calculate the target offset and length based on the range.
-        let (target_offset, target_length) = if let Some(range) = range {
-            let target_offset = max(offset, range.start);
-            let target_length =
-                min(offset + length - 1, range.start + range.length - 1) - target_offset + 1;
-            (target_offset, target_length)
-        } else {
-            (offset, length)
-        };
+        let (target_offset, target_length) = calculate_piece_range(offset, length, range);
 
-        f.seek(SeekFrom::Start(target_offset))
+        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
+            error!("open {:?} failed: {}", task_path, err);
+        })?;
+        let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
+
+        f_reader
+            .seek(SeekFrom::Start(target_offset))
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("seek {:?} failed: {}", task_path, err);
-                err
             })?;
 
-        Ok(f.take(target_length))
+        Ok(f_reader.take(target_length))
+    }
+
+    /// read_piece_with_dual_read return two readers, one is the range reader, and the other is the
+    /// full reader of the piece. It is used for cache the piece content to the proxy cache.
+    #[instrument(skip_all)]
+    pub async fn read_piece_with_dual_read(
+        &self,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+        range: Option<Range>,
+    ) -> Result<(impl AsyncRead, impl AsyncRead)> {
+        let task_path = self.get_task_path(task_id);
+
+        // Calculate the target offset and length based on the range.
+        let (target_offset, target_length) = calculate_piece_range(offset, length, range);
+
+        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
+            error!("open {:?} failed: {}", task_path, err);
+        })?;
+        let mut f_range_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
+
+        f_range_reader
+            .seek(SeekFrom::Start(target_offset))
+            .await
+            .inspect_err(|err| {
+                error!("seek {:?} failed: {}", task_path, err);
+            })?;
+        let range_reader = f_range_reader.take(target_length);
+
+        // Create full reader of the piece.
+        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
+            error!("open {:?} failed: {}", task_path, err);
+        })?;
+        let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
+
+        f_reader
+            .seek(SeekFrom::Start(offset))
+            .await
+            .inspect_err(|err| {
+                error!("seek {:?} failed: {}", task_path, err);
+            })?;
+        let reader = f_reader.take(length);
+
+        Ok((range_reader, reader))
     }
 
     /// write_piece_with_crc32_castagnoli writes the piece to the content with crc32 castagnoli.
@@ -293,14 +328,12 @@ impl Content {
             .write(true)
             .open(task_path.as_path())
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("open {:?} failed: {}", task_path, err);
-                err
             })?;
 
-        f.seek(SeekFrom::Start(offset)).await.map_err(|err| {
+        f.seek(SeekFrom::Start(offset)).await.inspect_err(|err| {
             error!("seek {:?} failed: {}", task_path, err);
-            err
         })?;
 
         // Copy the piece to the file while updating the CRC32C value.
@@ -357,21 +390,18 @@ impl Content {
             .write(true)
             .open(task_path.as_path())
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("open {:?} failed: {}", task_path, err);
-                err
             })?;
 
-        f.seek(SeekFrom::Start(offset)).await.map_err(|err| {
+        f.seek(SeekFrom::Start(offset)).await.inspect_err(|err| {
             error!("seek {:?} failed: {}", task_path, err);
-            err
         })?;
 
         // Copy the piece to the file.
         let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
-        let length = io::copy(&mut tee, &mut writer).await.map_err(|err| {
+        let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
             error!("copy {:?} failed: {}", task_path, err);
-            err
         })?;
 
         // Calculate the hash of the piece.
@@ -395,9 +425,8 @@ impl Content {
     #[instrument(skip_all)]
     async fn create_or_get_task_path(&self, task_id: &str) -> Result<PathBuf> {
         let task_dir = self.dir.join(DEFAULT_TASK_DIR).join(&task_id[..3]);
-        fs::create_dir_all(&task_dir).await.map_err(|err| {
+        fs::create_dir_all(&task_dir).await.inspect_err(|err| {
             error!("create {:?} failed: {}", task_dir, err);
-            err
         })?;
 
         Ok(task_dir.join(task_id))
@@ -413,9 +442,8 @@ impl Content {
         // Ensure the parent directory of the destination exists.
         if let Some(parent) = to.parent() {
             if !parent.exists() {
-                fs::create_dir_all(parent).await.map_err(|err| {
+                fs::create_dir_all(parent).await.inspect_err(|err| {
                     error!("failed to create directory {:?}: {}", parent, err);
-                    err
                 })?;
             }
         }
@@ -435,18 +463,18 @@ impl Content {
             // ensure the file exists.
             if task.is_empty() {
                 info!("persistent cache task is empty, no need to copy");
-                File::create(to).await.map_err(|err| {
+                File::create(to).await.inspect_err(|err| {
                     error!("create {:?} failed: {}", to, err);
-                    err
                 })?;
 
                 return Ok(());
             }
 
-            self.copy_task(task.id.as_str(), to).await.map_err(|err| {
-                error!("copy {:?} to {:?} failed: {}", task_path, to, err);
-                err
-            })?;
+            self.copy_task(task.id.as_str(), to)
+                .await
+                .inspect_err(|err| {
+                    error!("copy {:?} to {:?} failed: {}", task_path, to, err);
+                })?;
 
             info!("copy {:?} to {:?} success", task_path, to);
             return Ok(());
@@ -470,14 +498,12 @@ impl Content {
             .create_or_get_persistent_cache_task_path(task_id)
             .await?;
         let to_f = OpenOptions::new()
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .write(true)
             .open(task_path.as_path())
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("open {:?} failed: {}", task_path, err);
-                err
             })?;
 
         // Copy the content to the file while updating the CRC32C value.
@@ -512,9 +538,8 @@ impl Content {
         let persistent_cache_task_path = self.get_persistent_cache_task_path(task_id);
         fs::remove_file(persistent_cache_task_path.as_path())
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 error!("remove {:?} failed: {}", persistent_cache_task_path, err);
-                err
             })?;
         Ok(())
     }
@@ -538,11 +563,102 @@ impl Content {
             .join(DEFAULT_PERSISTENT_CACHE_TASK_DIR)
             .join(&task_id[..3]);
 
-        fs::create_dir_all(&task_dir).await.map_err(|err| {
+        fs::create_dir_all(&task_dir).await.inspect_err(|err| {
             error!("create {:?} failed: {}", task_dir, err);
-            err
         })?;
 
         Ok(task_dir.join(task_id))
+    }
+}
+
+/// calculate_piece_range calculates the target offset and length based on the piece range and
+/// request range.
+pub fn calculate_piece_range(offset: u64, length: u64, range: Option<Range>) -> (u64, u64) {
+    if let Some(range) = range {
+        let target_offset = max(offset, range.start);
+        let target_length =
+            min(offset + length - 1, range.start + range.length - 1) - target_offset + 1;
+        (target_offset, target_length)
+    } else {
+        (offset, length)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn should_calculate_piece_range() {
+        let test_cases = vec![
+            (1, 4, None, 1, 4),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 1,
+                    length: 4,
+                }),
+                1,
+                4,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 2,
+                    length: 1,
+                }),
+                2,
+                1,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 1,
+                    length: 1,
+                }),
+                1,
+                1,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 4,
+                    length: 1,
+                }),
+                4,
+                1,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 0,
+                    length: 2,
+                }),
+                1,
+                1,
+            ),
+            (
+                1,
+                4,
+                Some(Range {
+                    start: 4,
+                    length: 3,
+                }),
+                4,
+                1,
+            ),
+        ];
+
+        for (piece_offset, piece_length, range, expected_offset, expected_length) in test_cases {
+            let (target_offset, target_length) =
+                calculate_piece_range(piece_offset, piece_length, range);
+            assert_eq!(target_offset, expected_offset);
+            assert_eq!(target_length, expected_length);
+        }
     }
 }

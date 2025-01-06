@@ -95,7 +95,7 @@ impl Piece {
             id_generator,
             storage,
             downloader_factory: Arc::new(piece_downloader::DownloaderFactory::new(
-                config.upload.server.protocol.as_str(),
+                config.storage.server.protocol.as_str(),
                 config.clone(),
             )?),
             backend_factory,
@@ -319,9 +319,9 @@ impl Piece {
         (content_length as f64 / piece_length as f64).ceil() as u32
     }
 
-    /// upload_from_local_peer_into_async_read uploads a single piece from a local peer.
+    /// upload_from_local_into_async_read uploads a single piece from local cache.
     #[instrument(skip_all, fields(piece_id))]
-    pub async fn upload_from_local_peer_into_async_read(
+    pub async fn upload_from_local_into_async_read(
         &self,
         piece_id: &str,
         task_id: &str,
@@ -349,9 +349,40 @@ impl Piece {
             })
     }
 
-    /// download_from_local_peer_into_async_read downloads a single piece from a local peer.
+    /// upload_from_local_into_async_read. It will return two readers, one is the range reader, and the other is the
+    /// full reader of the piece.
     #[instrument(skip_all, fields(piece_id))]
-    pub async fn download_from_local_peer_into_async_read(
+    pub async fn upload_from_local_into_dual_async_read(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        length: u64,
+        range: Option<Range>,
+        disable_rate_limit: bool,
+    ) -> Result<(impl AsyncRead, impl AsyncRead)> {
+        // Span record the piece_id.
+        Span::current().record("piece_id", piece_id);
+
+        // Acquire the upload rate limiter.
+        if !disable_rate_limit {
+            self.upload_rate_limiter.acquire(length as usize).await;
+        }
+
+        // Upload the piece content.
+        self.storage
+            .upload_piece_with_dual_read(piece_id, task_id, range)
+            .await
+            .inspect(|_reader| {
+                collect_upload_piece_traffic_metrics(
+                    self.id_generator.task_type(task_id) as i32,
+                    length,
+                );
+            })
+    }
+
+    /// download_from_local_into_async_read downloads a single piece from local cache.
+    #[instrument(skip_all, fields(piece_id))]
+    pub async fn download_from_local_into_async_read(
         &self,
         piece_id: &str,
         task_id: &str,
@@ -378,10 +409,42 @@ impl Piece {
         self.storage.upload_piece(piece_id, task_id, range).await
     }
 
-    /// download_from_local_peer downloads a single piece from a local peer. Fake the download piece
-    /// from the local peer, just collect the metrics.
+    /// download_from_local_into_dual_async_read returns two readers, one is the range reader, and
+    /// the other is the full reader of the piece.
+    #[instrument(skip_all, fields(piece_id))]
+    pub async fn download_from_local_into_dual_async_read(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        length: u64,
+        range: Option<Range>,
+        disable_rate_limit: bool,
+        is_prefetch: bool,
+    ) -> Result<(impl AsyncRead, impl AsyncRead)> {
+        // Span record the piece_id.
+        Span::current().record("piece_id", piece_id);
+
+        // Acquire the download rate limiter.
+        if !disable_rate_limit {
+            if is_prefetch {
+                // Acquire the prefetch rate limiter.
+                self.prefetch_rate_limiter.acquire(length as usize).await;
+            } else {
+                // Acquire the download rate limiter.
+                self.download_rate_limiter.acquire(length as usize).await;
+            }
+        }
+
+        // Upload the piece content.
+        self.storage
+            .upload_piece_with_dual_read(piece_id, task_id, range)
+            .await
+    }
+
+    /// download_from_local downloads a single piece from local cache. Fake the download piece
+    /// from the local cache, just collect the metrics.
     #[instrument(skip_all)]
-    pub fn download_from_local_peer(&self, task_id: &str, length: u64) {
+    pub fn download_from_local(&self, task_id: &str, length: u64) {
         collect_download_piece_traffic_metrics(
             &TrafficType::LocalPeer,
             self.id_generator.task_type(task_id) as i32,
@@ -389,10 +452,10 @@ impl Piece {
         );
     }
 
-    /// download_from_remote_peer downloads a single piece from a remote peer.
+    /// download_from_parent downloads a single piece from a parent.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all, fields(piece_id))]
-    pub async fn download_from_remote_peer(
+    pub async fn download_from_parent(
         &self,
         piece_id: &str,
         host_id: &str,
@@ -455,7 +518,7 @@ impl Piece {
         // Record the finish of downloading piece.
         match self
             .storage
-            .download_piece_from_remote_peer_finished(
+            .download_piece_from_parent_finished(
                 piece_id,
                 task_id,
                 offset,
@@ -534,13 +597,11 @@ impl Piece {
         );
 
         // Download the piece from the source.
-        let backend = self.backend_factory.build(url).map_err(|err| {
+        let backend = self.backend_factory.build(url).inspect_err(|err| {
             error!("build backend failed: {}", err);
             if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                 error!("set piece metadata failed: {}", err)
             };
-
-            err
         })?;
 
         // Record the start time.
@@ -567,7 +628,7 @@ impl Piece {
                 hdfs,
             })
             .await
-            .map_err(|err| {
+            .inspect_err(|err| {
                 // Collect the backend request failure metrics.
                 collect_backend_request_failure_metrics(
                     backend.scheme().as_str(),
@@ -579,8 +640,6 @@ impl Piece {
                 if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                     error!("set piece metadata failed: {}", err)
                 };
-
-                err
             })?;
 
         if !response.success {

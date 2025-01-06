@@ -55,13 +55,13 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Barrier};
 use tokio::time::sleep;
 use tokio_rustls::TlsAcceptor;
-use tokio_util::io::{InspectReader, ReaderStream};
+use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, instrument, Instrument, Span};
 
 pub mod cache;
@@ -821,9 +821,9 @@ async fn proxy_via_dfdaemon(
                                 return;
                             };
 
-                            let piece_reader = match task
+                            let (piece_range_reader, piece_reader) = match task
                                 .piece
-                                .download_from_local_peer_into_async_read(
+                                .download_from_local_into_dual_async_read(
                                     task.piece
                                         .id(message.task_id.as_str(), piece.number)
                                         .as_str(),
@@ -835,7 +835,7 @@ async fn proxy_via_dfdaemon(
                                 )
                                 .await
                             {
-                                Ok(piece_reader) => piece_reader,
+                                Ok(dual_reader) => dual_reader,
                                 Err(err) => {
                                     error!("download piece reader error: {}", err);
                                     if let Err(err) = writer.shutdown().await {
@@ -847,24 +847,22 @@ async fn proxy_via_dfdaemon(
                             };
 
                             // Use a buffer to read the piece.
-                            let piece_reader =
-                                BufReader::with_capacity(read_buffer_size, piece_reader);
+                            let piece_range_reader =
+                                BufReader::with_capacity(read_buffer_size, piece_range_reader);
 
                             // Write the piece data to the pipe in order and store the piece reader
                             // in the cache.
-                            finished_piece_readers.insert(piece.number, piece_reader);
-                            while let Some(piece_reader) =
-                                finished_piece_readers.get_mut(&need_piece_number)
+                            finished_piece_readers
+                                .insert(piece.number, (piece_range_reader, piece_reader));
+                            while let Some((mut piece_range_reader, piece_reader)) =
+                                finished_piece_readers
+                                    .get_mut(&need_piece_number)
+                                    .map(|(range_reader, reader)| (range_reader, reader))
                             {
                                 debug!("copy piece {} to stream", need_piece_number);
-                                let mut content =
-                                    bytes::BytesMut::with_capacity(piece.length as usize);
-
-                                let mut tee = InspectReader::new(piece_reader, |bytes| {
-                                    content.extend_from_slice(bytes);
-                                });
-
-                                if let Err(err) = tokio::io::copy(&mut tee, &mut writer).await {
+                                if let Err(err) =
+                                    tokio::io::copy(&mut piece_range_reader, &mut writer).await
+                                {
                                     error!("download piece reader error: {}", err);
                                     if let Err(err) = writer.shutdown().await {
                                         error!("writer shutdown error: {}", err);
@@ -873,10 +871,30 @@ async fn proxy_via_dfdaemon(
                                     return;
                                 }
 
-                                cache.add_piece(
-                                    &task.piece.id(&message.task_id, need_piece_number),
-                                    content.freeze(),
-                                );
+                                // If the piece is not in the cache, add it to the cache.
+                                let piece_id =
+                                    task.piece.id(message.task_id.as_str(), need_piece_number);
+
+                                if !cache.contains_piece(&piece_id) {
+                                    let mut content =
+                                        bytes::BytesMut::with_capacity(piece.length as usize);
+                                    loop {
+                                        let n = match piece_reader.read_buf(&mut content).await {
+                                            Ok(n) => n,
+                                            Err(err) => {
+                                                error!("read piece reader error: {}", err);
+                                                break;
+                                            }
+                                        };
+
+                                        // When the piece reader reads to the end, add the piece
+                                        // to the cache.
+                                        if n == 0 {
+                                            cache.add_piece(&piece_id, content.freeze());
+                                            break;
+                                        }
+                                    }
+                                }
 
                                 need_piece_number += 1;
                             }
@@ -1011,9 +1029,8 @@ async fn proxy_via_https(
         .build();
 
     let client = Client::builder(TokioExecutor::new()).build(https);
-    let response = client.request(request).await.map_err(|err| {
+    let response = client.request(request).await.inspect_err(|err| {
         error!("request failed: {:?}", err);
-        err
     })?;
 
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
@@ -1091,6 +1108,7 @@ fn make_download_task_request(
             object_storage: None,
             hdfs: None,
             is_prefetch: false,
+            need_piece_content: false,
         }),
     })
 }
