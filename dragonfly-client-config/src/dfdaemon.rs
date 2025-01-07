@@ -188,12 +188,6 @@ fn default_storage_read_buffer_size() -> usize {
     128 * 1024
 }
 
-/// default_storage_cache_enable is the default value for the cache enable flag.
-/// The cache is disabled by default.
-#[inline]
-fn default_storage_cache_enable() -> bool {
-    false
-}
 /// default_storage_cache_capacity is the default cache capacity for the preheat task, default is
 /// 100.
 #[inline]
@@ -911,20 +905,20 @@ impl Default for StorageServer {
     }
 }
 
-/// CacheConfig represents the configuration settings for the cache.
+/// Cache represents the configuration settings for the cache.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct CacheConfig {
+pub struct Cache {
     /// enable determines whether the cache is enabled.
     pub enable: bool,
     /// capacity specifies the maximum number of entries the cache can hold.
     pub capacity: usize,
 }
 /// Default implementation for CacheConfig.
-impl Default for CacheConfig {
+impl Default for Cache {
     fn default() -> Self {
-        CacheConfig {
-            enable: default_storage_cache_enable(),
+        Cache {
+            enable: false,
             capacity: default_storage_cache_capacity(),
         }
     }
@@ -938,7 +932,7 @@ pub struct Storage {
     pub server: StorageServer,
 
     /// cache is the configuration for the cache.
-    pub cache: CacheConfig,
+    pub cache: Cache,
 
     /// dir is the directory to store task's metadata and content.
     #[serde(default = "crate::default_storage_dir")]
@@ -962,7 +956,7 @@ impl Default for Storage {
     fn default() -> Self {
         Storage {
             server: StorageServer::default(),
-            cache: CacheConfig::default(),
+            cache: Cache::default(),
             dir: crate::default_storage_dir(),
             keep: default_storage_keep(),
             write_buffer_size: default_storage_write_buffer_size(),
