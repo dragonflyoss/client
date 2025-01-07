@@ -905,11 +905,36 @@ impl Default for StorageServer {
     }
 }
 
-/// Cache represents the configuration settings for the cache.
+/// Cache represents the configuration settings for the cache. 
+/// When a user triggers a preheat request, and if the peer has the cache storage feature enabled, 
+/// the downloaded piece content will be stored in the cache. Subsequently, when other peers request 
+/// downloading the same content, the preheated peer can upload the piece content directly from memory, 
+/// bypassing disk I/O.
+/// 
+/// The workflow diagram is as follows:
+///                                                   |
+///                                                preheat
+///                                                   |
+///                                                   v
+///                                    +--------------------------------+
+///                                    |             Peer               |
+///                                    |         +-----------+          |
+///   +---------------+                |    |--->|   cache   |          |
+///   |               |                |    |    +-----------+          |
+///   |    source     |                |    |        |    |             |                +-------------+
+///   |               |<-- download -->|----|      miss   --- hit ----->|<-- download -->|    Peer     |
+///   |     local     |                |    |        |               |  |                +-------------+
+///   |               |                |    |        v               |  |
+///   |  other peers  |                |    |    +-----------+       |  |
+///   |               |                |    |--->|   disk    |-------|  |
+///   +---------------+                |         +-----------+          |
+///                                    |                                |
+///                                    +--------------------------------+ 
+///
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Cache {
-    /// enable determines whether the cache is enabled.
+    /// enable determines whether the cache feature is enabled.
     pub enable: bool,
     /// capacity specifies the maximum number of entries the cache can hold.
     pub capacity: usize,
@@ -932,7 +957,7 @@ pub struct Storage {
     /// server is the storage server configuration for dfdaemon.
     pub server: StorageServer,
 
-    /// cache is the configuration for the cache.
+    /// cache is the configuration for the cache storage.
     pub cache: Cache,
 
     /// dir is the directory to store task's metadata and content.
