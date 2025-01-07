@@ -24,7 +24,6 @@ use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{
     self, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter, SeekFrom,
 };
-use tokio_util::io::InspectReader;
 use tracing::{error, info, instrument, warn};
 
 /// DEFAULT_CONTENT_DIR is the default directory for store content.
@@ -359,56 +358,6 @@ impl Content {
         Ok(WritePieceResponse {
             length,
             hash: crc.to_string(),
-        })
-    }
-
-    /// write_piece_with_crc32_iso3309 writes the piece to the content with crc32 iso3309, there is
-    /// no hardware acceleration.
-    #[instrument(skip_all)]
-    pub async fn write_piece_with_crc32_iso3309<R: AsyncRead + Unpin + ?Sized>(
-        &self,
-        task_id: &str,
-        offset: u64,
-        reader: &mut R,
-    ) -> Result<WritePieceResponse> {
-        // Use a buffer to read the piece.
-        let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
-
-        // Crc32 is used to calculate the hash of the piece.
-        let mut hasher = crc32fast::Hasher::new();
-
-        // InspectReader is used to calculate the hash of the piece.
-        let mut tee = InspectReader::new(reader, |bytes| {
-            hasher.update(bytes);
-        });
-
-        // Open the file and seek to the offset.
-        let task_path = self.create_or_get_task_path(task_id).await?;
-        let mut f = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(task_path.as_path())
-            .await
-            .inspect_err(|err| {
-                error!("open {:?} failed: {}", task_path, err);
-            })?;
-
-        f.seek(SeekFrom::Start(offset)).await.inspect_err(|err| {
-            error!("seek {:?} failed: {}", task_path, err);
-        })?;
-
-        // Copy the piece to the file.
-        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
-        let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
-            error!("copy {:?} failed: {}", task_path, err);
-        })?;
-
-        // Calculate the hash of the piece.
-        let hash = hasher.finalize();
-        Ok(WritePieceResponse {
-            length,
-            hash: base16ct::lower::encode_string(&hash.to_be_bytes()),
         })
     }
 

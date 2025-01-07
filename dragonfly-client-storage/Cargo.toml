@@ -23,7 +23,6 @@ prost-wkt-types.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 sha2.workspace = true
-crc32fast.workspace = true
 crc32c.workspace = true
 base16ct.workspace = true
 num_cpus = "1.0"
