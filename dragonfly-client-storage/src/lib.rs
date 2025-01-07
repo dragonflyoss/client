@@ -404,6 +404,16 @@ impl Storage {
         // Get the piece metadata and return the content of the piece.
         match self.metadata.get_piece(piece_id) {
             Ok(Some(piece)) => {
+                if let Some(cache) = &self.cache {
+                    // Try to read the piece content from cache
+                    if let Ok(cache_reader) = cache
+                    .read_piece(piece_id,piece.offset, piece.length, range)
+                    .await 
+                    {
+                        self.metadata.upload_task_finished(task_id)?;
+                        return Ok(cache_reader);
+                    }
+                }
                 match self
                     .content
                     .read_piece(task_id, piece.offset, piece.length, range)

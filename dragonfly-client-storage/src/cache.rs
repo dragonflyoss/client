@@ -20,6 +20,8 @@ use lru::LruCache;
 use std::cmp::{max, min};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
+use tokio::io::AsyncRead;
+use std::io::Cursor;
 
 /// Cache is the cache for storing piece content by LRU algorithm.
 #[derive(Clone)]
@@ -44,26 +46,24 @@ impl Cache {
         offset: u64,
         length: u64,
         range: Option<Range>,
-    ) -> Result<Option<Vec<u8>>> {
+    ) -> Result<impl AsyncRead> {
         // Try to get the piece content from the cache
         let Some(piece_content) = self.get_piece(piece_id) else {
-            return Ok(None);
+            return Err(Error::PieceNotFound(piece_id.to_string()));
         };
     
-        // Calculate the range of bytes to return based on the `range` provided
+        // Calculate the range of bytes to return based on the range provided
         let (target_offset, target_length) = if let Some(range) = range {
-            // If `range` is specified, calculate the target offset and length within the range
             let target_offset = max(offset, range.start);
             let target_length = min(offset + length - 1, range.start + range.length - 1) - target_offset + 1;
             (target_offset, target_length)
         } else {
-            // Otherwise, just use the given offset and length
             (offset, length)
         };
     
         // Slice the content to match the required range and return it as a Vec<u8>
         let content_slice = &piece_content[target_offset as usize..(target_offset + target_length) as usize];
-        Ok(Some(content_slice.to_vec())) // Convert the slice to a Vec<u8> and wrap it in Some
+        Ok(Cursor::new(content_slice.to_vec()))
     }
 
     /// get gets the piece content from the cache.
