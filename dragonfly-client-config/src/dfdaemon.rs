@@ -914,7 +914,8 @@ pub struct Cache {
     /// capacity specifies the maximum number of entries the cache can hold.
     pub capacity: usize,
 }
-/// Default implementation for CacheConfig.
+
+/// Default implementation for Cache.
 impl Default for Cache {
     fn default() -> Self {
         Cache {
