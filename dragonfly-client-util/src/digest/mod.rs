@@ -95,16 +95,6 @@ impl Digest {
     pub fn encoded(&self) -> &str {
         &self.encoded
     }
-
-    // is_crc32_iso3309 checks if the crc32 encoded string uses the ISO 3309 polynomial.
-    pub fn is_crc32_iso3309(&self) -> bool {
-        self.algorithm == Algorithm::Crc32 && self.encoded.len() == 8
-    }
-
-    // is_crc32_castagnoli checks if the crc32 encoded string uses the Castagnoli polynomial.
-    pub fn is_crc32_castagnoli(&self) -> bool {
-        self.algorithm == Algorithm::Crc32 && self.encoded.len() == 10
-    }
 }
 
 /// Digest implements the Display.
@@ -234,27 +224,5 @@ mod tests {
         let digest =
             calculate_file_hash(Algorithm::Crc32, path).expect("failed to calculate Sha512 hash");
         assert_eq!(digest.encoded(), expected_crc32);
-    }
-
-    #[test]
-    fn test_is_crc32_iso3309() {
-        let mut hasher = crc32fast::Hasher::new();
-        hasher.update(b"test");
-        let hash = hasher.finalize();
-
-        let digest = Digest::new(
-            Algorithm::Crc32,
-            base16ct::lower::encode_string(&hash.to_be_bytes()),
-        );
-        assert!(digest.is_crc32_iso3309());
-    }
-
-    #[test]
-    fn test_is_crc32_castagnoli() {
-        let crc = crc32c::crc32c(b"test");
-        let encoded = crc.to_string();
-
-        let digest = Digest::new(Algorithm::Crc32, encoded);
-        assert!(digest.is_crc32_castagnoli());
     }
 }
