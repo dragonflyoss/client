@@ -25,6 +25,7 @@ use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{
     self, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter, SeekFrom,
 };
+use tokio_util::io::InspectReader;
 use tracing::{error, info, instrument, warn};
 
 /// DEFAULT_CONTENT_DIR is the default directory for store content.
@@ -337,24 +338,22 @@ impl Content {
         })?;
 
         // Copy the piece to the file while updating the CRC32 value.
+        let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
         let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
         let mut digest = crc.digest();
-        let mut length = 0;
-        let mut buffer = vec![0; self.config.storage.write_buffer_size];
+
+        let mut tee = InspectReader::new(reader, |bytes| {
+            digest.update(bytes);
+        });
+
         let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
-        let mut reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
+        let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
+            error!("copy {:?} failed: {}", task_path, err);
+        })?;
 
-        loop {
-            let n = reader.read(&mut buffer).await?;
-            if n == 0 {
-                break;
-            }
-
-            digest.update(&buffer[..n]);
-            writer.write_all(&buffer[..n]).await?;
-            length += n as u64;
-        }
-        writer.flush().await?;
+        writer.flush().await.inspect_err(|err| {
+            error!("flush {:?} failed: {}", task_path, err);
+        })?;
 
         // Calculate the hash of the piece.
         Ok(WritePieceResponse {
@@ -458,24 +457,22 @@ impl Content {
             })?;
 
         // Copy the content to the file while updating the CRC32 value.
+        let mut reader = BufReader::with_capacity(self.config.storage.write_buffer_size, from_f);
         let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
         let mut digest = crc.digest();
-        let mut length = 0;
-        let mut buffer = vec![0; self.config.storage.write_buffer_size];
+
+        let mut tee = InspectReader::new(&mut reader, |bytes| {
+            digest.update(bytes);
+        });
+
         let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, to_f);
-        let mut reader = BufReader::with_capacity(self.config.storage.write_buffer_size, from_f);
+        let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
+            error!("copy {:?} failed: {}", task_path, err);
+        })?;
 
-        loop {
-            let n = reader.read(&mut buffer).await?;
-            if n == 0 {
-                break;
-            }
-
-            digest.update(&buffer[..n]);
-            writer.write_all(&buffer[..n]).await?;
-            length += n as u64;
-        }
-        writer.flush().await?;
+        writer.flush().await.inspect_err(|err| {
+            error!("flush {:?} failed: {}", task_path, err);
+        })?;
 
         Ok(WritePersistentCacheTaskResponse {
             length,
