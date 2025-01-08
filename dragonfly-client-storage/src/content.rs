@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crc::*;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
@@ -335,8 +336,9 @@ impl Content {
             error!("seek {:?} failed: {}", task_path, err);
         })?;
 
-        // Copy the piece to the file while updating the CRC32C value.
-        let mut crc: u32 = 0;
+        // Copy the piece to the file while updating the CRC32 value.
+        let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
+        let mut digest = crc.digest();
         let mut length = 0;
         let mut buffer = vec![0; self.config.storage.write_buffer_size];
         let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
@@ -348,7 +350,7 @@ impl Content {
                 break;
             }
 
-            crc = crc32c::crc32c_append(crc, &buffer[..n]);
+            digest.update(&buffer[..n]);
             writer.write_all(&buffer[..n]).await?;
             length += n as u64;
         }
@@ -357,7 +359,7 @@ impl Content {
         // Calculate the hash of the piece.
         Ok(WritePieceResponse {
             length,
-            hash: crc.to_string(),
+            hash: digest.finalize().to_string(),
         })
     }
 
@@ -455,8 +457,9 @@ impl Content {
                 error!("open {:?} failed: {}", task_path, err);
             })?;
 
-        // Copy the content to the file while updating the CRC32C value.
-        let mut crc: u32 = 0;
+        // Copy the content to the file while updating the CRC32 value.
+        let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
+        let mut digest = crc.digest();
         let mut length = 0;
         let mut buffer = vec![0; self.config.storage.write_buffer_size];
         let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, to_f);
@@ -468,7 +471,7 @@ impl Content {
                 break;
             }
 
-            crc = crc32c::crc32c_append(crc, &buffer[..n]);
+            digest.update(&buffer[..n]);
             writer.write_all(&buffer[..n]).await?;
             length += n as u64;
         }
@@ -476,7 +479,7 @@ impl Content {
 
         Ok(WritePersistentCacheTaskResponse {
             length,
-            hash: crc.to_string(),
+            hash: digest.finalize().to_string(),
         })
     }
 

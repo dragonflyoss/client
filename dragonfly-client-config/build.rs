@@ -64,24 +64,6 @@ fn main() {
     let target = env::var("TARGET").unwrap_or_default();
     println!("cargo:rustc-env=BUILD_PLATFORM={}", target);
 
-    // Get the RUSTFLAGS environment variable.
-    let mut rustflags = env::var("RUSTFLAGS").unwrap_or_default();
-
-    // Set the environment variables for the RUSTFLAGS.
-    let additional_rustflags = if target.contains("x86_64") {
-        "-C target-feature=+sse4.2"
-    } else {
-        ""
-    };
-
-    if !additional_rustflags.is_empty() {
-        if !rustflags.is_empty() {
-            rustflags.push(' ');
-        }
-        rustflags.push_str(additional_rustflags);
-        println!("cargo:rustc-env=RUSTFLAGS={}", rustflags);
-    }
-
     // Set the environment variables for the build time.
     if let Ok(build_time) = SystemTime::now().duration_since(UNIX_EPOCH) {
         println!("cargo:rustc-env=BUILD_TIMESTAMP={}", build_time.as_secs());
