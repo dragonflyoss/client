@@ -16,10 +16,7 @@
 
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::{
-    error::{ErrorType, OrErr},
-    Error, Result,
-};
+use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::digest::{Algorithm, Digest};
 use reqwest::header::HeaderMap;
 use std::path::Path;
@@ -348,17 +345,10 @@ impl Storage {
         parent_id: &str,
         reader: &mut R,
     ) -> Result<metadata::Piece> {
-        let digest: Digest = expected_digest.parse().or_err(ErrorType::ParseError)?;
-        let response = if digest.is_crc32_iso3309() {
-            // Compatible with the old version.
-            self.content
-                .write_piece_with_crc32_iso3309(task_id, offset, reader)
-                .await?
-        } else {
-            self.content
-                .write_piece_with_crc32_castagnoli(task_id, offset, reader)
-                .await?
-        };
+        let response = self
+            .content
+            .write_piece_with_crc32_castagnoli(task_id, offset, reader)
+            .await?;
 
         let length = response.length;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
