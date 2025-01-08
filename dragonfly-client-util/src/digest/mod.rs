@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crc::*;
 use dragonfly_client_core::Result as ClientResult;
 use sha2::Digest as Sha2Digest;
 use std::fmt;
@@ -135,17 +136,18 @@ pub fn calculate_file_hash(algorithm: Algorithm, path: &Path) -> ClientResult<Di
     let mut reader = std::io::BufReader::new(f);
     match algorithm {
         Algorithm::Crc32 => {
-            let mut crc: u32 = 0;
             let mut buffer = [0; 4096];
+            let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
+            let mut digest = crc.digest();
             loop {
                 let n = reader.read(&mut buffer)?;
                 if n == 0 {
                     break;
                 }
-                crc = crc32c::crc32c_append(crc, &buffer[..n]);
+                digest.update(&buffer[..n]);
             }
 
-            Ok(Digest::new(algorithm, crc.to_string()))
+            Ok(Digest::new(algorithm, digest.finalize().to_string()))
         }
         Algorithm::Blake3 => {
             let mut hasher = blake3::Hasher::new();
