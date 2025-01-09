@@ -17,8 +17,6 @@
 use opentelemetry::sdk::propagation::TraceContextPropagator;
 use rolling_file::*;
 use std::fs;
-use std::fs::OpenOptions;
-use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use tracing::{info, Level};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -133,24 +131,5 @@ pub fn init_tracing(
         log_level
     );
 
-    // Redirect stderr to file.
-    if !verbose {
-        redirect_stderr_to_file(log_dir);
-    }
-
     guards
-}
-
-/// redirect_stderr_to_file redirects stderr to a file.
-fn redirect_stderr_to_file(log_dir: PathBuf) {
-    let log_path = log_dir.join("stderr.log");
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-        .unwrap();
-
-    unsafe {
-        libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO);
-    }
 }
