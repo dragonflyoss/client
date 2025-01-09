@@ -587,7 +587,7 @@ impl UploadClient {
 /// the host info in real-time from the parents and then select the parents for downloading.
 ///
 /// The workflow diagram is as follows:
-///
+///```
 ///                              +----------+
 ///              ----------------|  parent  |---------------
 ///              |               +----------+              |
@@ -607,6 +607,7 @@ impl UploadClient {
 /// |                                                |  download  |     |
 /// |                                                +------------+     |
 /// +-------------------------------------------------------------------+
+/// ```
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ParentSelector {
@@ -905,60 +906,12 @@ impl Default for StorageServer {
     }
 }
 
-/// Cache represents the configuration settings for the cache. 
-/// When a user triggers a preheat request, and if the peer has the cache storage feature enabled, 
-/// the downloaded piece content will be stored in the cache. Subsequently, when other peers request 
-/// downloading the same content, the preheated peer can upload the piece content directly from memory, 
-/// bypassing disk I/O.
-/// 
-/// The workflow diagram is as follows:
-///                                                   |
-///                                                preheat
-///                                                   |
-///                                                   v
-///                                    +--------------------------------+
-///                                    |             Peer               |
-///                                    |         +-----------+          |
-///   +---------------+                |    |--->|   cache   |          |
-///   |               |                |    |    +-----------+          |
-///   |    source     |                |    |        |    |             |                +-------------+
-///   |               |<-- download -->|----|      miss   --- hit ----->|<-- download -->|    Peer     |
-///   |     local     |                |    |        |               |  |                +-------------+
-///   |               |                |    |        v               |  |
-///   |  other peers  |                |    |    +-----------+       |  |
-///   |               |                |    |--->|   disk    |-------|  |
-///   +---------------+                |         +-----------+          |
-///                                    |                                |
-///                                    +--------------------------------+ 
-///
-#[derive(Debug, Clone, Validate, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Cache {
-    /// enable determines whether the cache feature is enabled.
-    pub enable: bool,
-    /// capacity specifies the maximum number of entries the cache can hold.
-    pub capacity: usize,
-}
-
-/// Default implementation for Cache.
-impl Default for Cache {
-    fn default() -> Self {
-        Cache {
-            enable: false,
-            capacity: default_storage_cache_capacity(),
-        }
-    }
-}
-
 /// Storage is the storage configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Storage {
     /// server is the storage server configuration for dfdaemon.
     pub server: StorageServer,
-
-    /// cache is the configuration for the cache storage.
-    pub cache: Cache,
 
     /// dir is the directory to store task's metadata and content.
     #[serde(default = "crate::default_storage_dir")]
@@ -975,6 +928,35 @@ pub struct Storage {
     /// read_buffer_size is the buffer size for reading piece from disk, default is 128KB.
     #[serde(default = "default_storage_read_buffer_size")]
     pub read_buffer_size: usize,
+
+    /// cache_capacity is the cache capacity for the preheat task, default is 100.
+    /// 
+    /// Cache storage:
+    /// 1. The user initiates a preheat job, where the peer downloads and caches content into memory and disk.
+    /// 2. Other peers performing the same task can directly access the preheated peer's memory to speed up the download.
+    /// ```
+    ///         |
+    ///     1.preheat
+    ///         |
+    ///         |
+    /// +--------------------------------------------------+
+    /// |       |              Peer                        |
+    /// |       |                   +-----------+          |
+    /// |       |     -- partial -->|   cache   |          |
+    /// |       |     |             +-----------+          |
+    /// |       v     |                |    |              |
+    /// | downloaded  |              miss   |              |                  +-------------+
+    /// |  content -->|                |    --- hit ------>|<-- 2.download -->|    Peer     |
+    /// |             |                |               ^   |                  +-------------+
+    /// |             |                v               |   |
+    /// |             |          +-----------+         |   |
+    /// |             -- full -->|   disk    |----------   |
+    /// |                        +-----------+             |
+    /// |                                                  |
+    /// +--------------------------------------------------+ 
+    /// ```
+    #[serde(default = "default_storage_cache_capacity")]
+    pub cache_capacity: usize,
 }
 
 /// Storage implements Default.
@@ -982,11 +964,11 @@ impl Default for Storage {
     fn default() -> Self {
         Storage {
             server: StorageServer::default(),
-            cache: Cache::default(),
             dir: crate::default_storage_dir(),
             keep: default_storage_keep(),
             write_buffer_size: default_storage_write_buffer_size(),
             read_buffer_size: default_storage_read_buffer_size(),
+            cache_capacity: default_storage_cache_capacity(),
         }
     }
 }
