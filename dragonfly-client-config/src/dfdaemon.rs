@@ -589,22 +589,22 @@ impl UploadClient {
 /// The workflow diagram is as follows:
 ///```
 ///                              +----------+
-///              ----------------|  parent  |---------------
+///              ----------------|  Parent  |---------------
 ///              |               +----------+              |
-///          host info                                piece metadata
+///          Host Info                                Piece Metadata
 /// +------------|-----------------------------------------|------------+
 /// |            |                                         |            |
-/// |            |                 peer                    |            |
+/// |            |                 Peer                    |            |
 /// |            v                                         v            |
 /// |  +------------------+                       +------------------+  |
-/// |  |  ParentSelector  | ---optimal parent---> |  PieceCollector  |  |
+/// |  |  ParentSelector  | ---Optimal Parent---> |  PieceCollector  |  |
 /// |  +------------------+                       +------------------+  |
 /// |                                                      |            |
-/// |                                                 piece metadata    |
+/// |                                                 Piece Metadata    |
 /// |                                                      |            |
 /// |                                                      v            |
 /// |                                                +------------+     |
-/// |                                                |  download  |     |
+/// |                                                |  Download  |     |
 /// |                                                +------------+     |
 /// +-------------------------------------------------------------------+
 /// ```
@@ -929,31 +929,33 @@ pub struct Storage {
     #[serde(default = "default_storage_read_buffer_size")]
     pub read_buffer_size: usize,
 
-    /// cache_capacity is the cache capacity for the preheat task, default is 100.
-    /// 
+    /// cache_capacity is the cache capacity for downloading, default is 100.
+    ///
     /// Cache storage:
-    /// 1. The user initiates a preheat job, where the peer downloads and caches content into memory and disk.
-    /// 2. Other peers performing the same task can directly access the preheated peer's memory to speed up the download.
+    /// 1. Users can create preheating jobs and preheat tasks to memory and disk by setting `load_to_cache` to `true`.
+    ///    For more details, refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L443.
+    /// 2. If the download hits the memory cache, it will be faster than reading from the disk, because there is no
+    ///    page cache for the first read.
     /// ```
-    ///         |
-    ///     1.preheat
+    ///
+    ///     1.Preheat
     ///         |
     ///         |
     /// +--------------------------------------------------+
     /// |       |              Peer                        |
     /// |       |                   +-----------+          |
-    /// |       |     -- partial -->|   cache   |          |
+    /// |       |     -- Partial -->|   Cache   |          |
     /// |       |     |             +-----------+          |
     /// |       v     |                |    |              |
-    /// | downloaded  |              miss   |              |                  +-------------+
-    /// |  content -->|                |    --- hit ------>|<-- 2.download -->|    Peer     |
-    /// |             |                |               ^   |                  +-------------+
+    /// |   Download  |              Miss   |              |             
+    /// |     Task -->|                |    --- Hit ------>|<-- 2.Download
+    /// |             |                |               ^   |              
     /// |             |                v               |   |
     /// |             |          +-----------+         |   |
-    /// |             -- full -->|   disk    |----------   |
+    /// |             -- Full -->|   Disk    |----------   |
     /// |                        +-----------+             |
     /// |                                                  |
-    /// +--------------------------------------------------+ 
+    /// +--------------------------------------------------+
     /// ```
     #[serde(default = "default_storage_cache_capacity")]
     pub cache_capacity: usize,
