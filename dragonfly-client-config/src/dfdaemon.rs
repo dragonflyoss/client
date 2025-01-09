@@ -188,7 +188,7 @@ fn default_storage_read_buffer_size() -> usize {
     128 * 1024
 }
 
-/// default_storage_cache_capacity is the default cache capacity for the preheat task, default is
+/// default_storage_cache_capacity is the default cache capacity for the preheat job, default is
 /// 100.
 #[inline]
 fn default_storage_cache_capacity() -> usize {
