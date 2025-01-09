@@ -188,6 +188,13 @@ fn default_storage_read_buffer_size() -> usize {
     128 * 1024
 }
 
+/// default_storage_cache_capacity is the default cache capacity for the preheat job, default is
+/// 100.
+#[inline]
+fn default_storage_cache_capacity() -> usize {
+    100
+}
+
 /// default_seed_peer_cluster_id is the default cluster id of seed peer.
 #[inline]
 fn default_seed_peer_cluster_id() -> u64 {
@@ -580,7 +587,7 @@ impl UploadClient {
 /// the host info in real-time from the parents and then select the parents for downloading.
 ///
 /// The workflow diagram is as follows:
-///
+///```
 ///                              +----------+
 ///              ----------------|  parent  |---------------
 ///              |               +----------+              |
@@ -600,6 +607,7 @@ impl UploadClient {
 /// |                                                |  download  |     |
 /// |                                                +------------+     |
 /// +-------------------------------------------------------------------+
+/// ```
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ParentSelector {
@@ -920,6 +928,35 @@ pub struct Storage {
     /// read_buffer_size is the buffer size for reading piece from disk, default is 128KB.
     #[serde(default = "default_storage_read_buffer_size")]
     pub read_buffer_size: usize,
+
+    /// cache_capacity is the cache capacity for the preheat task, default is 100.
+    /// 
+    /// Cache storage:
+    /// 1. The user initiates a preheat job, where the peer downloads and caches content into memory and disk.
+    /// 2. Other peers performing the same task can directly access the preheated peer's memory to speed up the download.
+    /// ```
+    ///         |
+    ///     1.preheat
+    ///         |
+    ///         |
+    /// +--------------------------------------------------+
+    /// |       |              Peer                        |
+    /// |       |                   +-----------+          |
+    /// |       |     -- partial -->|   cache   |          |
+    /// |       |     |             +-----------+          |
+    /// |       v     |                |    |              |
+    /// | downloaded  |              miss   |              |                  +-------------+
+    /// |  content -->|                |    --- hit ------>|<-- 2.download -->|    Peer     |
+    /// |             |                |               ^   |                  +-------------+
+    /// |             |                v               |   |
+    /// |             |          +-----------+         |   |
+    /// |             -- full -->|   disk    |----------   |
+    /// |                        +-----------+             |
+    /// |                                                  |
+    /// +--------------------------------------------------+ 
+    /// ```
+    #[serde(default = "default_storage_cache_capacity")]
+    pub cache_capacity: usize,
 }
 
 /// Storage implements Default.
@@ -931,6 +968,7 @@ impl Default for Storage {
             keep: default_storage_keep(),
             write_buffer_size: default_storage_write_buffer_size(),
             read_buffer_size: default_storage_read_buffer_size(),
+            cache_capacity: default_storage_cache_capacity(),
         }
     }
 }
