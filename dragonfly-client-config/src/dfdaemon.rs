@@ -188,17 +188,10 @@ fn default_storage_read_buffer_size() -> usize {
     128 * 1024
 }
 
-/// default_storage_cache_enable is the default value for the cache enable flag.
-/// The cache is disabled by default.
-#[inline]
-pub fn default_storage_cache_enable() -> bool {
-    false
-}
-
-/// default_storage_cache_capacity is the default cache capacity for the preheat task, default is
+/// default_storage_cache_capacity is the default cache capacity for the preheat job, default is
 /// 100.
 #[inline]
-pub fn default_storage_cache_capacity() -> usize {
+fn default_storage_cache_capacity() -> usize {
     100
 }
 
@@ -594,7 +587,7 @@ impl UploadClient {
 /// the host info in real-time from the parents and then select the parents for downloading.
 ///
 /// The workflow diagram is as follows:
-///
+///```
 ///                              +----------+
 ///              ----------------|  parent  |---------------
 ///              |               +----------+              |
@@ -614,6 +607,7 @@ impl UploadClient {
 /// |                                                |  download  |     |
 /// |                                                +------------+     |
 /// +-------------------------------------------------------------------+
+/// ```
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ParentSelector {
@@ -912,27 +906,6 @@ impl Default for StorageServer {
     }
 }
 
-/// CacheConfig represents the configuration settings for the cache.
-#[derive(Debug, Clone, Validate, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct CacheConfig {
-    /// enable determines whether the cache is enabled.
-    pub enable: bool,
-
-    /// capacity specifies the maximum number of entries the cache can hold.
-    pub capacity: usize,
-}
-
-/// Default implementation for CacheConfig.
-impl Default for CacheConfig {
-    fn default() -> Self {
-        CacheConfig {
-            enable: default_storage_cache_enable(),
-            capacity: default_storage_cache_capacity(),
-        }
-    }
-}
-
 /// Storage is the storage configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -956,8 +929,34 @@ pub struct Storage {
     #[serde(default = "default_storage_read_buffer_size")]
     pub read_buffer_size: usize,
 
-    /// cache is the configuration for the cache.
-    pub cache: CacheConfig,
+    /// cache_capacity is the cache capacity for the preheat task, default is 100.
+    /// 
+    /// Cache storage:
+    /// 1. The user initiates a preheat job, where the peer downloads and caches content into memory and disk.
+    /// 2. Other peers performing the same task can directly access the preheated peer's memory to speed up the download.
+    /// ```
+    ///         |
+    ///     1.preheat
+    ///         |
+    ///         |
+    /// +--------------------------------------------------+
+    /// |       |              Peer                        |
+    /// |       |                   +-----------+          |
+    /// |       |     -- partial -->|   cache   |          |
+    /// |       |     |             +-----------+          |
+    /// |       v     |                |    |              |
+    /// | downloaded  |              miss   |              |                  +-------------+
+    /// |  content -->|                |    --- hit ------>|<-- 2.download -->|    Peer     |
+    /// |             |                |               ^   |                  +-------------+
+    /// |             |                v               |   |
+    /// |             |          +-----------+         |   |
+    /// |             -- full -->|   disk    |----------   |
+    /// |                        +-----------+             |
+    /// |                                                  |
+    /// +--------------------------------------------------+ 
+    /// ```
+    #[serde(default = "default_storage_cache_capacity")]
+    pub cache_capacity: usize,
 }
 
 /// Storage implements Default.
@@ -969,7 +968,7 @@ impl Default for Storage {
             keep: default_storage_keep(),
             write_buffer_size: default_storage_write_buffer_size(),
             read_buffer_size: default_storage_read_buffer_size(),
-            cache: CacheConfig::default(),
+            cache_capacity: default_storage_cache_capacity(),
         }
     }
 }
