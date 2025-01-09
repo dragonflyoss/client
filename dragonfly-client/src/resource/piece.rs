@@ -30,6 +30,7 @@ use dragonfly_client_util::id_generator::IDGenerator;
 use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -328,7 +329,7 @@ impl Piece {
         length: u64,
         range: Option<Range>,
         disable_rate_limit: bool,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<Pin<Box<dyn AsyncRead + Send>>> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
 
@@ -390,7 +391,7 @@ impl Piece {
         range: Option<Range>,
         disable_rate_limit: bool,
         is_prefetch: bool,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<Pin<Box<dyn AsyncRead + Send>>> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
 

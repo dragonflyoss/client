@@ -21,6 +21,7 @@ use dragonfly_client_util::digest::{Algorithm, Digest};
 use reqwest::header::HeaderMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
@@ -46,7 +47,7 @@ pub struct Storage {
     content: content::Content,
 
     /// cache implements the cache for preheat task.
-    cache: Option<cache::Cache>,
+    cache: cache::Cache,
 }
 
 /// Storage implements the storage.
@@ -56,11 +57,7 @@ impl Storage {
     pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf) -> Result<Self> {
         let metadata = metadata::Metadata::new(config.clone(), dir, &log_dir)?;
         let content = content::Content::new(config.clone(), dir).await?;
-        let cache = if config.storage.cache.enable {
-            Some(cache::Cache::new(config.storage.cache.capacity)?)
-        } else {
-            None
-        };
+        let cache = cache::Cache::new(config.storage.cache_capacity.clone())?;
 
         Ok(Storage {
             config,
@@ -384,7 +381,7 @@ impl Storage {
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<Pin<Box<dyn AsyncRead + Send>>> {
         // Wait for the piece to be finished.
         self.wait_for_piece_finished(piece_id).await?;
 
@@ -394,14 +391,17 @@ impl Storage {
         // Get the piece metadata and return the content of the piece.
         match self.metadata.get_piece(piece_id) {
             Ok(Some(piece)) => {
-                if let Some(cache) = &self.cache {
-                    // Try to read the piece content from cache
-                    if let Ok(cache_reader) = cache
-                    .read_piece(piece_id,piece.offset, piece.length, range)
-                    .await 
+                if !self.cache.is_empty() {
+                    match self
+                        .cache
+                        .read_piece(piece_id, piece.offset, piece.length, range)
+                        .await
                     {
-                        self.metadata.upload_task_finished(task_id)?;
-                        return Ok(cache_reader);
+                        Ok(cache_reader) => {
+                            // Finish uploading the task.
+                            self.metadata.upload_task_finished(task_id)?;
+                            return Ok(Box::pin(cache_reader));
+                        }Err(_err) => {}
                     }
                 }
                 match self
@@ -412,7 +412,7 @@ impl Storage {
                     Ok(reader) => {
                         // Finish uploading the task.
                         self.metadata.upload_task_finished(task_id)?;
-                        Ok(reader)
+                        Ok(Box::pin(reader))
                     }
                     Err(err) => {
                         // Failed uploading the task.

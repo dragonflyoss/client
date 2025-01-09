@@ -30,7 +30,7 @@ pub struct Cache {
     pieces: Arc<Mutex<LruCache<String, bytes::Bytes>>>,
 }
 
-/// Cache implements the cache for storing http response by LRU algorithm.
+/// Cache implements the cache for storing piece content by LRU algorithm.
 impl Cache {
     /// new creates a new cache with the specified capacity.
     pub fn new(capacity: usize) -> Result<Self> {
@@ -54,30 +54,43 @@ impl Cache {
     
         // Calculate the range of bytes to return based on the range provided
         let (target_offset, target_length) = if let Some(range) = range {
-            let target_offset = max(offset, range.start);
-            let target_length = min(offset + length - 1, range.start + range.length - 1) - target_offset + 1;
-            (target_offset, target_length)
+            let target_offset = max(offset, range.start) - offset; 
+            let target_length = 
+                min(offset + length - 1, range.start + range.length - 1) - target_offset - offset + 1;
+            (target_offset as usize, target_length as usize)
         } else {
-            (offset, length)
+            (0, length as usize)
         };
+
+        let begin = target_offset;
+        let end = target_offset + target_length;
+        if begin >= piece_content.len() || end > piece_content.len() {
+            return Err(Error::InvalidParameter);
+        }
     
         // Slice the content to match the required range and return it as a Vec<u8>
-        let content_slice = &piece_content[target_offset as usize..(target_offset + target_length) as usize];
+        let content_slice = &piece_content[begin..end];
         Ok(Cursor::new(content_slice.to_vec()))
     }
 
-    /// get gets the piece content from the cache.
+    /// get_piece gets the piece content from the cache.
     pub fn get_piece(&self, id: &str) -> Option<bytes::Bytes> {
         let mut pieces = self.pieces.lock().unwrap();
         pieces.get(id).cloned()
     }
 
-    /// add create the piece content into the cache, if the key already exists, no operation will
+    /// add_piece add the piece content into the cache, if the key already exists, no operation will
     /// be performed.
     pub fn add_piece(&self, id: &str, content: bytes::Bytes) {
         let mut pieces = self.pieces.lock().unwrap();
         if !pieces.contains(id) {
             pieces.put(id.to_string(), content);
         }
+    }
+
+    /// is_empty checks if the cache is empty.
+    pub fn is_empty(&self) -> bool {
+        let pieces = self.pieces.lock().unwrap();
+        pieces.is_empty()
     }
 }
