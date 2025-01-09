@@ -24,9 +24,36 @@ use tokio::io::AsyncRead;
 use std::io::Cursor;
 
 /// Cache is the cache for storing piece content by LRU algorithm.
+/// 
+/// Cache storage:
+/// 1. Users can create preheating jobs and preheat tasks to memory and disk by setting `load_to_cache` to `true`.
+///    For more details, refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L443.
+/// 2. If the download hits the memory cache, it will be faster than reading from the disk, because there is no
+///    page cache for the first read.
+/// ```
+///
+///     1.Preheat
+///         |
+///         |
+/// +--------------------------------------------------+
+/// |       |              Peer                        |
+/// |       |                   +-----------+          |
+/// |       |     -- Partial -->|   Cache   |          |
+/// |       |     |             +-----------+          |
+/// |       v     |                |    |              |
+/// |   Download  |              Miss   |              |             
+/// |     Task -->|                |    --- Hit ------>|<-- 2.Download
+/// |             |                |               ^   |              
+/// |             |                v               |   |
+/// |             |          +-----------+         |   |
+/// |             -- Full -->|   Disk    |----------   |
+/// |                        +-----------+             |
+/// |                                                  |
+/// +--------------------------------------------------+
+/// ```
 #[derive(Clone)]
 pub struct Cache {
-    /// pieces stores the piece cache data with piece id and value.
+    /// pieces stores the piece with piece id and content.
     pieces: Arc<Mutex<LruCache<String, bytes::Bytes>>>,
 }
 
