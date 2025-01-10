@@ -57,7 +57,7 @@ impl Storage {
     pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf) -> Result<Self> {
         let metadata = metadata::Metadata::new(config.clone(), dir, &log_dir)?;
         let content = content::Content::new(config.clone(), dir).await?;
-        let cache = cache::Cache::new(config.storage.cache_capacity.clone())?;
+        let cache = cache::Cache::new(config.storage.cache_capacity)?;
 
         Ok(Storage {
             config,
@@ -480,6 +480,13 @@ impl Storage {
                 Err(err)
             }
         }
+    }
+
+    /// load_piece_to_cache loads the piece content to the cache.
+    #[instrument(skip_all)]
+    pub fn load_piece_to_cache(&self, piece_id: &str, piece_content: bytes::Bytes) {
+        // Load the piece content to the cache.
+        self.cache.write_piece_to_cache(piece_id, piece_content)
     }
 
     /// get_piece returns the piece metadata.

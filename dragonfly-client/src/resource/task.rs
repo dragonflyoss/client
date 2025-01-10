@@ -350,6 +350,7 @@ impl Task {
                 host_id,
                 peer_id,
                 request.need_piece_content,
+                request.load_to_cache,
                 interested_pieces.clone(),
                 download_progress_tx.clone(),
             )
@@ -674,6 +675,7 @@ impl Task {
                             remaining_interested_pieces.clone(),
                             request.is_prefetch,
                             request.need_piece_content,
+                            request.load_to_cache,
                             download_progress_tx.clone(),
                             in_stream_tx.clone(),
                         )
@@ -917,6 +919,7 @@ impl Task {
         interested_pieces: Vec<metadata::Piece>,
         is_prefetch: bool,
         need_piece_content: bool,
+        load_to_cache: bool,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
         in_stream_tx: Sender<AnnouncePeerRequest>,
     ) -> ClientResult<Vec<metadata::Piece>> {
@@ -977,6 +980,7 @@ impl Task {
                 finished_pieces: Arc<Mutex<Vec<metadata::Piece>>>,
                 is_prefetch: bool,
                 need_piece_content: bool,
+                load_to_cache: bool,
             ) -> ClientResult<metadata::Piece> {
                 // Limit the concurrent piece count.
                 let _permit = semaphore.acquire().await.unwrap();
@@ -997,6 +1001,7 @@ impl Task {
                         length,
                         parent.clone(),
                         is_prefetch,
+                        load_to_cache,
                     )
                     .await
                     .map_err(|err| {
@@ -1131,6 +1136,7 @@ impl Task {
                     finished_pieces.clone(),
                     is_prefetch,
                     need_piece_content,
+                    load_to_cache,
                 )
                 .in_current_span(),
             );
@@ -1244,6 +1250,7 @@ impl Task {
                 request_header: HeaderMap,
                 is_prefetch: bool,
                 need_piece_content: bool,
+                load_to_cache: bool,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
@@ -1268,6 +1275,7 @@ impl Task {
                         length,
                         request_header,
                         is_prefetch,
+                        load_to_cache,
                         object_storage,
                         hdfs,
                     )
@@ -1372,6 +1380,7 @@ impl Task {
                     request_header.clone(),
                     request.is_prefetch,
                     request.need_piece_content,
+                    request.load_to_cache,
                     self.piece.clone(),
                     self.storage.clone(),
                     semaphore.clone(),
@@ -1494,6 +1503,7 @@ impl Task {
         host_id: &str,
         peer_id: &str,
         need_piece_content: bool,
+        load_to_cache: bool,
         interested_pieces: Vec<metadata::Piece>,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<Vec<metadata::Piece>> {
@@ -1558,6 +1568,11 @@ impl Task {
                 reader.read_exact(&mut content).await.inspect_err(|err| {
                     error!("read piece {} failed: {:?}", piece_id, err);
                 })?;
+                
+                // If load_to_cache is true, load the piece content to the cache.
+                if load_to_cache {
+                    self.storage.load_piece_to_cache(piece_id.as_str(), bytes::Bytes::from(content.clone()));
+                }
 
                 piece.content = Some(content);
             }
@@ -1634,6 +1649,7 @@ impl Task {
                 length: u64,
                 request_header: HeaderMap,
                 is_prefetch: bool,
+                load_to_cache: bool,
                 piece_manager: Arc<piece::Piece>,
                 storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
@@ -1657,6 +1673,7 @@ impl Task {
                         length,
                         request_header,
                         is_prefetch,
+                        load_to_cache,
                         object_storage,
                         hdfs,
                     )
@@ -1715,6 +1732,7 @@ impl Task {
                     interested_piece.length,
                     request_header.clone(),
                     request.is_prefetch,
+                    request.load_to_cache,
                     self.piece.clone(),
                     self.storage.clone(),
                     semaphore.clone(),

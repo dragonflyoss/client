@@ -95,9 +95,18 @@ impl Cache {
             return Err(Error::InvalidParameter);
         }
     
-        // Slice the content to match the required range and return it as a Vec<u8>
-        let content_slice = &piece_content[begin..end];
-        Ok(Cursor::new(content_slice.to_vec()))
+        let piece_content = piece_content.slice(begin..end);
+        Ok(Cursor::new(piece_content))
+    }
+
+    /// write_piece_to_cache write the piece content to the cache.
+    pub fn write_piece_to_cache(
+        &self,
+        piece_id: &str,
+        content: bytes::Bytes
+    ) {
+        // Add the piece content to the cache
+        self.add_piece(piece_id, content);
     }
 
     /// get_piece gets the piece content from the cache.

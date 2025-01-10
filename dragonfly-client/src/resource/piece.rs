@@ -32,6 +32,7 @@ use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::io::Cursor;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{error, info, instrument, Span};
@@ -465,6 +466,7 @@ impl Piece {
         length: u64,
         parent: piece_collector::CollectedParent,
         is_prefetch: bool,
+        load_to_cache: bool,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
@@ -515,6 +517,10 @@ impl Piece {
                     error!("set piece metadata failed: {}", err)
                 };
             })?;
+        
+        if load_to_cache {
+            self.storage.load_piece_to_cache(piece_id, bytes::Bytes::from(content.clone()));
+        }
 
         // Record the finish of downloading piece.
         match self
@@ -562,6 +568,7 @@ impl Piece {
         length: u64,
         request_header: HeaderMap,
         is_prefetch: bool,
+        load_to_cache: bool,
         object_storage: Option<ObjectStorage>,
         hdfs: Option<Hdfs>,
     ) -> Result<metadata::Piece> {
@@ -676,6 +683,24 @@ impl Piece {
             start_time.elapsed(),
         );
 
+        let reader = &mut response.reader;
+        if load_to_cache {
+            let mut content = bytes::BytesMut::new();
+            reader
+                .read_buf(&mut content)
+                .await
+                .inspect_err(|err| {
+                    error!("read response failed: {}", err);
+                    if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
+                        error!("set piece metadata failed: {}", err)
+                    };
+                })?;
+
+            self.storage.load_piece_to_cache(piece_id, content.clone().freeze());
+
+            *reader = Box::new(Cursor::new(content.freeze()));
+        }
+
         // Record the finish of downloading piece.
         match self
             .storage
@@ -684,7 +709,7 @@ impl Piece {
                 task_id,
                 offset,
                 length,
-                &mut response.reader,
+                reader,
             )
             .await
         {
