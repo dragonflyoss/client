@@ -169,36 +169,38 @@ impl Storage {
             .await
     }
 
-    /// create_persistent_persistent_cache_task creates a new persistent cache task.
+    /// create_persistent_cache_task_started creates a new persistent cache task.
     #[instrument(skip_all)]
-    pub async fn create_persistent_persistent_cache_task(
+    pub async fn create_persistent_cache_task_started(
         &self,
         id: &str,
         ttl: Duration,
-        path: &Path,
         piece_length: u64,
         content_length: u64,
-        expected_digest: &str,
     ) -> Result<metadata::PersistentCacheTask> {
-        let response = self.content.write_persistent_cache_task(id, path).await?;
-        let digest = Digest::new(Algorithm::Crc32, response.hash);
-        if expected_digest != digest.to_string() {
-            return Err(Error::DigestMismatch(
-                expected_digest.to_string(),
-                digest.to_string(),
-            ));
-        }
-
-        self.metadata.create_persistent_persistent_cache_task(
-            id,
-            ttl,
-            piece_length,
-            content_length,
-            digest.to_string().as_str(),
-        )
+        self.metadata
+            .create_persistent_cache_task_started(id, ttl, piece_length, content_length)
     }
 
-    /// download_persistent_cache_task_started updates the metadata of the persistent cache task when the persistent cache task downloads started.
+    /// create_persistent_cache_task_finished updates the metadata of the persistent cache task
+    /// when the persistent cache task creates finished.
+    #[instrument(skip_all)]
+    pub async fn create_persistent_cache_task_finished(
+        &self,
+        id: &str,
+    ) -> Result<metadata::PersistentCacheTask> {
+        self.metadata.create_persistent_cache_task_finished(id)
+    }
+
+    /// create_persistent_cache_task_failed deletes the persistent cache task when
+    /// the persistent cache task creates failed.
+    #[instrument(skip_all)]
+    pub async fn create_persistent_cache_task_failed(&self, id: &str) {
+        self.delete_persistent_cache_task(id).await;
+    }
+
+    /// download_persistent_cache_task_started updates the metadata of the persistent cache task
+    /// when the persistent cache task downloads started.
     #[instrument(skip_all)]
     pub fn download_persistent_cache_task_started(
         &self,
@@ -274,12 +276,42 @@ impl Storage {
                 error!("delete persistent cache task metadata failed: {}", err);
             });
 
+        self.metadata.delete_pieces(id).unwrap_or_else(|err| {
+            error!("delete persistent cache piece metadatas failed: {}", err);
+        });
+
         self.content
             .delete_persistent_cache_task(id)
             .await
             .unwrap_or_else(|err| {
                 error!("delete persistent cache task content failed: {}", err);
             });
+    }
+
+    /// create_persistent_cache_piece creates a new persistent cache piece.
+    #[instrument(skip_all)]
+    pub async fn create_persistent_cache_piece<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        number: u32,
+        offset: u64,
+        length: u64,
+        reader: &mut R,
+    ) -> Result<metadata::Piece> {
+        let response = self
+            .content
+            .write_piece_with_crc32_castagnoli(task_id, offset, reader)
+            .await?;
+        let digest = Digest::new(Algorithm::Crc32, response.hash);
+
+        self.metadata.create_persistent_cache_piece(
+            piece_id,
+            number,
+            offset,
+            length,
+            digest.to_string().as_str(),
+        )
     }
 
     /// download_piece_started updates the metadata of the piece and writes

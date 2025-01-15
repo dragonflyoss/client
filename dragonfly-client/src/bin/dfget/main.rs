@@ -757,6 +757,7 @@ async fn download(
                 need_piece_content,
                 object_storage,
                 hdfs,
+                load_to_cache: false,
             }),
         })
         .await
