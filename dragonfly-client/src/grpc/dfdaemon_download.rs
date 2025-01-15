@@ -32,8 +32,10 @@ use dragonfly_api::dfdaemon::v2::{
     },
     DeletePersistentCacheTaskRequest, DeleteTaskRequest, DownloadPersistentCacheTaskRequest,
     DownloadPersistentCacheTaskResponse, DownloadTaskRequest, DownloadTaskResponse,
+    ReadPersistentCacheTaskRequest, ReadPersistentCacheTaskResponse,
     StatPersistentCacheTaskRequest, StatTaskRequest as DfdaemonStatTaskRequest,
-    UploadPersistentCacheTaskRequest,
+    UploadPersistentCacheTaskRequest, WritePersistentCacheTaskRequest,
+    WritePersistentCacheTaskResponse,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::DeleteHostRequest as SchedulerDeleteHostRequest;
@@ -41,10 +43,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error as ClientError, Result as ClientResult,
 };
-use dragonfly_client_util::{
-    digest::{calculate_file_hash, Algorithm},
-    http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
-};
+use dragonfly_client_util::http::{get_range, hashmap_to_headermap, headermap_to_hashmap};
 use hyper_util::rt::TokioIo;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -57,7 +56,7 @@ use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
 use tonic::service::interceptor::InterceptedService;
 use tonic::{
     transport::{Channel, Endpoint, Server, Uri},
-    Code, Request, Response, Status,
+    Code, Request, Response, Status, Streaming,
 };
 use tower::service_fn;
 use tracing::{debug, error, info, instrument, Instrument, Span};
@@ -660,6 +659,28 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(()))
     }
 
+    /// write_persistent_cache_task writes the persistent cache task from the stream.
+    #[instrument(skip_all)]
+    async fn write_persistent_cache_task(
+        &self,
+        _request: Request<Streaming<WritePersistentCacheTaskRequest>>,
+    ) -> Result<Response<WritePersistentCacheTaskResponse>, Status> {
+        unimplemented!()
+    }
+
+    /// ReadPersistentCacheTaskStream is the stream of the read persistent cache task response.
+    type ReadPersistentCacheTaskStream =
+        ReceiverStream<Result<ReadPersistentCacheTaskResponse, Status>>;
+
+    /// read_persistent_cache_task reads the persistent cache task.
+    #[instrument(skip_all, fields(task_id))]
+    async fn read_persistent_cache_task(
+        &self,
+        _request: Request<ReadPersistentCacheTaskRequest>,
+    ) -> Result<Response<Self::ReadPersistentCacheTaskStream>, Status> {
+        unimplemented!()
+    }
+
     /// DownloadPersistentCacheTaskStream is the stream of the download persistent cache task response.
     type DownloadPersistentCacheTaskStream =
         ReceiverStream<Result<DownloadPersistentCacheTaskResponse, Status>>;
@@ -847,14 +868,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let request = request.into_inner();
         let path = Path::new(request.path.as_str());
 
-        // Calculate the file hash by the blake3 algorithm.
-        let digest = calculate_file_hash(Algorithm::Blake3, path).map_err(|err| {
-            let error_message = format!("calculate file {} hash: {}", request.path.as_str(), err);
-            error!(error_message);
-            Status::with_details(Code::Internal, err.to_string(), error_message.into())
-        })?;
-        info!("calculate file digest: {}", digest);
-
         // Generate the task id.
         let task_id = self
             .task
@@ -894,8 +907,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 task_id.as_str(),
                 host_id.as_str(),
                 peer_id.as_str(),
-                path,
-                digest.to_string().as_str(),
+                path.to_path_buf(),
                 request.clone(),
             )
             .await
@@ -1110,20 +1122,8 @@ impl DfdaemonDownloadClient {
         &self,
         request: UploadPersistentCacheTaskRequest,
     ) -> ClientResult<PersistentCacheTask> {
-        // Clone the request.
-        let request_clone = request.clone();
-
         // Initialize the request.
-        let mut request = tonic::Request::new(request);
-
-        // Set the timeout to the request.
-        if let Some(timeout) = request_clone.timeout {
-            request.set_timeout(
-                Duration::try_from(timeout)
-                    .map_err(|_| tonic::Status::invalid_argument("invalid timeout"))?,
-            );
-        }
-
+        let request = tonic::Request::new(request);
         let response = self
             .client
             .clone()

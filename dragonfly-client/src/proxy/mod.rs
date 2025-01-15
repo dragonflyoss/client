@@ -1109,6 +1109,7 @@ fn make_download_task_request(
             hdfs: None,
             is_prefetch: false,
             need_piece_content: false,
+            load_to_cache: false,
         }),
     })
 }
