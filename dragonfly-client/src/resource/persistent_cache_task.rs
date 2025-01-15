@@ -43,10 +43,11 @@ use dragonfly_client_core::{
 };
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::id_generator::IDGenerator;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom};
 use tokio::sync::{
     mpsc::{self, Sender},
     Semaphore,
@@ -112,8 +113,7 @@ impl PersistentCacheTask {
         task_id: &str,
         host_id: &str,
         peer_id: &str,
-        path: &Path,
-        digest: &str,
+        path: PathBuf,
         request: UploadPersistentCacheTaskRequest,
     ) -> ClientResult<CommonPersistentCacheTask> {
         // Convert prost_wkt_types::Duration to std::time::Duration.
@@ -121,7 +121,7 @@ impl PersistentCacheTask {
             .or_err(ErrorType::ParseError)?;
 
         // Get the content length of the file.
-        let content_length = std::fs::metadata(path)
+        let content_length = std::fs::metadata(path.as_path())
             .inspect_err(|err| {
                 error!("get file metadata error: {}", err);
             })?
@@ -133,14 +133,19 @@ impl PersistentCacheTask {
             content_length,
         );
 
+        self.storage
+            .create_persistent_cache_task_started(task_id, ttl, piece_length, content_length)
+            .await?;
+
         // Notify the scheduler that the persistent cache task is started.
-        self.scheduler_client
+        match self
+            .scheduler_client
             .upload_persistent_cache_task_started(UploadPersistentCacheTaskStartedRequest {
                 host_id: host_id.to_string(),
                 task_id: task_id.to_string(),
                 peer_id: peer_id.to_string(),
                 persistent_replica_count: request.persistent_replica_count,
-                digest: digest.to_string(),
+                digest: None,
                 tag: request.tag.clone(),
                 application: request.application.clone(),
                 piece_length,
@@ -151,21 +156,154 @@ impl PersistentCacheTask {
                 ttl: request.ttl,
             })
             .await
-            .inspect_err(|err| {
+        {
+            Ok(_) => {}
+            Err(err) => {
+                self.storage
+                    .create_persistent_cache_task_failed(task_id)
+                    .await;
+
                 error!("upload persistent cache task started: {}", err);
-            })?;
+                return Err(err);
+            }
+        }
+
+        // Calculate the interested pieces to import.
+        let interested_pieces =
+            match self
+                .piece
+                .calculate_interested(piece_length, content_length, None)
+            {
+                Ok(interested_pieces) => interested_pieces,
+                Err(err) => {
+                    error!("calculate interested pieces error: {:?}", err);
+                    return Err(err);
+                }
+            };
+
+        // Initialize the join set.
+        let mut join_set = JoinSet::new();
+
+        // Import the pieces from the local.
+        for interested_piece in interested_pieces.clone() {
+            async fn create_persistent_cache_piece(
+                task_id: String,
+                path: PathBuf,
+                piece: metadata::Piece,
+                storage: Arc<Storage>,
+                read_buffer_size: usize,
+            ) -> ClientResult<metadata::Piece> {
+                let piece_id = storage.piece_id(task_id.as_str(), piece.number);
+                info!("start to write persistent cache piece {}", piece_id,);
+
+                let f = File::open(path.as_path()).await.inspect_err(|err| {
+                    error!("open {:?} failed: {}", path, err);
+                })?;
+                let mut f_reader = BufReader::with_capacity(read_buffer_size, f);
+
+                f_reader
+                    .seek(SeekFrom::Start(piece.offset))
+                    .await
+                    .inspect_err(|err| {
+                        error!("seek {:?} failed: {}", path, err);
+                    })?;
+
+                let metadata = storage
+                    .create_persistent_cache_piece(
+                        piece_id.as_str(),
+                        task_id.as_str(),
+                        piece.number,
+                        piece.offset,
+                        piece.length,
+                        &mut f_reader.take(piece.length),
+                    )
+                    .await?;
+
+                info!("finished persistent cache piece {}", piece_id);
+                Ok(metadata)
+            }
+
+            join_set.spawn(
+                create_persistent_cache_piece(
+                    task_id.to_string(),
+                    path.clone(),
+                    interested_piece,
+                    self.storage.clone(),
+                    self.config.storage.read_buffer_size,
+                )
+                .in_current_span(),
+            );
+        }
+
+        // Initialize the finished pieces.
+        let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
+
+        // Wait for the pieces to be created.
+        while let Some(message) = join_set
+            .join_next()
+            .await
+            .transpose()
+            .or_err(ErrorType::AsyncRuntimeError)?
+        {
+            match message {
+                Ok(metadata) => {
+                    // Store the finished piece.
+                    finished_pieces.push(metadata.clone());
+                }
+                Err(err) => {
+                    join_set.detach_all();
+
+                    // Delete the persistent cache task.
+                    self.storage
+                        .create_persistent_cache_task_failed(task_id)
+                        .await;
+
+                    // Notify the scheduler that the persistent cache task is failed.
+                    self.scheduler_client
+                        .upload_persistent_cache_task_failed(
+                            UploadPersistentCacheTaskFailedRequest {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.to_string(),
+                                peer_id: peer_id.to_string(),
+                                description: Some(err.to_string()),
+                            },
+                        )
+                        .await
+                        .inspect_err(|err| {
+                            error!("upload persistent cache task failed: {}", err);
+                        })?;
+
+                    return Err(err);
+                }
+            }
+        }
+
+        if finished_pieces.len() != interested_pieces.len() {
+            // Delete the persistent cache task.
+            self.storage
+                .create_persistent_cache_task_failed(task_id)
+                .await;
+
+            // Notify the scheduler that the persistent cache task is failed.
+            self.scheduler_client
+                .upload_persistent_cache_task_failed(UploadPersistentCacheTaskFailedRequest {
+                    host_id: host_id.to_string(),
+                    task_id: task_id.to_string(),
+                    peer_id: peer_id.to_string(),
+                    description: Some("not all pieces are imported".to_string()),
+                })
+                .await
+                .inspect_err(|err| {
+                    error!("upload persistent cache task failed: {}", err);
+                })?;
+
+            return Err(Error::Unknown("not all pieces are imported".to_string()));
+        }
 
         // Create the persistent cache task.
         match self
             .storage
-            .create_persistent_persistent_cache_task(
-                task_id,
-                ttl,
-                path,
-                piece_length,
-                content_length,
-                digest,
-            )
+            .create_persistent_cache_task_finished(task_id)
             .await
         {
             Ok(metadata) => {
@@ -182,6 +320,11 @@ impl PersistentCacheTask {
                 {
                     Ok(response) => response,
                     Err(err) => {
+                        // Delete the persistent cache task.
+                        self.storage
+                            .create_persistent_cache_task_failed(task_id)
+                            .await;
+
                         // Notify the scheduler that the persistent cache task is failed.
                         self.scheduler_client
                             .upload_persistent_cache_task_failed(
@@ -197,8 +340,6 @@ impl PersistentCacheTask {
                                 error!("upload persistent cache task failed: {}", err);
                             })?;
 
-                        // Delete the persistent cache task.
-                        self.storage.delete_persistent_cache_task(task_id).await;
                         return Err(err);
                     }
                 };
@@ -208,7 +349,7 @@ impl PersistentCacheTask {
                     persistent_replica_count: request.persistent_replica_count,
                     current_persistent_replica_count: response.current_persistent_replica_count,
                     current_replica_count: response.current_replica_count,
-                    digest: digest.to_string(),
+                    digest: None,
                     tag: request.tag,
                     application: request.application,
                     piece_length: metadata.piece_length,
@@ -221,6 +362,11 @@ impl PersistentCacheTask {
                 })
             }
             Err(err) => {
+                // Delete the persistent cache task.
+                self.storage
+                    .create_persistent_cache_task_failed(task_id)
+                    .await;
+
                 // Notify the scheduler that the persistent cache task is failed.
                 self.scheduler_client
                     .upload_persistent_cache_task_failed(UploadPersistentCacheTaskFailedRequest {
@@ -234,8 +380,6 @@ impl PersistentCacheTask {
                         error!("upload persistent cache task failed: {}", err);
                     })?;
 
-                // Delete the persistent cache task.
-                self.storage.delete_persistent_cache_task(task_id).await;
                 Err(err)
             }
         }

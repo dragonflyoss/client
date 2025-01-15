@@ -277,10 +277,6 @@ impl ImportCommand {
                 ttl: Some(
                     prost_wkt_types::Duration::try_from(self.ttl).or_err(ErrorType::ParseError)?,
                 ),
-                timeout: Some(
-                    prost_wkt_types::Duration::try_from(self.timeout)
-                        .or_err(ErrorType::ParseError)?,
-                ),
             })
             .await?;
 
