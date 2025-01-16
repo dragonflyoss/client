@@ -425,7 +425,7 @@ impl Storage {
         match self.metadata.get_piece(piece_id) {
             Ok(Some(piece)) => {
                 // Try to upload piece content form cache.
-                if !self.cache.is_empty() {
+                if !self.cache.is_empty() && self.cache.contains_piece(piece_id) {
                     match self
                         .cache
                         .read_piece(piece_id, piece.offset, piece.length, range)
