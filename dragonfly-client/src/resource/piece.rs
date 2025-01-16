@@ -32,7 +32,6 @@ use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::io::Cursor;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{error, info, instrument, Span};
@@ -518,8 +517,16 @@ impl Piece {
                 };
             })?;
         
+        // Load piece content to cache from parent
         if load_to_cache {
-            self.storage.load_piece_to_cache(piece_id, bytes::Bytes::from(content.clone()));
+            self
+            .storage
+            .load_piece_to_cache(
+                piece_id, 
+                &mut content.clone().as_slice(),
+            )
+            .await;
+            info!("load piece content to cache piece {}", piece_id);
         }
 
         // Record the finish of downloading piece.
@@ -683,22 +690,26 @@ impl Piece {
             start_time.elapsed(),
         );
 
-        let reader = &mut response.reader;
+        let mut reader= response.reader;
+
         if load_to_cache {
-            let mut content = bytes::BytesMut::new();
-            reader
-                .read_buf(&mut content)
-                .await
-                .inspect_err(|err| {
-                    error!("read response failed: {}", err);
+            // Load piece content to cache from source.
+            self.storage.load_piece_to_cache(piece_id, &mut reader).await;
+            info!("load piece content to cache: piece_id={}", piece_id);
+
+            let cache_reader = match self.storage.upload_piece_from_cache(piece_id, offset, length, None).await {
+                Ok(reader) => reader,
+                Err(err) => {
+                    error!("download piece finished: {}", err);
                     if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                         error!("set piece metadata failed: {}", err)
                     };
-                })?;
+    
+                    return Err(err);
+                }
+            };
 
-            self.storage.load_piece_to_cache(piece_id, content.clone().freeze());
-
-            *reader = Box::new(Cursor::new(content.freeze()));
+            reader = Box::new(cache_reader);
         }
 
         // Record the finish of downloading piece.
@@ -709,7 +720,7 @@ impl Piece {
                 task_id,
                 offset,
                 length,
-                reader,
+                &mut reader,
             )
             .await
         {

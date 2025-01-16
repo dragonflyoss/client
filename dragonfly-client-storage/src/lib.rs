@@ -19,6 +19,7 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::digest::{Algorithm, Digest};
 use reqwest::header::HeaderMap;
+use tracing::info;
 use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -57,7 +58,7 @@ impl Storage {
     pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf) -> Result<Self> {
         let metadata = metadata::Metadata::new(config.clone(), dir, &log_dir)?;
         let content = content::Content::new(config.clone(), dir).await?;
-        let cache = cache::Cache::new(config.storage.cache_capacity)?;
+        let cache = cache::Cache::new(config.clone())?;
 
         Ok(Storage {
             config,
@@ -391,6 +392,7 @@ impl Storage {
         // Get the piece metadata and return the content of the piece.
         match self.metadata.get_piece(piece_id) {
             Ok(Some(piece)) => {
+                // Try to upload piece content form cache.
                 if !self.cache.is_empty() {
                     match self
                         .cache
@@ -399,11 +401,15 @@ impl Storage {
                     {
                         Ok(cache_reader) => {
                             // Finish uploading the task.
+                            info!("hit cache: {}", piece_id);
                             self.metadata.upload_task_finished(task_id)?;
                             return Ok(Box::pin(cache_reader));
-                        }Err(_err) => {}
+                        }
+                        Err(_err) => {}
                     }
                 }
+
+                // Upload piece content from storage when cache entry is not hit or cache is empty.
                 match self
                     .content
                     .read_piece(task_id, piece.offset, piece.length, range)
@@ -482,11 +488,32 @@ impl Storage {
         }
     }
 
-    /// load_piece_to_cache loads the piece content to the cache.
+    /// upload_piece_from_cache uploads the piece content by piece id from cache.
     #[instrument(skip_all)]
-    pub fn load_piece_to_cache(&self, piece_id: &str, piece_content: bytes::Bytes) {
+    pub async fn upload_piece_from_cache(
+        &self,
+        piece_id: &str,
+        offset: u64,
+        length: u64,
+        range: Option<Range>,
+    ) -> Result<impl AsyncRead>{
+        self.cache.read_piece(piece_id, offset, length, range).await
+    }
+
+    /// load_piece_to_cache loads the piece content with piece id to the cache.
+    #[instrument(skip_all)]
+    pub async fn load_piece_to_cache<R: AsyncRead + Unpin + ?Sized>(
+        &self, 
+        piece_id: &str, 
+        reader: &mut R,
+    ) {
+        // If the piece is already in the cache, return.
+        if self.cache.contains_piece(piece_id) {
+            return;
+        }
+
         // Load the piece content to the cache.
-        self.cache.write_piece_to_cache(piece_id, piece_content)
+        self.cache.write_piece(piece_id, reader).await;
     }
 
     /// get_piece returns the piece metadata.

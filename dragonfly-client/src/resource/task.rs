@@ -1547,8 +1547,8 @@ impl Task {
                 created_at: Some(prost_wkt_types::Timestamp::from(piece.created_at)),
             };
 
-            // If need_piece_content is true, read the piece content from the local.
-            if need_piece_content {
+            // If need_piece_content or load_to_cache is true, read the piece content from the local.
+            if need_piece_content || load_to_cache {
                 let mut reader = self
                     .piece
                     .download_from_local_into_async_read(
@@ -1568,13 +1568,21 @@ impl Task {
                 reader.read_exact(&mut content).await.inspect_err(|err| {
                     error!("read piece {} failed: {:?}", piece_id, err);
                 })?;
-                
-                // If load_to_cache is true, load the piece content to the cache.
-                if load_to_cache {
-                    self.storage.load_piece_to_cache(piece_id.as_str(), bytes::Bytes::from(content.clone()));
+
+                if need_piece_content {
+                    piece.content = Some(content.clone());
                 }
 
-                piece.content = Some(content);
+                if load_to_cache {
+                    // Load piece content to cache.
+                    self
+                    .storage
+                    .load_piece_to_cache(
+                        piece_id.as_str(), 
+                        &mut content.clone().as_slice(),
+                    )
+                    .await;
+                    }
             }
 
             // Send the download progress.
