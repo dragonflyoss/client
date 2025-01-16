@@ -14,18 +14,18 @@
  * limitations under the License.
  */
 
+use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
-use dragonfly_api::common::v2::Range;
 use lru::LruCache;
 use std::cmp::{max, min};
+use std::io::Cursor;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
-use std::io::Cursor;
 
 /// Cache is the cache for storing piece content by LRU algorithm.
-/// 
+///
 /// Cache storage:
 /// 1. Users can create preheating jobs and preheat tasks to memory and disk by setting `load_to_cache` to `true`.
 ///    For more details, refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L443.
@@ -56,7 +56,7 @@ use std::io::Cursor;
 pub struct Cache {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
-    
+
     /// pieces stores the pieces with their piece id and content.
     pieces: Arc<Mutex<LruCache<String, bytes::Bytes>>>,
 }
@@ -65,10 +65,10 @@ pub struct Cache {
 impl Cache {
     /// new creates a new cache with the specified capacity.
     pub fn new(config: Arc<Config>) -> Result<Self> {
-        let capacity = NonZeroUsize::new(config.storage.cache_capacity)
-                                                    .ok_or(Error::InvalidParameter)?;
+        let capacity =
+            NonZeroUsize::new(config.storage.cache_capacity).ok_or(Error::InvalidParameter)?;
         let pieces = Arc::new(Mutex::new(LruCache::new(capacity)));
-        
+
         Ok(Cache { config, pieces })
     }
 
@@ -84,12 +84,13 @@ impl Cache {
         let Some(piece_content) = self.get_piece(piece_id).await else {
             return Err(Error::PieceNotFound(piece_id.to_string()));
         };
-    
+
         // Calculate the range of bytes to return based on the range provided
         let (target_offset, target_length) = if let Some(range) = range {
-            let target_offset = max(offset, range.start) - offset; 
-            let target_length = 
-                min(offset + length - 1, range.start + range.length - 1) - target_offset - offset + 1;
+            let target_offset = max(offset, range.start) - offset;
+            let target_length =
+                min(offset + length - 1, range.start + range.length - 1) - target_offset - offset
+                    + 1;
             (target_offset as usize, target_length as usize)
         } else {
             (0, length as usize)
@@ -100,17 +101,13 @@ impl Cache {
         if begin >= piece_content.len() || end > piece_content.len() {
             return Err(Error::InvalidParameter);
         }
-    
+
         let piece_content = piece_content.slice(begin..end).to_vec();
         Ok(Cursor::new(piece_content))
     }
 
     /// write_piece writes the piece content to the cache.
-    pub async fn write_piece<R: AsyncRead + Unpin + ?Sized>(
-        &self,
-        piece_id: &str,
-        reader: &mut R,
-    ) {
+    pub async fn write_piece<R: AsyncRead + Unpin + ?Sized>(&self, piece_id: &str, reader: &mut R) {
         let content = match self.copy_piece_content(reader).await {
             Ok(piece_content) => piece_content,
             Err(_err) => {
@@ -123,9 +120,9 @@ impl Cache {
     }
 
     /// copy_piece_content reads the content from the provided asynchronous reader into a vector.
-    /// 
+    ///
     /// ### Purpose
-    /// This method is designed to handle scenarios where downloading from source returns 
+    /// This method is designed to handle scenarios where downloading from source returns
     /// a stream instead of the piece content directly when downloading from parent peer.
     pub async fn copy_piece_content<R: AsyncRead + Unpin + ?Sized>(
         &self,
@@ -184,8 +181,8 @@ mod tests {
     use super::*;
     use bytes::Bytes;
     use dragonfly_client_config::dfdaemon::Config;
-    use std::sync::Arc;
     use std::io::Cursor;
+    use std::sync::Arc;
 
     fn create_test_config() -> Arc<Config> {
         Arc::new(Config {
@@ -218,7 +215,9 @@ mod tests {
         cache.write_piece(piece_id, &mut reader).await;
 
         // Read the piece from the cache
-        let result = cache.read_piece(piece_id, 0, content.len() as u64, None).await;
+        let result = cache
+            .read_piece(piece_id, 0, content.len() as u64, None)
+            .await;
 
         assert!(
             result.is_ok(),
@@ -250,7 +249,9 @@ mod tests {
             length: 5,
         });
 
-        let result = cache.read_piece(piece_id, 0, content.len() as u64, range).await;
+        let result = cache
+            .read_piece(piece_id, 0, content.len() as u64, range)
+            .await;
 
         assert!(
             result.is_ok(),
@@ -299,12 +300,12 @@ mod tests {
             },
             ..Default::default()
         });
-    
+
         let cache = Cache::new(config.clone()).expect("Failed to create cache");
-    
+
         cache.add_piece("piece1", Bytes::from("Content 1")).await;
         cache.add_piece("piece2", Bytes::from("Content 2")).await;
-    
+
         assert!(
             cache.get_piece("piece1").await.is_some(),
             "Piece1 should still exist"
@@ -313,9 +314,9 @@ mod tests {
             cache.get_piece("piece2").await.is_some(),
             "Piece2 should still exist"
         );
-    
+
         cache.add_piece("piece3", Bytes::from("Content 3")).await;
-    
+
         assert!(
             cache.get_piece("piece1").await.is_none(),
             "Piece1 should have been evicted"
@@ -328,51 +329,48 @@ mod tests {
             cache.get_piece("piece3").await.is_some(),
             "Piece3 should exist in the cache"
         );
-    }    
+    }
 
     #[tokio::test]
-async fn test_contains_piece() {
-    let config = Arc::new(Config {
-        storage: dragonfly_client_config::dfdaemon::Storage {
-            cache_capacity: 3,
-            write_buffer_size: 1024,
+    async fn test_contains_piece() {
+        let config = Arc::new(Config {
+            storage: dragonfly_client_config::dfdaemon::Storage {
+                cache_capacity: 3,
+                write_buffer_size: 1024,
+                ..Default::default()
+            },
             ..Default::default()
-        },
-        ..Default::default()
-    });
+        });
 
-    let cache = Cache::new(config.clone()).expect("Failed to create cache");
+        let cache = Cache::new(config.clone()).expect("Failed to create cache");
 
-    let piece_id1 = "piece1";
-    let piece_id2 = "piece2";
+        let piece_id1 = "piece1";
+        let piece_id2 = "piece2";
 
-    assert!(
-        !cache.contains_piece(piece_id1),
-        "Cache should not contain piece1 initially"
-    );
+        assert!(
+            !cache.contains_piece(piece_id1),
+            "Cache should not contain piece1 initially"
+        );
 
+        cache.add_piece(piece_id1, Bytes::from("Content 1")).await;
+        assert!(
+            cache.contains_piece(piece_id1),
+            "Cache should contain piece1 after it is added"
+        );
 
-    cache.add_piece(piece_id1, Bytes::from("Content 1")).await;
-    assert!(
-        cache.contains_piece(piece_id1),
-        "Cache should contain piece1 after it is added"
-    );
+        assert!(
+            !cache.contains_piece(piece_id2),
+            "Cache should not contain piece2"
+        );
 
-    assert!(
-        !cache.contains_piece(piece_id2),
-        "Cache should not contain piece2"
-    );
-
-
-    cache.add_piece(piece_id2, Bytes::from("Content 2")).await;
-    assert!(
-        cache.contains_piece(piece_id1),
-        "Cache should still contain piece1"
-    );
-    assert!(
-        cache.contains_piece(piece_id2),
-        "Cache should contain piece2 after it is added"
-    );
-}
-
+        cache.add_piece(piece_id2, Bytes::from("Content 2")).await;
+        assert!(
+            cache.contains_piece(piece_id1),
+            "Cache should still contain piece1"
+        );
+        assert!(
+            cache.contains_piece(piece_id2),
+            "Cache should contain piece2 after it is added"
+        );
+    }
 }

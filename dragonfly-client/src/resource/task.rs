@@ -1575,14 +1575,10 @@ impl Task {
 
                 if load_to_cache {
                     // Load piece content to cache.
-                    self
-                    .storage
-                    .load_piece_to_cache(
-                        piece_id.as_str(), 
-                        &mut content.clone().as_slice(),
-                    )
-                    .await;
-                    }
+                    self.storage
+                        .load_piece_to_cache(piece_id.as_str(), &mut content.clone().as_slice())
+                        .await;
+                }
             }
 
             // Send the download progress.

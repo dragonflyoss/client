@@ -516,16 +516,12 @@ impl Piece {
                     error!("set piece metadata failed: {}", err)
                 };
             })?;
-        
+
         // Load piece content to cache from parent
         if load_to_cache {
-            self
-            .storage
-            .load_piece_to_cache(
-                piece_id, 
-                &mut content.clone().as_slice(),
-            )
-            .await;
+            self.storage
+                .load_piece_to_cache(piece_id, &mut content.clone().as_slice())
+                .await;
             info!("load piece content to cache piece {}", piece_id);
         }
 
@@ -690,21 +686,27 @@ impl Piece {
             start_time.elapsed(),
         );
 
-        let mut reader= response.reader;
+        let mut reader = response.reader;
 
         if load_to_cache {
             // Load piece content to cache from source.
-            self.storage.load_piece_to_cache(piece_id, &mut reader).await;
+            self.storage
+                .load_piece_to_cache(piece_id, &mut reader)
+                .await;
             info!("load piece content to cache: piece_id={}", piece_id);
 
-            let cache_reader = match self.storage.upload_piece_from_cache(piece_id, offset, length, None).await {
+            let cache_reader = match self
+                .storage
+                .upload_piece_from_cache(piece_id, offset, length, None)
+                .await
+            {
                 Ok(reader) => reader,
                 Err(err) => {
                     error!("download piece finished: {}", err);
                     if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                         error!("set piece metadata failed: {}", err)
                     };
-    
+
                     return Err(err);
                 }
             };
@@ -715,13 +717,7 @@ impl Piece {
         // Record the finish of downloading piece.
         match self
             .storage
-            .download_piece_from_source_finished(
-                piece_id,
-                task_id,
-                offset,
-                length,
-                &mut reader,
-            )
+            .download_piece_from_source_finished(piece_id, task_id, offset, length, &mut reader)
             .await
         {
             Ok(piece) => {

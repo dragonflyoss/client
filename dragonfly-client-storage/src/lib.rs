@@ -19,19 +19,19 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::digest::{Algorithm, Digest};
 use reqwest::header::HeaderMap;
-use tracing::info;
 use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
+use tracing::info;
 use tracing::{debug, error, instrument};
 
+pub mod cache;
 pub mod content;
 pub mod metadata;
 pub mod storage_engine;
-pub mod cache;
 
 /// DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.
 pub const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(100);
@@ -496,15 +496,15 @@ impl Storage {
         offset: u64,
         length: u64,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead>{
+    ) -> Result<impl AsyncRead> {
         self.cache.read_piece(piece_id, offset, length, range).await
     }
 
     /// load_piece_to_cache loads the piece content with piece id to the cache.
     #[instrument(skip_all)]
     pub async fn load_piece_to_cache<R: AsyncRead + Unpin + ?Sized>(
-        &self, 
-        piece_id: &str, 
+        &self,
+        piece_id: &str,
         reader: &mut R,
     ) {
         // If the piece is already in the cache, return.
