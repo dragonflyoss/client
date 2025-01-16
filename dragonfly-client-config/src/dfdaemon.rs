@@ -929,34 +929,34 @@ pub struct Storage {
     #[serde(default = "default_storage_read_buffer_size")]
     pub read_buffer_size: usize,
 
-/// cache_capacity is the cache capacity for downloading, default is 100.
-/// 
-/// Cache storage:
-/// 1. Users can create preheating jobs and preheat tasks to memory and disk by setting `load_to_cache` to `true`.
-///    For more details, refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L443.
-/// 2. If the download hits the memory cache, it will be faster than reading from the disk, because there is no
-///    page cache for the first read.
-/// ```
-///
-///     1.Preheat
-///         |
-///         |
-/// +--------------------------------------------------+
-/// |       |              Peer                        |
-/// |       |                   +-----------+          |
-/// |       |     -- Partial -->|   Cache   |          |
-/// |       |     |             +-----------+          |
-/// |       v     |                |    |              |
-/// |   Download  |              Miss   |              |             
-/// |     Task -->|                |    --- Hit ------>|<-- 2.Download
-/// |             |                |               ^   |              
-/// |             |                v               |   |
-/// |             |          +-----------+         |   |
-/// |             -- Full -->|   Disk    |----------   |
-/// |                        +-----------+             |
-/// |                                                  |
-/// +--------------------------------------------------+
-/// ```
+    /// cache_capacity is the cache capacity for downloading, default is 100.
+    /// 
+    /// Cache storage:
+    /// 1. Users can create preheating jobs and preheat tasks to memory and disk by setting `load_to_cache` to `true`.
+    ///    For more details, refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L443.
+    /// 2. If the download hits the memory cache, it will be faster than reading from the disk, because there is no
+    ///    page cache for the first read.
+    /// ```
+    ///
+    ///     1.Preheat
+    ///         |
+    ///         |
+    /// +--------------------------------------------------+
+    /// |       |              Peer                        |
+    /// |       |                   +-----------+          |
+    /// |       |     -- Partial -->|   Cache   |          |
+    /// |       |     |             +-----------+          |
+    /// |       v     |                |    |              |
+    /// |   Download  |              Miss   |              |             
+    /// |     Task -->|                |    --- Hit ------>|<-- 2.Download
+    /// |             |                |               ^   |              
+    /// |             |                v               |   |
+    /// |             |          +-----------+         |   |
+    /// |             -- Full -->|   Disk    |----------   |
+    /// |                        +-----------+             |
+    /// |                                                  |
+    /// +--------------------------------------------------+
+    /// ```
     #[serde(default = "default_storage_cache_capacity")]
     pub cache_capacity: usize,
 }
