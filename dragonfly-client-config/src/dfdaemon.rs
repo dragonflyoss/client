@@ -929,7 +929,7 @@ pub struct Storage {
     #[serde(default = "default_storage_read_buffer_size")]
     pub read_buffer_size: usize,
 
-/// Cache is the cache for storing piece content by LRU algorithm.
+/// cache_capacity is the cache capacity for downloading, default is 100.
 /// 
 /// Cache storage:
 /// 1. Users can create preheating jobs and preheat tasks to memory and disk by setting `load_to_cache` to `true`.
