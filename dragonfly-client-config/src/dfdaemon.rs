@@ -930,7 +930,7 @@ pub struct Storage {
     pub read_buffer_size: usize,
 
     /// cache_capacity is the cache capacity for downloading, default is 100.
-    /// 
+    ///
     /// Cache storage:
     /// 1. Users can create preheating jobs and preheat tasks to memory and disk by setting `load_to_cache` to `true`.
     ///    For more details, refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L443.
