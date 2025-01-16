@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crc::*;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
@@ -24,6 +25,7 @@ use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{
     self, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter, SeekFrom,
 };
+use tokio_util::io::InspectReader;
 use tracing::{error, info, instrument, warn};
 
 /// DEFAULT_CONTENT_DIR is the default directory for store content.
@@ -335,29 +337,28 @@ impl Content {
             error!("seek {:?} failed: {}", task_path, err);
         })?;
 
-        // Copy the piece to the file while updating the CRC32C value.
-        let mut crc: u32 = 0;
-        let mut length = 0;
-        let mut buffer = vec![0; self.config.storage.write_buffer_size];
+        // Copy the piece to the file while updating the CRC32 value.
+        let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
+        let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
+        let mut digest = crc.digest();
+
+        let mut tee = InspectReader::new(reader, |bytes| {
+            digest.update(bytes);
+        });
+
         let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
-        let mut reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
+        let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
+            error!("copy {:?} failed: {}", task_path, err);
+        })?;
 
-        loop {
-            let n = reader.read(&mut buffer).await?;
-            if n == 0 {
-                break;
-            }
-
-            crc = crc32c::crc32c_append(crc, &buffer[..n]);
-            writer.write_all(&buffer[..n]).await?;
-            length += n as u64;
-        }
-        writer.flush().await?;
+        writer.flush().await.inspect_err(|err| {
+            error!("flush {:?} failed: {}", task_path, err);
+        })?;
 
         // Calculate the hash of the piece.
         Ok(WritePieceResponse {
             length,
-            hash: crc.to_string(),
+            hash: digest.finalize().to_string(),
         })
     }
 
@@ -455,28 +456,27 @@ impl Content {
                 error!("open {:?} failed: {}", task_path, err);
             })?;
 
-        // Copy the content to the file while updating the CRC32C value.
-        let mut crc: u32 = 0;
-        let mut length = 0;
-        let mut buffer = vec![0; self.config.storage.write_buffer_size];
-        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, to_f);
+        // Copy the content to the file while updating the CRC32 value.
         let mut reader = BufReader::with_capacity(self.config.storage.write_buffer_size, from_f);
+        let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
+        let mut digest = crc.digest();
 
-        loop {
-            let n = reader.read(&mut buffer).await?;
-            if n == 0 {
-                break;
-            }
+        let mut tee = InspectReader::new(&mut reader, |bytes| {
+            digest.update(bytes);
+        });
 
-            crc = crc32c::crc32c_append(crc, &buffer[..n]);
-            writer.write_all(&buffer[..n]).await?;
-            length += n as u64;
-        }
-        writer.flush().await?;
+        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, to_f);
+        let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
+            error!("copy {:?} failed: {}", task_path, err);
+        })?;
+
+        writer.flush().await.inspect_err(|err| {
+            error!("flush {:?} failed: {}", task_path, err);
+        })?;
 
         Ok(WritePersistentCacheTaskResponse {
             length,
-            hash: crc.to_string(),
+            hash: digest.finalize().to_string(),
         })
     }
 

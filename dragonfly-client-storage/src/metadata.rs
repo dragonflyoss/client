@@ -139,9 +139,6 @@ pub struct PersistentCacheTask {
     /// ttl is the time to live of the persistent cache task.
     pub ttl: Duration,
 
-    /// digests is the digests of the persistent cache task.
-    pub digest: String,
-
     /// piece_length is the length of the piece.
     pub piece_length: u64,
 
@@ -531,17 +528,14 @@ impl<E: StorageEngineOwned> Metadata<E> {
         self.db.delete::<Task>(id.as_bytes())
     }
 
-    /// create_persistent_persistent_cache_task creates a new persistent cache task.
-    /// If the persistent cache task imports the content to the dfdaemon finished,
-    /// the dfdaemon will create a persistent cache task metadata.
+    /// create_persistent_cache_task creates a new persistent cache task.
     #[instrument(skip_all)]
-    pub fn create_persistent_persistent_cache_task(
+    pub fn create_persistent_cache_task_started(
         &self,
         id: &str,
         ttl: Duration,
         piece_length: u64,
         content_length: u64,
-        digest: &str,
     ) -> Result<PersistentCacheTask> {
         let task = PersistentCacheTask {
             id: id.to_string(),
@@ -549,11 +543,32 @@ impl<E: StorageEngineOwned> Metadata<E> {
             ttl,
             piece_length,
             content_length,
-            digest: digest.to_string(),
             updated_at: Utc::now().naive_utc(),
             created_at: Utc::now().naive_utc(),
-            finished_at: Some(Utc::now().naive_utc()),
             ..Default::default()
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// create_persistent_cache_task_finished updates the metadata of the persistent cache task
+    /// when the persistent cache task finished.
+    #[instrument(skip_all)]
+    pub fn create_persistent_cache_task_finished(&self, id: &str) -> Result<PersistentCacheTask> {
+        let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.updated_at = Utc::now().naive_utc();
+                task.failed_at = None;
+
+                // If the persistent cache task is created by user, the finished_at has been set.
+                if task.finished_at.is_none() {
+                    task.finished_at = Some(Utc::now().naive_utc());
+                }
+
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
         };
 
         self.db.put(id.as_bytes(), &task)?;
@@ -706,6 +721,37 @@ impl<E: StorageEngineOwned> Metadata<E> {
     pub fn delete_persistent_cache_task(&self, id: &str) -> Result<()> {
         info!("delete persistent cache task metadata {}", id);
         self.db.delete::<PersistentCacheTask>(id.as_bytes())
+    }
+
+    /// create_persistent_cache_piece creates a new persistent cache piece, which is imported by
+    /// local.
+    #[instrument(skip_all)]
+    pub fn create_persistent_cache_piece(
+        &self,
+        piece_id: &str,
+        number: u32,
+        offset: u64,
+        length: u64,
+        digest: &str,
+    ) -> Result<Piece> {
+        // Construct the piece metadata.
+        let piece = Piece {
+            number,
+            offset,
+            length,
+            digest: digest.to_string(),
+            // Persistent cache piece does not have parent id, because the piece content is
+            // imported by local.
+            parent_id: None,
+            updated_at: Utc::now().naive_utc(),
+            created_at: Utc::now().naive_utc(),
+            finished_at: Some(Utc::now().naive_utc()),
+            ..Default::default()
+        };
+
+        // Put the piece metadata.
+        self.db.put(piece_id.as_bytes(), &piece)?;
+        Ok(piece)
     }
 
     /// download_piece_started updates the metadata of the piece when the piece downloads started.

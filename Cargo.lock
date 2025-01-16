@@ -589,9 +589,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.23"
+version = "4.5.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3135e7ec2ef7b10c6ed8950f0f792ed96ee093fa088608f1c76e569722700c84"
+checksum = "a8eb5e908ef3a6efbe1ed62520fb7287959888c88485abe072543190ecc66783"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -599,9 +599,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.23"
+version = "4.5.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30582fc632330df2bd26877bde0c1f4470d57c582bbc070376afcd04d8cb4838"
+checksum = "96b01801b5fc6a0a232407abc821660c9c6d25a1cafc0d4f85f29fb8d9afc121"
 dependencies = [
  "anstream",
  "anstyle",
@@ -611,9 +611,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.5.18"
+version = "4.5.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ac6a0c7b1a9e9a5186361f67dfa1b88213572f427fb9ab038efb2bd8c582dab"
+checksum = "54b755194d6389280185988721fffba69495eed5ee9feeee9a599b53db80318c"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -711,6 +711,21 @@ checksum = "53fe5e26ff1b7aef8bca9c6080520cfb8d9333c7568e1829cef191a9723e5504"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "crc"
+version = "3.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69e6e4d7b33a94f0991c26729976b10ebde1d34c3ee82408fb536164fa10d636"
+dependencies = [
+ "crc-catalog",
+]
+
+[[package]]
+name = "crc-catalog"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19d374276b40fb8bbdee95aef7c7fa6b5316ec764510eb64b8dd0e2ed0d7e7f5"
 
 [[package]]
 name = "crc32c"
@@ -923,7 +938,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "0.2.2"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "blake3",
@@ -952,7 +967,6 @@ dependencies = [
  "jemalloc_pprof",
  "lazy_static",
  "leaky-bucket",
- "libc",
  "lru",
  "openssl",
  "opentelemetry",
@@ -996,7 +1010,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "0.2.2"
+version = "0.2.5"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-core",
@@ -1027,7 +1041,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "0.2.2"
+version = "0.2.5"
 dependencies = [
  "bytesize",
  "bytesize-serde",
@@ -1053,7 +1067,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "0.2.2"
+version = "0.2.5"
 dependencies = [
  "headers 0.4.0",
  "hyper 1.5.2",
@@ -1072,7 +1086,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "0.2.2"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -1090,13 +1104,13 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "0.2.2"
+version = "0.2.5"
 dependencies = [
  "base16ct",
  "bincode",
  "bytes",
  "chrono",
- "crc32c",
+ "crc",
  "dragonfly-api",
  "dragonfly-client-config",
  "dragonfly-client-core",
@@ -1117,12 +1131,12 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "0.2.2"
+version = "0.2.5"
 dependencies = [
  "base16ct",
  "base64 0.22.1",
  "blake3",
- "crc32c",
+ "crc",
  "crc32fast",
  "dragonfly-api",
  "dragonfly-client-core",
@@ -1507,7 +1521,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "0.2.2"
+version = "0.2.5"
 dependencies = [
  "dragonfly-client-backend",
  "dragonfly-client-core",
@@ -4055,9 +4069,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.134"
+version = "1.0.135"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d00f4175c42ee48b15416f6193a959ba3a0d67fc699a0db9ad12df9f83991c7d"
+checksum = "2b0d7ba2887406110130a978386c4e1befb98c674b4fba677954e4db976630d9"
 dependencies = [
  "itoa",
  "memchr",
@@ -5089,9 +5103,9 @@ checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
 
 [[package]]
 name = "uuid"
-version = "1.11.0"
+version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8c5f0a0af699448548ad1a2fbf920fb4bee257eae39953ba95cb84891a0446a"
+checksum = "b913a3b5fe84142e269d63cc62b64319ccaf89b748fc31fe025177f767a756c4"
 dependencies = [
  "getrandom",
  "serde",

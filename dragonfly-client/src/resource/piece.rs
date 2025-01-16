@@ -104,6 +104,7 @@ impl Piece {
                 RateLimiter::builder()
                     .initial(config.download.rate_limit.as_u64() as usize)
                     .refill(config.download.rate_limit.as_u64() as usize)
+                    .max(MAX_PIECE_LENGTH as usize)
                     .interval(Duration::from_secs(1))
                     .fair(false)
                     .build(),
@@ -112,14 +113,18 @@ impl Piece {
                 RateLimiter::builder()
                     .initial(config.upload.rate_limit.as_u64() as usize)
                     .refill(config.upload.rate_limit.as_u64() as usize)
+                    .max(MAX_PIECE_LENGTH as usize)
                     .interval(Duration::from_secs(1))
+                    .fair(false)
                     .build(),
             ),
             prefetch_rate_limiter: Arc::new(
                 RateLimiter::builder()
                     .initial(config.proxy.prefetch_rate_limit.as_u64() as usize)
                     .refill(config.proxy.prefetch_rate_limit.as_u64() as usize)
+                    .max(MAX_PIECE_LENGTH as usize)
                     .interval(Duration::from_secs(1))
+                    .fair(false)
                     .build(),
             ),
         })
