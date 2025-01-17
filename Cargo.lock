@@ -923,9 +923,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.1.6"
+version = "2.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cc74bdb827031beb5d5ab3856a7469790e46bf70a978846d1248b7e30d19706"
+checksum = "b5e7217ce1173887b0be41f8a78568b20f2ab892b2382aa185ae969fc80333ff"
 dependencies = [
  "prost 0.13.4",
  "prost-types",
@@ -1135,7 +1135,6 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "crc",
- "crc32fast",
  "dragonfly-api",
  "dragonfly-client-core",
  "hex",
@@ -1153,6 +1152,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "wyhash",
 ]
 
 [[package]]
@@ -5634,6 +5634,15 @@ name = "writeable"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e9df38ee2d2c3c5948ea468a8406ff0db0b29ae1ffde1bcf20ef305bcc95c51"
+
+[[package]]
+name = "wyhash"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baf6e163c25e3fac820b4b453185ea2dea3b6a3e0a721d4d23d75bd33734c295"
+dependencies = [
+ "rand_core 0.6.4",
+]
 
 [[package]]
 name = "x509-parser"

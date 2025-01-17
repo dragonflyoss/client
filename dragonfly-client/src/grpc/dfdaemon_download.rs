@@ -867,6 +867,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Clone the request.
         let request = request.into_inner();
         let path = Path::new(request.path.as_str());
+        info!("upload persistent cache task {:?}", request);
 
         // Generate the task id.
         let task_id = self
@@ -881,6 +882,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 error!("generate task id: {}", err);
                 Status::invalid_argument(err.to_string())
             })?;
+        info!("generate task id: {}", task_id);
 
         // Generate the host id.
         let host_id = self.task.id_generator.host_id();
@@ -1020,7 +1022,6 @@ impl DfdaemonDownloadClient {
             .unwrap()
             .buffer_size(super::BUFFER_SIZE)
             .connect_timeout(super::CONNECT_TIMEOUT)
-            .timeout(super::REQUEST_TIMEOUT)
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
             .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
@@ -1122,8 +1123,20 @@ impl DfdaemonDownloadClient {
         &self,
         request: UploadPersistentCacheTaskRequest,
     ) -> ClientResult<PersistentCacheTask> {
+        // Clone the request.
+        let request_clone = request.clone();
+
         // Initialize the request.
-        let request = tonic::Request::new(request);
+        let mut request = tonic::Request::new(request);
+
+        // Set the timeout to the request.
+        if let Some(timeout) = request_clone.timeout {
+            request.set_timeout(
+                Duration::try_from(timeout)
+                    .map_err(|_| tonic::Status::invalid_argument("invalid timeout"))?,
+            );
+        }
+
         let response = self
             .client
             .clone()
@@ -1138,9 +1151,7 @@ impl DfdaemonDownloadClient {
         &self,
         request: StatPersistentCacheTaskRequest,
     ) -> ClientResult<PersistentCacheTask> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::CONNECT_TIMEOUT);
-
+        let request = Self::make_request(request);
         let response = self
             .client
             .clone()

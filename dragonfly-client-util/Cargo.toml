@@ -30,7 +30,7 @@ blake3.workspace = true
 crc.workspace = true
 base16ct.workspace = true
 base64 = "0.22.1"
-crc32fast = "1.4.2"
+wyhash = "0.5.0"
 
 [dev-dependencies]
 tempfile.workspace = true

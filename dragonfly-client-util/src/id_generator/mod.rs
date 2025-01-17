@@ -20,10 +20,13 @@ use dragonfly_client_core::{
     Result,
 };
 use sha2::{Digest, Sha256};
+use std::hash::Hasher;
+use std::io::Read;
 use std::path::PathBuf;
 use tracing::instrument;
 use url::Url;
 use uuid::Uuid;
+use wyhash::WyHash;
 
 /// SEED_PEER_SUFFIX is the suffix of the seed peer.
 const SEED_PEER_SUFFIX: &str = "seed";
@@ -126,25 +129,32 @@ impl IDGenerator {
         tag: Option<&str>,
         application: Option<&str>,
     ) -> Result<String> {
-        // Initialize the hasher.
-        let mut hasher = blake3::Hasher::new();
-
         // Calculate the hash of the file.
-        let mut f = std::fs::File::open(path)?;
-        std::io::copy(&mut f, &mut hasher)?;
+        let f = std::fs::File::open(path)?;
+        let mut buffer = [0; 4096];
+        let mut reader = std::io::BufReader::with_capacity(buffer.len(), f);
+        let mut hasher = WyHash::default();
+        loop {
+            let n = reader.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+
+            hasher.write(&buffer[..n]);
+        }
 
         // Add the tag to generate the persistent cache task id.
         if let Some(tag) = tag {
-            hasher.update(tag.as_bytes());
+            hasher.write(tag.as_bytes());
         }
 
         // Add the application to generate the persistent cache task id.
         if let Some(application) = application {
-            hasher.update(application.as_bytes());
+            hasher.write(application.as_bytes());
         }
 
         // Generate the persistent cache task id.
-        Ok(hasher.finalize().to_hex().to_string())
+        Ok(hasher.finish().to_string())
     }
 
     /// peer_id generates the peer id.
@@ -253,21 +263,21 @@ mod tests {
                 "This is a test file",
                 Some("tag1"),
                 Some("app1"),
-                "84ed9fca6c51c725c21ab005682509bc9f5a9e08779aa14039a1df41bd95bb9f",
+                "15288906590529426257",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
                 "This is a test file",
                 None,
                 Some("app1"),
-                "c39ee7baea1df8276d16224b6bbe93d0abaedaa056e819bb1a6318e28cdde508",
+                "16142504978820333826",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
                 "This is a test file",
                 Some("tag1"),
                 None,
-                "de692dcd9b6eace344140ef2718033527ee0a2e436c03044a771902bd536ae7d",
+                "3790865882910844849",
             ),
         ];
 
