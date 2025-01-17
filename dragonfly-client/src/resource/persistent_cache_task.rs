@@ -145,7 +145,6 @@ impl PersistentCacheTask {
                 task_id: task_id.to_string(),
                 peer_id: peer_id.to_string(),
                 persistent_replica_count: request.persistent_replica_count,
-                digest: None,
                 tag: request.tag.clone(),
                 application: request.application.clone(),
                 piece_length,
@@ -167,6 +166,7 @@ impl PersistentCacheTask {
                 return Err(err);
             }
         }
+        info!("upload persistent cache task started");
 
         // Calculate the interested pieces to import.
         let interested_pieces =
@@ -194,7 +194,7 @@ impl PersistentCacheTask {
                 read_buffer_size: usize,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = storage.piece_id(task_id.as_str(), piece.number);
-                info!("start to write persistent cache piece {}", piece_id,);
+                debug!("start to write persistent cache piece {}", piece_id,);
 
                 let f = File::open(path.as_path()).await.inspect_err(|err| {
                     error!("open {:?} failed: {}", path, err);
@@ -217,9 +217,12 @@ impl PersistentCacheTask {
                         piece.length,
                         &mut f_reader.take(piece.length),
                     )
-                    .await?;
+                    .await
+                    .inspect_err(|err| {
+                        error!("write {:?} failed: {}", piece_id, err);
+                    })?;
 
-                info!("finished persistent cache piece {}", piece_id);
+                debug!("finished persistent cache piece {}", piece_id);
                 Ok(metadata)
             }
 
@@ -320,6 +323,8 @@ impl PersistentCacheTask {
                 {
                     Ok(response) => response,
                     Err(err) => {
+                        error!("upload persistent cache task finished: {}", err);
+
                         // Delete the persistent cache task.
                         self.storage
                             .create_persistent_cache_task_failed(task_id)
@@ -344,12 +349,12 @@ impl PersistentCacheTask {
                     }
                 };
 
+                info!("upload persistent cache task finished");
                 Ok(CommonPersistentCacheTask {
                     id: task_id.to_string(),
                     persistent_replica_count: request.persistent_replica_count,
                     current_persistent_replica_count: response.current_persistent_replica_count,
                     current_replica_count: response.current_replica_count,
-                    digest: None,
                     tag: request.tag,
                     application: request.application,
                     piece_length: metadata.piece_length,
@@ -362,6 +367,8 @@ impl PersistentCacheTask {
                 })
             }
             Err(err) => {
+                error!("create persistent cache task finished: {}", err);
+
                 // Delete the persistent cache task.
                 self.storage
                     .create_persistent_cache_task_failed(task_id)
@@ -652,8 +659,6 @@ impl PersistentCacheTask {
                     request: Some(
                         announce_persistent_cache_peer_request::Request::RegisterPersistentCachePeerRequest(
                             RegisterPersistentCachePeerRequest {
-                                host_id: host_id.to_string(),
-                                task_id: task.id.clone(),
                                 tag: request.tag.clone(),
                                 application: request.application.clone(),
                                 piece_length: task.piece_length,

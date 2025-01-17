@@ -268,7 +268,7 @@ impl ImportCommand {
         );
         pb.set_message("Importing...");
 
-        dfdaemon_download_client
+        let persistent_cache_task = dfdaemon_download_client
             .upload_persistent_cache_task(UploadPersistentCacheTaskRequest {
                 path: self.path.clone().into_os_string().into_string().unwrap(),
                 persistent_replica_count: self.persistent_replica_count,
@@ -277,10 +277,14 @@ impl ImportCommand {
                 ttl: Some(
                     prost_wkt_types::Duration::try_from(self.ttl).or_err(ErrorType::ParseError)?,
                 ),
+                timeout: Some(
+                    prost_wkt_types::Duration::try_from(self.timeout)
+                        .or_err(ErrorType::ParseError)?,
+                ),
             })
             .await?;
 
-        pb.finish_with_message("Done");
+        pb.finish_with_message(format!("Done: {}", persistent_cache_task.id));
         Ok(())
     }
 
