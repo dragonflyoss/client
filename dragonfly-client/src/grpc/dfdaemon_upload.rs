@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use super::interceptor::TracingInterceptor;
 use crate::metrics::{
     collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
     collect_download_task_failure_metrics, collect_download_task_finished_metrics,
@@ -23,7 +24,10 @@ use crate::metrics::{
 };
 use crate::resource::{persistent_cache_task, task};
 use crate::shutdown;
-use dragonfly_api::common::v2::{Host, PersistentCacheTask, Piece, Priority, Task, TaskType};
+use bytesize::ByteSize;
+use dragonfly_api::common::v2::{
+    Host, Network, PersistentCacheTask, Piece, Priority, Task, TaskType,
+};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient,
     dfdaemon_upload_server::{DfdaemonUpload, DfdaemonUploadServer as DfdaemonUploadGRPCServer},
@@ -39,10 +43,13 @@ use dragonfly_client_core::{
     Error as ClientError, Result as ClientResult,
 };
 use dragonfly_client_util::http::{get_range, hashmap_to_headermap, headermap_to_hashmap};
+use pnet::datalink;
+use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
+use sysinfo::Networks;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
@@ -54,8 +61,6 @@ use tonic::{
 };
 use tracing::{debug, error, info, instrument, Instrument, Span};
 use url::Url;
-
-use super::interceptor::TracingInterceptor;
 
 /// DfdaemonUploadServer is the grpc server of the upload.
 pub struct DfdaemonUploadServer {
@@ -865,9 +870,126 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     #[instrument(skip_all)]
     async fn sync_host(
         &self,
-        _request: Request<SyncHostRequest>,
+        request: Request<SyncHostRequest>,
     ) -> Result<Response<Self::SyncHostStream>, Status> {
-        unimplemented!()
+        /// DEFAULT_INTERFACE_SPEED is the default speed for interfaces.
+        const DEFAULT_INTERFACE_SPEED: ByteSize = ByteSize::mb(10000);
+        /// FIRST_REFRESH_INTERVAL is the interval between the first refresh of the network.
+        const FIRST_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
+        /// DEFAULT_REFRESH_INTERVAL is the default interval for refreshing the network.
+        const DEFAULT_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+
+        // Get request ip.
+        let request_ip = request.remote_addr();
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the remote host id from the request.
+        let remote_host_id = request.host_id;
+
+        // Get the remote peer id from the request;
+        let remote_peer_id = request.peer_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.clone());
+        match request_ip {
+            None => Span::current().record("request_ip", "None"),
+            Some(ip) => Span::current().record("request_ip", ip.to_string().as_str()),
+        };
+
+        Span::current().record("remote_host_id", remote_host_id.as_str());
+        Span::current().record("remote_peer_id", remote_peer_id.as_str());
+
+        // Get request interface and speed.
+        let mut request_interface = None;
+        let mut request_interface_speed = DEFAULT_INTERFACE_SPEED.as_u64();
+        if let Some(request_ip) = request_ip {
+            // Get interface of this ip.
+            let interfaces = datalink::interfaces();
+            for net in interfaces.iter() {
+                if net.ips.iter().any(|ip| ip.contains(request_ip.ip())) {
+                    request_interface = Some(net.name.clone());
+                    break;
+                }
+            }
+
+            // Get speed of interface.
+            if let Some(interface) = request_interface.clone() {
+                let speed_path = format!("/sys/class/net/{}/speed", interface);
+                let content = fs::read_to_string(speed_path).unwrap_or_default();
+                if let Ok(speed) = content.trim().parse::<u64>() {
+                    // Convert Mib/Sec to bit/Sec.
+                    debug!(
+                        "interface {} bandwidth is {}",
+                        &interface,
+                        ByteSize::mb(speed)
+                    );
+                    request_interface_speed = ByteSize::mb(speed).as_u64();
+                }
+            }
+        }
+
+        // Initialize stream channel.
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(1);
+        // Start the host info update loop.
+        let mut networks = Networks::new_with_refreshed_list();
+        let mut last_refresh_time = SystemTime::now();
+        tokio::time::sleep(FIRST_REFRESH_INTERVAL).await;
+
+        info!("start sending host info to host {}", remote_host_id);
+        loop {
+            let mut host = Host::default();
+
+            // Get network information by request ip
+            let mut network = Network::default();
+
+            // Refresh network information.
+            networks.refresh();
+            let new_time = SystemTime::now();
+            let interval = new_time
+                .duration_since(last_refresh_time)
+                .unwrap()
+                .as_millis() as u64;
+            last_refresh_time = new_time;
+
+            // Get interface available bandwidth.
+            if let Some(request_interface) = request_interface.clone() {
+                for (interface, data) in &networks {
+                    if *interface == request_interface {
+                        network.upload_rate =
+                            (request_interface_speed - data.transmitted()) * 1000 / interval;
+                        debug!(
+                            "refresh interface {} available bandwidth to {}",
+                            interface,
+                            ByteSize(network.upload_rate)
+                        );
+                    }
+                }
+            }
+            host.network = Some(network);
+
+            match out_stream_tx.send(Ok(host.clone())).await {
+                Ok(_) => {
+                    debug!("sync host info to remote host {}", remote_host_id.as_str());
+                }
+                Err(err) => {
+                    info!(
+                        "connection broken from remote host {}, err: {}",
+                        remote_host_id, err
+                    );
+                    drop(out_stream_tx);
+                    break;
+                }
+            };
+
+            // Wait for the piece to be finished.
+            tokio::time::sleep(DEFAULT_REFRESH_INTERVAL).await;
+        }
+        Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
     /// DownloadPersistentCacheTaskStream is the stream of the download persistent cache task response.
