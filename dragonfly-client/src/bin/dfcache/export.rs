@@ -76,12 +76,63 @@ pub struct ExportCommand {
         help = "Specify the timeout for exporting a file"
     )]
     timeout: Duration,
+
+    #[arg(
+        short = 'e',
+        long = "endpoint",
+        default_value_os_t = dfdaemon::default_download_unix_socket_path(),
+        help = "Endpoint of dfdaemon's GRPC server"
+    )]
+    endpoint: PathBuf,
+
+    #[arg(
+        short = 'l',
+        long,
+        default_value = "info",
+        help = "Specify the logging level [trace, debug, info, warn, error]"
+    )]
+    log_level: Level,
+
+    #[arg(
+        long,
+        default_value_os_t = dfcache::default_dfcache_log_dir(),
+        help = "Specify the log directory"
+    )]
+    log_dir: PathBuf,
+
+    #[arg(
+        long,
+        default_value_t = 6,
+        help = "Specify the max number of log files"
+    )]
+    log_max_files: usize,
+
+    #[arg(
+        long = "verbose",
+        default_value_t = false,
+        help = "Specify whether to print log"
+    )]
+    verbose: bool,
 }
 
 /// Implement the execute for ExportCommand.
 impl ExportCommand {
     /// execute executes the export command.
-    pub async fn execute(&self, endpoint: &Path) -> Result<()> {
+    pub async fn execute(&self) -> Result<()> {
+        // Parse command line arguments.
+        Args::parse();
+
+        // Initialize tracing.
+        let _guards = init_tracing(
+            dfcache::NAME,
+            self.log_dir.clone(),
+            self.log_level,
+            self.log_max_files,
+            None,
+            false,
+            self.verbose,
+        );
+
         // Validate the command line arguments.
         if let Err(err) = self.validate_args() {
             println!(
@@ -122,7 +173,7 @@ impl ExportCommand {
 
         // Get dfdaemon download client.
         let dfdaemon_download_client =
-            match get_dfdaemon_download_client(endpoint.to_path_buf()).await {
+            match get_dfdaemon_download_client(self.endpoint.to_path_buf()).await {
                 Ok(client) => client,
                 Err(err) => {
                     println!(
@@ -148,7 +199,7 @@ impl ExportCommand {
                         style::Bold,
                         style::Reset,
                         err,
-                        endpoint.to_string_lossy(),
+                        self.endpoint.to_string_lossy(),
                     );
 
                     println!(

@@ -21,7 +21,7 @@ use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{dfcache, dfdaemon};
 use dragonfly_client_core::Result;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tracing::Level;
 
 pub mod export;
@@ -40,43 +40,6 @@ pub mod stat;
     disable_version_flag = true
 )]
 struct Args {
-    #[arg(
-        short = 'e',
-        long = "endpoint",
-        default_value_os_t = dfdaemon::default_download_unix_socket_path(),
-        help = "Endpoint of dfdaemon's GRPC server"
-    )]
-    endpoint: PathBuf,
-
-    #[arg(
-        short = 'l',
-        long,
-        default_value = "info",
-        help = "Specify the logging level [trace, debug, info, warn, error]"
-    )]
-    log_level: Level,
-
-    #[arg(
-        long,
-        default_value_os_t = dfcache::default_dfcache_log_dir(),
-        help = "Specify the log directory"
-    )]
-    log_dir: PathBuf,
-
-    #[arg(
-        long,
-        default_value_t = 6,
-        help = "Specify the max number of log files"
-    )]
-    log_max_files: usize,
-
-    #[arg(
-        long = "verbose",
-        default_value_t = false,
-        help = "Specify whether to print log"
-    )]
-    verbose: bool,
-
     #[arg(
         short = 'V',
         long = "version",
@@ -134,12 +97,12 @@ pub enum Command {
 /// Implement the execute for Command.
 impl Command {
     #[allow(unused)]
-    pub async fn execute(self, endpoint: &Path) -> Result<()> {
+    pub async fn execute(self) -> Result<()> {
         match self {
-            Self::Import(cmd) => cmd.execute(endpoint).await,
-            Self::Export(cmd) => cmd.execute(endpoint).await,
-            Self::Stat(cmd) => cmd.execute(endpoint).await,
-            Self::Remove(cmd) => cmd.execute(endpoint).await,
+            Self::Import(cmd) => cmd.execute().await,
+            Self::Export(cmd) => cmd.execute().await,
+            Self::Stat(cmd) => cmd.execute().await,
+            Self::Remove(cmd) => cmd.execute().await,
         }
     }
 }
@@ -149,19 +112,8 @@ async fn main() -> anyhow::Result<()> {
     // Parse command line arguments.
     let args = Args::parse();
 
-    // Initialize tracing.
-    let _guards = init_tracing(
-        dfcache::NAME,
-        args.log_dir,
-        args.log_level,
-        args.log_max_files,
-        None,
-        false,
-        args.verbose,
-    );
-
     // Execute the command.
-    args.command.execute(&args.endpoint).await?;
+    args.command.execute().await?;
     Ok(())
 }
 
