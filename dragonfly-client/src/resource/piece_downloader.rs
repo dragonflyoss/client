@@ -15,7 +15,7 @@
  */
 
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
-use dragonfly_api::dfdaemon::v2::DownloadPieceRequest;
+use dragonfly_api::dfdaemon::v2::{DownloadPersistentCachePieceRequest, DownloadPieceRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use std::sync::Arc;
@@ -27,6 +27,16 @@ use tracing::{error, instrument};
 pub trait Downloader {
     /// download_piece downloads a piece from the other peer by different protocols.
     async fn download_piece(
+        &self,
+        addr: &str,
+        number: u32,
+        host_id: &str,
+        task_id: &str,
+    ) -> Result<(Vec<u8>, u64, String)>;
+
+    /// download_persistent_cache_piece downloads a persistent cache piece from the other peer by different
+    /// protocols.
+    async fn download_persistent_cache_piece(
         &self,
         addr: &str,
         number: u32,
@@ -98,6 +108,41 @@ impl Downloader for GRPCDownloader {
         let response = dfdaemon_upload_client
             .download_piece(
                 DownloadPieceRequest {
+                    host_id: host_id.to_string(),
+                    task_id: task_id.to_string(),
+                    piece_number: number,
+                },
+                self.config.download.piece_timeout,
+            )
+            .await?;
+
+        let Some(piece) = response.piece else {
+            return Err(Error::InvalidParameter);
+        };
+
+        let Some(content) = piece.content else {
+            return Err(Error::InvalidParameter);
+        };
+
+        Ok((content, piece.offset, piece.digest))
+    }
+
+    /// download_persistent_cache_piece downloads a persistent cache piece from the other peer by
+    /// the gRPC protocol.
+    #[instrument(skip_all)]
+    async fn download_persistent_cache_piece(
+        &self,
+        addr: &str,
+        number: u32,
+        host_id: &str,
+        task_id: &str,
+    ) -> Result<(Vec<u8>, u64, String)> {
+        let dfdaemon_upload_client =
+            DfdaemonUploadClient::new(self.config.clone(), format!("http://{}", addr)).await?;
+
+        let response = dfdaemon_upload_client
+            .download_persistent_cache_piece(
+                DownloadPersistentCachePieceRequest {
                     host_id: host_id.to_string(),
                     task_id: task_id.to_string(),
                     piece_number: number,

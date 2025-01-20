@@ -153,8 +153,15 @@ impl IDGenerator {
             hasher.write(application.as_bytes());
         }
 
-        // Generate the persistent cache task id.
-        Ok(hasher.finish().to_string())
+        // Generate the task id by wyhash.
+        let id = hasher.finish().to_string();
+
+        // Generate the persistent cache task ID. The original ID is too short, so we calculate the SHA-256
+        // hash to ensure it can be prefix-searched by the storage engine.
+        let mut hasher = Sha256::new();
+        hasher.update(id);
+
+        Ok(hex::encode(hasher.finalize()))
     }
 
     /// peer_id generates the peer id.
