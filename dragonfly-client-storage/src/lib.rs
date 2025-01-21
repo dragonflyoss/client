@@ -267,6 +267,17 @@ impl Storage {
         self.metadata.get_persistent_cache_tasks()
     }
 
+    /// set_persistent_for_persistent_cache_task sets the persistent flag for the persistent cache task.
+    #[instrument(skip_all)]
+    pub fn set_persistent_for_persistent_cache_task(
+        &self,
+        id: &str,
+        persistent: bool,
+    ) -> Result<metadata::PersistentCacheTask> {
+        self.metadata
+            .set_persistent_for_persistent_cache_task(id, persistent)
+    }
+
     /// delete_persistent_cache_task deletes the persistent cache task metadatas, persistent cache task content and piece metadatas.
     #[instrument(skip_all)]
     pub async fn delete_persistent_cache_task(&self, id: &str) {

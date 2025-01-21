@@ -703,6 +703,25 @@ impl<E: StorageEngineOwned> Metadata<E> {
         self.db.get(id.as_bytes())
     }
 
+    /// set_persistent_for_persistent_cache_task sets the persistent flag for the persistent cache task.
+    pub fn set_persistent_for_persistent_cache_task(
+        &self,
+        id: &str,
+        persistent: bool,
+    ) -> Result<PersistentCacheTask> {
+        let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.persistent = persistent;
+                task.updated_at = Utc::now().naive_utc();
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
     /// is_persistent_cache_task_exists checks if the persistent cache task exists.
     #[instrument(skip_all)]
     pub fn is_persistent_cache_task_exists(&self, id: &str) -> Result<bool> {
