@@ -30,7 +30,7 @@ dragonfly-client-backend = { path = "dragonfly-client-backend", version = "0.2.5
 dragonfly-client-util = { path = "dragonfly-client-util", version = "0.2.5" }
 dragonfly-client-init = { path = "dragonfly-client-init", version = "0.2.5" }
 thiserror = "1.0"
-dragonfly-api = "=2.1.9"
+dragonfly-api = "=2.1.12"
 reqwest = { version = "0.12.4", features = [
     "stream",
     "native-tls",
