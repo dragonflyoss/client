@@ -711,6 +711,212 @@ impl Piece {
             }
         }
     }
+
+    /// persistent_cache_id generates a new persistent cache piece id.
+    #[inline]
+    #[instrument(skip_all)]
+    pub fn persistent_cache_id(&self, task_id: &str, number: u32) -> String {
+        self.storage.persistent_cache_piece_id(task_id, number)
+    }
+
+    /// get_persistent_cache gets a persistent cache piece from the local storage.
+    #[instrument(skip_all)]
+    pub fn get_persistent_cache(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
+        self.storage.get_persistent_cache_piece(piece_id)
+    }
+
+    /// create_persistent_cache creates a new persistent cache piece.
+    #[instrument(skip_all)]
+    pub async fn create_persistent_cache<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        number: u32,
+        offset: u64,
+        length: u64,
+        reader: &mut R,
+    ) -> Result<metadata::Piece> {
+        self.storage
+            .create_persistent_cache_piece(piece_id, task_id, number, offset, length, reader)
+            .await
+    }
+
+    /// upload_persistent_cache_from_local_into_async_read uploads a persistent cache piece from local cache.
+    #[instrument(skip_all, fields(piece_id))]
+    pub async fn upload_persistent_cache_from_local_into_async_read(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        length: u64,
+        range: Option<Range>,
+    ) -> Result<impl AsyncRead> {
+        // Span record the piece_id.
+        Span::current().record("piece_id", piece_id);
+
+        // Acquire the upload rate limiter.
+        self.upload_rate_limiter.acquire(length as usize).await;
+
+        // Upload the persistent cache piece content.
+        self.storage
+            .upload_persistent_cache_piece(piece_id, task_id, range)
+            .await
+            .inspect(|_reader| {
+                collect_upload_piece_traffic_metrics(
+                    self.id_generator.task_type(task_id) as i32,
+                    length,
+                );
+            })
+    }
+
+    /// download_persistent_cache_from_local_into_async_read downloads a persistent cache piece from local cache.
+    #[instrument(skip_all, fields(piece_id))]
+    pub async fn download_persistent_cache_from_local_into_async_read(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        length: u64,
+        range: Option<Range>,
+        disable_rate_limit: bool,
+        is_prefetch: bool,
+    ) -> Result<impl AsyncRead> {
+        // Span record the piece_id.
+        Span::current().record("piece_id", piece_id);
+
+        // Acquire the download rate limiter.
+        if !disable_rate_limit {
+            if is_prefetch {
+                // Acquire the prefetch rate limiter.
+                self.prefetch_rate_limiter.acquire(length as usize).await;
+            } else {
+                // Acquire the download rate limiter.
+                self.download_rate_limiter.acquire(length as usize).await;
+            }
+        }
+
+        // Upload the piece content.
+        self.storage
+            .upload_persistent_cache_piece(piece_id, task_id, range)
+            .await
+    }
+
+    /// download_persistent_cache_from_local downloads a persistent cache piece from local cache. Fake the download
+    /// persistent cache piece from the local cache, just collect the metrics.
+    #[instrument(skip_all)]
+    pub fn download_persistent_cache_from_local(&self, task_id: &str, length: u64) {
+        collect_download_piece_traffic_metrics(
+            &TrafficType::LocalPeer,
+            self.id_generator.task_type(task_id) as i32,
+            length,
+        );
+    }
+
+    /// download_persistent_cache_from_parent downloads a persistent cache piece from a parent.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all, fields(piece_id))]
+    pub async fn download_persistent_cache_from_parent(
+        &self,
+        piece_id: &str,
+        host_id: &str,
+        task_id: &str,
+        number: u32,
+        length: u64,
+        parent: piece_collector::CollectedParent,
+        is_prefetch: bool,
+    ) -> Result<metadata::Piece> {
+        // Span record the piece_id.
+        Span::current().record("piece_id", piece_id);
+
+        if is_prefetch {
+            // Acquire the prefetch rate limiter.
+            self.prefetch_rate_limiter.acquire(length as usize).await;
+        } else {
+            // Acquire the download rate limiter.
+            self.download_rate_limiter.acquire(length as usize).await;
+        }
+
+        // Record the start of downloading piece.
+        let piece = self
+            .storage
+            .download_persistent_cache_piece_started(piece_id, number)
+            .await?;
+
+        // If the piece is downloaded by the other thread,
+        // return the piece directly.
+        if piece.is_finished() {
+            return Ok(piece);
+        }
+
+        // Create a dfdaemon client.
+        let host = parent.host.clone().ok_or_else(|| {
+            error!("peer host is empty");
+            if let Some(err) = self
+                .storage
+                .download_persistent_cache_piece_failed(piece_id)
+                .err()
+            {
+                error!("set persistent cache piece metadata failed: {}", err)
+            };
+
+            Error::InvalidPeer(parent.id.clone())
+        })?;
+
+        let (content, offset, digest) = self
+            .downloader_factory
+            .build()
+            .download_persistent_cache_piece(
+                format!("{}:{}", host.ip, host.port).as_str(),
+                number,
+                host_id,
+                task_id,
+            )
+            .await
+            .inspect_err(|err| {
+                error!("download persistent cache piece failed: {}", err);
+                if let Some(err) = self
+                    .storage
+                    .download_persistent_cache_piece_failed(piece_id)
+                    .err()
+                {
+                    error!("set persistent cache piece metadata failed: {}", err)
+                };
+            })?;
+
+        // Record the finish of downloading piece.
+        match self
+            .storage
+            .download_persistent_cache_piece_from_parent_finished(
+                piece_id,
+                task_id,
+                offset,
+                digest.as_str(),
+                parent.id.as_str(),
+                &mut content.as_slice(),
+            )
+            .await
+        {
+            Ok(piece) => {
+                collect_download_piece_traffic_metrics(
+                    &TrafficType::RemotePeer,
+                    self.id_generator.task_type(task_id) as i32,
+                    length,
+                );
+
+                Ok(piece)
+            }
+            Err(err) => {
+                error!("download persistent cache piece finished: {}", err);
+                if let Some(err) = self
+                    .storage
+                    .download_persistent_cache_piece_failed(piece_id)
+                    .err()
+                {
+                    error!("set persistent cache piece metadata failed: {}", err)
+                };
+
+                Err(err)
+            }
+        }
+    }
 }
 
 #[cfg(test)]

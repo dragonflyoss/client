@@ -53,14 +53,13 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio::io::AsyncReadExt;
 use tokio::sync::{
     mpsc::{self, Sender},
     Semaphore,
 };
 use tokio::task::JoinSet;
-use tokio::time::sleep;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Status};
 use tracing::{debug, error, info, instrument, Instrument};
@@ -564,7 +563,7 @@ impl Task {
                 info!("sent DownloadPeerFailedRequest");
 
                 // Wait for the latest message to be sent.
-                sleep(Duration::from_millis(1)).await;
+                in_stream_tx.closed().await;
                 return Ok(finished_pieces);
             }
 
@@ -620,7 +619,7 @@ impl Task {
                     info!("sent DownloadPeerFinishedRequest");
 
                     // Wait for the latest message to be sent.
-                    sleep(Duration::from_millis(1)).await;
+                    in_stream_tx.closed().await;
                     return Ok(Vec::new());
                 }
                 announce_peer_response::Response::NormalTaskResponse(response) => {
@@ -690,7 +689,7 @@ impl Task {
                         }
                         Err(err) => {
                             error!("download from parent error: {:?}", err);
-                            return Ok(finished_pieces);
+                            Vec::new()
                         }
                     };
 
@@ -729,7 +728,7 @@ impl Task {
                         }
 
                         // Wait for the latest message to be sent.
-                        sleep(Duration::from_millis(1)).await;
+                        in_stream_tx.closed().await;
                         return Ok(finished_pieces);
                     }
 
@@ -830,7 +829,7 @@ impl Task {
                             info!("sent DownloadPeerBackToSourceFailedRequest");
 
                             // Wait for the latest message to be sent.
-                            sleep(Duration::from_millis(1)).await;
+                            in_stream_tx.closed().await;
                             return Ok(finished_pieces);
                         }
                     };
@@ -869,7 +868,7 @@ impl Task {
                         }
 
                         // Wait for the latest message to be sent.
-                        sleep(Duration::from_millis(1)).await;
+                        in_stream_tx.closed().await;
                         return Ok(finished_pieces);
                     }
 
@@ -894,7 +893,7 @@ impl Task {
                     }
 
                     // Wait for the latest message to be sent.
-                    sleep(Duration::from_millis(1)).await;
+                    in_stream_tx.closed().await;
                     return Ok(finished_pieces);
                 }
             }
@@ -969,7 +968,6 @@ impl Task {
                 length: u64,
                 parent: piece_collector::CollectedParent,
                 piece_manager: Arc<piece::Piece>,
-                storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnouncePeerRequest>,
@@ -981,7 +979,7 @@ impl Task {
                 // Limit the concurrent piece count.
                 let _permit = semaphore.acquire().await.unwrap();
 
-                let piece_id = storage.piece_id(task_id.as_str(), number);
+                let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!(
                     "start to download piece {} from parent {:?}",
                     piece_id,
@@ -1123,7 +1121,6 @@ impl Task {
                     collect_piece.length,
                     collect_piece.parent.clone(),
                     self.piece.clone(),
-                    self.storage.clone(),
                     semaphore.clone(),
                     download_progress_tx.clone(),
                     in_stream_tx.clone(),
@@ -1171,7 +1168,7 @@ impl Task {
                         .unwrap_or_else(|err| {
                             error!(
                                 "send DownloadPieceFailedRequest for piece {} failed: {:?}",
-                                self.storage.piece_id(task_id, piece_number),
+                                self.piece.id(task_id, piece_number),
                                 err
                             )
                         });
@@ -1245,7 +1242,6 @@ impl Task {
                 is_prefetch: bool,
                 need_piece_content: bool,
                 piece_manager: Arc<piece::Piece>,
-                storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnouncePeerRequest>,
@@ -1255,7 +1251,7 @@ impl Task {
                 // Limit the concurrent download count.
                 let _permit = semaphore.acquire().await.unwrap();
 
-                let piece_id = storage.piece_id(task_id.as_str(), number);
+                let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!("start to download piece {} from source", piece_id);
 
                 let metadata = piece_manager
@@ -1373,7 +1369,6 @@ impl Task {
                     request.is_prefetch,
                     request.need_piece_content,
                     self.piece.clone(),
-                    self.storage.clone(),
                     semaphore.clone(),
                     download_progress_tx.clone(),
                     in_stream_tx.clone(),
@@ -1505,7 +1500,7 @@ impl Task {
 
         // Download the piece from the local.
         for interested_piece in interested_pieces {
-            let piece_id = self.storage.piece_id(task_id, interested_piece.number);
+            let piece_id = self.piece.id(task_id, interested_piece.number);
 
             // Get the piece metadata from the local storage.
             let piece = match self.piece.get(piece_id.as_str()) {
@@ -1635,7 +1630,6 @@ impl Task {
                 request_header: HeaderMap,
                 is_prefetch: bool,
                 piece_manager: Arc<piece::Piece>,
-                storage: Arc<Storage>,
                 semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 object_storage: Option<ObjectStorage>,
@@ -1644,7 +1638,7 @@ impl Task {
                 // Limit the concurrent download count.
                 let _permit = semaphore.acquire().await.unwrap();
 
-                let piece_id = storage.piece_id(task_id.as_str(), number);
+                let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!("start to download piece {} from source", piece_id);
 
                 let metadata = piece_manager
@@ -1716,7 +1710,6 @@ impl Task {
                     request_header.clone(),
                     request.is_prefetch,
                     self.piece.clone(),
-                    self.storage.clone(),
                     semaphore.clone(),
                     download_progress_tx.clone(),
                     request.object_storage.clone(),

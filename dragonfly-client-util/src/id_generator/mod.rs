@@ -153,8 +153,15 @@ impl IDGenerator {
             hasher.write(application.as_bytes());
         }
 
-        // Generate the persistent cache task id.
-        Ok(hasher.finish().to_string())
+        // Generate the task id by wyhash.
+        let id = hasher.finish().to_string();
+
+        // Generate the persistent cache task ID. The original ID is too short, so we calculate the SHA-256
+        // hash to ensure it can be prefix-searched by the storage engine.
+        let mut hasher = Sha256::new();
+        hasher.update(id);
+
+        Ok(hex::encode(hasher.finalize()))
     }
 
     /// peer_id generates the peer id.
@@ -263,21 +270,21 @@ mod tests {
                 "This is a test file",
                 Some("tag1"),
                 Some("app1"),
-                "15288906590529426257",
+                "ed401a8aa6b9a47b426d2aa01245127d9ac2d1b7974ca866719da59b5456ac4d",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
                 "This is a test file",
                 None,
                 Some("app1"),
-                "16142504978820333826",
+                "4cbb2c5142f609e98a7d9a887c6404c7432475a52d6c64c52d543b5614a99c63",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
                 "This is a test file",
                 Some("tag1"),
                 None,
-                "3790865882910844849",
+                "65094f31f9997904f779a27ed0d1ce460c9c4082f214e7626a179f2ea491d34e",
             ),
         ];
 

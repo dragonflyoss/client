@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::grpc::dfdaemon_download::DfdaemonDownloadClient;
+use crate::grpc::{dfdaemon_download::DfdaemonDownloadClient, REQUEST_TIMEOUT};
 use crate::metrics::{
     collect_download_piece_traffic_metrics, collect_proxy_request_failure_metrics,
     collect_proxy_request_started_metrics,
@@ -808,7 +808,10 @@ async fn proxy_via_dfdaemon(
                             // Send the none response to the client, if the first piece is received.
                             if !initialized {
                                 debug!("first piece received, send response");
-                                sender.send(None).await.unwrap_or_default();
+                                sender
+                                    .send_timeout(None, REQUEST_TIMEOUT)
+                                    .await
+                                    .unwrap_or_default();
                                 initialized = true;
                             }
 
@@ -929,26 +932,32 @@ async fn proxy_via_dfdaemon(
                             Ok(backend) => {
                                 error!("download task failed: {:?}", backend);
                                 sender
-                                    .send(Some(make_error_response(
-                                        http::StatusCode::from_u16(
-                                            backend.status_code.unwrap_or_default() as u16,
-                                        )
-                                        .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
-                                        Some(
-                                            hashmap_to_headermap(&backend.header)
-                                                .unwrap_or_default(),
-                                        ),
-                                    )))
+                                    .send_timeout(
+                                        Some(make_error_response(
+                                            http::StatusCode::from_u16(
+                                                backend.status_code.unwrap_or_default() as u16,
+                                            )
+                                            .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
+                                            Some(
+                                                hashmap_to_headermap(&backend.header)
+                                                    .unwrap_or_default(),
+                                            ),
+                                        )),
+                                        REQUEST_TIMEOUT,
+                                    )
                                     .await
                                     .unwrap_or_default();
                             }
                             Err(_) => {
                                 error!("download task failed: {}", err);
                                 sender
-                                    .send(Some(make_error_response(
-                                        http::StatusCode::INTERNAL_SERVER_ERROR,
-                                        None,
-                                    )))
+                                    .send_timeout(
+                                        Some(make_error_response(
+                                            http::StatusCode::INTERNAL_SERVER_ERROR,
+                                            None,
+                                        )),
+                                        REQUEST_TIMEOUT,
+                                    )
                                     .await
                                     .unwrap_or_default();
                             }

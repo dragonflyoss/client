@@ -27,10 +27,12 @@ use dragonfly_api::common::v2::{Host, PersistentCacheTask, Piece, Priority, Task
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient,
     dfdaemon_upload_server::{DfdaemonUpload, DfdaemonUploadServer as DfdaemonUploadGRPCServer},
-    DeletePersistentCacheTaskRequest, DeleteTaskRequest, DownloadPersistentCacheTaskRequest,
+    DeletePersistentCacheTaskRequest, DeleteTaskRequest, DownloadPersistentCachePieceRequest,
+    DownloadPersistentCachePieceResponse, DownloadPersistentCacheTaskRequest,
     DownloadPersistentCacheTaskResponse, DownloadPieceRequest, DownloadPieceResponse,
     DownloadTaskRequest, DownloadTaskResponse, StatPersistentCacheTaskRequest, StatTaskRequest,
-    SyncHostRequest, SyncPiecesRequest, SyncPiecesResponse,
+    SyncHostRequest, SyncPersistentCachePiecesRequest, SyncPersistentCachePiecesResponse,
+    SyncPiecesRequest, SyncPiecesResponse,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_config::dfdaemon::Config;
@@ -137,6 +139,9 @@ impl DfdaemonUploadServer {
             .max_frame_size(super::MAX_FRAME_SIZE)
             .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
             .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
+            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+            .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
+            .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
             .add_service(reflection.clone())
             .add_service(health_service)
             .add_service(self.service.clone())
@@ -415,7 +420,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             {
                                 error!("hard link or copy task: {}", err);
                                 out_stream_tx
-                                    .send(Err(Status::internal(err.to_string())))
+                                    .send_timeout(
+                                        Err(Status::internal(err.to_string())),
+                                        super::REQUEST_TIMEOUT,
+                                    )
                                     .await
                                     .unwrap_or_else(|err| {
                                         error!("send download progress error: {:?}", err)
@@ -450,11 +458,14 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         }) {
                             Ok(json) => {
                                 out_stream_tx
-                                    .send(Err(Status::with_details(
-                                        Code::Internal,
-                                        err.to_string(),
-                                        json.into(),
-                                    )))
+                                    .send_timeout(
+                                        Err(Status::with_details(
+                                            Code::Internal,
+                                            err.to_string(),
+                                            json.into(),
+                                        )),
+                                        super::REQUEST_TIMEOUT,
+                                    )
                                     .await
                                     .unwrap_or_else(|err| {
                                         error!("send download progress error: {:?}", err)
@@ -462,7 +473,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             }
                             Err(err) => {
                                 out_stream_tx
-                                    .send(Err(Status::internal(err.to_string())))
+                                    .send_timeout(
+                                        Err(Status::internal(err.to_string())),
+                                        super::REQUEST_TIMEOUT,
+                                    )
                                     .await
                                     .unwrap_or_else(|err| {
                                         error!("send download progress error: {:?}", err)
@@ -493,7 +507,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             .unwrap_or_else(|err| error!("download task failed: {}", err));
 
                         out_stream_tx
-                            .send(Err(Status::internal(err.to_string())))
+                            .send_timeout(
+                                Err(Status::internal(err.to_string())),
+                                super::REQUEST_TIMEOUT,
+                            )
                             .await
                             .unwrap_or_else(|err| {
                                 error!("send download progress error: {:?}", err)
@@ -680,7 +697,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                     task_id, interested_piece_number, err
                                 );
                                 out_stream_tx
-                                    .send(Err(Status::internal(err.to_string())))
+                                    .send_timeout(
+                                        Err(Status::internal(err.to_string())),
+                                        super::REQUEST_TIMEOUT,
+                                    )
                                     .await
                                     .unwrap_or_else(|err| {
                                         error!(
@@ -697,11 +717,14 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         // Send the piece metadata to the stream.
                         if piece.is_finished() {
                             match out_stream_tx
-                                .send(Ok(SyncPiecesResponse {
-                                    number: piece.number,
-                                    offset: piece.offset,
-                                    length: piece.length,
-                                }))
+                                .send_timeout(
+                                    Ok(SyncPiecesResponse {
+                                        number: piece.number,
+                                        offset: piece.offset,
+                                        length: piece.length,
+                                    }),
+                                    super::REQUEST_TIMEOUT,
+                                )
                                 .await
                             {
                                 Ok(_) => {
@@ -914,7 +937,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             .await
         {
             Err(ClientError::BackendError(err)) => {
-                error!("download cache started failed by error: {}", err);
+                error!(
+                    "download persistent cache task started failed by error: {}",
+                    err
+                );
                 self.persistent_cache_task
                     .download_failed(task_id.as_str())
                     .await
@@ -939,7 +965,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 }
             }
             Err(err) => {
-                error!("download started failed: {}", err);
+                error!("download persistent cache task started failed: {}", err);
                 return Err(Status::internal(err.to_string()));
             }
             Ok(task) => {
@@ -960,12 +986,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             task.piece_length()
         );
 
-        // Clone the persistent cache task.
-        let task_manager = self.persistent_cache_task.clone();
-
         // Initialize stream channel.
         let request_clone = request.clone();
-        let task_manager_clone = task_manager.clone();
+        let task_manager_clone = self.persistent_cache_task.clone();
         let task_clone = task.clone();
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
@@ -1007,7 +1030,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             {
                                 error!("hard link or copy persistent cache task: {}", err);
                                 out_stream_tx
-                                    .send(Err(Status::internal(err.to_string())))
+                                    .send_timeout(
+                                        Err(Status::internal(err.to_string())),
+                                        super::REQUEST_TIMEOUT,
+                                    )
                                     .await
                                     .unwrap_or_else(|err| {
                                         error!("send download progress error: {:?}", err)
@@ -1032,7 +1058,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             task_priority.to_string().as_str(),
                         );
 
-                        error!("download failed: {}", e);
+                        error!("download persistent cache task failed: {}", e);
                     }
                 }
 
@@ -1105,6 +1131,244 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         self.persistent_cache_task.delete(task_id.as_str()).await;
         Ok(Response::new(()))
     }
+
+    /// SyncPiecesStream is the stream of the sync pieces response.
+    type SyncPersistentCachePiecesStream =
+        ReceiverStream<Result<SyncPersistentCachePiecesResponse, Status>>;
+
+    /// sync_persistent_cache_pieces provides the persistent cache piece metadata for parent.
+    #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
+    async fn sync_persistent_cache_pieces(
+        &self,
+        request: Request<SyncPersistentCachePiecesRequest>,
+    ) -> Result<Response<Self::SyncPersistentCachePiecesStream>, Status> {
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the remote host id from the request.
+        let remote_host_id = request.host_id;
+
+        // Get the task id from tae request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.clone());
+        Span::current().record("remote_host_id", remote_host_id.as_str());
+        Span::current().record("task_id", task_id.clone());
+
+        // Get the interested piece numbers from the request.
+        let mut interested_piece_numbers = request.interested_piece_numbers.clone();
+
+        // Clone the task.
+        let task_manager = self.task.clone();
+
+        // Initialize stream channel.
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
+        tokio::spawn(
+            async move {
+                loop {
+                    let mut has_started_piece = false;
+                    let mut finished_piece_numbers = Vec::new();
+                    for interested_piece_number in interested_piece_numbers.iter() {
+                        let piece = match task_manager.piece.get(
+                            task_manager
+                                .piece
+                                .persistent_cache_id(task_id.as_str(), *interested_piece_number)
+                                .as_str(),
+                        ) {
+                            Ok(Some(piece)) => piece,
+                            Ok(None) => continue,
+                            Err(err) => {
+                                error!(
+                                    "send persistent cache piece metadata {}-{}: {}",
+                                    task_id, interested_piece_number, err
+                                );
+                                out_stream_tx
+                                    .send_timeout(Err(Status::internal(err.to_string())), super::REQUEST_TIMEOUT)
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        error!(
+                                            "send persistent cache piece metadata {}-{} to stream: {}",
+                                            task_id, interested_piece_number, err
+                                        );
+                                    });
+
+                                drop(out_stream_tx);
+                                return;
+                            }
+                        };
+
+                        // Send the piece metadata to the stream.
+                        if piece.is_finished() {
+                            match out_stream_tx
+                                .send_timeout(Ok(SyncPersistentCachePiecesResponse {
+                                    number: piece.number,
+                                    offset: piece.offset,
+                                    length: piece.length,
+                                }), super::REQUEST_TIMEOUT)
+                                .await
+                            {
+                                Ok(_) => {
+                                    info!("send persistent cache piece metadata {}-{}", task_id, piece.number);
+                                }
+                                Err(err) => {
+                                    error!(
+                                        "send persistent cache piece metadata {}-{} to stream: {}",
+                                        task_id, interested_piece_number, err
+                                    );
+
+                                    drop(out_stream_tx);
+                                    return;
+                                }
+                            }
+
+                            // Add the finished piece number to the finished piece numbers.
+                            finished_piece_numbers.push(piece.number);
+                            continue;
+                        }
+
+                        // Check whether the piece is started.
+                        if piece.is_started() {
+                            has_started_piece = true;
+                        }
+                    }
+
+                    // Remove the finished piece numbers from the interested piece numbers.
+                    interested_piece_numbers
+                        .retain(|number| !finished_piece_numbers.contains(number));
+
+                    // If all the interested pieces are finished, return.
+                    if interested_piece_numbers.is_empty() {
+                        info!("all the interested persistent cache pieces are finished");
+                        drop(out_stream_tx);
+                        return;
+                    }
+
+                    // If there is no started piece, return.
+                    if !has_started_piece {
+                        info!("there is no started persistent cache piece");
+                        drop(out_stream_tx);
+                        return;
+                    }
+
+                    // Wait for the piece to be finished.
+                    tokio::time::sleep(
+                        dragonfly_client_storage::DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL,
+                    )
+                    .await;
+                }
+            }
+            .in_current_span(),
+        );
+
+        Ok(Response::new(ReceiverStream::new(out_stream_rx)))
+    }
+
+    /// download_persistent_cache_piece provides the persistent cache piece content for parent.
+    #[instrument(skip_all, fields(host_id, remote_host_id, task_id, piece_id))]
+    async fn download_persistent_cache_piece(
+        &self,
+        request: Request<DownloadPersistentCachePieceRequest>,
+    ) -> Result<Response<DownloadPersistentCachePieceResponse>, Status> {
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the remote host id from the request.
+        let remote_host_id = request.host_id;
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Get the interested piece number from the request.
+        let piece_number = request.piece_number;
+
+        // Generate the piece id.
+        let piece_id = self.task.piece.id(task_id.as_str(), piece_number);
+
+        // Span record the host id, task id and piece number.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("remote_host_id", remote_host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record("piece_id", piece_id.as_str());
+
+        // Get the piece metadata from the local storage.
+        let piece = self
+            .task
+            .piece
+            .get_persistent_cache(piece_id.as_str())
+            .map_err(|err| {
+                error!(
+                    "upload persistent cache piece metadata from local storage: {}",
+                    err
+                );
+                Status::internal(err.to_string())
+            })?
+            .ok_or_else(|| {
+                error!("upload persistent cache piece metadata not found");
+                Status::not_found("persistent cache piece metadata not found")
+            })?;
+
+        // Collect upload piece started metrics.
+        collect_upload_piece_started_metrics();
+        info!("start upload persistent cache piece content");
+
+        // Get the piece content from the local storage.
+        let mut reader = self
+            .task
+            .piece
+            .upload_persistent_cache_from_local_into_async_read(
+                piece_id.as_str(),
+                task_id.as_str(),
+                piece.length,
+                None,
+            )
+            .await
+            .map_err(|err| {
+                // Collect upload piece failure metrics.
+                collect_upload_piece_failure_metrics();
+
+                error!(
+                    "upload persistent cache piece content from local storage: {}",
+                    err
+                );
+                Status::internal(err.to_string())
+            })?;
+
+        // Read the content of the piece.
+        let mut content = vec![0; piece.length as usize];
+        reader.read_exact(&mut content).await.map_err(|err| {
+            // Collect upload piece failure metrics.
+            collect_upload_piece_failure_metrics();
+
+            error!("upload persistent cache piece content failed: {}", err);
+            Status::internal(err.to_string())
+        })?;
+
+        // Collect upload piece finished metrics.
+        collect_upload_piece_finished_metrics();
+        info!("finished persistent cache upload piece content");
+
+        // Return the piece.
+        Ok(Response::new(DownloadPersistentCachePieceResponse {
+            piece: Some(Piece {
+                number: piece.number,
+                parent_id: piece.parent_id,
+                offset: piece.offset,
+                length: piece.length,
+                digest: piece.digest,
+                content: Some(content),
+                traffic_type: None,
+                cost: None,
+                created_at: None,
+            }),
+        }))
+    }
 }
 
 /// DfdaemonUploadClient is a wrapper of DfdaemonUploadGRPCClient.
@@ -1140,6 +1404,9 @@ impl DfdaemonUploadClient {
                     .buffer_size(super::BUFFER_SIZE)
                     .connect_timeout(super::CONNECT_TIMEOUT)
                     .timeout(super::REQUEST_TIMEOUT)
+                    .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+                    .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                    .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
                     .connect()
                     .await
                     .inspect_err(|err| {
@@ -1152,6 +1419,9 @@ impl DfdaemonUploadClient {
                 .buffer_size(super::BUFFER_SIZE)
                 .connect_timeout(super::CONNECT_TIMEOUT)
                 .timeout(super::REQUEST_TIMEOUT)
+                .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+                .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
                 .connect()
                 .await
                 .inspect_err(|err| {
@@ -1274,6 +1544,40 @@ impl DfdaemonUploadClient {
             .delete_persistent_cache_task(request)
             .await?;
         Ok(())
+    }
+
+    /// sync_persistent_cache_pieces provides the persistent cache piece metadata for parent.
+    #[instrument(skip_all)]
+    pub async fn sync_persistent_cache_pieces(
+        &self,
+        request: SyncPersistentCachePiecesRequest,
+    ) -> ClientResult<tonic::Response<tonic::codec::Streaming<SyncPersistentCachePiecesResponse>>>
+    {
+        let request = Self::make_request(request);
+        let response = self
+            .client
+            .clone()
+            .sync_persistent_cache_pieces(request)
+            .await?;
+        Ok(response)
+    }
+
+    /// download_persistent_cache_piece provides the persistent cache piece content for parent.
+    #[instrument(skip_all)]
+    pub async fn download_persistent_cache_piece(
+        &self,
+        request: DownloadPersistentCachePieceRequest,
+        timeout: Duration,
+    ) -> ClientResult<DownloadPersistentCachePieceResponse> {
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(timeout);
+
+        let response = self
+            .client
+            .clone()
+            .download_persistent_cache_piece(request)
+            .await?;
+        Ok(response.into_inner())
     }
 
     /// make_request creates a new request with timeout.
