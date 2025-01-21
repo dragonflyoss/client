@@ -420,7 +420,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             {
                                 error!("hard link or copy task: {}", err);
                                 out_stream_tx
-                                    .send(Err(Status::internal(err.to_string())))
+                                    .send_timeout(
+                                        Err(Status::internal(err.to_string())),
+                                        super::REQUEST_TIMEOUT,
+                                    )
                                     .await
                                     .unwrap_or_else(|err| {
                                         error!("send download progress error: {:?}", err)
@@ -453,11 +456,14 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         }) {
                             Ok(json) => {
                                 out_stream_tx
-                                    .send(Err(Status::with_details(
-                                        Code::Internal,
-                                        err.to_string(),
-                                        json.into(),
-                                    )))
+                                    .send_timeout(
+                                        Err(Status::with_details(
+                                            Code::Internal,
+                                            err.to_string(),
+                                            json.into(),
+                                        )),
+                                        super::REQUEST_TIMEOUT,
+                                    )
                                     .await
                                     .unwrap_or_else(|err| {
                                         error!("send download progress error: {:?}", err)
@@ -465,7 +471,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             }
                             Err(err) => {
                                 out_stream_tx
-                                    .send(Err(Status::internal(err.to_string())))
+                                    .send_timeout(
+                                        Err(Status::internal(err.to_string())),
+                                        super::REQUEST_TIMEOUT,
+                                    )
                                     .await
                                     .unwrap_or_else(|err| {
                                         error!("send download progress error: {:?}", err)
@@ -496,7 +505,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             .unwrap_or_else(|err| error!("download task failed: {}", err));
 
                         out_stream_tx
-                            .send(Err(Status::internal(err.to_string())))
+                            .send_timeout(
+                                Err(Status::internal(err.to_string())),
+                                super::REQUEST_TIMEOUT,
+                            )
                             .await
                             .unwrap_or_else(|err| {
                                 error!("send download progress error: {:?}", err)
@@ -725,7 +737,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             .await
         {
             Err(ClientError::BackendError(err)) => {
-                error!("download cache started failed by error: {}", err);
+                error!(
+                    "download persistent cache task started failed by error: {}",
+                    err
+                );
                 self.persistent_cache_task
                     .download_failed(task_id.as_str())
                     .await
@@ -750,7 +765,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 }
             }
             Err(err) => {
-                error!("download started failed: {}", err);
+                error!("download persistent cache task started failed: {}", err);
                 return Err(Status::internal(err.to_string()));
             }
             Ok(task) => {
@@ -771,12 +786,9 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             task.piece_length()
         );
 
-        // Clone the persistent cache task.
-        let task_manager = self.persistent_cache_task.clone();
-
         // Initialize stream channel.
         let request_clone = request.clone();
-        let task_manager_clone = task_manager.clone();
+        let task_manager_clone = self.persistent_cache_task.clone();
         let task_clone = task.clone();
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
@@ -818,7 +830,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             {
                                 error!("hard link or copy persistent cache task: {}", err);
                                 out_stream_tx
-                                    .send(Err(Status::internal(err.to_string())))
+                                    .send_timeout(
+                                        Err(Status::internal(err.to_string())),
+                                        super::REQUEST_TIMEOUT,
+                                    )
                                     .await
                                     .unwrap_or_else(|err| {
                                         error!("send download progress error: {:?}", err)
@@ -826,15 +841,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             };
                         }
                     }
-                    Err(e) => {
-                        // Download task failed.
-                        task_manager_clone
-                            .download_failed(task_clone.id.as_str())
-                            .await
-                            .unwrap_or_else(|err| {
-                                error!("download persistent cache task failed: {}", err)
-                            });
-
+                    Err(err) => {
                         // Collect download task failure metrics.
                         collect_download_task_failure_metrics(
                             task_type,
@@ -843,7 +850,25 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             task_priority.to_string().as_str(),
                         );
 
-                        error!("download failed: {}", e);
+                        error!("download persistent cache task failed: {}", err);
+
+                        // Download task failed.
+                        task_manager_clone
+                            .download_failed(task_clone.id.as_str())
+                            .await
+                            .unwrap_or_else(|err| {
+                                error!("download persistent cache task failed: {}", err)
+                            });
+
+                        out_stream_tx
+                            .send_timeout(
+                                Err(Status::internal(err.to_string())),
+                                super::REQUEST_TIMEOUT,
+                            )
+                            .await
+                            .unwrap_or_else(|err| {
+                                error!("send download progress error: {:?}", err)
+                            });
                     }
                 }
 
@@ -867,6 +892,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Clone the request.
         let request = request.into_inner();
         let path = Path::new(request.path.as_str());
+        info!("upload persistent cache task {:?}", request);
 
         // Generate the task id.
         let task_id = self
@@ -878,9 +904,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 request.application.as_deref(),
             )
             .map_err(|err| {
-                error!("generate task id: {}", err);
+                error!("generate persistent cache task id: {}", err);
                 Status::invalid_argument(err.to_string())
             })?;
+        info!("generate persistent cache task id: {}", task_id);
 
         // Generate the host id.
         let host_id = self.task.id_generator.host_id();
@@ -1020,7 +1047,6 @@ impl DfdaemonDownloadClient {
             .unwrap()
             .buffer_size(super::BUFFER_SIZE)
             .connect_timeout(super::CONNECT_TIMEOUT)
-            .timeout(super::REQUEST_TIMEOUT)
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
             .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
@@ -1122,8 +1148,20 @@ impl DfdaemonDownloadClient {
         &self,
         request: UploadPersistentCacheTaskRequest,
     ) -> ClientResult<PersistentCacheTask> {
+        // Clone the request.
+        let request_clone = request.clone();
+
         // Initialize the request.
-        let request = tonic::Request::new(request);
+        let mut request = tonic::Request::new(request);
+
+        // Set the timeout to the request.
+        if let Some(timeout) = request_clone.timeout {
+            request.set_timeout(
+                Duration::try_from(timeout)
+                    .map_err(|_| tonic::Status::invalid_argument("invalid timeout"))?,
+            );
+        }
+
         let response = self
             .client
             .clone()
@@ -1138,9 +1176,7 @@ impl DfdaemonDownloadClient {
         &self,
         request: StatPersistentCacheTaskRequest,
     ) -> ClientResult<PersistentCacheTask> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(super::CONNECT_TIMEOUT);
-
+        let request = Self::make_request(request);
         let response = self
             .client
             .clone()

@@ -30,7 +30,7 @@ dragonfly-client-backend = { path = "dragonfly-client-backend", version = "0.2.5
 dragonfly-client-util = { path = "dragonfly-client-util", version = "0.2.5" }
 dragonfly-client-init = { path = "dragonfly-client-init", version = "0.2.5" }
 thiserror = "1.0"
-dragonfly-api = "=2.1.6"
+dragonfly-api = "=2.1.12"
 reqwest = { version = "0.12.4", features = [
     "stream",
     "native-tls",
@@ -62,7 +62,7 @@ rustls-pemfile = "2.2.0"
 sha2 = "0.10"
 blake3 = "1.5.5"
 crc = "3.2.1"
-uuid = { version = "1.11", features = ["v4"] }
+uuid = { version = "1.12", features = ["v4"] }
 hex = "0.4"
 rocksdb = "0.22.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -100,8 +100,9 @@ bytesize-serde = "0.2.1"
 percent-encoding = "2.3.1"
 tempfile = "3.14.0"
 tokio-rustls = "0.25.0-alpha.4"
-serde_json = "1.0.135"
+serde_json = "1.0.137"
 lru = "0.12.5"
+bytes = "1.9"
 
 [profile.release]
 opt-level = "z"

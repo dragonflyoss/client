@@ -425,7 +425,7 @@ impl Storage {
         match self.metadata.get_piece(piece_id) {
             Ok(Some(piece)) => {
                 // Try to upload piece content form cache.
-                if !self.cache.is_empty() && self.cache.contains_piece(piece_id) {
+                if !self.cache.is_empty().await && self.cache.contains_piece(piece_id).await {
                     match self
                         .cache
                         .read_piece(piece_id, piece.offset, piece.length, range)
@@ -538,14 +538,20 @@ impl Storage {
         &self,
         piece_id: &str,
         reader: &mut R,
+        length: u64,
     ) {
         // If the piece is already in the cache, return.
-        if self.cache.contains_piece(piece_id) {
+        if self.cache.contains_piece(piece_id).await {
             return;
         }
 
         // Load the piece content to the cache.
-        self.cache.write_piece(piece_id, reader).await;
+        match self.cache.write_piece(piece_id, reader, length).await {
+            Ok(_) => {}
+            Err(err) => {
+                error!("load piece to cache failed: {}", err);
+            }
+        }
     }
 
     /// get_piece returns the piece metadata.
@@ -572,6 +578,144 @@ impl Storage {
         self.metadata.piece_id(task_id, number)
     }
 
+    /// download_persistent_cache_piece_started updates the metadata of the persistent cache piece and writes
+    /// the data of piece to file when the persistent cache piece downloads started.
+    #[instrument(skip_all)]
+    pub async fn download_persistent_cache_piece_started(
+        &self,
+        piece_id: &str,
+        number: u32,
+    ) -> Result<metadata::Piece> {
+        // Wait for the piece to be finished.
+        match self
+            .wait_for_persistent_cache_piece_finished(piece_id)
+            .await
+        {
+            Ok(piece) => Ok(piece),
+            // If piece is not found or wait timeout, create piece metadata.
+            Err(_) => self.metadata.download_piece_started(piece_id, number),
+        }
+    }
+
+    /// download_persistent_cache_piece_from_parent_finished is used for downloading persistent cache piece from parent.
+    #[instrument(skip_all)]
+    pub async fn download_persistent_cache_piece_from_parent_finished<
+        R: AsyncRead + Unpin + ?Sized,
+    >(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        offset: u64,
+        expected_digest: &str,
+        parent_id: &str,
+        reader: &mut R,
+    ) -> Result<metadata::Piece> {
+        let response = self
+            .content
+            .write_piece_with_crc32_castagnoli(task_id, offset, reader)
+            .await?;
+
+        let length = response.length;
+        let digest = Digest::new(Algorithm::Crc32, response.hash);
+
+        // Check the digest of the piece.
+        if expected_digest != digest.to_string() {
+            return Err(Error::DigestMismatch(
+                expected_digest.to_string(),
+                digest.to_string(),
+            ));
+        }
+
+        self.metadata.download_piece_finished(
+            piece_id,
+            offset,
+            length,
+            digest.to_string().as_str(),
+            Some(parent_id.to_string()),
+        )
+    }
+
+    /// download_persistent_cache_piece_failed updates the metadata of the persistent cache piece when the persistent cache piece downloads failed.
+    #[instrument(skip_all)]
+    pub fn download_persistent_cache_piece_failed(&self, piece_id: &str) -> Result<()> {
+        self.metadata.download_piece_failed(piece_id)
+    }
+
+    /// upload_persistent_cache_piece updates the metadata of the piece and_then
+    /// returns the data of the piece.
+    #[instrument(skip_all)]
+    pub async fn upload_persistent_cache_piece(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        range: Option<Range>,
+    ) -> Result<impl AsyncRead> {
+        // Wait for the persistent cache piece to be finished.
+        self.wait_for_persistent_cache_piece_finished(piece_id)
+            .await?;
+
+        // Start uploading the persistent cache task.
+        self.metadata
+            .upload_persistent_cache_task_started(task_id)?;
+
+        // Get the persistent cache piece metadata and return the content of the persistent cache piece.
+        match self.metadata.get_piece(piece_id) {
+            Ok(Some(piece)) => {
+                match self
+                    .content
+                    .read_piece(task_id, piece.offset, piece.length, range)
+                    .await
+                {
+                    Ok(reader) => {
+                        // Finish uploading the persistent cache task.
+                        self.metadata
+                            .upload_persistent_cache_task_finished(task_id)?;
+                        Ok(reader)
+                    }
+                    Err(err) => {
+                        // Failed uploading the persistent cache task.
+                        self.metadata.upload_persistent_cache_task_failed(task_id)?;
+                        Err(err)
+                    }
+                }
+            }
+            Ok(None) => {
+                // Failed uploading the persistent cache task.
+                self.metadata.upload_persistent_cache_task_failed(task_id)?;
+                Err(Error::PieceNotFound(piece_id.to_string()))
+            }
+            Err(err) => {
+                // Failed uploading the persistent cache task.
+                self.metadata.upload_persistent_cache_task_failed(task_id)?;
+                Err(err)
+            }
+        }
+    }
+
+    /// get_persistent_cache_piece returns the persistent cache piece metadata.
+    #[instrument(skip_all)]
+    pub fn get_persistent_cache_piece(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
+        self.metadata.get_piece(piece_id)
+    }
+
+    /// is_persistent_cache_piece_exists returns whether the persistent cache piece exists.
+    #[instrument(skip_all)]
+    pub fn is_persistent_cache_piece_exists(&self, piece_id: &str) -> Result<bool> {
+        self.metadata.is_piece_exists(piece_id)
+    }
+
+    /// get_persistent_cache_pieces returns the persistent cache piece metadatas.
+    pub fn get_persistent_cache_pieces(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
+        self.metadata.get_pieces(task_id)
+    }
+
+    /// persistent_cache_piece_id returns the persistent cache piece id.
+    #[inline]
+    #[instrument(skip_all)]
+    pub fn persistent_cache_piece_id(&self, task_id: &str, number: u32) -> String {
+        self.metadata.piece_id(task_id, number)
+    }
+
     /// wait_for_piece_finished waits for the piece to be finished.
     #[instrument(skip_all)]
     async fn wait_for_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
@@ -587,6 +731,45 @@ impl Storage {
                 _ = interval.tick() => {
                     let piece = self
                         .get_piece(piece_id)?
+                        .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
+
+                    // If the piece is finished, return.
+                    if piece.is_finished() {
+                        debug!("wait piece finished success");
+                        return Ok(piece);
+                    }
+
+                    if wait_for_piece_count > 0 {
+                        debug!("wait piece finished");
+                    }
+                    wait_for_piece_count += 1;
+                }
+                _ = &mut piece_timeout => {
+                    self.metadata.wait_for_piece_finished_failed(piece_id).unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
+                    return Err(Error::WaitForPieceFinishedTimeout(piece_id.to_string()));
+                }
+            }
+        }
+    }
+
+    /// wait_for_persistent_cache_piece_finished waits for the persistent cache piece to be finished.
+    #[instrument(skip_all)]
+    async fn wait_for_persistent_cache_piece_finished(
+        &self,
+        piece_id: &str,
+    ) -> Result<metadata::Piece> {
+        // Initialize the timeout of piece.
+        let piece_timeout = tokio::time::sleep(self.config.download.piece_timeout);
+        tokio::pin!(piece_timeout);
+
+        // Initialize the interval of piece.
+        let mut wait_for_piece_count = 0;
+        let mut interval = tokio::time::interval(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL);
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let piece = self
+                        .get_persistent_cache_piece(piece_id)?
                         .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
 
                     // If the piece is finished, return.
