@@ -70,16 +70,6 @@ impl Storage {
         self.content.hard_link_or_copy_task(task, to, range).await
     }
 
-    /// read_task_by_range returns the reader of the task by range.
-    #[instrument(skip_all)]
-    pub async fn read_task_by_range(
-        &self,
-        task_id: &str,
-        range: Range,
-    ) -> Result<impl AsyncRead + 'static> {
-        self.content.read_task_by_range(task_id, range).await
-    }
-
     /// download_task_started updates the metadata of the task when the task downloads started.
     #[instrument(skip_all)]
     pub fn download_task_started(
@@ -265,17 +255,6 @@ impl Storage {
     #[instrument(skip_all)]
     pub fn get_persistent_cache_tasks(&self) -> Result<Vec<metadata::PersistentCacheTask>> {
         self.metadata.get_persistent_cache_tasks()
-    }
-
-    /// set_persistent_for_persistent_cache_task sets the persistent flag for the persistent cache task.
-    #[instrument(skip_all)]
-    pub fn set_persistent_for_persistent_cache_task(
-        &self,
-        id: &str,
-        persistent: bool,
-    ) -> Result<metadata::PersistentCacheTask> {
-        self.metadata
-            .set_persistent_for_persistent_cache_task(id, persistent)
     }
 
     /// delete_persistent_cache_task deletes the persistent cache task metadatas, persistent cache task content and piece metadatas.
