@@ -360,7 +360,10 @@ mod tests {
                 let key = format!("concurrent-{}", i);
                 let data = vec![i as u8; piece_length as usize];
                 let mut writer = Cursor::new(data.clone());
-                cache.write_piece(&key, &mut writer, piece_length).await.unwrap();
+                cache
+                    .write_piece(&key, &mut writer, piece_length)
+                    .await
+                    .unwrap();
 
                 let mut reader = cache.read_piece(&key, 0, piece_length, None).await.unwrap();
                 let mut buffer = Vec::new();
