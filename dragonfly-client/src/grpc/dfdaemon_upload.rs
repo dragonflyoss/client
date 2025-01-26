@@ -18,7 +18,8 @@ use crate::metrics::{
     collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
     collect_download_task_failure_metrics, collect_download_task_finished_metrics,
     collect_download_task_started_metrics, collect_stat_task_failure_metrics,
-    collect_stat_task_started_metrics, collect_upload_piece_failure_metrics,
+    collect_stat_task_started_metrics, collect_update_task_failure_metrics,
+    collect_update_task_started_metrics, collect_upload_piece_failure_metrics,
     collect_upload_piece_finished_metrics, collect_upload_piece_started_metrics,
 };
 use crate::resource::{persistent_cache_task, task};
@@ -32,7 +33,7 @@ use dragonfly_api::dfdaemon::v2::{
     DownloadPersistentCacheTaskResponse, DownloadPieceRequest, DownloadPieceResponse,
     DownloadTaskRequest, DownloadTaskResponse, StatPersistentCacheTaskRequest, StatTaskRequest,
     SyncHostRequest, SyncPersistentCachePiecesRequest, SyncPersistentCachePiecesResponse,
-    SyncPiecesRequest, SyncPiecesResponse,
+    SyncPiecesRequest, SyncPiecesResponse, UpdatePersistentCacheTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_config::dfdaemon::Config;
@@ -54,7 +55,7 @@ use tonic::{
     transport::{Channel, Server},
     Code, Request, Response, Status,
 };
-use tracing::{debug, error, info, instrument, Instrument, Span};
+use tracing::{error, info, instrument, Instrument, Span};
 use url::Url;
 
 use super::interceptor::TracingInterceptor;
@@ -195,8 +196,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         request: Request<DownloadTaskRequest>,
     ) -> Result<Response<Self::DownloadTaskStream>, Status> {
-        debug!("download task in upload server");
-
         // Record the start time.
         let start_time = Instant::now();
 
@@ -234,6 +233,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
+        info!("download task in upload server");
 
         // Download task started.
         info!("download task started: {:?}", download);
@@ -586,6 +586,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        info!("stat task in upload server");
 
         // Collect the stat task metrics.
         collect_stat_task_started_metrics(TaskType::Standard as i32);
@@ -624,6 +625,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        info!("delete task in upload server");
 
         // Collect the delete task started metrics.
         collect_delete_task_started_metrics(TaskType::Standard as i32);
@@ -668,6 +670,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("host_id", host_id.clone());
         Span::current().record("remote_host_id", remote_host_id.as_str());
         Span::current().record("task_id", task_id.clone());
+        info!("sync pieces in upload server");
 
         // Get the interested piece numbers from the request.
         let mut interested_piece_numbers = request.interested_piece_numbers.clone();
@@ -812,6 +815,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("remote_host_id", remote_host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("piece_id", piece_id.as_str());
+        info!("download piece content in upload server");
 
         // Get the piece metadata from the local storage.
         let piece = self
@@ -903,8 +907,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         request: Request<DownloadPersistentCacheTaskRequest>,
     ) -> Result<Response<Self::DownloadPersistentCacheTaskStream>, Status> {
-        info!("download persistent cache task in download server");
-
         // Record the start time.
         let start_time = Instant::now();
 
@@ -928,6 +930,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
+        info!("download persistent cache task in download server");
 
         // Download task started.
         info!("download persistent cache task started: {:?}", request);
@@ -1070,6 +1073,44 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
+    /// update_persistent_cache_task update metadata of the persistent cache task.
+    #[instrument(skip_all, fields(host_id, task_id))]
+    async fn update_persistent_cache_task(
+        &self,
+        request: Request<UpdatePersistentCacheTaskRequest>,
+    ) -> Result<Response<()>, Status> {
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        info!("update persistent cache task in upload server");
+
+        // Collect the update task started metrics.
+        collect_update_task_started_metrics(TaskType::PersistentCache as i32);
+
+        if request.persistent {
+            self.persistent_cache_task
+                .persist(task_id.as_str())
+                .map_err(|err| {
+                    // Collect the update task failure metrics.
+                    collect_update_task_failure_metrics(TaskType::PersistentCache as i32);
+
+                    error!("update persistent cache task: {}", err);
+                    Status::internal(err.to_string())
+                })?;
+        }
+
+        Ok(Response::new(()))
+    }
+
     /// stat_persistent_cache_task stats the persistent cache task.
     #[instrument(skip_all, fields(host_id, task_id))]
     async fn stat_persistent_cache_task(
@@ -1088,6 +1129,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        info!("stat persistent cache task in upload server");
 
         // Collect the stat task started metrics.
         collect_stat_task_started_metrics(TaskType::PersistentCache as i32);
@@ -1125,6 +1167,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        info!("delete persistent cache task in upload server");
 
         // Collect the delete task started metrics.
         collect_delete_task_started_metrics(TaskType::PersistentCache as i32);
@@ -1158,6 +1201,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("host_id", host_id.clone());
         Span::current().record("remote_host_id", remote_host_id.as_str());
         Span::current().record("task_id", task_id.clone());
+        info!("sync persistent cache pieces in upload server");
 
         // Get the interested piece numbers from the request.
         let mut interested_piece_numbers = request.interested_piece_numbers.clone();
@@ -1296,6 +1340,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("remote_host_id", remote_host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("piece_id", piece_id.as_str());
+        info!("download persistent cache piece in upload server");
 
         // Get the piece metadata from the local storage.
         let piece = self

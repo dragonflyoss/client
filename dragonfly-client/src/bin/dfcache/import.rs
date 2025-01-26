@@ -38,6 +38,13 @@ pub struct ImportCommand {
     path: PathBuf,
 
     #[arg(
+        long = "id",
+        required = false,
+        help = "Specify the id of the persistent cache task, its length must be 64 bytes. If id is none, dfdaemon will generate the new task id based on the file content, tag and application by wyhash algorithm."
+    )]
+    id: Option<String>,
+
+    #[arg(
         long = "persistent-replica-count",
         default_value_t = default_dfcache_persistent_replica_count(),
         help = "Specify the replica count of the persistent cache task"
@@ -321,6 +328,7 @@ impl ImportCommand {
 
         let persistent_cache_task = dfdaemon_download_client
             .upload_persistent_cache_task(UploadPersistentCacheTaskRequest {
+                task_id: self.id.clone(),
                 path: self.path.clone().into_os_string().into_string().unwrap(),
                 persistent_replica_count: self.persistent_replica_count,
                 tag: self.tag.clone(),
@@ -341,6 +349,15 @@ impl ImportCommand {
 
     /// validate_args validates the command line arguments.
     fn validate_args(&self) -> Result<()> {
+        if let Some(id) = self.id.as_ref() {
+            if id.len() != 64 {
+                return Err(Error::ValidationError(format!(
+                    "id length must be 64 bytes, but got {}",
+                    id.len()
+                )));
+            }
+        }
+
         if self.path.is_dir() {
             return Err(Error::ValidationError(format!(
                 "path {} is a directory",

@@ -30,10 +30,9 @@ use dragonfly_api::dfdaemon::v2::{
     dfdaemon_download_server::{
         DfdaemonDownload, DfdaemonDownloadServer as DfdaemonDownloadGRPCServer,
     },
-    DeletePersistentCacheTaskRequest, DeleteTaskRequest, DownloadPersistentCacheTaskRequest,
-    DownloadPersistentCacheTaskResponse, DownloadTaskRequest, DownloadTaskResponse,
-    StatPersistentCacheTaskRequest, StatTaskRequest as DfdaemonStatTaskRequest,
-    UploadPersistentCacheTaskRequest,
+    DeleteTaskRequest, DownloadPersistentCacheTaskRequest, DownloadPersistentCacheTaskResponse,
+    DownloadTaskRequest, DownloadTaskResponse, StatPersistentCacheTaskRequest,
+    StatTaskRequest as DfdaemonStatTaskRequest, UploadPersistentCacheTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::DeleteHostRequest as SchedulerDeleteHostRequest;
@@ -57,7 +56,7 @@ use tonic::{
     Code, Request, Response, Status,
 };
 use tower::service_fn;
-use tracing::{debug, error, info, instrument, Instrument, Span};
+use tracing::{error, info, instrument, Instrument, Span};
 
 use super::interceptor::TracingInterceptor;
 
@@ -199,8 +198,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         &self,
         request: Request<DownloadTaskRequest>,
     ) -> Result<Response<Self::DownloadTaskStream>, Status> {
-        debug!("download task in download server");
-
         // Record the start time.
         let start_time = Instant::now();
 
@@ -238,6 +235,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
+        info!("download task in download server");
 
         // Download task started.
         info!("download task started: {:?}", download);
@@ -590,6 +588,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        info!("stat task in download server");
 
         // Collect the stat task metrics.
         collect_stat_task_started_metrics(TaskType::Standard as i32);
@@ -628,6 +627,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        info!("delete task in download server");
 
         // Collect the delete task started metrics.
         collect_delete_task_started_metrics(TaskType::Standard as i32);
@@ -655,6 +655,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
         // Span record the host id.
         Span::current().record("host_id", host_id.as_str());
+        info!("delete host in download server");
 
         // Collect the delete host started metrics.
         collect_delete_host_started_metrics();
@@ -684,8 +685,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         &self,
         request: Request<DownloadPersistentCacheTaskRequest>,
     ) -> Result<Response<Self::DownloadPersistentCacheTaskStream>, Status> {
-        info!("download persistent cache task in download server");
-
         // Record the start time.
         let start_time = Instant::now();
 
@@ -709,6 +708,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
+        info!("download persistent cache task in download server");
 
         // Download task started.
         info!("download persistent cache task started: {:?}", request);
@@ -876,18 +876,21 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         info!("upload persistent cache task {:?}", request);
 
         // Generate the task id.
-        let task_id = self
-            .task
-            .id_generator
-            .persistent_cache_task_id(
-                &path.to_path_buf(),
-                request.tag.as_deref(),
-                request.application.as_deref(),
-            )
-            .map_err(|err| {
-                error!("generate persistent cache task id: {}", err);
-                Status::invalid_argument(err.to_string())
-            })?;
+        let task_id = match request.task_id.as_deref() {
+            Some(task_id) => task_id.to_string(),
+            None => self
+                .task
+                .id_generator
+                .persistent_cache_task_id(
+                    &path.to_path_buf(),
+                    request.tag.as_deref(),
+                    request.application.as_deref(),
+                )
+                .map_err(|err| {
+                    error!("generate persistent cache task id: {}", err);
+                    Status::invalid_argument(err.to_string())
+                })?,
+        };
         info!("generate persistent cache task id: {}", task_id);
 
         // Generate the host id.
@@ -900,6 +903,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
+        info!("upload persistent cache task in download server");
 
         // Collect upload task started metrics.
         collect_upload_task_started_metrics(
@@ -966,6 +970,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        info!("stat persistent cache task in download server");
 
         // Collect the stat persistent cache task started metrics.
         collect_stat_task_started_metrics(TaskType::PersistentCache as i32);
@@ -983,31 +988,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             })?;
 
         Ok(Response::new(task))
-    }
-
-    /// delete_persistent_cache_task deletes the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id))]
-    async fn delete_persistent_cache_task(
-        &self,
-        request: Request<DeletePersistentCacheTaskRequest>,
-    ) -> Result<Response<()>, Status> {
-        // Clone the request.
-        let request = request.into_inner();
-
-        // Generate the host id.
-        let host_id = self.task.id_generator.host_id();
-
-        // Get the task id from the request.
-        let task_id = request.task_id;
-
-        // Span record the host id and task id.
-        Span::current().record("host_id", host_id.as_str());
-        Span::current().record("task_id", task_id.as_str());
-
-        // Collect the delete persistent cache task started metrics.
-        collect_delete_task_started_metrics(TaskType::PersistentCache as i32);
-        self.persistent_cache_task.delete(task_id.as_str()).await;
-        Ok(Response::new(()))
     }
 }
 
@@ -1164,21 +1144,6 @@ impl DfdaemonDownloadClient {
             .stat_persistent_cache_task(request)
             .await?;
         Ok(response.into_inner())
-    }
-
-    /// delete_persistent_cache_task deletes the persistent cache task.
-    #[instrument(skip_all)]
-    pub async fn delete_persistent_cache_task(
-        &self,
-        request: DeletePersistentCacheTaskRequest,
-    ) -> ClientResult<()> {
-        let request = Self::make_request(request);
-        let _response = self
-            .client
-            .clone()
-            .delete_persistent_cache_task(request)
-            .await?;
-        Ok(())
     }
 
     /// make_request creates a new request with timeout.
