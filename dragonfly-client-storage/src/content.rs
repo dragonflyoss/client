@@ -205,26 +205,6 @@ impl Content {
         Ok(())
     }
 
-    /// read_task reads the task content by range.
-    #[instrument(skip_all)]
-    pub async fn read_task_by_range(&self, task_id: &str, range: Range) -> Result<impl AsyncRead> {
-        let task_path = self.get_task_path(task_id);
-        let from_f = File::open(task_path.as_path()).await.inspect_err(|err| {
-            error!("open {:?} failed: {}", task_path, err);
-        })?;
-        let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, from_f);
-
-        f_reader
-            .seek(SeekFrom::Start(range.start))
-            .await
-            .inspect_err(|err| {
-                error!("seek {:?} failed: {}", task_path, err);
-            })?;
-
-        let range_reader = f_reader.take(range.length);
-        Ok(range_reader)
-    }
-
     /// delete_task deletes the task content.
     #[instrument(skip_all)]
     pub async fn delete_task(&self, task_id: &str) -> Result<()> {

@@ -590,6 +590,9 @@ impl<E: StorageEngineOwned> Metadata<E> {
         let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
             Some(mut task) => {
                 // If the task exists, update the task metadata.
+                task.ttl = ttl;
+                task.persistent = persistent;
+                task.piece_length = piece_length;
                 task.updated_at = Utc::now().naive_utc();
                 task.failed_at = None;
                 task

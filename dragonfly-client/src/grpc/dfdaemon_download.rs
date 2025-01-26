@@ -32,10 +32,8 @@ use dragonfly_api::dfdaemon::v2::{
     },
     DeletePersistentCacheTaskRequest, DeleteTaskRequest, DownloadPersistentCacheTaskRequest,
     DownloadPersistentCacheTaskResponse, DownloadTaskRequest, DownloadTaskResponse,
-    ReadPersistentCacheTaskRequest, ReadPersistentCacheTaskResponse,
     StatPersistentCacheTaskRequest, StatTaskRequest as DfdaemonStatTaskRequest,
-    UploadPersistentCacheTaskRequest, WritePersistentCacheTaskRequest,
-    WritePersistentCacheTaskResponse,
+    UploadPersistentCacheTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::DeleteHostRequest as SchedulerDeleteHostRequest;
@@ -56,7 +54,7 @@ use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
 use tonic::service::interceptor::InterceptedService;
 use tonic::{
     transport::{Channel, Endpoint, Server, Uri},
-    Code, Request, Response, Status, Streaming,
+    Code, Request, Response, Status,
 };
 use tower::service_fn;
 use tracing::{debug, error, info, instrument, Instrument, Span};
@@ -674,28 +672,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             })?;
 
         Ok(Response::new(()))
-    }
-
-    /// write_persistent_cache_task writes the persistent cache task from the stream.
-    #[instrument(skip_all)]
-    async fn write_persistent_cache_task(
-        &self,
-        _request: Request<Streaming<WritePersistentCacheTaskRequest>>,
-    ) -> Result<Response<WritePersistentCacheTaskResponse>, Status> {
-        unimplemented!()
-    }
-
-    /// ReadPersistentCacheTaskStream is the stream of the read persistent cache task response.
-    type ReadPersistentCacheTaskStream =
-        ReceiverStream<Result<ReadPersistentCacheTaskResponse, Status>>;
-
-    /// read_persistent_cache_task reads the persistent cache task.
-    #[instrument(skip_all, fields(task_id))]
-    async fn read_persistent_cache_task(
-        &self,
-        _request: Request<ReadPersistentCacheTaskRequest>,
-    ) -> Result<Response<Self::ReadPersistentCacheTaskStream>, Status> {
-        unimplemented!()
     }
 
     /// DownloadPersistentCacheTaskStream is the stream of the download persistent cache task response.
