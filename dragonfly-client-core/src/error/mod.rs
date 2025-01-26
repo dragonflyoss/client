@@ -42,6 +42,10 @@ pub enum DFError {
     #[error{"hashring {0} is failed"}]
     HashRing(String),
 
+    /// NoSpace is the error when there is no space left on device.
+    #[error("no space left on device: {0}")]
+    NoSpace(String),
+
     /// HostNotFound is the error when the host is not found.
     #[error{"host {0} not found"}]
     HostNotFound(String),

@@ -84,6 +84,33 @@ impl Content {
         Ok(Content { config, dir })
     }
 
+    /// available_space returns the available space of the disk.
+    pub fn available_space(&self) -> Result<u64> {
+        let stat = fs2::statvfs(&self.dir)?;
+        Ok(stat.available_space())
+    }
+
+    /// total_space returns the total space of the disk.
+    pub fn total_space(&self) -> Result<u64> {
+        let stat = fs2::statvfs(&self.dir)?;
+        Ok(stat.total_space())
+    }
+
+    /// has_enough_space checks if the storage has enough space to store the content.
+    pub fn has_enough_space(&self, content_length: u64) -> Result<bool> {
+        let available_space = self.available_space()?;
+        if available_space < content_length {
+            warn!(
+                "not enough space to store the persistent cache task: available_space={}, content_length={}",
+                available_space, content_length
+            );
+
+            return Ok(false);
+        }
+
+        Ok(true)
+    }
+
     /// hard_link_or_copy_task hard links or copies the task content to the destination.
     #[instrument(skip_all)]
     pub async fn hard_link_or_copy_task(
