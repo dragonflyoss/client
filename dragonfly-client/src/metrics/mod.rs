@@ -193,6 +193,20 @@ lazy_static! {
             &[]
         ).expect("metric can be created");
 
+    /// UPDATE_TASK_COUNT is used to count the number of update tasks.
+    pub static ref UPDATE_TASK_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("update_task_total", "Counter of the number of the update task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type"]
+        ).expect("metric can be created");
+
+    /// UPDATE_TASK_FAILURE_COUNT is used to count the failed number of update tasks.
+    pub static ref UPDATE_TASK_FAILURE_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("update_task_failure_total", "Counter of the number of failed of the update task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type"]
+        ).expect("metric can be created");
+
     /// STAT_TASK_COUNT is used to count the number of stat tasks.
     pub static ref STAT_TASK_COUNT: IntCounterVec =
         IntCounterVec::new(
@@ -338,6 +352,14 @@ fn register_custom_metrics() {
         .expect("metric can be registered");
 
     REGISTRY
+        .register(Box::new(UPDATE_TASK_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(UPDATE_TASK_FAILURE_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
         .register(Box::new(STAT_TASK_COUNT.clone()))
         .expect("metric can be registered");
 
@@ -398,6 +420,8 @@ fn reset_custom_metrics() {
     PROXY_REQUEST_FAILURE_COUNT.reset();
     PROXY_REQUEST_VIA_DFDAEMON_COUNT.reset();
     PROXY_REQUEST_VIA_DFDAEMON_AND_CACHE_HITS_COUNT.reset();
+    UPDATE_TASK_COUNT.reset();
+    UPDATE_TASK_FAILURE_COUNT.reset();
     STAT_TASK_COUNT.reset();
     STAT_TASK_FAILURE_COUNT.reset();
     DELETE_TASK_COUNT.reset();
@@ -743,6 +767,20 @@ pub fn collect_proxy_request_via_dfdaemon_metrics() {
 pub fn collect_proxy_request_via_dfdaemon_and_cache_hits_metrics() {
     PROXY_REQUEST_VIA_DFDAEMON_AND_CACHE_HITS_COUNT
         .with_label_values(&[])
+        .inc();
+}
+
+/// collect_update_task_started_metrics collects the update task started metrics.
+pub fn collect_update_task_started_metrics(typ: i32) {
+    UPDATE_TASK_COUNT
+        .with_label_values(&[typ.to_string().as_str()])
+        .inc();
+}
+
+/// collect_update_task_failure_metrics collects the update task failure metrics.
+pub fn collect_update_task_failure_metrics(typ: i32) {
+    UPDATE_TASK_FAILURE_COUNT
+        .with_label_values(&[typ.to_string().as_str()])
         .inc();
 }
 

@@ -19,7 +19,6 @@ use dashmap::DashMap;
 use dragonfly_api::common::v2::Host;
 use dragonfly_api::dfdaemon::v2::{SyncPersistentCachePiecesRequest, SyncPiecesRequest};
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_storage::metadata;
 use std::sync::Arc;
@@ -197,9 +196,9 @@ impl PieceCollector {
                 let out_stream = response.into_inner().timeout(collected_piece_timeout);
                 tokio::pin!(out_stream);
 
-                while let Some(message) =
-                    out_stream.try_next().await.or_err(ErrorType::StreamError)?
-                {
+                while let Some(message) = out_stream.try_next().await.inspect_err(|err| {
+                    error!("sync pieces from parent {} failed: {}", parent.id, err);
+                })? {
                     let message = message?;
                     let mut parent_id =
                         match collected_pieces.try_get_mut(&message.number).try_unwrap() {
@@ -432,9 +431,12 @@ impl PersistentCachePieceCollector {
                 let out_stream = response.into_inner().timeout(collected_piece_timeout);
                 tokio::pin!(out_stream);
 
-                while let Some(message) =
-                    out_stream.try_next().await.or_err(ErrorType::StreamError)?
-                {
+                while let Some(message) = out_stream.try_next().await.inspect_err(|err| {
+                    error!(
+                        "sync persistent cache pieces from parent {} failed: {}",
+                        parent.id, err
+                    );
+                })? {
                     let message = message?;
                     let mut parent_id =
                         match collected_pieces.try_get_mut(&message.number).try_unwrap() {

@@ -117,9 +117,7 @@ impl RocksdbStorageEngine {
 
         // If the storage is kept, open the db and drop the unused column families.
         // Otherwise, destroy the db.
-        if keep {
-            drop_unused_cfs(&dir);
-        } else {
+        if !keep {
             rocksdb::DB::destroy(&options, &dir).unwrap_or_else(|err| {
                 warn!("destroy {:?} failed: {}", dir, err);
             });
@@ -258,25 +256,4 @@ where
     let cf_name = T::NAMESPACE;
     db.cf_handle(cf_name)
         .ok_or_else(|| Error::ColumnFamilyNotFound(cf_name.to_string()))
-}
-
-/// drop_unused_cfs drops the unused column families.
-fn drop_unused_cfs(dir: &Path) {
-    let old_cf_names = vec!["task", "piece", "cache_task"];
-    let unused_cf_names = vec!["cache_task"];
-
-    let mut db = match rocksdb::DB::open_cf(&rocksdb::Options::default(), dir, old_cf_names) {
-        Ok(db) => db,
-        Err(err) => {
-            warn!("open cf failed: {}", err);
-            return;
-        }
-    };
-
-    for cf_name in unused_cf_names {
-        match db.drop_cf(cf_name) {
-            Ok(_) => info!("drop cf [{}] success", cf_name),
-            Err(err) => warn!("drop cf [{}] failed: {}", cf_name, err),
-        }
-    }
 }

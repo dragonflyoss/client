@@ -117,7 +117,7 @@ impl Task {
     }
 
     /// get gets the metadata of the task.
-    pub async fn get(&self, id: &str) -> ClientResult<Option<metadata::Task>> {
+    pub fn get(&self, id: &str) -> ClientResult<Option<metadata::Task>> {
         self.storage.get_task(id)
     }
 
@@ -205,6 +205,18 @@ impl Task {
             piece::PieceLengthStrategy::OptimizeByFileLength,
             content_length,
         );
+
+        // If the task is not found, check if the storage has enough space to
+        // store the task.
+        if let Ok(None) = self.get(id) {
+            let has_enough_space = self.storage.has_enough_space(content_length)?;
+            if !has_enough_space {
+                return Err(Error::NoSpace(format!(
+                    "not enough space to store the persistent cache task: content_length={}",
+                    content_length
+                )));
+            }
+        }
 
         self.storage.download_task_started(
             id,
@@ -534,7 +546,9 @@ impl Task {
             .timeout(self.config.scheduler.schedule_timeout);
         tokio::pin!(out_stream);
 
-        while let Some(message) = out_stream.try_next().await? {
+        while let Some(message) = out_stream.try_next().await.inspect_err(|err| {
+            error!("receive message from scheduler failed: {:?}", err);
+        })? {
             // Check if the schedule count is exceeded.
             schedule_count += 1;
             if schedule_count >= self.config.scheduler.max_schedule_count {
@@ -840,7 +854,7 @@ impl Task {
                         partial_finished_pieces.clone(),
                     );
 
-                    if finished_pieces.len() == remaining_interested_pieces.len() {
+                    if partial_finished_pieces.len() == remaining_interested_pieces.len() {
                         // Send the download peer finished request.
                         match in_stream_tx
                             .send_timeout(

@@ -26,7 +26,6 @@ use tracing::Level;
 
 pub mod export;
 pub mod import;
-pub mod remove;
 pub mod stat;
 
 #[derive(Debug, Parser)]
@@ -83,15 +82,6 @@ pub enum Command {
         long_about = "Stat a file in Dragonfly P2P network by task ID. If stat successfully, it will return the file information."
     )]
     Stat(stat::StatCommand),
-
-    #[command(
-        name = "rm",
-        author,
-        version,
-        about = "Remove a file from Dragonfly P2P network",
-        long_about = "Remove the P2P cache in Dragonfly P2P network by task ID."
-    )]
-    Remove(remove::RemoveCommand),
 }
 
 /// Implement the execute for Command.
@@ -102,7 +92,6 @@ impl Command {
             Self::Import(cmd) => cmd.execute().await,
             Self::Export(cmd) => cmd.execute().await,
             Self::Stat(cmd) => cmd.execute().await,
-            Self::Remove(cmd) => cmd.execute().await,
         }
     }
 }

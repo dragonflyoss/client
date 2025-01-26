@@ -108,6 +108,12 @@ impl PersistentCacheTask {
         })
     }
 
+    /// get gets a persistent cache task from local.
+    #[instrument(skip_all)]
+    pub fn get(&self, task_id: &str) -> ClientResult<Option<metadata::PersistentCacheTask>> {
+        self.storage.get_persistent_cache_task(task_id)
+    }
+
     /// create_persistent creates a persistent cache task from local.
     #[instrument(skip_all)]
     pub async fn create_persistent(
@@ -159,6 +165,15 @@ impl PersistentCacheTask {
                 error!("upload persistent cache task started: {}", err);
                 return Err(err);
             }
+        }
+
+        // Check if the storage has enough space to store the persistent cache task.
+        let has_enough_space = self.storage.has_enough_space(content_length)?;
+        if !has_enough_space {
+            return Err(Error::NoSpace(format!(
+                "not enough space to store the persistent cache task: content_length={}",
+                content_length
+            )));
         }
 
         self.storage
@@ -416,6 +431,18 @@ impl PersistentCacheTask {
         let ttl = Duration::try_from(response.ttl.ok_or(Error::InvalidParameter)?)
             .or_err(ErrorType::ParseError)?;
 
+        // If the persistent cache task is not found, check if the storage has enough space to
+        // store the persistent cache task.
+        if let Ok(None) = self.get(task_id) {
+            let has_enough_space = self.storage.has_enough_space(response.content_length)?;
+            if !has_enough_space {
+                return Err(Error::NoSpace(format!(
+                    "not enough space to store the persistent cache task: content_length={}",
+                    response.content_length
+                )));
+            }
+        }
+
         self.storage.download_persistent_cache_task_started(
             task_id,
             ttl,
@@ -646,6 +673,7 @@ impl PersistentCacheTask {
                     request: Some(
                         announce_persistent_cache_peer_request::Request::RegisterPersistentCachePeerRequest(
                             RegisterPersistentCachePeerRequest {
+                                persistent: request.persistent,
                                 tag: request.tag.clone(),
                                 application: request.application.clone(),
                                 piece_length: task.piece_length,
@@ -680,7 +708,9 @@ impl PersistentCacheTask {
             .timeout(self.config.scheduler.schedule_timeout);
         tokio::pin!(out_stream);
 
-        while let Some(message) = out_stream.try_next().await? {
+        while let Some(message) = out_stream.try_next().await.inspect_err(|err| {
+            error!("receive message from scheduler failed: {:?}", err);
+        })? {
             // Check if the schedule count is exceeded.
             schedule_count += 1;
             if schedule_count >= self.config.scheduler.max_schedule_count {
@@ -1317,6 +1347,11 @@ impl PersistentCacheTask {
         }
 
         Ok(finished_pieces)
+    }
+
+    /// persist persists the persistent cache task.
+    pub fn persist(&self, task_id: &str) -> ClientResult<metadata::PersistentCacheTask> {
+        self.storage.persist_persistent_cache_task(task_id)
     }
 
     /// stat stats the persistent cache task from the scheduler.

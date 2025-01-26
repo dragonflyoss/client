@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, instrument, warn};
 
 pub mod content;
 pub mod metadata;
@@ -57,6 +57,21 @@ impl Storage {
             metadata,
             content,
         })
+    }
+
+    /// total_space returns the total space of the disk.
+    pub fn total_space(&self) -> Result<u64> {
+        self.content.total_space()
+    }
+
+    /// available_space returns the available space of the disk.
+    pub fn available_space(&self) -> Result<u64> {
+        self.content.available_space()
+    }
+
+    /// has_enough_space checks if the storage has enough space to store the content.
+    pub fn has_enough_space(&self, content_length: u64) -> Result<bool> {
+        self.content.has_enough_space(content_length)
     }
 
     /// hard_link_or_copy_task hard links or copies the task content to the destination.
@@ -243,6 +258,12 @@ impl Storage {
         id: &str,
     ) -> Result<Option<metadata::PersistentCacheTask>> {
         self.metadata.get_persistent_cache_task(id)
+    }
+
+    /// persist_persistent_cache_task persists the persistent cache task metadata.
+    #[instrument(skip_all)]
+    pub fn persist_persistent_cache_task(&self, id: &str) -> Result<metadata::PersistentCacheTask> {
+        self.metadata.persist_persistent_cache_task(id)
     }
 
     /// is_persistent_cache_task_exists returns whether the persistent cache task exists.

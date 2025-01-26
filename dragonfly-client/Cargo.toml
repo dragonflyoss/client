@@ -64,6 +64,7 @@ percent-encoding.workspace = true
 tokio-rustls.workspace = true
 serde_json.workspace = true
 lru.workspace = true
+fs2.workspace = true
 lazy_static = "1.5"
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
@@ -81,7 +82,6 @@ sysinfo = "0.32.1"
 tower = "0.4.13"
 indicatif = "0.17.9"
 dashmap = "6.1.0"
-fs2 = "0.4.3"
 hashring = "0.3.6"
 fslock = "0.2.1"
 leaky-bucket = "1.1.2"

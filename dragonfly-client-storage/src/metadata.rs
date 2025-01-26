@@ -700,6 +700,22 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
+    /// persist_persistent_cache_task persists the persistent cache task metadata.
+    #[instrument(skip_all)]
+    pub fn persist_persistent_cache_task(&self, id: &str) -> Result<PersistentCacheTask> {
+        let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.persistent = true;
+                task.updated_at = Utc::now().naive_utc();
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
     /// get_persistent_cache_task gets the persistent cache task metadata.
     #[instrument(skip_all)]
     pub fn get_persistent_cache_task(&self, id: &str) -> Result<Option<PersistentCacheTask>> {

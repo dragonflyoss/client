@@ -923,9 +923,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.1.16"
+version = "2.1.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a940c6a5682da214cadb78c76e2d7c4d26ad9ab5f110fb0d17fd1475a2c0f0c"
+checksum = "ee86ce7919760ff9e043ea089d398e367acf18451ae607aa614b3e65c4cafcd7"
 dependencies = [
  "prost 0.13.4",
  "prost-types",
@@ -938,7 +938,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1010,7 +1010,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-core",
@@ -1041,7 +1041,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "bytesize",
  "bytesize-serde",
@@ -1067,7 +1067,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "headers 0.4.0",
  "hyper 1.5.2",
@@ -1086,7 +1086,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -1104,7 +1104,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "base16ct",
  "bincode",
@@ -1114,6 +1114,7 @@ dependencies = [
  "dragonfly-client-config",
  "dragonfly-client-core",
  "dragonfly-client-util",
+ "fs2",
  "num_cpus",
  "prost-wkt-types",
  "rayon",
@@ -1129,7 +1130,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "base16ct",
  "base64 0.22.1",
@@ -1519,7 +1520,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "dragonfly-client-backend",
  "dragonfly-client-core",
