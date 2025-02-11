@@ -206,16 +206,13 @@ impl Task {
             content_length,
         );
 
-        // If the task is not found, check if the storage has enough space to
+        // If the task is not finished, check if the storage has enough space to
         // store the task.
-        if let Ok(None) = self.get(id) {
-            let has_enough_space = self.storage.has_enough_space(content_length)?;
-            if !has_enough_space {
-                return Err(Error::NoSpace(format!(
-                    "not enough space to store the persistent cache task: content_length={}",
-                    content_length
-                )));
-            }
+        if !task.is_finished() && !self.storage.has_enough_space(content_length)? {
+            return Err(Error::NoSpace(format!(
+                "not enough space to store the persistent cache task: content_length={}",
+                content_length
+            )));
         }
 
         self.storage.download_task_started(
