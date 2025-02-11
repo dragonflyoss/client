@@ -185,10 +185,7 @@ impl PersistentCacheTask {
 
     /// is_expired returns whether the persistent cache task is expired.
     pub fn is_expired(&self) -> bool {
-        // When scheduler runs garbage collection, it will trigger dfdaemon to evict the persistent cache task.
-        // But sometimes the dfdaemon may not evict the persistent cache task in time, so we select the ttl * 1.2
-        // as the expired time to force evict the persistent cache task.
-        self.created_at + self.ttl * 2 < Utc::now().naive_utc()
+        self.created_at + self.ttl < Utc::now().naive_utc()
     }
 
     /// is_failed returns whether the persistent cache task downloads failed.
