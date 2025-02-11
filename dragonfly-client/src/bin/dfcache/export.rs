@@ -429,7 +429,7 @@ impl ExportCommand {
             (None, true)
         } else {
             let absolute_path = Path::new(&self.output).absolutize()?;
-            info!("download file to: {}", absolute_path.to_string_lossy());
+            info!("export file to: {}", absolute_path.to_string_lossy());
             (Some(absolute_path.to_string_lossy().to_string()), false)
         };
 
