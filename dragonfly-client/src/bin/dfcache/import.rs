@@ -22,9 +22,11 @@ use dragonfly_client_core::{
     Error, Result,
 };
 use indicatif::{ProgressBar, ProgressStyle};
-use std::path::PathBuf;
+use path_absolutize::*;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use termion::{color, style};
+use tracing::info;
 
 use super::*;
 
@@ -317,6 +319,9 @@ impl ImportCommand {
 
     /// run runs the import sub command.
     async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
+        let absolute_path = Path::new(&self.path).absolutize()?;
+        info!("import file: {}", absolute_path.to_string_lossy());
+
         let pb = ProgressBar::new_spinner();
         pb.enable_steady_tick(DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL);
         pb.set_style(
@@ -329,7 +334,7 @@ impl ImportCommand {
         let persistent_cache_task = dfdaemon_download_client
             .upload_persistent_cache_task(UploadPersistentCacheTaskRequest {
                 task_id: self.id.clone(),
-                path: self.path.clone().into_os_string().into_string().unwrap(),
+                path: absolute_path.to_string_lossy().to_string(),
                 persistent_replica_count: self.persistent_replica_count,
                 tag: self.tag.clone(),
                 application: self.application.clone(),
