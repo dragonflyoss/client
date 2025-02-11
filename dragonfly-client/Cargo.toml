@@ -88,7 +88,7 @@ leaky-bucket = "1.1.2"
 http-body-util = "0.1.2"
 futures-util = "0.3.31"
 termion = "4.0.3"
-tabled = "0.17.0"
+tabled = "0.18.0"
 path-absolutize = "3.1.1"
 
 [dev-dependencies]
