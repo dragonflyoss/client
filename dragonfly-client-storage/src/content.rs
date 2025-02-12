@@ -413,7 +413,10 @@ impl Content {
             info!("remove {:?} failed: {}", to, err);
         });
 
-        if let Err(err) = self.hard_link_task(task.id.as_str(), to).await {
+        if let Err(err) = self
+            .hard_link_persistent_cache_task(task.id.as_str(), to)
+            .await
+        {
             warn!("hard link {:?} to {:?} failed: {}", task_path, to, err);
 
             // If the persistent cache task is empty, no need to copy. Need to open the file to
@@ -427,7 +430,7 @@ impl Content {
                 return Ok(());
             }
 
-            self.copy_task(task.id.as_str(), to)
+            self.copy_persistent_cache_task(task.id.as_str(), to)
                 .await
                 .inspect_err(|err| {
                     error!("copy {:?} to {:?} failed: {}", task_path, to, err);
@@ -441,21 +444,98 @@ impl Content {
         Ok(())
     }
 
-    /// copy_persistent_cache_task copies the persistent cache task content to the destination.
+    /// read_persistent_cache_piece reads the persistent cache piece from the content.
     #[instrument(skip_all)]
-    pub async fn write_persistent_cache_task(
+    pub async fn read_persistent_cache_piece(
         &self,
         task_id: &str,
-        from: &Path,
-    ) -> Result<WritePersistentCacheTaskResponse> {
-        // Open the file to copy the content.
-        let from_f = File::open(from).await?;
+        offset: u64,
+        length: u64,
+        range: Option<Range>,
+    ) -> Result<impl AsyncRead> {
+        let task_path = self.get_persistent_cache_task_path(task_id);
 
+        // Calculate the target offset and length based on the range.
+        let (target_offset, target_length) = calculate_piece_range(offset, length, range);
+
+        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
+            error!("open {:?} failed: {}", task_path, err);
+        })?;
+        let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
+
+        f_reader
+            .seek(SeekFrom::Start(target_offset))
+            .await
+            .inspect_err(|err| {
+                error!("seek {:?} failed: {}", task_path, err);
+            })?;
+
+        Ok(f_reader.take(target_length))
+    }
+
+    /// read_persistent_cache_piece_with_dual_read return two readers, one is the range reader, and the other is the
+    /// full reader of the persistent cache piece. It is used for cache the piece content to the proxy cache.
+    #[instrument(skip_all)]
+    pub async fn read_persistent_cache_piece_with_dual_read(
+        &self,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+        range: Option<Range>,
+    ) -> Result<(impl AsyncRead, impl AsyncRead)> {
+        let task_path = self.get_persistent_cache_task_path(task_id);
+
+        // Calculate the target offset and length based on the range.
+        let (target_offset, target_length) = calculate_piece_range(offset, length, range);
+
+        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
+            error!("open {:?} failed: {}", task_path, err);
+        })?;
+        let mut f_range_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
+
+        f_range_reader
+            .seek(SeekFrom::Start(target_offset))
+            .await
+            .inspect_err(|err| {
+                error!("seek {:?} failed: {}", task_path, err);
+            })?;
+        let range_reader = f_range_reader.take(target_length);
+
+        // Create full reader of the piece.
+        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
+            error!("open {:?} failed: {}", task_path, err);
+        })?;
+        let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
+
+        f_reader
+            .seek(SeekFrom::Start(offset))
+            .await
+            .inspect_err(|err| {
+                error!("seek {:?} failed: {}", task_path, err);
+            })?;
+        let reader = f_reader.take(length);
+
+        Ok((range_reader, reader))
+    }
+
+    /// write_persistent_cache_piece_with_crc32_castagnoli writes the persistent cache piece to the content with crc32 castagnoli.
+    /// Calculate the hash of the piece by crc32 castagnoli with hardware acceleration.
+    #[instrument(skip_all)]
+    pub async fn write_persistent_cache_piece_with_crc32_castagnoli<
+        R: AsyncRead + Unpin + ?Sized,
+    >(
+        &self,
+        task_id: &str,
+        offset: u64,
+        reader: &mut R,
+    ) -> Result<WritePieceResponse> {
+        // Open the file and seek to the offset.
         let task_path = self
             .create_or_get_persistent_cache_task_path(task_id)
             .await?;
-        let to_f = OpenOptions::new()
-            .create_new(true)
+        let mut f = OpenOptions::new()
+            .create(true)
+            .truncate(false)
             .write(true)
             .open(task_path.as_path())
             .await
@@ -463,16 +543,20 @@ impl Content {
                 error!("open {:?} failed: {}", task_path, err);
             })?;
 
-        // Copy the content to the file while updating the CRC32 value.
-        let mut reader = BufReader::with_capacity(self.config.storage.write_buffer_size, from_f);
+        f.seek(SeekFrom::Start(offset)).await.inspect_err(|err| {
+            error!("seek {:?} failed: {}", task_path, err);
+        })?;
+
+        // Copy the piece to the file while updating the CRC32 value.
+        let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
         let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
         let mut digest = crc.digest();
 
-        let mut tee = InspectReader::new(&mut reader, |bytes| {
+        let mut tee = InspectReader::new(reader, |bytes| {
             digest.update(bytes);
         });
 
-        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, to_f);
+        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
         let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
             error!("copy {:?} failed: {}", task_path, err);
         })?;
@@ -481,10 +565,34 @@ impl Content {
             error!("flush {:?} failed: {}", task_path, err);
         })?;
 
-        Ok(WritePersistentCacheTaskResponse {
+        // Calculate the hash of the piece.
+        Ok(WritePieceResponse {
             length,
             hash: digest.finalize().to_string(),
         })
+    }
+
+    /// hard_link_persistent_cache_task hard links the persistent cache task content.
+    #[instrument(skip_all)]
+    async fn hard_link_persistent_cache_task(&self, task_id: &str, link: &Path) -> Result<()> {
+        fs::hard_link(self.get_persistent_cache_task_path(task_id), link).await?;
+        Ok(())
+    }
+
+    /// copy_persistent_cache_task copies the persistent cache task content to the destination.
+    #[instrument(skip_all)]
+    async fn copy_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        // Ensure the parent directory of the destination exists.
+        if let Some(parent) = to.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).await.inspect_err(|err| {
+                    error!("failed to create directory {:?}: {}", parent, err);
+                })?;
+            }
+        }
+
+        fs::copy(self.get_persistent_cache_task_path(task_id), to).await?;
+        Ok(())
     }
 
     /// delete_task deletes the persistent cache task content.

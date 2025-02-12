@@ -802,6 +802,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
                         // Download persistent cache task succeeded.
                         info!("download persistent cache task succeeded");
+                        if let Err(err) =
+                            task_manager_clone.download_finished(task_clone.id.as_str())
+                        {
+                            error!("download persistent cache task finished: {}", err);
+                        }
 
                         // Hard link or copy the persistent cache task content to the destination.
                         if let Some(output_path) = request_clone.output_path {
