@@ -873,16 +873,16 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(DownloadPieceResponse {
             piece: Some(Piece {
                 number: piece.number,
-                parent_id: piece.parent_id,
+                parent_id: piece.parent_id.clone(),
                 offset: piece.offset,
                 length: piece.length,
-                digest: piece.digest,
+                digest: piece.digest.clone(),
                 content: Some(content),
                 traffic_type: None,
                 cost: None,
                 created_at: None,
             }),
-            digest: None,
+            digest: Some(piece.calculate_digest()),
         }))
     }
 
