@@ -15,6 +15,7 @@
  */
 
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
+use chrono::DateTime;
 use dragonfly_api::common::v2::{
     PersistentCachePeer, PersistentCacheTask as CommonPersistentCacheTask, Piece, TrafficType,
 };
@@ -431,6 +432,11 @@ impl PersistentCacheTask {
         let ttl = Duration::try_from(response.ttl.ok_or(Error::InvalidParameter)?)
             .or_err(ErrorType::ParseError)?;
 
+        // Convert prost_wkt_types::Timestamp to chrono::DateTime.
+        let created_at = response.created_at.ok_or(Error::InvalidParameter)?;
+        let created_at = DateTime::from_timestamp(created_at.seconds, created_at.nanos as u32)
+            .ok_or(Error::InvalidParameter)?;
+
         // If the persistent cache task is not found, check if the storage has enough space to
         // store the persistent cache task.
         if let Ok(None) = self.get(task_id) {
@@ -449,6 +455,7 @@ impl PersistentCacheTask {
             request.persistent,
             response.piece_length,
             response.content_length,
+            created_at.naive_utc(),
         )
     }
 

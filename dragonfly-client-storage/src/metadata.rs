@@ -583,6 +583,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         persistent: bool,
         piece_length: u64,
         content_length: u64,
+        created_at: NaiveDateTime,
     ) -> Result<PersistentCacheTask> {
         let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -601,7 +602,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
                 piece_length,
                 content_length,
                 updated_at: Utc::now().naive_utc(),
-                created_at: Utc::now().naive_utc(),
+                created_at,
                 ..Default::default()
             },
         };

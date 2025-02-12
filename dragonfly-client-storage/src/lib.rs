@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use chrono::NaiveDateTime;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
@@ -214,6 +215,7 @@ impl Storage {
         persistent: bool,
         piece_length: u64,
         content_length: u64,
+        created_at: NaiveDateTime,
     ) -> Result<metadata::PersistentCacheTask> {
         self.metadata.download_persistent_cache_task_started(
             id,
@@ -221,6 +223,7 @@ impl Storage {
             persistent,
             piece_length,
             content_length,
+            created_at,
         )
     }
 
@@ -312,7 +315,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_piece_with_crc32_castagnoli(task_id, offset, reader)
+            .write_persistent_cache_piece_with_crc32_castagnoli(task_id, offset, reader)
             .await?;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
 
@@ -562,7 +565,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_piece_with_crc32_castagnoli(task_id, offset, reader)
+            .write_persistent_cache_piece_with_crc32_castagnoli(task_id, offset, reader)
             .await?;
 
         let length = response.length;
@@ -613,7 +616,7 @@ impl Storage {
             Ok(Some(piece)) => {
                 match self
                     .content
-                    .read_piece(task_id, piece.offset, piece.length, range)
+                    .read_persistent_cache_piece(task_id, piece.offset, piece.length, range)
                     .await
                 {
                     Ok(reader) => {

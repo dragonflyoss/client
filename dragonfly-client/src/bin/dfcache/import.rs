@@ -354,6 +354,15 @@ impl ImportCommand {
 
     /// validate_args validates the command line arguments.
     fn validate_args(&self) -> Result<()> {
+        if self.ttl < Duration::from_secs(5 * 60)
+            || self.ttl > Duration::from_secs(7 * 24 * 60 * 60)
+        {
+            return Err(Error::ValidationError(format!(
+                "ttl must be between 5 minutes and 7 days, but got {}",
+                self.ttl.as_secs()
+            )));
+        }
+
         if let Some(id) = self.id.as_ref() {
             if id.len() != 64 {
                 return Err(Error::ValidationError(format!(
