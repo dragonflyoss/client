@@ -232,7 +232,7 @@ impl GC {
     /// evict_persistent_cache_task_by_ttl evicts the persistent cache task by ttl.
     #[instrument(skip_all)]
     async fn evict_persistent_cache_task_by_ttl(&self) -> Result<()> {
-        info!("start to evict by persistent cache task ttl * 2");
+        info!("start to evict by persistent cache task ttl");
         for task in self.storage.get_persistent_cache_tasks()? {
             // If the persistent cache task is expired and not uploading, evict the persistent cache task.
             if task.is_expired() {
@@ -308,7 +308,7 @@ impl GC {
             }
 
             // Evict the task.
-            self.storage.delete_task(&task.id).await;
+            self.storage.delete_persistent_cache_task(&task.id).await;
 
             // Update the evicted space.
             let task_space = task.content_length();
