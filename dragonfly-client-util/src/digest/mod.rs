@@ -129,7 +129,7 @@ impl FromStr for Digest {
     }
 }
 
-/// calculate_file_hash calculates the hash of a file.
+/// calculate_file_digest calculates the digest of a file.
 #[instrument(skip_all)]
 pub fn calculate_file_digest(algorithm: Algorithm, path: &Path) -> ClientResult<Digest> {
     let f = std::fs::File::open(path)?;
