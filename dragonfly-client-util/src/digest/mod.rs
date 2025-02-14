@@ -131,7 +131,7 @@ impl FromStr for Digest {
 
 /// calculate_file_hash calculates the hash of a file.
 #[instrument(skip_all)]
-pub fn calculate_file_hash(algorithm: Algorithm, path: &Path) -> ClientResult<Digest> {
+pub fn calculate_file_digest(algorithm: Algorithm, path: &Path) -> ClientResult<Digest> {
     let f = std::fs::File::open(path)?;
     let mut reader = std::io::BufReader::new(f);
     match algorithm {
@@ -200,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_file_hash() {
+    fn test_calculate_file_digest() {
         let content = b"test content";
         let temp_file = tempfile::NamedTempFile::new().expect("failed to create temp file");
         let path = temp_file.path();
@@ -208,23 +208,23 @@ mod tests {
         file.write_all(content).expect("failed to write to file");
 
         let expected_blake3 = "ead3df8af4aece7792496936f83b6b6d191a7f256585ce6b6028db161278017e";
-        let digest =
-            calculate_file_hash(Algorithm::Blake3, path).expect("failed to calculate Blake3 hash");
+        let digest = calculate_file_digest(Algorithm::Blake3, path)
+            .expect("failed to calculate Blake3 hash");
         assert_eq!(digest.encoded(), expected_blake3);
 
         let expected_sha256 = "6ae8a75555209fd6c44157c0aed8016e763ff435a19cf186f76863140143ff72";
-        let digest =
-            calculate_file_hash(Algorithm::Sha256, path).expect("failed to calculate Sha256 hash");
+        let digest = calculate_file_digest(Algorithm::Sha256, path)
+            .expect("failed to calculate Sha256 hash");
         assert_eq!(digest.encoded(), expected_sha256);
 
         let expected_sha512 = "0cbf4caef38047bba9a24e621a961484e5d2a92176a859e7eb27df343dd34eb98d538a6c5f4da1ce302ec250b821cc001e46cc97a704988297185a4df7e99602";
-        let digest =
-            calculate_file_hash(Algorithm::Sha512, path).expect("failed to calculate Sha512 hash");
+        let digest = calculate_file_digest(Algorithm::Sha512, path)
+            .expect("failed to calculate Sha512 hash");
         assert_eq!(digest.encoded(), expected_sha512);
 
         let expected_crc32 = "422618885";
         let digest =
-            calculate_file_hash(Algorithm::Crc32, path).expect("failed to calculate Sha512 hash");
+            calculate_file_digest(Algorithm::Crc32, path).expect("failed to calculate Sha512 hash");
         assert_eq!(digest.encoded(), expected_crc32);
     }
 }

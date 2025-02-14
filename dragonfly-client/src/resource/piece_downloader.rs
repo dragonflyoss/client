@@ -18,6 +18,7 @@ use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use dragonfly_api::dfdaemon::v2::{DownloadPersistentCachePieceRequest, DownloadPieceRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
+use dragonfly_client_storage::metadata;
 use std::sync::Arc;
 use tracing::{error, instrument};
 
@@ -119,6 +120,25 @@ impl Downloader for GRPCDownloader {
         let Some(piece) = response.piece else {
             return Err(Error::InvalidParameter);
         };
+
+        let piece_metadata = metadata::Piece {
+            number,
+            length: piece.length,
+            offset: piece.offset,
+            digest: piece.digest.clone(),
+            parent_id: piece.parent_id.clone(),
+            ..Default::default()
+        };
+
+        if let Some(expected_digest) = &response.digest {
+            let actual_digest = piece_metadata.calculate_digest();
+            if expected_digest != &actual_digest {
+                return Err(Error::ValidationError(format!(
+                    "checksum mismatch, expected: {}, actual: {}",
+                    expected_digest, actual_digest
+                )));
+            }
+        }
 
         let Some(content) = piece.content else {
             return Err(Error::InvalidParameter);
