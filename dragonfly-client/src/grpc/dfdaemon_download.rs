@@ -42,6 +42,7 @@ use dragonfly_client_core::{
 };
 use dragonfly_client_util::http::{get_range, hashmap_to_headermap, headermap_to_hashmap};
 use hyper_util::rt::TokioIo;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -124,14 +125,16 @@ impl DfdaemonDownloadServer {
 
         // Start download grpc server with unix domain socket.
         fs::create_dir_all(self.socket_path.parent().unwrap()).await?;
-
         if self.socket_path.is_file() {
             // Remove the old unix domain socket file if it exists.
             fs::remove_file(&self.socket_path).await?;
         }
-        let uds = UnixListener::bind(&self.socket_path)?;
-        let uds_stream = UnixListenerStream::new(uds);
 
+        let uds = UnixListener::bind(&self.socket_path)?;
+        let perms = std::fs::Permissions::from_mode(0o660);
+        fs::set_permissions(&self.socket_path, perms).await?;
+
+        let uds_stream = UnixListenerStream::new(uds);
         let server = Server::builder()
             .max_frame_size(super::MAX_FRAME_SIZE)
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
