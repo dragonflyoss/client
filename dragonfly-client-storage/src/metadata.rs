@@ -303,25 +303,19 @@ impl Piece {
         }
     }
 
-    /// calculate_digest return the digest of the piece metadata,
-    /// which is different from the digest of the piece content.
+    /// calculate_digest return the digest of the piece metadata, including the piece number,
+    /// offset, length and content digest. The digest is used to check the integrity of the
+    /// piece metadata.
     pub fn calculate_digest(&self) -> String {
         let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
-        let mut crc_digest = crc.digest();
+        let mut digest = crc.digest();
+        digest.update(&self.number.to_be_bytes());
+        digest.update(&self.offset.to_be_bytes());
+        digest.update(&self.length.to_be_bytes());
+        digest.update(self.digest.as_bytes());
 
-        crc_digest.update(&self.number.to_be_bytes());
-        crc_digest.update(&self.offset.to_be_bytes());
-        crc_digest.update(&self.length.to_be_bytes());
-        crc_digest.update(self.digest.as_bytes());
-
-        if let Some(parent_id) = &self.parent_id {
-            crc_digest.update(parent_id.as_bytes());
-        }
-
-        let digest =
-            digest::Digest::new(digest::Algorithm::Crc32, crc_digest.finalize().to_string());
-
-        digest.to_string()
+        let encoded = digest.finalize().to_string();
+        digest::Digest::new(digest::Algorithm::Crc32, encoded).to_string()
     }
 }
 
@@ -957,12 +951,11 @@ mod tests {
             offset: 0,
             length: 1024,
             digest: "crc32:3810626145".to_string(),
-            parent_id: Some("d3c4e940ad06c47fc36ac67801e6f8e36cb4".to_string()),
             ..Default::default()
         };
 
         let digest = piece.calculate_digest();
-        assert_eq!(digest, "crc32:523852508");
+        assert_eq!(digest, "crc32:3874114958");
     }
 
     #[test]
