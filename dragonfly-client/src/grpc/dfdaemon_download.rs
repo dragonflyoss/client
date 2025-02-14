@@ -36,6 +36,7 @@ use dragonfly_api::dfdaemon::v2::{
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::DeleteHostRequest as SchedulerDeleteHostRequest;
+use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error as ClientError, Result as ClientResult,
@@ -56,13 +57,16 @@ use tonic::{
     transport::{Channel, Endpoint, Server, Uri},
     Code, Request, Response, Status,
 };
-use tower::service_fn;
+use tower::{service_fn, ServiceBuilder};
 use tracing::{error, info, instrument, Instrument, Span};
 
 use super::interceptor::TracingInterceptor;
 
 /// DfdaemonDownloadServer is the grpc unix server of the download.
 pub struct DfdaemonDownloadServer {
+    /// config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
     /// socket_path is the path of the unix domain socket.
     socket_path: PathBuf,
 
@@ -81,6 +85,7 @@ impl DfdaemonDownloadServer {
     /// new creates a new DfdaemonServer.
     #[instrument(skip_all)]
     pub fn new(
+        config: Arc<Config>,
         socket_path: PathBuf,
         task: Arc<task::Task>,
         persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
@@ -97,6 +102,7 @@ impl DfdaemonDownloadServer {
         .max_encoding_message_size(usize::MAX);
 
         Self {
+            config,
             socket_path,
             service,
             shutdown,
@@ -130,9 +136,17 @@ impl DfdaemonDownloadServer {
             fs::remove_file(&self.socket_path).await?;
         }
 
+        // Bind the unix domain socket and set the permissions for the socket.
         let uds = UnixListener::bind(&self.socket_path)?;
         let perms = std::fs::Permissions::from_mode(0o660);
         fs::set_permissions(&self.socket_path, perms).await?;
+
+        // TODO(Gaius): RateLimitLayer is not implemented Clone, so we can't use it here.
+        // Only use the LoadShed layer and the ConcurrencyLimit layer.
+        let layer = ServiceBuilder::new()
+            .concurrency_limit(self.config.download.server.request_rate_limit as usize)
+            .load_shed()
+            .into_inner();
 
         let uds_stream = UnixListenerStream::new(uds);
         let server = Server::builder()
@@ -140,6 +154,7 @@ impl DfdaemonDownloadServer {
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
+            .layer(layer)
             .add_service(reflection.clone())
             .add_service(health_service)
             .add_service(self.service.clone())
