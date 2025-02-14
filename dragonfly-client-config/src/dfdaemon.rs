@@ -60,6 +60,12 @@ pub fn default_download_unix_socket_path() -> PathBuf {
     crate::default_root_dir().join("dfdaemon.sock")
 }
 
+/// default_download_request_rate_limit is the default rate limit of the download request in the
+/// download grpc server, default is 4000 req/s.
+pub fn default_download_request_rate_limit() -> u64 {
+    4000
+}
+
 /// default_parent_selector_sync_interval is the default interval to sync host information.
 #[inline]
 fn default_parent_selector_sync_interval() -> Duration {
@@ -93,6 +99,12 @@ fn default_dfdaemon_cache_dir() -> PathBuf {
 /// default_upload_grpc_server_port is the default port of the upload gRPC server.
 #[inline]
 fn default_upload_grpc_server_port() -> u16 {
+    4000
+}
+
+/// default_upload_request_rate_limit is the default rate limit of the upload request in the
+/// upload grpc server, default is 4000 req/s.
+pub fn default_upload_request_rate_limit() -> u64 {
     4000
 }
 
@@ -426,6 +438,11 @@ pub struct DownloadServer {
     /// socket_path is the unix socket path for dfdaemon gRPC service.
     #[serde(default = "default_download_unix_socket_path")]
     pub socket_path: PathBuf,
+
+    /// request_rate_limit is the rate limit of the download request in the download grpc server,
+    /// default is 4000 req/s.
+    #[serde(default = "default_download_request_rate_limit")]
+    pub request_rate_limit: u64,
 }
 
 /// DownloadServer implements Default.
@@ -433,6 +450,7 @@ impl Default for DownloadServer {
     fn default() -> Self {
         DownloadServer {
             socket_path: default_download_unix_socket_path(),
+            request_rate_limit: default_download_request_rate_limit(),
         }
     }
 }
@@ -496,6 +514,11 @@ pub struct UploadServer {
     /// key is the server key path with PEM format for the upload server and it is used for
     /// mutual TLS.
     pub key: Option<PathBuf>,
+
+    /// request_rate_limit is the rate limit of the upload request in the upload grpc server,
+    /// default is 4000 req/s.
+    #[serde(default = "default_upload_request_rate_limit")]
+    pub request_rate_limit: u64,
 }
 
 /// UploadServer implements Default.
@@ -507,6 +530,7 @@ impl Default for UploadServer {
             ca_cert: None,
             cert: None,
             key: None,
+            request_rate_limit: default_upload_request_rate_limit(),
         }
     }
 }
