@@ -882,6 +882,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 cost: None,
                 created_at: None,
             }),
+            // Calculate the digest of the piece metadata, including the number, offset, length and
+            // content digest. The digest is used to verify the integrity of the piece metadata.
             digest: Some(piece.calculate_digest()),
         }))
     }
@@ -1409,15 +1411,18 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(DownloadPersistentCachePieceResponse {
             piece: Some(Piece {
                 number: piece.number,
-                parent_id: piece.parent_id,
+                parent_id: piece.parent_id.clone(),
                 offset: piece.offset,
                 length: piece.length,
-                digest: piece.digest,
+                digest: piece.digest.clone(),
                 content: Some(content),
                 traffic_type: None,
                 cost: None,
                 created_at: None,
             }),
+            // Calculate the digest of the piece metadata, including the number, offset, length and
+            // content digest. The digest is used to verify the integrity of the piece metadata.
+            digest: Some(piece.calculate_digest()),
         }))
     }
 }
