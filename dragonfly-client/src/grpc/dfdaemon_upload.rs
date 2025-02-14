@@ -55,6 +55,7 @@ use tonic::{
     transport::{Channel, Server},
     Code, Request, Response, Status,
 };
+use tower::ServiceBuilder;
 use tracing::{error, info, instrument, Instrument, Span};
 use url::Url;
 
@@ -127,6 +128,13 @@ impl DfdaemonUploadServer {
             .set_serving::<DfdaemonUploadGRPCServer<DfdaemonUploadServerHandler>>()
             .await;
 
+        // TODO(Gaius): RateLimitLayer is not implemented Clone, so we can't use it here.
+        // Only use the LoadShed layer and the ConcurrencyLimit layer.
+        let layer = ServiceBuilder::new()
+            .concurrency_limit(self.config.upload.server.request_rate_limit as usize)
+            .load_shed()
+            .into_inner();
+
         // Start upload grpc server.
         let mut server_builder = Server::builder();
         if let Ok(Some(server_tls_config)) =
@@ -143,6 +151,7 @@ impl DfdaemonUploadServer {
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
+            .layer(layer)
             .add_service(reflection.clone())
             .add_service(health_service)
             .add_service(self.service.clone())
