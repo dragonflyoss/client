@@ -15,9 +15,10 @@
  */
 
 use chrono::{NaiveDateTime, Utc};
+use crc::*;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_util::http::headermap_to_hashmap;
+use dragonfly_client_util::{digest, http::headermap_to_hashmap};
 use rayon::prelude::*;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -300,6 +301,27 @@ impl Piece {
             },
             None => None,
         }
+    }
+
+    /// calculate_digest return the digest of the piece metadata,
+    /// which is different from the digest of the piece content.
+    pub fn calculate_digest(&self) -> String {
+        let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
+        let mut crc_digest = crc.digest();
+
+        crc_digest.update(&self.number.to_be_bytes());
+        crc_digest.update(&self.offset.to_be_bytes());
+        crc_digest.update(&self.length.to_be_bytes());
+        crc_digest.update(self.digest.as_bytes());
+
+        if let Some(parent_id) = &self.parent_id {
+            crc_digest.update(parent_id.as_bytes());
+        }
+
+        let digest =
+            digest::Digest::new(digest::Algorithm::Crc32, crc_digest.finalize().to_string());
+
+        digest.to_string()
     }
 }
 
@@ -927,6 +949,21 @@ impl Metadata<RocksdbStorageEngine> {
 mod tests {
     use super::*;
     use tempdir::TempDir;
+
+    #[test]
+    fn test_calculate_digest() {
+        let piece = Piece {
+            number: 1,
+            offset: 0,
+            length: 1024,
+            digest: "crc32:3810626145".to_string(),
+            parent_id: Some("d3c4e940ad06c47fc36ac67801e6f8e36cb4".to_string()),
+            ..Default::default()
+        };
+
+        let digest = piece.calculate_digest();
+        assert_eq!(digest, "crc32:523852508");
+    }
 
     #[test]
     fn should_create_metadata() {
