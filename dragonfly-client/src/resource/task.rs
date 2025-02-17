@@ -349,7 +349,6 @@ impl Task {
                 host_id,
                 peer_id,
                 request.need_piece_content,
-                request.load_to_cache,
                 interested_pieces.clone(),
                 download_progress_tx.clone(),
             )
@@ -1498,7 +1497,6 @@ impl Task {
         host_id: &str,
         peer_id: &str,
         need_piece_content: bool,
-        load_to_cache: bool,
         interested_pieces: Vec<metadata::Piece>,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<Vec<metadata::Piece>> {
@@ -1542,8 +1540,8 @@ impl Task {
                 created_at: Some(prost_wkt_types::Timestamp::from(piece.created_at)),
             };
 
-            // If need_piece_content or load_to_cache is true, read the piece content from the local.
-            if need_piece_content || load_to_cache {
+            // If need_piece_content is true, read the piece content from the local.
+            if need_piece_content {
                 let mut reader = self
                     .piece
                     .download_from_local_into_async_read(
@@ -1564,20 +1562,7 @@ impl Task {
                     error!("read piece {} failed: {:?}", piece_id, err);
                 })?;
 
-                if need_piece_content {
-                    piece.content = Some(content.clone());
-                }
-
-                // Load piece content to cache.
-                if load_to_cache {
-                    self.storage
-                        .load_piece_to_cache(
-                            piece_id.as_str(),
-                            &mut content.clone().as_slice(),
-                            piece.length,
-                        )
-                        .await;
-                }
+                piece.content = Some(content);
             }
 
             // Send the download progress.
