@@ -25,11 +25,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
-use tracing::{debug, error, instrument, warn};
 use tokio_util::either::Either;
 use tokio_util::io::InspectReader;
-use tracing::info;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, info, instrument, warn};
 
 pub mod cache;
 pub mod content;
@@ -69,36 +67,6 @@ impl Storage {
             content,
             cache,
         })
-    }
-
-    /// total_space returns the total space of the disk.
-    pub fn total_space(&self) -> Result<u64> {
-        self.content.total_space()
-    }
-
-    /// available_space returns the available space of the disk.
-    pub fn available_space(&self) -> Result<u64> {
-        self.content.available_space()
-    }
-
-    /// has_enough_space checks if the storage has enough space to store the content.
-    pub fn has_enough_space(&self, content_length: u64) -> Result<bool> {
-        self.content.has_enough_space(content_length)
-    }
-
-    /// total_space returns the total space of the disk.
-    pub fn total_space(&self) -> Result<u64> {
-        self.content.total_space()
-    }
-
-    /// available_space returns the available space of the disk.
-    pub fn available_space(&self) -> Result<u64> {
-        self.content.available_space()
-    }
-
-    /// has_enough_space checks if the storage has enough space to store the content.
-    pub fn has_enough_space(&self, content_length: u64) -> Result<bool> {
-        self.content.has_enough_space(content_length)
     }
 
     /// total_space returns the total space of the disk.
@@ -531,7 +499,6 @@ impl Storage {
                 {
                     Ok(reader) => {
                         // Finish uploading the task.
-                        info!("hit storage: {}", piece_id);
                         self.metadata.upload_task_finished(task_id)?;
                         Ok(Either::Right(reader))
                     }

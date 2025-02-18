@@ -65,7 +65,6 @@ tokio-rustls.workspace = true
 serde_json.workspace = true
 lru.workspace = true
 fs2.workspace = true
-bytes.workspace = true
 lazy_static = "1.5"
 tracing-log = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
@@ -79,7 +78,6 @@ pprof = { version = "0.14", features = ["flamegraph", "protobuf-codec"] }
 prometheus = { version = "0.13", features = ["process"] }
 tonic-health = "0.12.3"
 bytes = "1.10"
-
 sysinfo = "0.32.1"
 tower = { version = "0.4.13", features = ["limit", "load-shed", "buffer"] }
 indicatif = "0.17.11"
