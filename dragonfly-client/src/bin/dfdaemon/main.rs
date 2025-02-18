@@ -292,6 +292,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Initialize download grpc server.
     let mut dfdaemon_download_grpc = DfdaemonDownloadServer::new(
+        config.clone(),
         config.download.server.socket_path.clone(),
         task.clone(),
         persistent_cache_task.clone(),

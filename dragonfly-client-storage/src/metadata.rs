@@ -15,9 +15,10 @@
  */
 
 use chrono::{NaiveDateTime, Utc};
+use crc::*;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_util::http::headermap_to_hashmap;
+use dragonfly_client_util::{digest, http::headermap_to_hashmap};
 use rayon::prelude::*;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -185,10 +186,7 @@ impl PersistentCacheTask {
 
     /// is_expired returns whether the persistent cache task is expired.
     pub fn is_expired(&self) -> bool {
-        // When scheduler runs garbage collection, it will trigger dfdaemon to evict the persistent cache task.
-        // But sometimes the dfdaemon may not evict the persistent cache task in time, so we select the ttl * 1.2
-        // as the expired time to force evict the persistent cache task.
-        self.created_at + self.ttl * 2 < Utc::now().naive_utc()
+        self.created_at + self.ttl < Utc::now().naive_utc()
     }
 
     /// is_failed returns whether the persistent cache task downloads failed.
@@ -303,6 +301,21 @@ impl Piece {
             },
             None => None,
         }
+    }
+
+    /// calculate_digest return the digest of the piece metadata, including the piece number,
+    /// offset, length and content digest. The digest is used to check the integrity of the
+    /// piece metadata.
+    pub fn calculate_digest(&self) -> String {
+        let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
+        let mut digest = crc.digest();
+        digest.update(&self.number.to_be_bytes());
+        digest.update(&self.offset.to_be_bytes());
+        digest.update(&self.length.to_be_bytes());
+        digest.update(self.digest.as_bytes());
+
+        let encoded = digest.finalize().to_string();
+        digest::Digest::new(digest::Algorithm::Crc32, encoded).to_string()
     }
 }
 
@@ -586,10 +599,14 @@ impl<E: StorageEngineOwned> Metadata<E> {
         persistent: bool,
         piece_length: u64,
         content_length: u64,
+        created_at: NaiveDateTime,
     ) -> Result<PersistentCacheTask> {
         let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
             Some(mut task) => {
                 // If the task exists, update the task metadata.
+                task.ttl = ttl;
+                task.persistent = persistent;
+                task.piece_length = piece_length;
                 task.updated_at = Utc::now().naive_utc();
                 task.failed_at = None;
                 task
@@ -601,7 +618,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
                 piece_length,
                 content_length,
                 updated_at: Utc::now().naive_utc(),
-                created_at: Utc::now().naive_utc(),
+                created_at,
                 ..Default::default()
             },
         };
@@ -687,6 +704,22 @@ impl<E: StorageEngineOwned> Metadata<E> {
         let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
             Some(mut task) => {
                 task.uploading_count -= 1;
+                task.updated_at = Utc::now().naive_utc();
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// persist_persistent_cache_task persists the persistent cache task metadata.
+    #[instrument(skip_all)]
+    pub fn persist_persistent_cache_task(&self, id: &str) -> Result<PersistentCacheTask> {
+        let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.persistent = true;
                 task.updated_at = Utc::now().naive_utc();
                 task
             }
@@ -910,6 +943,20 @@ impl Metadata<RocksdbStorageEngine> {
 mod tests {
     use super::*;
     use tempdir::TempDir;
+
+    #[test]
+    fn test_calculate_digest() {
+        let piece = Piece {
+            number: 1,
+            offset: 0,
+            length: 1024,
+            digest: "crc32:3810626145".to_string(),
+            ..Default::default()
+        };
+
+        let digest = piece.calculate_digest();
+        assert_eq!(digest, "crc32:3874114958");
+    }
 
     #[test]
     fn should_create_metadata() {

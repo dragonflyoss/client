@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use chrono::NaiveDateTime;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
@@ -24,6 +25,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
+use tracing::{debug, error, instrument, warn};
 use tokio_util::either::Either;
 use tokio_util::io::InspectReader;
 use tracing::info;
@@ -69,6 +71,51 @@ impl Storage {
         })
     }
 
+    /// total_space returns the total space of the disk.
+    pub fn total_space(&self) -> Result<u64> {
+        self.content.total_space()
+    }
+
+    /// available_space returns the available space of the disk.
+    pub fn available_space(&self) -> Result<u64> {
+        self.content.available_space()
+    }
+
+    /// has_enough_space checks if the storage has enough space to store the content.
+    pub fn has_enough_space(&self, content_length: u64) -> Result<bool> {
+        self.content.has_enough_space(content_length)
+    }
+
+    /// total_space returns the total space of the disk.
+    pub fn total_space(&self) -> Result<u64> {
+        self.content.total_space()
+    }
+
+    /// available_space returns the available space of the disk.
+    pub fn available_space(&self) -> Result<u64> {
+        self.content.available_space()
+    }
+
+    /// has_enough_space checks if the storage has enough space to store the content.
+    pub fn has_enough_space(&self, content_length: u64) -> Result<bool> {
+        self.content.has_enough_space(content_length)
+    }
+
+    /// total_space returns the total space of the disk.
+    pub fn total_space(&self) -> Result<u64> {
+        self.content.total_space()
+    }
+
+    /// available_space returns the available space of the disk.
+    pub fn available_space(&self) -> Result<u64> {
+        self.content.available_space()
+    }
+
+    /// has_enough_space checks if the storage has enough space to store the content.
+    pub fn has_enough_space(&self, content_length: u64) -> Result<bool> {
+        self.content.has_enough_space(content_length)
+    }
+
     /// hard_link_or_copy_task hard links or copies the task content to the destination.
     #[instrument(skip_all)]
     pub async fn hard_link_or_copy_task(
@@ -78,16 +125,6 @@ impl Storage {
         range: Option<Range>,
     ) -> Result<()> {
         self.content.hard_link_or_copy_task(task, to, range).await
-    }
-
-    /// read_task_by_range returns the reader of the task by range.
-    #[instrument(skip_all)]
-    pub async fn read_task_by_range(
-        &self,
-        task_id: &str,
-        range: Range,
-    ) -> Result<impl AsyncRead + 'static> {
-        self.content.read_task_by_range(task_id, range).await
     }
 
     /// download_task_started updates the metadata of the task when the task downloads started.
@@ -219,6 +256,7 @@ impl Storage {
         persistent: bool,
         piece_length: u64,
         content_length: u64,
+        created_at: NaiveDateTime,
     ) -> Result<metadata::PersistentCacheTask> {
         self.metadata.download_persistent_cache_task_started(
             id,
@@ -226,6 +264,7 @@ impl Storage {
             persistent,
             piece_length,
             content_length,
+            created_at,
         )
     }
 
@@ -263,6 +302,12 @@ impl Storage {
         id: &str,
     ) -> Result<Option<metadata::PersistentCacheTask>> {
         self.metadata.get_persistent_cache_task(id)
+    }
+
+    /// persist_persistent_cache_task persists the persistent cache task metadata.
+    #[instrument(skip_all)]
+    pub fn persist_persistent_cache_task(&self, id: &str) -> Result<metadata::PersistentCacheTask> {
+        self.metadata.persist_persistent_cache_task(id)
     }
 
     /// is_persistent_cache_task_exists returns whether the persistent cache task exists.
@@ -311,7 +356,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_piece_with_crc32_castagnoli(task_id, offset, reader)
+            .write_persistent_cache_piece_with_crc32_castagnoli(task_id, offset, reader)
             .await?;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
 
@@ -628,7 +673,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_piece_with_crc32_castagnoli(task_id, offset, reader)
+            .write_persistent_cache_piece_with_crc32_castagnoli(task_id, offset, reader)
             .await?;
 
         let length = response.length;
@@ -679,7 +724,7 @@ impl Storage {
             Ok(Some(piece)) => {
                 match self
                     .content
-                    .read_piece(task_id, piece.offset, piece.length, range)
+                    .read_persistent_cache_piece(task_id, piece.offset, piece.length, range)
                     .await
                 {
                     Ok(reader) => {

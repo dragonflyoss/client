@@ -103,7 +103,7 @@ impl Piece {
                 RateLimiter::builder()
                     .initial(config.download.rate_limit.as_u64() as usize)
                     .refill(config.download.rate_limit.as_u64() as usize)
-                    .max(MAX_PIECE_LENGTH as usize)
+                    .max(config.download.rate_limit.as_u64() as usize)
                     .interval(Duration::from_secs(1))
                     .fair(false)
                     .build(),
@@ -112,7 +112,7 @@ impl Piece {
                 RateLimiter::builder()
                     .initial(config.upload.rate_limit.as_u64() as usize)
                     .refill(config.upload.rate_limit.as_u64() as usize)
-                    .max(MAX_PIECE_LENGTH as usize)
+                    .max(config.upload.rate_limit.as_u64() as usize)
                     .interval(Duration::from_secs(1))
                     .fair(false)
                     .build(),
@@ -121,7 +121,7 @@ impl Piece {
                 RateLimiter::builder()
                     .initial(config.proxy.prefetch_rate_limit.as_u64() as usize)
                     .refill(config.proxy.prefetch_rate_limit.as_u64() as usize)
-                    .max(MAX_PIECE_LENGTH as usize)
+                    .max(config.proxy.prefetch_rate_limit.as_u64() as usize)
                     .interval(Duration::from_secs(1))
                     .fair(false)
                     .build(),

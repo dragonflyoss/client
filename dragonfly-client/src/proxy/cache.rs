@@ -59,7 +59,7 @@ impl Cache {
             download.filtered_query_params.clone(),
         )?;
 
-        let Some(task) = self.task.get(&task_id).await? else {
+        let Some(task) = self.task.get(&task_id)? else {
             return Ok(None);
         };
 

@@ -64,6 +64,7 @@ percent-encoding.workspace = true
 tokio-rustls.workspace = true
 serde_json.workspace = true
 lru.workspace = true
+fs2.workspace = true
 bytes.workspace = true
 lazy_static = "1.5"
 tracing-log = "0.2"
@@ -77,19 +78,19 @@ opentelemetry-jaeger = { version = "0.17.0", features = ["rt-tokio"] }
 pprof = { version = "0.14", features = ["flamegraph", "protobuf-codec"] }
 prometheus = { version = "0.13", features = ["process"] }
 tonic-health = "0.12.3"
+bytes = "1.10"
 
 sysinfo = "0.32.1"
-tower = "0.4.13"
-indicatif = "0.17.9"
+tower = { version = "0.4.13", features = ["limit", "load-shed", "buffer"] }
+indicatif = "0.17.11"
 dashmap = "6.1.0"
-fs2 = "0.4.3"
 hashring = "0.3.6"
 fslock = "0.2.1"
 leaky-bucket = "1.1.2"
 http-body-util = "0.1.2"
 futures-util = "0.3.31"
 termion = "4.0.3"
-tabled = "0.17.0"
+tabled = "0.18.0"
 path-absolutize = "3.1.1"
 
 [dev-dependencies]

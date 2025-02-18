@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.5"
+version = "0.2.11"
 authors = ["The Dragonfly Developers"]
 homepage = "https://d7y.io/"
 repository = "https://github.com/dragonflyoss/client.git"
@@ -22,15 +22,15 @@ readme = "README.md"
 edition = "2021"
 
 [workspace.dependencies]
-dragonfly-client = { path = "dragonfly-client", version = "0.2.5" }
-dragonfly-client-core = { path = "dragonfly-client-core", version = "0.2.5" }
-dragonfly-client-config = { path = "dragonfly-client-config", version = "0.2.5" }
-dragonfly-client-storage = { path = "dragonfly-client-storage", version = "0.2.5" }
-dragonfly-client-backend = { path = "dragonfly-client-backend", version = "0.2.5" }
-dragonfly-client-util = { path = "dragonfly-client-util", version = "0.2.5" }
-dragonfly-client-init = { path = "dragonfly-client-init", version = "0.2.5" }
+dragonfly-client = { path = "dragonfly-client", version = "0.2.11" }
+dragonfly-client-core = { path = "dragonfly-client-core", version = "0.2.11" }
+dragonfly-client-config = { path = "dragonfly-client-config", version = "0.2.11" }
+dragonfly-client-storage = { path = "dragonfly-client-storage", version = "0.2.11" }
+dragonfly-client-backend = { path = "dragonfly-client-backend", version = "0.2.11" }
+dragonfly-client-util = { path = "dragonfly-client-util", version = "0.2.11" }
+dragonfly-client-init = { path = "dragonfly-client-init", version = "0.2.11" }
 thiserror = "1.0"
-dragonfly-api = "=2.1.12"
+dragonfly-api = "=2.1.27"
 reqwest = { version = "0.12.4", features = [
     "stream",
     "native-tls",
@@ -43,7 +43,7 @@ reqwest = { version = "0.12.4", features = [
 ] }
 reqwest-middleware = "0.4"
 rcgen = { version = "0.12.1", features = ["x509-parser"] }
-hyper = { version = "1.5", features = ["full"] }
+hyper = { version = "1.6", features = ["full"] }
 hyper-util = { version = "0.1.10", features = [
     "client",
     "client-legacy",
@@ -57,12 +57,12 @@ http-range-header = "0.4.2"
 tracing = "0.1"
 url = "2.5.4"
 rustls = { version = "0.22.4", features = ["tls12"] }
-rustls-pki-types = "1.10.1"
+rustls-pki-types = "1.11.0"
 rustls-pemfile = "2.2.0"
 sha2 = "0.10"
 blake3 = "1.5.5"
 crc = "3.2.1"
-uuid = { version = "1.12", features = ["v4"] }
+uuid = { version = "1.13", features = ["v4"] }
 hex = "0.4"
 rocksdb = "0.22.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -90,18 +90,19 @@ opendal = { version = "0.48.0", features = [
     "services-cos",
     "services-webhdfs",
 ] }
-clap = { version = "4.5.26", features = ["derive"] }
+clap = { version = "4.5.29", features = ["derive"] }
 anyhow = "1.0.95"
-toml_edit = "0.22.22"
-toml = "0.8.19"
+toml_edit = "0.22.24"
+toml = "0.8.20"
 base16ct = { version = "0.2", features = ["alloc"] }
-bytesize = { version = "1.2.0", features = ["serde"] }
+bytesize = { version = "1.3.2", features = ["serde"] }
 bytesize-serde = "0.2.1"
 percent-encoding = "2.3.1"
-tempfile = "3.14.0"
+tempfile = "3.16.0"
 tokio-rustls = "0.25.0-alpha.4"
-serde_json = "1.0.137"
+serde_json = "1.0.138"
 lru = "0.12.5"
+fs2 = "0.4.3"
 bytes = "1.9"
 
 [profile.release]

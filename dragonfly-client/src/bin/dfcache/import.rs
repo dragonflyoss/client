@@ -22,9 +22,11 @@ use dragonfly_client_core::{
     Error, Result,
 };
 use indicatif::{ProgressBar, ProgressStyle};
-use std::path::PathBuf;
+use path_absolutize::*;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use termion::{color, style};
+use tracing::info;
 
 use super::*;
 
@@ -36,6 +38,13 @@ const DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL: Duration = Duration::from_milli
 pub struct ImportCommand {
     #[arg(help = "Specify the path of the file to import")]
     path: PathBuf,
+
+    #[arg(
+        long = "id",
+        required = false,
+        help = "Specify the id of the persistent cache task, its length must be 64 bytes. If id is none, dfdaemon will generate the new task id based on the file content, tag and application by wyhash algorithm."
+    )]
+    id: Option<String>,
 
     #[arg(
         long = "persistent-replica-count",
@@ -310,6 +319,9 @@ impl ImportCommand {
 
     /// run runs the import sub command.
     async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
+        let absolute_path = Path::new(&self.path).absolutize()?;
+        info!("import file: {}", absolute_path.to_string_lossy());
+
         let pb = ProgressBar::new_spinner();
         pb.enable_steady_tick(DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL);
         pb.set_style(
@@ -321,7 +333,8 @@ impl ImportCommand {
 
         let persistent_cache_task = dfdaemon_download_client
             .upload_persistent_cache_task(UploadPersistentCacheTaskRequest {
-                path: self.path.clone().into_os_string().into_string().unwrap(),
+                task_id: self.id.clone(),
+                path: absolute_path.to_string_lossy().to_string(),
                 persistent_replica_count: self.persistent_replica_count,
                 tag: self.tag.clone(),
                 application: self.application.clone(),
@@ -341,6 +354,24 @@ impl ImportCommand {
 
     /// validate_args validates the command line arguments.
     fn validate_args(&self) -> Result<()> {
+        if self.ttl < Duration::from_secs(5 * 60)
+            || self.ttl > Duration::from_secs(7 * 24 * 60 * 60)
+        {
+            return Err(Error::ValidationError(format!(
+                "ttl must be between 5 minutes and 7 days, but got {}",
+                self.ttl.as_secs()
+            )));
+        }
+
+        if let Some(id) = self.id.as_ref() {
+            if id.len() != 64 {
+                return Err(Error::ValidationError(format!(
+                    "id length must be 64 bytes, but got {}",
+                    id.len()
+                )));
+            }
+        }
+
         if self.path.is_dir() {
             return Err(Error::ValidationError(format!(
                 "path {} is a directory",

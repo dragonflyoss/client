@@ -25,6 +25,7 @@ tokio-util.workspace = true
 sha2.workspace = true
 crc.workspace = true
 base16ct.workspace = true
+fs2.workspace = true
 lru.workspace = true
 bytes.workspace = true
 num_cpus = "1.0"
