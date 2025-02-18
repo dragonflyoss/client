@@ -138,3 +138,213 @@ impl Cache {
         pieces.contains(id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use tokio::runtime::Runtime;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_new() {
+        let capacities = [
+            10,
+            1000,
+            0,
+            1,
+        ];
+    
+        for &capacity in capacities.iter() {
+            let result = Cache::new(capacity);
+    
+            if capacity == 0 {
+                assert!(result.is_err());
+    
+                if let Err(err) = result {
+                    assert!(matches!(err, Error::InvalidParameter));
+                }
+            } else {
+                assert!(result.is_ok());
+    
+                if let Ok(cache) = result {
+                    let pieces = cache.pieces.read().await;
+                    assert_eq!(pieces.cap().get(), capacity);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_contains_piece() {
+        let rt = Runtime::new().unwrap();
+
+        rt.block_on(async {
+            let cache = Cache::new(10).unwrap();
+            let piece_id = "piece_1";
+            let piece_content = Bytes::from("test data");
+
+            cache
+                .write_piece(piece_id, &mut Cursor::new(piece_content.clone()), piece_content.len() as u64)
+                .await
+                .unwrap();
+
+            let exists = cache.contains_piece(piece_id).await;
+            assert!(exists);
+        });
+
+        rt.block_on(async {
+            let cache = Cache::new(10).unwrap();
+            let piece_id = "piece_2";
+
+            let exists = cache.contains_piece(piece_id).await;
+            assert!(!exists);
+        });
+
+        rt.block_on(async {
+            let cache = Cache::new(1).unwrap();
+            let piece_id_1 = "piece_1";
+            let piece_id_2 = "piece_2";
+            let piece_content = Bytes::from("test data");
+
+            cache
+                .write_piece(piece_id_1, &mut Cursor::new(piece_content.clone()), piece_content.len() as u64)
+                .await
+                .unwrap();
+
+            cache
+                .write_piece(piece_id_2, &mut Cursor::new(piece_content.clone()), piece_content.len() as u64)
+                .await
+                .unwrap();
+
+            let exists = cache.contains_piece(piece_id_1).await;
+            assert!(!exists);
+
+            let exists = cache.contains_piece(piece_id_2).await;
+            assert!(exists);
+        });
+    }
+
+    #[test]
+    fn test_read_piece_piece_not_found() {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let cache = Cache::new(10).unwrap();
+            let piece_id = "piece_1";
+
+            let result = cache.read_piece(piece_id, 0, 10, None).await;
+
+            assert!(matches!(result, Err(Error::PieceNotFound(_))));
+        });
+    }
+
+    #[test]
+    fn test_read_piece_no_range() {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let cache = Cache::new(10).unwrap();
+            let piece_id = "piece_1";
+            let piece_content = Bytes::from("hello world");
+
+            cache
+                .write_piece(piece_id, &mut Cursor::new(piece_content.clone()), piece_content.len() as u64)
+                .await
+                .unwrap();
+
+            let mut reader = cache.read_piece(piece_id, 0, piece_content.len() as u64, None).await.unwrap();
+            let mut buffer = Vec::new();
+            reader.read_to_end(&mut buffer).await.unwrap();
+
+            assert_eq!(buffer, piece_content);
+        });
+    }
+
+    #[test]
+    fn test_read_piece_with_valid_range() {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let cache = Cache::new(10).unwrap();
+            let piece_id = "piece_1";
+            let piece_content = Bytes::from("hello world");
+
+            cache
+                .write_piece(piece_id, &mut Cursor::new(piece_content.clone()), piece_content.len() as u64)
+                .await
+                .unwrap();
+
+            let range = Range {
+                start: 6,
+                length: 5,
+            };
+
+            let mut reader = cache.read_piece(piece_id, 0, piece_content.len() as u64, Some(range)).await.unwrap();
+            let mut buffer = Vec::new();
+            reader.read_to_end(&mut buffer).await.unwrap();
+
+            assert_eq!(buffer, Bytes::from("world"));
+        });
+    }
+
+    #[test]
+    fn test_read_piece_with_invalid_range() {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let cache = Cache::new(10).unwrap();
+            let piece_id = "piece_1";
+            let piece_content = Bytes::from("hello world");
+
+            cache
+                .write_piece(piece_id, &mut Cursor::new(piece_content.clone()), piece_content.len() as u64)
+                .await
+                .unwrap();
+
+            let range = Range {
+                start: 10,
+                length: 10,
+            };
+
+            let result = cache.read_piece(piece_id, 0, piece_content.len() as u64, Some(range)).await;
+
+            assert!(matches!(result, Err(Error::InvalidParameter)));
+        });
+    }
+
+    #[test]
+    fn test_read_piece_valid_offset_and_length() {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let cache = Cache::new(10).unwrap();
+            let piece_id = "piece_1";
+            let piece_content = Bytes::from("hello world");
+
+            cache
+                .write_piece(piece_id, &mut Cursor::new(piece_content.clone()), piece_content.len() as u64)
+                .await
+                .unwrap();
+
+            let mut reader = cache.read_piece(piece_id, 6, 5, None).await.unwrap();
+            let mut buffer = Vec::new();
+            reader.read_to_end(&mut buffer).await.unwrap();
+
+            assert_eq!(buffer, Bytes::from("world"));
+        });
+    }
+
+    #[test]
+    fn test_read_piece_invalid_offset_and_length() {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let cache = Cache::new(10).unwrap();
+            let piece_id = "piece_1";
+            let piece_content = Bytes::from("hello world");
+
+            cache
+                .write_piece(piece_id, &mut Cursor::new(piece_content.clone()), piece_content.len() as u64)
+                .await
+                .unwrap();
+
+            let result = cache.read_piece(piece_id, 20, 10, None).await;
+
+            assert!(matches!(result, Err(Error::InvalidParameter)));
+        });
+    }
+}
