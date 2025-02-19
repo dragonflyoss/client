@@ -183,7 +183,7 @@ jobs:
       - name: Run Trivy vulnerability scanner in tarball mode
         uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0
         with:
-          image-ref: dragonflyoss/${{ matrix.module }}:${{ steps.get_version.outputs.VERSION }}
+          image-ref: dragonflyoss/dfinit:${{ steps.get_version.outputs.VERSION }}
           severity: 'CRITICAL,HIGH'
           format: 'sarif'
           output: 'trivy-results.sarif'
