@@ -401,6 +401,7 @@ impl Storage {
     }
 
     /// download_piece_from_parent_finished is used for downloading piece from parent.
+    #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     pub async fn download_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,

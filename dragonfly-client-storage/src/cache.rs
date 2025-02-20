@@ -123,13 +123,16 @@ impl Cache {
         }
 
         let mut buffer = Vec::with_capacity(length as usize);
-        reader
-            .read_to_end(&mut buffer)
-            .await
-            .map_err(|_err| Error::Unknown(piece_id.to_string()))?;
-
-        pieces.put(piece_id.to_string(), Bytes::from(buffer));
-        Ok(())
+        match reader.read_to_end(&mut buffer).await {
+            Ok(_) => {
+                pieces.push(piece_id.to_string(), Bytes::from(buffer));
+                Ok(())
+            }
+            Err(err) => Err(Error::Unknown(format!(
+                "Failed to read piece data for {}: {}",
+                piece_id, err
+            ))),
+        }
     }
 
     /// contains_piece checks whether the piece exists in the cache.
@@ -145,23 +148,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_new() {
-        let capacities = [10, 1000, 0, 1];
+        // Test case which is a tuple consists of the capacity and the expected result.
+        let test_cases = vec![
+            (1, Ok(1)),
+            (10, Ok(10)),
+            (1000, Ok(1000)),
+            (0, Err(Error::InvalidParameter)),
+        ];
 
-        for &capacity in capacities.iter() {
+        for (capacity, expected_result) in test_cases {
             let result = Cache::new(capacity);
 
-            if capacity == 0 {
-                assert!(result.is_err());
-
-                if let Err(err) = result {
-                    assert!(matches!(err, Error::InvalidParameter));
+            match expected_result {
+                Ok(expected_capacity) => {
+                    assert!(result.is_ok());
+                    if let Ok(cache) = result {
+                        let pieces = cache.pieces.read().await;
+                        assert_eq!(pieces.cap().get(), expected_capacity);
+                    }
                 }
-            } else {
-                assert!(result.is_ok());
+                Err(_err) => {
+                    assert!(result.is_err());
 
-                if let Ok(cache) = result {
-                    let pieces = cache.pieces.read().await;
-                    assert_eq!(pieces.cap().get(), capacity);
+                    if let Err(err) = result {
+                        assert!(matches!(err, Error::InvalidParameter));
+                    }
                 }
             }
         }
@@ -169,120 +180,213 @@ mod tests {
 
     #[tokio::test]
     async fn test_contains_piece() {
-        let cache = Cache::new(10).unwrap();
-        let piece_id = "piece_1";
-        let piece_content = Bytes::from("test data");
+        let capacity = 5;
+        let cache = Cache::new(capacity).unwrap();
 
+        // Test case which is a tuple consists of piece id, piece content and expected result.
+        let test_cases = vec![
+            ("piece_1", Bytes::from("data 1"), false),
+            ("piece_2", Bytes::from("data 2"), true),
+            ("piece_3", Bytes::from("data 3"), false),
+            ("piece_4", Bytes::from("data 4"), true),
+            ("piece_5", Bytes::from("data 5"), true),
+            ("piece_6", Bytes::from("data 6"), true),
+            ("piece_7", Bytes::from("data 7"), true),
+        ];
+
+        // Insert six pieces into a cache with a capacity of 5, and piece_1 will be evicted due to LRU,
+        // lru list: [piece_6, piece_5, piece_4, piece_3, piece_2].
+        for (piece_id, piece_content, _) in test_cases[0..6].iter() {
+            cache
+                .pieces
+                .write()
+                .await
+                .push(piece_id.to_string(), piece_content.clone());
+        }
+
+        // Read piece_2, lru list: [piece_2, piece_6, piece_5, piece_4, piece_3].
+        let _ = cache.pieces.write().await.get("piece_2");
+
+        // Write piece_7, and piece_3 will be evicted due to LRU,
+        // lru list: [piece_7, piece_2, piece_6, piece_5, piece_4].
+        let (piece_id, piece_content, _) = &test_cases[6];
         cache
-            .write_piece(
-                piece_id,
-                &mut Cursor::new(piece_content.clone()),
-                piece_content.len() as u64,
-            )
+            .pieces
+            .write()
             .await
-            .unwrap();
+            .push(piece_id.to_string(), piece_content.clone());
 
-        let exists = cache.contains_piece(piece_id).await;
-        assert!(exists);
-
-        let cache = Cache::new(10).unwrap();
-        let piece_id = "piece_2";
-
-        let exists = cache.contains_piece(piece_id).await;
-        assert!(!exists);
-
-        let cache = Cache::new(1).unwrap();
-        let piece_id_1 = "piece_1";
-        let piece_id_2 = "piece_2";
-        let piece_content = Bytes::from("test data");
-
-        cache
-            .write_piece(
-                piece_id_1,
-                &mut Cursor::new(piece_content.clone()),
-                piece_content.len() as u64,
-            )
-            .await
-            .unwrap();
-
-        cache
-            .write_piece(
-                piece_id_2,
-                &mut Cursor::new(piece_content.clone()),
-                piece_content.len() as u64,
-            )
-            .await
-            .unwrap();
-
-        let exists = cache.contains_piece(piece_id_1).await;
-        assert!(!exists);
-
-        let exists = cache.contains_piece(piece_id_2).await;
-        assert!(exists);
+        for (piece_id, _, expected_existence) in test_cases {
+            let exists = cache.contains_piece(piece_id).await;
+            assert_eq!(exists, expected_existence);
+        }
     }
 
     #[tokio::test]
-    async fn test_read_piece_piece_not_found() {
-        let cache = Cache::new(10).unwrap();
-        let piece_id = "piece_1";
+    async fn test_read_piece() {
+        let capacity = 5;
+        let cache = Cache::new(capacity).unwrap();
 
-        let result = cache.read_piece(piece_id, 0, 10, None).await;
+        cache
+            .pieces
+            .write()
+            .await
+            .push("piece_1".to_string(), Bytes::from("data 1"));
 
-        assert!(matches!(result, Err(Error::PieceNotFound(_))));
+        // Test case which is a tuple consists of piece id, offset, length, range and expected result.
+        let test_cases = vec![
+            // Case 1: No range, read the whole piece
+            ("piece_1", 0, 4, None, Ok(Bytes::from("data"))),
+            // Case 2: Range that matches the whole piece
+            (
+                "piece_1",
+                0,
+                4,
+                Some(Range {
+                    start: 0,
+                    length: 4,
+                }),
+                Ok(Bytes::from("data")),
+            ),
+            // Case 3: Range starting at position 2, length = 1
+            (
+                "piece_1",
+                0,
+                4,
+                Some(Range {
+                    start: 2,
+                    length: 1,
+                }),
+                Ok(Bytes::from("t")),
+            ),
+            // Case 4: Range starts at 0 and length is 2
+            (
+                "piece_1",
+                0,
+                4,
+                Some(Range {
+                    start: 0,
+                    length: 2,
+                }),
+                Ok(Bytes::from("da")),
+            ),
+            // Case 5: Range starts at the end, length = 1
+            (
+                "piece_1",
+                0,
+                4,
+                Some(Range {
+                    start: 3,
+                    length: 1,
+                }),
+                Ok(Bytes::from("a")),
+            ),
+            // Case 6: Range length exceeding piece bounds
+            (
+                "piece_1",
+                0,
+                4,
+                Some(Range {
+                    start: 2,
+                    length: 3,
+                }),
+                Ok(Bytes::from("ta")),
+            ),
+            // Case 7: Piece not found in cache
+            (
+                "piece_2",
+                0,
+                4,
+                None,
+                Err(Error::PieceNotFound("piece_2".to_string())),
+            ),
+        ];
+
+        for (piece_id, offset, length, range, expected_result) in test_cases {
+            let result = cache.read_piece(piece_id, offset, length, range).await;
+
+            match expected_result {
+                Ok(expected_data) => {
+                    assert!(result.is_ok());
+                    let mut reader = result.unwrap();
+                    let mut buf = Vec::new();
+                    reader.read_to_end(&mut buf).await.unwrap();
+                    assert_eq!(buf, expected_data);
+                }
+                Err(expected_error) => {
+                    assert!(result.is_err(), "Expected error, but got success");
+                    if let Err(err) = result {
+                        match expected_error {
+                            Error::PieceNotFound(_id) => {
+                                assert!(matches!(err, Error::PieceNotFound(_piece_id)));
+                            }
+                            Error::InvalidParameter => {
+                                assert!(matches!(err, Error::InvalidParameter));
+                            }
+                            _ => panic!("Unexpected error type"),
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[tokio::test]
-    async fn test_read_piece_no_range() {
-        let cache = Cache::new(10).unwrap();
-        let piece_id = "piece_1";
-        let piece_content = Bytes::from("hello world");
+    async fn test_write_piece() {
+        let capacity = 5;
+        let cache = Cache::new(capacity).unwrap();
 
-        cache
-            .write_piece(
-                piece_id,
-                &mut Cursor::new(piece_content.clone()),
-                piece_content.len() as u64,
-            )
-            .await
-            .unwrap();
+        // Test case which is a tuple consists of piece id, piece content, length, range and expected result.
+        let test_cases = vec![
+            // Case 1: Write a new piece
+            (
+                "piece_1",
+                "test data",
+                9,
+                Ok(()),
+                Some(Bytes::from("test data")),
+            ),
+            // Case 2: Try to overwrite an existing piece
+            (
+                "piece_1",
+                "new data",
+                8,
+                Err(Error::Unknown(
+                    "overwrite existing piece piece_1".to_string(),
+                )),
+                None,
+            ),
+        ];
 
-        let mut reader = cache
-            .read_piece(piece_id, 0, piece_content.len() as u64, None)
-            .await
-            .unwrap();
-        let mut buffer = Vec::new();
-        reader.read_to_end(&mut buffer).await.unwrap();
+        for (piece_id, content, length, expected_result, expected_data) in test_cases {
+            let result = {
+                let reader = &mut Cursor::new(Bytes::from(content));
+                cache.write_piece(piece_id, reader, length).await
+            };
 
-        assert_eq!(buffer, piece_content);
-    }
+            match expected_result {
+                Ok(_) => {
+                    assert!(result.is_ok());
+                    let pieces = cache.pieces.read().await;
+                    assert!(pieces.contains(piece_id));
 
-    #[tokio::test]
-    async fn test_read_piece_with_valid_range() {
-        let cache = Cache::new(10).unwrap();
-        let piece_id = "piece_1";
-        let piece_content = Bytes::from("hello world");
-
-        cache
-            .write_piece(
-                piece_id,
-                &mut Cursor::new(piece_content.clone()),
-                piece_content.len() as u64,
-            )
-            .await
-            .unwrap();
-
-        let range = Range {
-            start: 6,
-            length: 5,
-        };
-
-        let mut reader = cache
-            .read_piece(piece_id, 0, piece_content.len() as u64, Some(range))
-            .await
-            .unwrap();
-        let mut buffer = Vec::new();
-        reader.read_to_end(&mut buffer).await.unwrap();
-
-        assert_eq!(buffer, Bytes::from("world"));
+                    if let Some(expected_data) = expected_data {
+                        let actual_data = pieces.peek(piece_id).unwrap();
+                        assert_eq!(&*actual_data, &expected_data,);
+                    }
+                }
+                Err(expected_error) => {
+                    assert!(result.is_err());
+                    if let Err(err) = result {
+                        match expected_error {
+                            Error::Unknown(_id) => {
+                                assert!(matches!(err, Error::Unknown(_)));
+                            }
+                            _ => panic!("Unexpected error type"),
+                        }
+                    }
+                }
+            }
+        }
     }
 }
