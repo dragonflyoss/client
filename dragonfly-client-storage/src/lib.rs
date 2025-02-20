@@ -571,18 +571,6 @@ impl Storage {
         }
     }
 
-    /// upload_piece_from_cache uploads the piece content by piece id from cache.
-    #[instrument(skip_all)]
-    pub async fn upload_piece_from_cache(
-        &self,
-        piece_id: &str,
-        offset: u64,
-        length: u64,
-        range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
-        self.cache.read_piece(piece_id, offset, length, range).await
-    }
-
     /// get_piece returns the piece metadata.
     #[instrument(skip_all)]
     pub fn get_piece(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
