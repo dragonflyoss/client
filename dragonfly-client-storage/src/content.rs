@@ -653,7 +653,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn should_calculate_piece_range() {
+    async fn test_calculate_piece_range() {
         let test_cases = vec![
             (1, 4, None, 1, 4),
             (
@@ -724,5 +724,18 @@ mod tests {
             assert_eq!(target_offset, expected_offset);
             assert_eq!(target_length, expected_length);
         }
+    }
+
+    #[tokio::test]
+    async fn test_has_enough_space() {
+        let config = Arc::new(Config::default());
+        let dir = PathBuf::from("/tmp/dragonfly_test");
+        let content = Content::new(config, &dir).await.unwrap();
+
+        let has_space = content.has_enough_space(1).unwrap();
+        assert!(has_space);
+
+        let has_space = content.has_enough_space(u64::MAX).unwrap();
+        assert!(!has_space);
     }
 }

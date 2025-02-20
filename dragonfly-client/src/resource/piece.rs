@@ -925,7 +925,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn should_calculate_interested() {
+    async fn test_calculate_interested() {
         let temp_dir = tempdir().unwrap();
 
         let config = Config::default();
