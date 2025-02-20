@@ -152,7 +152,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn should_calculate_piece_range() {
+    async fn test_calculate_piece_range() {
         let test_cases = vec![
             (1, 4, None, 0, 4),
             (
