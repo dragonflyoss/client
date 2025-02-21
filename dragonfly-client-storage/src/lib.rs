@@ -414,9 +414,18 @@ impl Storage {
         load_to_cache: bool,
         length: u64,
     ) -> Result<metadata::Piece> {
+        let mut buffer = Vec::new();
+        let mut inspect_reader = InspectReader::new(reader, |bytes| {
+            buffer.extend_from_slice(bytes);
+        });
+
         // Load piece content to cache.
         if load_to_cache {
-            match self.cache.write_piece(piece_id, reader, length).await {
+            match self
+                .cache
+                .write_piece(piece_id, &mut inspect_reader, length)
+                .await
+            {
                 Ok(_) => {
                     info!("load piece content to cache. piece: {}", piece_id);
                 }
@@ -428,7 +437,7 @@ impl Storage {
 
         let response = self
             .content
-            .write_piece_with_crc32_castagnoli(task_id, offset, reader)
+            .write_piece_with_crc32_castagnoli(task_id, offset, &mut &buffer[..])
             .await?;
 
         let length = response.length;
