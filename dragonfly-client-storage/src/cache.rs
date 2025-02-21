@@ -372,7 +372,7 @@ mod tests {
 
                     if let Some(expected_data) = expected_data {
                         let actual_data = pieces.peek(piece_id).unwrap();
-                        assert_eq!(&*actual_data, &expected_data,);
+                        assert_eq!(actual_data, &expected_data,);
                     }
                 }
                 Err(expected_error) => {
