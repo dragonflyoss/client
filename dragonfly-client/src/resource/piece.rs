@@ -39,18 +39,21 @@ use tracing::{error, info, instrument, Span};
 /// than MAX_PIECE_COUNT, the piece length will be optimized by the file length.
 /// When piece length became the MAX_PIECE_LENGTH, the piece count
 /// probably will be upper than MAX_PIECE_COUNT.
-const MAX_PIECE_COUNT: u64 = 500;
+pub const MAX_PIECE_COUNT: u64 = 500;
 
 /// MIN_PIECE_LENGTH is the minimum piece length.
-const MIN_PIECE_LENGTH: u64 = 4 * 1024 * 1024;
+pub const MIN_PIECE_LENGTH: u64 = 4 * 1024 * 1024;
 
 /// MAX_PIECE_LENGTH is the maximum piece length.
-const MAX_PIECE_LENGTH: u64 = 16 * 1024 * 1024;
+pub const MAX_PIECE_LENGTH: u64 = 16 * 1024 * 1024;
 
 /// PieceLengthStrategy sets the optimization strategy of piece length.
 pub enum PieceLengthStrategy {
     /// OptimizeByFileLength optimizes the piece length by the file length.
-    OptimizeByFileLength,
+    OptimizeByFileLength(u64),
+
+    /// FixedPieceLength sets the fixed piece length.
+    FixedPieceLength(u64),
 }
 
 /// Piece represents a piece manager.
@@ -297,13 +300,9 @@ impl Piece {
     }
 
     /// calculate_piece_size calculates the piece size by content_length.
-    pub fn calculate_piece_length(
-        &self,
-        strategy: PieceLengthStrategy,
-        content_length: u64,
-    ) -> u64 {
+    pub fn calculate_piece_length(&self, strategy: PieceLengthStrategy) -> u64 {
         match strategy {
-            PieceLengthStrategy::OptimizeByFileLength => {
+            PieceLengthStrategy::OptimizeByFileLength(content_length) => {
                 let piece_length = (content_length as f64 / MAX_PIECE_COUNT as f64) as u64;
                 let actual_piece_length = piece_length.next_power_of_two();
 
@@ -316,6 +315,7 @@ impl Piece {
                     (false, _) => MIN_PIECE_LENGTH,
                 }
             }
+            PieceLengthStrategy::FixedPieceLength(piece_length) => piece_length,
         }
     }
 
