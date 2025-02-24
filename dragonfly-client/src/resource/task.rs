@@ -20,7 +20,7 @@ use crate::metrics::{
     collect_backend_request_started_metrics,
 };
 use dragonfly_api::common::v2::{
-    Download, Hdfs, ObjectStorage, Peer, Piece, Range, Task as CommonTask, TrafficType,
+    Download, Hdfs, ObjectStorage, Peer, Piece, Task as CommonTask, TrafficType,
 };
 use dragonfly_api::dfdaemon::{
     self,
@@ -249,13 +249,8 @@ impl Task {
 
     /// hard_link_or_copy hard links or copies the task content to the destination.
     #[instrument(skip_all)]
-    pub async fn hard_link_or_copy(
-        &self,
-        task: &metadata::Task,
-        to: &Path,
-        range: Option<Range>,
-    ) -> ClientResult<()> {
-        self.storage.hard_link_or_copy_task(task, to, range).await
+    pub async fn hard_link_or_copy(&self, task: &metadata::Task, to: &Path) -> ClientResult<()> {
+        self.storage.hard_link_or_copy_task(task, to).await
     }
 
     /// download downloads a task.
