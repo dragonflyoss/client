@@ -77,13 +77,8 @@ impl Storage {
 
     /// hard_link_or_copy_task hard links or copies the task content to the destination.
     #[instrument(skip_all)]
-    pub async fn hard_link_or_copy_task(
-        &self,
-        task: &metadata::Task,
-        to: &Path,
-        range: Option<Range>,
-    ) -> Result<()> {
-        self.content.hard_link_or_copy_task(task, to, range).await
+    pub async fn hard_link_or_copy_task(&self, task: &metadata::Task, to: &Path) -> Result<()> {
+        self.content.hard_link_or_copy_task(task, to).await
     }
 
     /// download_task_started updates the metadata of the task when the task downloads started.

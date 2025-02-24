@@ -51,6 +51,12 @@ pub const DRAGONFLY_USE_P2P_HEADER: &str = "X-Dragonfly-Use-P2P";
 /// If the value is "false", the range request will fetch the range content.
 pub const DRAGONFLY_PREFETCH_HEADER: &str = "X-Dragonfly-Prefetch";
 
+/// DRAGONFLY_OUTPUT_PATH_HEADER is the header key of output path in http request.
+/// If the value is set, the downloaded file will be saved to the specified path,
+/// and response the file by the body. If the specified path is exist, the file will be
+/// removed and saved to the specified path.
+pub const DRAGONFLY_OUTPUT_PATH_HEADER: &str = "X-Dragonfly-Output-Path";
+
 /// get_tag gets the tag from http header.
 #[instrument(skip_all)]
 pub fn get_tag(header: &HeaderMap) -> Option<String> {
@@ -145,5 +151,132 @@ pub fn get_prefetch(header: &HeaderMap) -> Option<bool> {
             }
         },
         None => None,
+    }
+}
+
+/// get_output_path gets the output path from http header.
+pub fn get_output_path(header: &HeaderMap) -> Option<String> {
+    header
+        .get(DRAGONFLY_OUTPUT_PATH_HEADER)
+        .and_then(|output_path| output_path.to_str().ok())
+        .map(|output_path| output_path.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::header::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn test_get_tag() {
+        let mut headers = HeaderMap::new();
+        headers.insert(DRAGONFLY_TAG_HEADER, HeaderValue::from_static("test-tag"));
+        assert_eq!(get_tag(&headers), Some("test-tag".to_string()));
+
+        let empty_headers = HeaderMap::new();
+        assert_eq!(get_tag(&empty_headers), None);
+    }
+
+    #[test]
+    fn test_get_application() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            DRAGONFLY_APPLICATION_HEADER,
+            HeaderValue::from_static("test-app"),
+        );
+        assert_eq!(get_application(&headers), Some("test-app".to_string()));
+
+        let empty_headers = HeaderMap::new();
+        assert_eq!(get_application(&empty_headers), None);
+    }
+
+    #[test]
+    fn test_get_priority() {
+        let mut headers = HeaderMap::new();
+        headers.insert(DRAGONFLY_PRIORITY_HEADER, HeaderValue::from_static("5"));
+        assert_eq!(get_priority(&headers), 5);
+
+        let empty_headers = HeaderMap::new();
+        assert_eq!(get_priority(&empty_headers), Priority::Level6 as i32);
+
+        headers.insert(
+            DRAGONFLY_PRIORITY_HEADER,
+            HeaderValue::from_static("invalid"),
+        );
+        assert_eq!(get_priority(&headers), Priority::Level6 as i32);
+    }
+
+    #[test]
+    fn test_get_registry() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            DRAGONFLY_REGISTRY_HEADER,
+            HeaderValue::from_static("test-registry"),
+        );
+        assert_eq!(get_registry(&headers), Some("test-registry".to_string()));
+
+        let empty_headers = HeaderMap::new();
+        assert_eq!(get_registry(&empty_headers), None);
+    }
+
+    #[test]
+    fn test_get_filtered_query_params() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            DRAGONFLY_FILTERED_QUERY_PARAMS_HEADER,
+            HeaderValue::from_static("param1,param2"),
+        );
+        assert_eq!(
+            get_filtered_query_params(&headers, vec!["default".to_string()]),
+            vec!["param1".to_string(), "param2".to_string()]
+        );
+
+        let empty_headers = HeaderMap::new();
+        assert_eq!(
+            get_filtered_query_params(&empty_headers, vec!["default".to_string()]),
+            vec!["default".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_get_use_p2p() {
+        let mut headers = HeaderMap::new();
+        headers.insert(DRAGONFLY_USE_P2P_HEADER, HeaderValue::from_static("true"));
+        assert!(get_use_p2p(&headers));
+
+        headers.insert(DRAGONFLY_USE_P2P_HEADER, HeaderValue::from_static("false"));
+        assert!(!get_use_p2p(&headers));
+
+        let empty_headers = HeaderMap::new();
+        assert!(!get_use_p2p(&empty_headers));
+    }
+
+    #[test]
+    fn test_get_prefetch() {
+        let mut headers = HeaderMap::new();
+        headers.insert(DRAGONFLY_PREFETCH_HEADER, HeaderValue::from_static("true"));
+        assert_eq!(get_prefetch(&headers), Some(true));
+
+        headers.insert(DRAGONFLY_PREFETCH_HEADER, HeaderValue::from_static("false"));
+        assert_eq!(get_prefetch(&headers), Some(false));
+
+        let empty_headers = HeaderMap::new();
+        assert_eq!(get_prefetch(&empty_headers), None);
+    }
+
+    #[test]
+    fn test_get_output_path() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            DRAGONFLY_OUTPUT_PATH_HEADER,
+            HeaderValue::from_static("/path/to/output"),
+        );
+        assert_eq!(
+            get_output_path(&headers),
+            Some("/path/to/output".to_string())
+        );
+
+        let empty_headers = HeaderMap::new();
+        assert_eq!(get_output_path(&empty_headers), None);
     }
 }

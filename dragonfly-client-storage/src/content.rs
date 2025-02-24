@@ -117,33 +117,8 @@ impl Content {
         &self,
         task: &crate::metadata::Task,
         to: &Path,
-        range: Option<Range>,
     ) -> Result<()> {
         let task_path = self.get_task_path(task.id.as_str());
-
-        // Copy the task content to the destination by range
-        // if the range is specified.
-        if let Some(range) = range {
-            // If the range length is 0, no need to copy. Need to open the file to
-            // ensure the file exists.
-            if range.length == 0 {
-                info!("range length is 0, no need to copy");
-                File::create(to).await.inspect_err(|err| {
-                    error!("create {:?} failed: {}", to, err);
-                })?;
-
-                return Ok(());
-            }
-
-            self.copy_task_by_range(task.id.as_str(), to, range)
-                .await
-                .inspect_err(|err| {
-                    error!("copy range {:?} to {:?} failed: {}", task_path, to, err);
-                })?;
-
-            info!("copy range {:?} to {:?} success", task_path, to);
-            return Ok(());
-        }
 
         // If the hard link fails, copy the task content to the destination.
         fs::remove_file(to).await.unwrap_or_else(|err| {
