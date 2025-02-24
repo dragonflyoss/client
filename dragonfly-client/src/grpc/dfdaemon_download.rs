@@ -234,6 +234,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             .id_generator
             .task_id(
                 download.url.as_str(),
+                download.piece_length,
                 download.tag.as_deref(),
                 download.application.as_deref(),
                 download.filtered_query_params.clone(),
@@ -902,6 +903,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 .id_generator
                 .persistent_cache_task_id(
                     &path.to_path_buf(),
+                    request.piece_length,
                     request.tag.as_deref(),
                     request.application.as_deref(),
                 )

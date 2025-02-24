@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.12"
+version = "0.2.13"
 authors = ["The Dragonfly Developers"]
 homepage = "https://d7y.io/"
 repository = "https://github.com/dragonflyoss/client.git"
@@ -22,15 +22,15 @@ readme = "README.md"
 edition = "2021"
 
 [workspace.dependencies]
-dragonfly-client = { path = "dragonfly-client", version = "0.2.12" }
-dragonfly-client-core = { path = "dragonfly-client-core", version = "0.2.12" }
-dragonfly-client-config = { path = "dragonfly-client-config", version = "0.2.12" }
-dragonfly-client-storage = { path = "dragonfly-client-storage", version = "0.2.12" }
-dragonfly-client-backend = { path = "dragonfly-client-backend", version = "0.2.12" }
-dragonfly-client-util = { path = "dragonfly-client-util", version = "0.2.12" }
-dragonfly-client-init = { path = "dragonfly-client-init", version = "0.2.12" }
+dragonfly-client = { path = "dragonfly-client", version = "0.2.13" }
+dragonfly-client-core = { path = "dragonfly-client-core", version = "0.2.13" }
+dragonfly-client-config = { path = "dragonfly-client-config", version = "0.2.13" }
+dragonfly-client-storage = { path = "dragonfly-client-storage", version = "0.2.13" }
+dragonfly-client-backend = { path = "dragonfly-client-backend", version = "0.2.13" }
+dragonfly-client-util = { path = "dragonfly-client-util", version = "0.2.13" }
+dragonfly-client-init = { path = "dragonfly-client-init", version = "0.2.13" }
 thiserror = "1.0"
-dragonfly-api = "=2.1.27"
+dragonfly-api = "=2.1.28"
 reqwest = { version = "0.12.4", features = [
     "stream",
     "native-tls",

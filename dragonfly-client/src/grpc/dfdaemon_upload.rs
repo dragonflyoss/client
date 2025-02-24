@@ -223,6 +223,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             .id_generator
             .task_id(
                 download.url.as_str(),
+                download.piece_length,
                 download.tag.as_deref(),
                 download.application.as_deref(),
                 download.filtered_query_params.clone(),

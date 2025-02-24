@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use bytesize::ByteSize;
 use clap::Parser;
 use dragonfly_api::common::v2::{Download, Hdfs, ObjectStorage, TaskType};
 use dragonfly_api::dfdaemon::v2::{download_task_response, DownloadTaskRequest};
@@ -24,6 +25,7 @@ use dragonfly_client::metrics::{
     collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
     collect_backend_request_started_metrics,
 };
+use dragonfly_client::resource::piece::MIN_PIECE_LENGTH;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::{hdfs, object_storage, BackendFactory, DirEntry, HeadRequest};
 use dragonfly_client_config::VersionValueParser;
@@ -139,9 +141,16 @@ struct Args {
     priority: i32,
 
     #[arg(
+        long = "piece-length",
+        required = false,
+        help = "Specify the piece length for downloading file. If the piece length is not specified, the piece length will be calculated according to the file size. Different piece lengths will be divided into different tasks. The value needs to be set with human readable format and needs to be greater than or equal to 4mib, for example: 4mib, 1gib"
+    )]
+    piece_length: Option<ByteSize>,
+
+    #[arg(
         long = "application",
         default_value = "",
-        help = "Caller application which is used for statistics and access control"
+        help = "Different applications for the same url will be divided into different tasks"
     )]
     application: String,
 
@@ -743,7 +752,7 @@ async fn download(
                 priority: args.priority,
                 filtered_query_params,
                 request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
-                piece_length: None,
+                piece_length: args.piece_length.map(|piece_length| piece_length.as_u64()),
                 output_path,
                 timeout: Some(
                     prost_wkt_types::Duration::try_from(args.timeout)
@@ -975,6 +984,16 @@ fn validate_args(args: &Args) -> Result<()> {
             return Err(Error::ValidationError(format!(
                 "output path {} is already exist",
                 args.output.to_string_lossy()
+            )));
+        }
+    }
+
+    if let Some(piece_length) = args.piece_length {
+        if piece_length.as_u64() < MIN_PIECE_LENGTH {
+            return Err(Error::ValidationError(format!(
+                "piece length {} bytes is less than the minimum piece length {} bytes",
+                piece_length.as_u64(),
+                MIN_PIECE_LENGTH
             )));
         }
     }

@@ -54,6 +54,7 @@ impl Cache {
 
         let task_id = self.task.id_generator.task_id(
             &download.url,
+            download.piece_length,
             download.tag.as_deref(),
             download.application.as_deref(),
             download.filtered_query_params.clone(),
