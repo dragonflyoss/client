@@ -1108,7 +1108,7 @@ fn make_download_task_request(
             ),
             request_header: headermap_to_hashmap(&header),
             piece_length: None,
-            output_path: None,
+            output_path: header::get_output_path(&header),
             timeout: None,
             need_back_to_source: false,
             disable_back_to_source: config.proxy.disable_back_to_source,
