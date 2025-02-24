@@ -21,7 +21,7 @@ use crate::metrics::{
     collect_proxy_request_via_dfdaemon_and_cache_hits_metrics,
     collect_proxy_request_via_dfdaemon_metrics,
 };
-use crate::resource::task::Task;
+use crate::resource::{piece::MIN_PIECE_LENGTH, task::Task};
 use crate::shutdown;
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType, TrafficType};
@@ -1092,6 +1092,17 @@ fn make_download_task_request(
     // Registry will return the 403 status code if the Host header is set.
     header.remove(reqwest::header::HOST);
 
+    // Validate the request arguments.
+    let piece_length = header::get_piece_length(&header).map(|piece_length| piece_length.as_u64());
+    if let Some(piece_length) = piece_length {
+        if piece_length < MIN_PIECE_LENGTH {
+            return Err(ClientError::ValidationError(format!(
+                "piece length {} is less than the minimum piece length {}",
+                piece_length, MIN_PIECE_LENGTH
+            )));
+        }
+    }
+
     Ok(DownloadTaskRequest {
         download: Some(Download {
             url: make_download_url(request.uri(), rule.use_tls, rule.redirect.clone())?,
@@ -1107,7 +1118,7 @@ fn make_download_task_request(
                 rule.filtered_query_params.clone(),
             ),
             request_header: headermap_to_hashmap(&header),
-            piece_length: None,
+            piece_length,
             output_path: header::get_output_path(&header),
             timeout: None,
             need_back_to_source: false,

@@ -201,10 +201,17 @@ impl Task {
             None => return Err(Error::InvalidContentLength),
         };
 
-        let piece_length = self.piece.calculate_piece_length(
-            piece::PieceLengthStrategy::OptimizeByFileLength,
-            content_length,
-        );
+        let piece_length = match request.piece_length {
+            Some(piece_length) => self
+                .piece
+                .calculate_piece_length(piece::PieceLengthStrategy::FixedPieceLength(piece_length)),
+            None => {
+                self.piece
+                    .calculate_piece_length(piece::PieceLengthStrategy::OptimizeByFileLength(
+                        content_length,
+                    ))
+            }
+        };
 
         // If the task is not finished, check if the storage has enough space to
         // store the task.
