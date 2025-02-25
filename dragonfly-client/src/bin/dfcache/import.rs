@@ -44,7 +44,7 @@ pub struct ImportCommand {
     #[arg(
         long = "id",
         required = false,
-        help = "Specify the id of the persistent cache task, its length must be 64 bytes. If id is none, dfdaemon will generate the new task id based on the file content, tag and application by wyhash algorithm."
+        help = "Specify the id of the persistent cache task. If id is none, dfdaemon will generate the new task id based on the file content, tag and application by crc32 algorithm."
     )]
     id: Option<String>,
 
