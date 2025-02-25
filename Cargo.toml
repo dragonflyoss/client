@@ -103,6 +103,7 @@ tokio-rustls = "0.25.0-alpha.4"
 serde_json = "1.0.138"
 lru = "0.12.5"
 fs2 = "0.4.3"
+bytes = "1.9"
 
 [profile.release]
 opt-level = "z"
