@@ -60,7 +60,7 @@ rustls = { version = "0.22.4", features = ["tls12"] }
 rustls-pki-types = "1.11.0"
 rustls-pemfile = "2.2.0"
 sha2 = "0.10"
-blake3 = "1.5.5"
+blake3 = "1.6.0"
 crc = "3.2.1"
 uuid = { version = "1.13", features = ["v4"] }
 hex = "0.4"
