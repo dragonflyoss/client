@@ -21,7 +21,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 struct MetadataMap<'a>(&'a mut metadata::MetadataMap);
 
 /// MetadataMap implements the otel tracing Injector.
-impl<'a> opentelemetry::propagation::Injector for MetadataMap<'a> {
+impl opentelemetry::propagation::Injector for MetadataMap<'_> {
     /// set a key-value pair to the injector.
     fn set(&mut self, key: &str, value: String) {
         if let Ok(key) = metadata::MetadataKey::from_bytes(key.as_bytes()) {

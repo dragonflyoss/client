@@ -246,7 +246,7 @@ impl Operations for RocksdbStorageEngine {
 }
 
 /// RocksdbStorageEngine implements the rocksdb of the storage engine.
-impl<'db> StorageEngine<'db> for RocksdbStorageEngine {}
+impl StorageEngine<'_> for RocksdbStorageEngine {}
 
 /// cf_handle returns the column family handle for the given object.
 fn cf_handle<T>(db: &rocksdb::DB) -> Result<&rocksdb::ColumnFamily>
