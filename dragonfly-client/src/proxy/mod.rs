@@ -655,32 +655,42 @@ async fn proxy_via_dfdaemon(
         }
     };
 
-    // Get the content from the cache by the request.
-    match cache.get_by_request(&download_task_request).await {
-        Ok(None) => {
-            debug!("cache miss");
-        }
-        Ok(Some(content)) => {
-            info!("cache hit");
+    // Skip cache lookup if output_path is set in the download task request.
+    // Rationale: When output_path is specified, the client expects to create the file itself,
+    // and returning cached content would prevent proper file creation.
+    let has_output_path = download_task_request
+        .download
+        .as_ref()
+        .map_or(false, |d| d.output_path.is_some());
 
-            // Collect the download piece traffic metrics and the proxy request via dfdaemon and
-            // cache hits metrics.
-            collect_proxy_request_via_dfdaemon_and_cache_hits_metrics();
-            collect_download_piece_traffic_metrics(
-                &TrafficType::LocalPeer,
-                TaskType::Standard as i32,
-                content.len() as u64,
-            );
+    if !has_output_path {
+        // Get the content from the cache by the request.
+        match cache.get_by_request(&download_task_request).await {
+            Ok(None) => {
+                debug!("cache miss");
+            }
+            Ok(Some(content)) => {
+                info!("cache hit");
 
-            let body_boxed = Full::new(content).map_err(ClientError::from).boxed();
-            return Ok(Response::new(body_boxed));
-        }
-        Err(err) => {
-            error!("get content from cache failed: {}", err);
-            return Ok(make_error_response(
-                http::StatusCode::INTERNAL_SERVER_ERROR,
-                None,
-            ));
+                // Collect the download piece traffic metrics and the proxy request via dfdaemon and
+                // cache hits metrics.
+                collect_proxy_request_via_dfdaemon_and_cache_hits_metrics();
+                collect_download_piece_traffic_metrics(
+                    &TrafficType::LocalPeer,
+                    TaskType::Standard as i32,
+                    content.len() as u64,
+                );
+
+                let body_boxed = Full::new(content).map_err(ClientError::from).boxed();
+                return Ok(Response::new(body_boxed));
+            }
+            Err(err) => {
+                error!("get content from cache failed: {}", err);
+                return Ok(make_error_response(
+                    http::StatusCode::INTERNAL_SERVER_ERROR,
+                    None,
+                ));
+            }
         }
     }
 
@@ -1119,6 +1129,7 @@ fn make_download_task_request(
             ),
             request_header: headermap_to_hashmap(&header),
             piece_length,
+            // Need the absolute path.
             output_path: header::get_output_path(&header),
             timeout: None,
             need_back_to_source: false,

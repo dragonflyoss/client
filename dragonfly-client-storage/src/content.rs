@@ -17,7 +17,7 @@
 use crc::*;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::Result;
+use dragonfly_client_core::{Error, Result};
 use std::cmp::{max, min};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -111,7 +111,41 @@ impl Content {
         Ok(true)
     }
 
+    /// is_same_dev_inode checks if the source and target are the same device and inode.
+    async fn is_same_dev_inode<P: AsRef<Path>, Q: AsRef<Path>>(
+        &self,
+        source: P,
+        target: Q,
+    ) -> Result<bool> {
+        let source_metadata = fs::metadata(source).await?;
+        let target_metadata = fs::metadata(target).await?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Ok(source_metadata.dev() == target_metadata.dev()
+                && source_metadata.ino() == target_metadata.ino())
+        }
+
+        #[cfg(not(unix))]
+        {
+            Err(Error::IO(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "platform not supported",
+            )))
+        }
+    }
+
     /// hard_link_or_copy_task hard links or copies the task content to the destination.
+    ///
+    /// 1. Destination exists:
+    ///     1.1. If the source and destination are the same device and inode, return directly.
+    ///     1.2. If the source and destination are not the same device and inode, return an error.
+    ///       Because the destination already exists, it is not allowed to overwrite the
+    ///       destination.
+    /// 2. Destination does not exist:
+    ///     2.1. Hard link the task content to the destination.
+    ///     2.2. If the hard link fails, copy the task content to the destination.
     #[instrument(skip_all)]
     pub async fn hard_link_or_copy_task(
         &self,
@@ -120,12 +154,25 @@ impl Content {
     ) -> Result<()> {
         let task_path = self.get_task_path(task.id.as_str());
 
-        // If the hard link fails, copy the task content to the destination.
-        fs::remove_file(to).await.unwrap_or_else(|err| {
-            info!("remove {:?} failed: {}", to, err);
-        });
+        // If the destination exists, check if the source and destination are the same device and
+        // inode. If they are the same, return directly. If not, return an error.
+        if to.exists() {
+            return match self.is_same_dev_inode(&task_path, to).await {
+                Ok(true) => {
+                    info!("hard already exists, no need to operate");
+                    Ok(())
+                }
+                Ok(false) => Err(Error::IO(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("{:?} already exists", to),
+                ))),
+                Err(err) => Err(err),
+            };
+        }
 
-        if let Err(err) = self.hard_link_task(task.id.as_str(), to).await {
+        // If the destination does not exist, hard link the task content to the destination.
+        // If the hard link fails, copy the task content to the destination.
+        if let Err(err) = fs::hard_link(task_path.clone(), to).await {
             warn!("hard link {:?} to {:?} failed: {}", task_path, to, err);
 
             // If the task is empty, no need to copy. Need to open the file to
@@ -150,13 +197,6 @@ impl Content {
         }
 
         info!("hard link {:?} to {:?} success", task_path, to);
-        Ok(())
-    }
-
-    /// hard_link_task hard links the task content.
-    #[instrument(skip_all)]
-    async fn hard_link_task(&self, task_id: &str, link: &Path) -> Result<()> {
-        fs::hard_link(self.get_task_path(task_id), link).await?;
         Ok(())
     }
 
@@ -365,33 +405,50 @@ impl Content {
     }
 
     /// hard_link_or_copy_persistent_cache_task hard links or copies the task content to the destination.
+    ///
+    /// 1. Destination exists:
+    ///     1.1. If the source and destination are the same device and inode, return directly.
+    ///     1.2. If the source and destination are not the same device and inode, return an error.
+    ///       Because the destination already exists, it is not allowed to overwrite the
+    ///       destination.
+    /// 2. Destination does not exist:
+    ///     2.1. Hard link the task content to the destination.
+    ///     2.2. If the hard link fails, copy the task content to the destination.
     #[instrument(skip_all)]
     pub async fn hard_link_or_copy_persistent_cache_task(
         &self,
         task: &crate::metadata::PersistentCacheTask,
         to: &Path,
     ) -> Result<()> {
-        // Ensure the parent directory of the destination exists.
-        if let Some(parent) = to.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).await.inspect_err(|err| {
-                    error!("failed to create directory {:?}: {}", parent, err);
-                })?;
-            }
-        }
-
         // Get the persistent cache task path.
         let task_path = self.get_persistent_cache_task_path(task.id.as_str());
 
-        // If the hard link fails, copy the task content to the destination.
-        fs::remove_file(to).await.unwrap_or_else(|err| {
-            info!("remove {:?} failed: {}", to, err);
-        });
+        // If the destination exists, check if the source and destination are the same device and
+        // inode. If they are the same, return directly. If not, return an error.
+        if to.exists() {
+            return match self.is_same_dev_inode(&task_path, to).await {
+                Ok(true) => {
+                    info!("hard already exists, no need to operate");
+                    Ok(())
+                }
+                Ok(false) => Err(Error::IO(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("{:?} already exists", to),
+                ))),
+                Err(err) => {
+                    error!(
+                        "check if {:?} and {:?} are the same device and inode failed: {}",
+                        task_path, to, err
+                    );
 
-        if let Err(err) = self
-            .hard_link_persistent_cache_task(task.id.as_str(), to)
-            .await
-        {
+                    Err(err)
+                }
+            };
+        }
+
+        // If the destination does not exist, hard link the task content to the destination.
+        // If the hard link fails, copy the task content to the destination.
+        if let Err(err) = fs::hard_link(task_path.clone(), to).await {
             warn!("hard link {:?} to {:?} failed: {}", task_path, to, err);
 
             // If the persistent cache task is empty, no need to copy. Need to open the file to
@@ -545,13 +602,6 @@ impl Content {
             length,
             hash: digest.finalize().to_string(),
         })
-    }
-
-    /// hard_link_persistent_cache_task hard links the persistent cache task content.
-    #[instrument(skip_all)]
-    async fn hard_link_persistent_cache_task(&self, task_id: &str, link: &Path) -> Result<()> {
-        fs::hard_link(self.get_persistent_cache_task_path(task_id), link).await?;
-        Ok(())
     }
 
     /// copy_persistent_cache_task copies the persistent cache task content to the destination.
