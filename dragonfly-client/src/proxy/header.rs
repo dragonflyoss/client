@@ -52,10 +52,18 @@ pub const DRAGONFLY_USE_P2P_HEADER: &str = "X-Dragonfly-Use-P2P";
 /// If the value is "false", the range request will fetch the range content.
 pub const DRAGONFLY_PREFETCH_HEADER: &str = "X-Dragonfly-Prefetch";
 
-/// DRAGONFLY_OUTPUT_PATH_HEADER is the header key of output path in http request.
-/// If the value is set, the downloaded file will be saved to the specified path,
-/// and response the file by the body. If the specified path is exist, the file will be
-/// removed and saved to the specified path.
+/// DRAGONFLY_OUTPUT_PATH_HEADER is the header key of absolute output path in http request.
+///
+/// When this header is present in a request, following rules apply:
+/// - If the path exists:
+///   - If it's the same file as the cache (same dev/inode): Request succeeds
+///   - If it's a different file: Request fails with error message
+///
+/// - If the path doesn't exist:
+///   - A new file will be created at the specified location
+///
+/// Note: When X-Dragonfly-Output-Path is specified, the client expects to create the
+/// file itself, and returning cached content would prevent proper file creation.
 pub const DRAGONFLY_OUTPUT_PATH_HEADER: &str = "X-Dragonfly-Output-Path";
 
 /// DRAGONFLY_PIECE_LENGTH is the header key of piece length in http request.
