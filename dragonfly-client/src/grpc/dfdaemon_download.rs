@@ -131,10 +131,11 @@ impl DfdaemonDownloadServer {
 
         // Start download grpc server with unix domain socket.
         fs::create_dir_all(self.socket_path.parent().unwrap()).await?;
-        if self.socket_path.is_file() {
-            // Remove the old unix domain socket file if it exists.
-            fs::remove_file(&self.socket_path).await?;
-        }
+        fs::remove_file(self.socket_path.clone())
+            .await
+            .unwrap_or_else(|err| {
+                info!("remove {:?} failed: {}", self.socket_path, err);
+            });
 
         // Bind the unix domain socket and set the permissions for the socket.
         let uds = UnixListener::bind(&self.socket_path)?;
