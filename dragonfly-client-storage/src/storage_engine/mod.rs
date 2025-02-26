@@ -65,6 +65,7 @@ pub trait Operations {
     fn iter<O: DatabaseObject>(&self) -> Result<impl Iterator<Item = Result<(Box<[u8]>, O)>>>;
 
     /// iter_raw iterates all objects without serialization.
+    #[allow(clippy::type_complexity)]
     fn iter_raw<O: DatabaseObject>(
         &self,
     ) -> Result<impl Iterator<Item = Result<(Box<[u8]>, Box<[u8]>)>>>;
@@ -76,6 +77,7 @@ pub trait Operations {
     ) -> Result<impl Iterator<Item = Result<(Box<[u8]>, O)>>>;
 
     /// prefix_iter_raw iterates all objects with prefix without serialization.
+    #[allow(clippy::type_complexity)]
     fn prefix_iter_raw<O: DatabaseObject>(
         &self,
         prefix: &[u8],
