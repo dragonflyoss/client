@@ -268,7 +268,7 @@ impl Task {
         task: &metadata::Task,
         host_id: &str,
         peer_id: &str,
-        mut request: Download,
+        request: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<()> {
         // Get the id of the task.
@@ -285,9 +285,6 @@ impl Task {
             error!("piece length not found");
             return Err(Error::InvalidPieceLength);
         };
-
-        // Add the piece length to the request for register task.
-        request.piece_length = Some(piece_length);
 
         // Calculate the interested pieces to download.
         let interested_pieces =
