@@ -124,7 +124,7 @@ impl Cache {
             return;
         }
 
-        pieces.put(id.to_string(), content);
+        pieces.push(id.to_string(), content);
     }
 
     /// contains_piece checks whether the piece exists in the cache.
