@@ -661,7 +661,7 @@ async fn proxy_via_dfdaemon(
     let has_output_path = download_task_request
         .download
         .as_ref()
-        .map_or(false, |d| d.output_path.is_some());
+        .is_some_and(|d| d.output_path.is_some());
 
     if !has_output_path {
         // Get the content from the cache by the request.
