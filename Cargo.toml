@@ -112,7 +112,6 @@ strip = "symbols"
 
 [profile.dev]
 opt-level = 0
-build-override = { debug = true }
 debug = true
 incremental = true
 strip = false
