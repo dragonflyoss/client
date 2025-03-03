@@ -103,6 +103,101 @@ jobs:
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
+  push_client_debug_image_to_registry:
+    name: Push Client Debug Image
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 600
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Get Version
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          if [[ ${GITHUB_REF} == "refs/heads/main" || ${GITHUB_REF} =~ refs/pull/([0-9]+)/merge ]]; then
+            VERSION=latest
+          fi
+
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Get Git Revision
+        id: vars
+        shell: bash
+        run: |
+          echo "git_revision=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: PrepareReg Names
+        run: |
+          echo IMAGE_REPOSITORY=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]') >> $GITHUB_ENV
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Login Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push to Registry
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ci/Dockerfile.debug
+          platforms: linux/amd64,linux/arm64
+          labels: |-
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            GITVERSION=git-${{ steps.vars.outputs.git_revision }}
+            VERSION=${{ steps.get_version.outputs.VERSION }}-debug
+          tags: |
+            dragonflyoss/client:${{ steps.get_version.outputs.VERSION }}-debug
+            ghcr.io/${{ env.IMAGE_REPOSITORY }}:${{ steps.get_version.outputs.VERSION }}-debug
+          push: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new
+
+      - name: Run Trivy vulnerability scanner in tarball mode
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0
+        with:
+          image-ref: dragonflyoss/client:${{ steps.get_version.outputs.VERSION }}
+          severity: 'CRITICAL,HIGH'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7f7db0f4f7b4bf65d80d
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
   push_dfinit_image_to_registry:
     name: Push Dfinit Image
     runs-on: [self-hosted, Linux, X64]
