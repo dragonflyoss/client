@@ -766,7 +766,7 @@ async fn proxy_via_dfdaemon(
     };
 
     // Write the task data to the reader.
-    let (reader, mut writer) = tokio::io::duplex(256 * 1024);
+    let (reader, mut writer) = tokio::io::duplex(512 * 1024);
 
     // Write the status code to the writer.
     let (sender, mut receiver) = mpsc::channel(10 * 1024);
@@ -873,10 +873,8 @@ async fn proxy_via_dfdaemon(
                             // in the cache.
                             finished_piece_readers
                                 .insert(piece.number, (piece_range_reader, piece_reader));
-                            while let Some((mut piece_range_reader, piece_reader)) =
-                                finished_piece_readers
-                                    .get_mut(&need_piece_number)
-                                    .map(|(range_reader, reader)| (range_reader, reader))
+                            while let Some((mut piece_range_reader, mut piece_reader)) =
+                                finished_piece_readers.remove(&need_piece_number)
                             {
                                 debug!("copy piece {} to stream", need_piece_number);
                                 if let Err(err) =
@@ -919,7 +917,6 @@ async fn proxy_via_dfdaemon(
                                     }
                                 };
 
-                                finished_piece_readers.remove(&need_piece_number);
                                 need_piece_number += 1;
                             }
                         } else {
