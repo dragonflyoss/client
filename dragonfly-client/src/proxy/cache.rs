@@ -24,6 +24,7 @@ use std::cmp::{max, min};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
+/// TODO(Gaius): Fix the memory leak issue.
 /// Cache is the cache for storing http response by LRU algorithm.
 #[derive(Clone)]
 pub struct Cache {
