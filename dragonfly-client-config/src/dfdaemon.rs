@@ -200,13 +200,6 @@ fn default_storage_read_buffer_size() -> usize {
     128 * 1024
 }
 
-/// default_storage_cache_capacity is the default cache capacity for the preheat job, default is
-/// 100.
-#[inline]
-fn default_storage_cache_capacity() -> usize {
-    100
-}
-
 /// default_seed_peer_cluster_id is the default cluster id of seed peer.
 #[inline]
 fn default_seed_peer_cluster_id() -> u64 {
@@ -247,12 +240,6 @@ fn default_gc_policy_dist_low_threshold_percent() -> u8 {
 #[inline]
 pub fn default_proxy_server_port() -> u16 {
     4001
-}
-
-/// default_proxy_cache_capacity is the default cache capacity for the proxy server, default is 150.
-#[inline]
-pub fn default_proxy_cache_capacity() -> usize {
-    150
 }
 
 /// default_proxy_read_buffer_size is the default buffer size for reading piece, default is 32KB.
@@ -981,8 +968,7 @@ pub struct Storage {
     /// |                                                  |
     /// +--------------------------------------------------+
     /// ```
-    #[serde(default = "default_storage_cache_capacity")]
-    pub cache_capacity: usize,
+    pub cache_capacity: Option<usize>,
 }
 
 /// Storage implements Default.
@@ -994,7 +980,7 @@ impl Default for Storage {
             keep: default_storage_keep(),
             write_buffer_size: default_storage_write_buffer_size(),
             read_buffer_size: default_storage_read_buffer_size(),
-            cache_capacity: default_storage_cache_capacity(),
+            cache_capacity: None,
         }
     }
 }
@@ -1264,8 +1250,7 @@ pub struct Proxy {
     /// The cache is used to store the hot piece content of the task, piece length is 4MB~16MB.
     /// If the capacity is 150, the cache size is 600MB~2.4GB, need to adjust according to the
     /// memory size of the host.
-    #[serde(default = "default_proxy_cache_capacity")]
-    pub cache_capacity: usize,
+    pub cache_capacity: Option<usize>,
 
     /// read_buffer_size is the buffer size for reading piece from disk, default is 1KB.
     #[serde(default = "default_proxy_read_buffer_size")]
@@ -1282,7 +1267,7 @@ impl Default for Proxy {
             disable_back_to_source: false,
             prefetch: false,
             prefetch_rate_limit: default_prefetch_rate_limit(),
-            cache_capacity: default_proxy_cache_capacity(),
+            cache_capacity: None,
             read_buffer_size: default_proxy_read_buffer_size(),
         }
     }

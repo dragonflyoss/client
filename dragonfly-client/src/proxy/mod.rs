@@ -76,7 +76,7 @@ pub struct Proxy {
     config: Arc<Config>,
 
     /// cache is the cache manager for storing the piece content.
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
 
     /// task is the task manager.
     task: Arc<Task>,
@@ -110,7 +110,7 @@ impl Proxy {
     ) -> Self {
         let mut proxy = Self {
             config: config.clone(),
-            cache: Arc::new(cache::Cache::new(config.proxy.cache_capacity, task.clone()).unwrap()),
+            cache: None,
             task: task.clone(),
             addr: SocketAddr::new(config.proxy.server.ip.unwrap(), config.proxy.server.port),
             registry_cert: Arc::new(None),
@@ -118,6 +118,10 @@ impl Proxy {
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         };
+
+        if let Some(cache_capacity) = config.proxy.cache_capacity {
+            proxy.cache = Some(Arc::new(cache::Cache::new(cache_capacity, task).unwrap()));
+        }
 
         // Load and generate the registry certificates from the PEM format file.
         proxy.registry_cert = match config.proxy.registry_mirror.load_cert_der() {
@@ -221,7 +225,7 @@ impl Proxy {
 #[instrument(skip_all, fields(uri, method))]
 pub async fn handler(
     config: Arc<Config>,
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -292,7 +296,7 @@ pub async fn handler(
 #[instrument(skip_all)]
 pub async fn registry_mirror_http_handler(
     config: Arc<Config>,
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -314,7 +318,7 @@ pub async fn registry_mirror_http_handler(
 #[instrument(skip_all)]
 pub async fn registry_mirror_https_handler(
     config: Arc<Config>,
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -338,7 +342,7 @@ pub async fn registry_mirror_https_handler(
 #[instrument(skip_all)]
 pub async fn http_handler(
     config: Arc<Config>,
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -423,7 +427,7 @@ pub async fn http_handler(
 #[instrument(skip_all)]
 pub async fn https_handler(
     config: Arc<Config>,
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -470,7 +474,7 @@ pub async fn https_handler(
 #[instrument(skip_all)]
 async fn upgraded_tunnel(
     config: Arc<Config>,
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     upgraded: Upgraded,
     host: String,
@@ -540,7 +544,7 @@ async fn upgraded_tunnel(
 #[instrument(skip_all, fields(uri, method))]
 pub async fn upgraded_handler(
     config: Arc<Config>,
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     host: String,
     mut request: Request<hyper::body::Incoming>,
@@ -634,7 +638,7 @@ pub async fn upgraded_handler(
 #[instrument(skip_all, fields(host_id, task_id, peer_id))]
 async fn proxy_via_dfdaemon(
     config: Arc<Config>,
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     rule: &Rule,
     request: Request<hyper::body::Incoming>,
@@ -663,33 +667,35 @@ async fn proxy_via_dfdaemon(
         .as_ref()
         .is_some_and(|d| d.output_path.is_some());
 
+    // If has_output_path is false and cache is enabled, check the cache first.
     if !has_output_path {
-        // Get the content from the cache by the request.
-        match cache.get_by_request(&download_task_request).await {
-            Ok(None) => {
-                debug!("cache miss");
-            }
-            Ok(Some(content)) => {
-                info!("cache hit");
+        if let Some(cache) = cache.as_ref() {
+            match cache.get_by_request(&download_task_request).await {
+                Ok(None) => {
+                    debug!("cache miss");
+                }
+                Ok(Some(content)) => {
+                    info!("cache hit");
 
-                // Collect the download piece traffic metrics and the proxy request via dfdaemon and
-                // cache hits metrics.
-                collect_proxy_request_via_dfdaemon_and_cache_hits_metrics();
-                collect_download_piece_traffic_metrics(
-                    &TrafficType::LocalPeer,
-                    TaskType::Standard as i32,
-                    content.len() as u64,
-                );
+                    // Collect the download piece traffic metrics and the proxy request via dfdaemon and
+                    // cache hits metrics.
+                    collect_proxy_request_via_dfdaemon_and_cache_hits_metrics();
+                    collect_download_piece_traffic_metrics(
+                        &TrafficType::LocalPeer,
+                        TaskType::Standard as i32,
+                        content.len() as u64,
+                    );
 
-                let body_boxed = Full::new(content).map_err(ClientError::from).boxed();
-                return Ok(Response::new(body_boxed));
-            }
-            Err(err) => {
-                error!("get content from cache failed: {}", err);
-                return Ok(make_error_response(
-                    http::StatusCode::INTERNAL_SERVER_ERROR,
-                    None,
-                ));
+                    let body_boxed = Full::new(content).map_err(ClientError::from).boxed();
+                    return Ok(Response::new(body_boxed));
+                }
+                Err(err) => {
+                    error!("get content from cache failed: {}", err);
+                    return Ok(make_error_response(
+                        http::StatusCode::INTERNAL_SERVER_ERROR,
+                        None,
+                    ));
+                }
             }
         }
     }
@@ -884,30 +890,34 @@ async fn proxy_via_dfdaemon(
                                     return;
                                 }
 
-                                // If the piece is not in the cache, add it to the cache.
-                                let piece_id =
-                                    task.piece.id(message.task_id.as_str(), need_piece_number);
+                                // If cache is enabled, check the cache first.
+                                if let Some(cache) = cache.as_ref() {
+                                    // If the piece is not in the cache, add it to the cache.
+                                    let piece_id =
+                                        task.piece.id(message.task_id.as_str(), need_piece_number);
 
-                                if !cache.contains_piece(&piece_id) {
-                                    let mut content =
-                                        bytes::BytesMut::with_capacity(piece.length as usize);
-                                    loop {
-                                        let n = match piece_reader.read_buf(&mut content).await {
-                                            Ok(n) => n,
-                                            Err(err) => {
-                                                error!("read piece reader error: {}", err);
+                                    if !cache.contains_piece(&piece_id) {
+                                        let mut content =
+                                            bytes::BytesMut::with_capacity(piece.length as usize);
+                                        loop {
+                                            let n = match piece_reader.read_buf(&mut content).await
+                                            {
+                                                Ok(n) => n,
+                                                Err(err) => {
+                                                    error!("read piece reader error: {}", err);
+                                                    break;
+                                                }
+                                            };
+
+                                            // When the piece reader reads to the end, add the piece
+                                            // to the cache.
+                                            if n == 0 {
+                                                cache.add_piece(&piece_id, content.freeze());
                                                 break;
                                             }
-                                        };
-
-                                        // When the piece reader reads to the end, add the piece
-                                        // to the cache.
-                                        if n == 0 {
-                                            cache.add_piece(&piece_id, content.freeze());
-                                            break;
                                         }
                                     }
-                                }
+                                };
 
                                 need_piece_number += 1;
                             }
