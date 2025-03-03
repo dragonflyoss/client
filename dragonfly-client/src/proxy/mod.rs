@@ -919,6 +919,7 @@ async fn proxy_via_dfdaemon(
                                     }
                                 };
 
+                                finished_piece_readers.remove(&need_piece_number);
                                 need_piece_number += 1;
                             }
                         } else {
