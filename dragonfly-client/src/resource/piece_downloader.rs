@@ -104,7 +104,8 @@ impl Downloader for GRPCDownloader {
         task_id: &str,
     ) -> Result<(Vec<u8>, u64, String)> {
         let dfdaemon_upload_client =
-            DfdaemonUploadClient::new(self.config.clone(), format!("http://{}", addr)).await?;
+            DfdaemonUploadClient::new(self.config.clone(), format!("http://{}", addr), true)
+                .await?;
 
         let response = dfdaemon_upload_client
             .download_piece(
@@ -159,7 +160,8 @@ impl Downloader for GRPCDownloader {
         task_id: &str,
     ) -> Result<(Vec<u8>, u64, String)> {
         let dfdaemon_upload_client =
-            DfdaemonUploadClient::new(self.config.clone(), format!("http://{}", addr)).await?;
+            DfdaemonUploadClient::new(self.config.clone(), format!("http://{}", addr), true)
+                .await?;
 
         let response = dfdaemon_upload_client
             .download_persistent_cache_piece(

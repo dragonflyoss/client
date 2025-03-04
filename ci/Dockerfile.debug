@@ -56,7 +56,7 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends iperf3 fio wget curl \
     iotop bash-completion procps apache2-utils ca-certificates binutils bpfcc-tools \
-    dnsutils iputils-ping vim linux-perf llvm graphviz \
+    dnsutils iputils-ping vim linux-perf llvm graphviz lsof socat strace \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/client/target/debug/dfget /usr/local/bin/dfget
