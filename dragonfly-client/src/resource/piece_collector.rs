@@ -107,7 +107,7 @@ impl PieceCollector {
         let interested_pieces = self.interested_pieces.clone();
         let collected_pieces = self.collected_pieces.clone();
         let collected_piece_timeout = self.config.download.piece_timeout;
-        let (collected_piece_tx, collected_piece_rx) = mpsc::channel(10 * 1024);
+        let (collected_piece_tx, collected_piece_rx) = mpsc::channel(128 * 1024);
         tokio::spawn(
             async move {
                 Self::collect_from_parents(
@@ -153,7 +153,6 @@ impl PieceCollector {
                 host_id: String,
                 task_id: String,
                 parent: CollectedParent,
-                parents: Vec<CollectedParent>,
                 interested_pieces: Vec<metadata::Piece>,
                 collected_pieces: Arc<DashMap<u32, String>>,
                 collected_piece_tx: Sender<CollectedPiece>,
@@ -168,15 +167,18 @@ impl PieceCollector {
                 })?;
 
                 // Create a dfdaemon client.
-                let dfdaemon_upload_client =
-                    DfdaemonUploadClient::new(config, format!("http://{}:{}", host.ip, host.port))
-                        .await
-                        .inspect_err(|err| {
-                            error!(
-                                "create dfdaemon upload client from parent {} failed: {}",
-                                parent.id, err
-                            );
-                        })?;
+                let dfdaemon_upload_client = DfdaemonUploadClient::new(
+                    config,
+                    format!("http://{}:{}", host.ip, host.port),
+                    false,
+                )
+                .await
+                .inspect_err(|err| {
+                    error!(
+                        "create dfdaemon upload client from parent {} failed: {}",
+                        parent.id, err
+                    );
+                })?;
 
                 let response = dfdaemon_upload_client
                     .sync_pieces(SyncPiecesRequest {
@@ -200,25 +202,15 @@ impl PieceCollector {
                     error!("sync pieces from parent {} failed: {}", parent.id, err);
                 })? {
                     let message = message?;
-                    let mut parent_id =
-                        match collected_pieces.try_get_mut(&message.number).try_unwrap() {
-                            Some(parent_id) => parent_id,
-                            None => continue,
-                        };
-                    parent_id.push_str(&parent.id);
+
+                    // Remove the piece from collected_pieces, avoid to collect the same piece from
+                    // different parents.
+                    collected_pieces.remove(&message.number);
 
                     info!(
                         "received piece {}-{} metadata from parent {}",
                         task_id, message.number, parent.id
                     );
-
-                    let parent = parents
-                        .iter()
-                        .find(|parent| parent.id == parent_id.as_str())
-                        .ok_or_else(|| {
-                            error!("parent {} not found", parent_id.as_str());
-                            Error::InvalidPeer(parent_id.clone())
-                        })?;
 
                     collected_piece_tx
                         .send(CollectedPiece {
@@ -230,12 +222,6 @@ impl PieceCollector {
                         .inspect_err(|err| {
                             error!("send CollectedPiece failed: {}", err);
                         })?;
-
-                    // Release the lock of the piece with parent_id.
-                    drop(parent_id);
-
-                    // Remove the piece from collected_pieces.
-                    collected_pieces.remove(&message.number);
                 }
 
                 Ok(parent)
@@ -247,7 +233,6 @@ impl PieceCollector {
                     host_id.to_string(),
                     task_id.to_string(),
                     parent.clone(),
-                    parents.clone(),
                     interested_pieces.clone(),
                     collected_pieces.clone(),
                     collected_piece_tx.clone(),
@@ -385,7 +370,6 @@ impl PersistentCachePieceCollector {
                 host_id: String,
                 task_id: String,
                 parent: CollectedParent,
-                parents: Vec<CollectedParent>,
                 interested_pieces: Vec<metadata::Piece>,
                 collected_pieces: Arc<DashMap<u32, String>>,
                 collected_piece_tx: Sender<CollectedPiece>,
@@ -400,15 +384,18 @@ impl PersistentCachePieceCollector {
                 })?;
 
                 // Create a dfdaemon client.
-                let dfdaemon_upload_client =
-                    DfdaemonUploadClient::new(config, format!("http://{}:{}", host.ip, host.port))
-                        .await
-                        .inspect_err(|err| {
-                            error!(
-                                "create dfdaemon upload client from parent {} failed: {}",
-                                parent.id, err
-                            );
-                        })?;
+                let dfdaemon_upload_client = DfdaemonUploadClient::new(
+                    config,
+                    format!("http://{}:{}", host.ip, host.port),
+                    false,
+                )
+                .await
+                .inspect_err(|err| {
+                    error!(
+                        "create dfdaemon upload client from parent {} failed: {}",
+                        parent.id, err
+                    );
+                })?;
 
                 let response = dfdaemon_upload_client
                     .sync_persistent_cache_pieces(SyncPersistentCachePiecesRequest {
@@ -438,25 +425,15 @@ impl PersistentCachePieceCollector {
                     );
                 })? {
                     let message = message?;
-                    let mut parent_id =
-                        match collected_pieces.try_get_mut(&message.number).try_unwrap() {
-                            Some(parent_id) => parent_id,
-                            None => continue,
-                        };
-                    parent_id.push_str(&parent.id);
+
+                    // Remove the piece from collected_pieces, avoid to collect the same piece from
+                    // different parents.
+                    collected_pieces.remove(&message.number);
 
                     info!(
                         "received persistent cache piece {}-{} metadata from parent {}",
                         task_id, message.number, parent.id
                     );
-
-                    let parent = parents
-                        .iter()
-                        .find(|parent| parent.id == parent_id.as_str())
-                        .ok_or_else(|| {
-                            error!("parent {} not found", parent_id.as_str());
-                            Error::InvalidPeer(parent_id.clone())
-                        })?;
 
                     collected_piece_tx
                         .send(CollectedPiece {
@@ -468,12 +445,6 @@ impl PersistentCachePieceCollector {
                         .inspect_err(|err| {
                             error!("send CollectedPiece failed: {}", err);
                         })?;
-
-                    // Release the lock of the piece with parent_id.
-                    drop(parent_id);
-
-                    // Remove the piece from collected_pieces.
-                    collected_pieces.remove(&message.number);
                 }
 
                 Ok(parent)
@@ -485,7 +456,6 @@ impl PersistentCachePieceCollector {
                     host_id.to_string(),
                     task_id.to_string(),
                     parent.clone(),
-                    parents.clone(),
                     interested_pieces.clone(),
                     collected_pieces.clone(),
                     collected_piece_tx.clone(),
