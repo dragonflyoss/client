@@ -783,18 +783,18 @@ async fn proxy_via_dfdaemon(
         ));
     };
 
+    // Write the status code to the writer.
+    let (sender, mut receiver) = mpsc::channel(10 * 1024);
+
     // Get the read buffer size from the config.
     let read_buffer_size = config.proxy.read_buffer_size;
 
     // Write the task data to the reader.
     let (reader, writer) = tokio::io::duplex(read_buffer_size);
     let mut writer = BufWriter::with_capacity(read_buffer_size, writer);
-
-    // Write the status code to the writer.
-    let (sender, mut receiver) = mpsc::channel(10 * 1024);
+    let reader_stream = ReaderStream::with_capacity(reader, read_buffer_size);
 
     // Construct the response body.
-    let reader_stream = ReaderStream::with_capacity(reader, read_buffer_size);
     let stream_body = StreamBody::new(reader_stream.map_ok(Frame::data).map_err(ClientError::from));
     let boxed_body = stream_body.boxed();
 

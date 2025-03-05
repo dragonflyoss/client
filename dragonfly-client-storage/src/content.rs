@@ -359,8 +359,10 @@ impl Content {
             error!("seek {:?} failed: {}", task_path, err);
         })?;
 
-        // Copy the piece to the file while updating the CRC32 value.
         let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
+        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
+
+        // Copy the piece to the file while updating the CRC32 value.
         let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
         let mut digest = crc.digest();
 
@@ -368,7 +370,6 @@ impl Content {
             digest.update(bytes);
         });
 
-        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
         let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
             error!("copy {:?} failed: {}", task_path, err);
         })?;
@@ -579,8 +580,10 @@ impl Content {
             error!("seek {:?} failed: {}", task_path, err);
         })?;
 
-        // Copy the piece to the file while updating the CRC32 value.
         let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
+        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
+
+        // Copy the piece to the file while updating the CRC32 value.
         let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
         let mut digest = crc.digest();
 
@@ -588,7 +591,6 @@ impl Content {
             digest.update(bytes);
         });
 
-        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
         let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
             error!("copy {:?} failed: {}", task_path, err);
         })?;
