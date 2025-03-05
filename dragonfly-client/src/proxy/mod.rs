@@ -54,12 +54,10 @@ use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Barrier};
-use tokio::time::sleep;
 use tokio_rustls::TlsAcceptor;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, instrument, Instrument, Span};
@@ -154,6 +152,7 @@ impl Proxy {
     #[instrument(skip_all)]
     pub async fn run(&self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         let mut shutdown = self.shutdown.clone();
+        let read_buffer_size = self.config.proxy.read_buffer_size;
 
         // When the grpc server is started, notify the barrier. If the shutdown signal is received
         // before barrier is waited successfully, the server will shutdown immediately.
@@ -173,6 +172,25 @@ impl Proxy {
             DfdaemonDownloadClient::new_unix(self.config.download.server.socket_path.clone())
                 .await?;
 
+        #[derive(Clone)]
+        struct Context {
+            config: Arc<Config>,
+            cache: Option<Arc<cache::Cache>>,
+            task: Arc<Task>,
+            dfdaemon_download_client: DfdaemonDownloadClient,
+            registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+            server_ca_cert: Arc<Option<Certificate>>,
+        }
+
+        let context = Context {
+            config: self.config.clone(),
+            cache: self.cache.clone(),
+            task: self.task.clone(),
+            dfdaemon_download_client,
+            registry_cert: self.registry_cert.clone(),
+            server_ca_cert: self.server_ca_cert.clone(),
+        };
+
         let listener = TcpListener::bind(self.addr).await?;
         info!("proxy server listening on {}", self.addr);
 
@@ -187,21 +205,21 @@ impl Proxy {
                     let io = TokioIo::new(tcp);
                     debug!("accepted connection from {}", remote_address);
 
-                    let config = self.config.clone();
-                    let cache = self.cache.clone();
-                    let task = self.task.clone();
-                    let dfdaemon_download_client = dfdaemon_download_client.clone();
-
-                    let registry_cert = self.registry_cert.clone();
-                    let server_ca_cert = self.server_ca_cert.clone();
+                    let context = context.clone();
                     tokio::task::spawn(async move {
                         if let Err(err) = ServerBuilder::new()
                             .keep_alive(true)
+                            .max_buf_size(read_buffer_size)
                             .preserve_header_case(true)
                             .title_case_headers(true)
                             .serve_connection(
                                 io,
-                                service_fn(move |request| handler(config.clone(), cache.clone(), task.clone(), request, dfdaemon_download_client.clone(), registry_cert.clone(), server_ca_cert.clone())),
+                                service_fn(move |request|{
+                                    let context = context.clone();
+                                    async move {
+                                        handler(context.config, context.cache, context.task, request, context.dfdaemon_download_client, context.registry_cert, context.server_ca_cert).await
+                                    }
+                                } ),
                                 )
                             .with_upgrades()
                             .await
@@ -765,14 +783,18 @@ async fn proxy_via_dfdaemon(
         ));
     };
 
+    // Get the read buffer size from the config.
+    let read_buffer_size = config.proxy.read_buffer_size;
+
     // Write the task data to the reader.
-    let (reader, mut writer) = tokio::io::duplex(512 * 1024);
+    let (reader, writer) = tokio::io::duplex(read_buffer_size);
+    let mut writer = BufWriter::with_capacity(read_buffer_size, writer);
 
     // Write the status code to the writer.
     let (sender, mut receiver) = mpsc::channel(10 * 1024);
 
     // Construct the response body.
-    let reader_stream = ReaderStream::new(reader);
+    let reader_stream = ReaderStream::with_capacity(reader, read_buffer_size);
     let stream_body = StreamBody::new(reader_stream.map_ok(Frame::data).map_err(ClientError::from));
     let boxed_body = stream_body.boxed();
 
@@ -780,9 +802,6 @@ async fn proxy_via_dfdaemon(
     let mut response = Response::new(boxed_body);
     *response.headers_mut() = make_response_headers(download_task_started_response.clone())?;
     *response.status_mut() = http::StatusCode::OK;
-
-    // Get the read buffer size from the config.
-    let read_buffer_size = config.proxy.read_buffer_size;
 
     // Return the response if the client return the first piece.
     let mut initialized = false;
@@ -817,10 +836,6 @@ async fn proxy_via_dfdaemon(
                             ),
                         ) = message.response
                         {
-                            // Sleep for a while to avoid the out stream is aborted. If the task is small, proxy read the piece
-                            // before the task download is finished. It will cause `user body write aborted` error.
-                            sleep(Duration::from_millis(1)).await;
-
                             // Send the none response to the client, if the first piece is received.
                             if !initialized {
                                 debug!("first piece received, send response");
