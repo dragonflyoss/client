@@ -142,7 +142,7 @@ jobs:
       - name: Cache Docker layers
         uses: actions/cache@v4
         with:
-          path: /tmp/.buildx-cache-debug
+          path: /tmp/.buildx-cache
           key: ${{ runner.os }}-buildx-debug-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-buildx-debug-
@@ -195,8 +195,8 @@ jobs:
 
       - name: Move cache
         run: |
-          rm -rf /tmp/.buildx-cache-debug
-          mv /tmp/.buildx-cache-new-debug /tmp/.buildx-cache-debug
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
   push_dfinit_image_to_registry:
     name: Push Dfinit Image
