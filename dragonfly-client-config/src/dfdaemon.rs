@@ -188,16 +188,16 @@ fn default_storage_keep() -> bool {
     false
 }
 
-/// default_storage_write_buffer_size is the default buffer size for writing piece to disk, default is 128KB.
+/// default_storage_write_buffer_size is the default buffer size for writing piece to disk, default is 4MB.
 #[inline]
 fn default_storage_write_buffer_size() -> usize {
-    128 * 1024
+    4 * 1024 * 1024
 }
 
-/// default_storage_read_buffer_size is the default buffer size for reading piece from disk, default is 128KB.
+/// default_storage_read_buffer_size is the default buffer size for reading piece from disk, default is 4MB.
 #[inline]
 fn default_storage_read_buffer_size() -> usize {
-    128 * 1024
+    4 * 1024 * 1024
 }
 
 /// default_seed_peer_cluster_id is the default cluster id of seed peer.
@@ -242,10 +242,10 @@ pub fn default_proxy_server_port() -> u16 {
     4001
 }
 
-/// default_proxy_read_buffer_size is the default buffer size for reading piece, default is 32KB.
+/// default_proxy_read_buffer_size is the default buffer size for reading piece, default is 4MB.
 #[inline]
 pub fn default_proxy_read_buffer_size() -> usize {
-    32 * 1024
+    4 * 1024 * 1024
 }
 
 /// default_prefetch_rate_limit is the default rate limit of the prefetch speed in GiB/Mib/Kib per second. The prefetch request
