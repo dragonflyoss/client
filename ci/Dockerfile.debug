@@ -35,6 +35,8 @@ COPY dragonfly-client-init/src ./dragonfly-client-init/src
 
 RUN cargo build --verbose --bin dfget --bin dfdaemon --bin dfstore --bin dfcache
 
+RUN cargo install flamegraph --root /usr/local
+
 FROM alpine:3.20 AS health
 
 ENV GRPC_HEALTH_PROBE_VERSION=v0.4.24
@@ -63,6 +65,7 @@ COPY --from=builder /app/client/target/debug/dfget /usr/local/bin/dfget
 COPY --from=builder /app/client/target/debug/dfdaemon /usr/local/bin/dfdaemon
 COPY --from=builder /app/client/target/debug/dfstore /usr/local/bin/dfstore
 COPY --from=builder /app/client/target/debug/dfcache /usr/local/bin/dfcache
+COPY --from=builder /usr/local/bin/flamegraph /usr/local/bin/
 COPY --from=pprof /go/bin/pprof /bin/pprof
 COPY --from=health /bin/grpc_health_probe /bin/grpc_health_probe
 
