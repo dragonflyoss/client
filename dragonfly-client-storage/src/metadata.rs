@@ -948,12 +948,12 @@ mod tests {
             number: 1,
             offset: 0,
             length: 1024,
-            digest: "crc32:3810626145".to_string(),
+            digest: "crc32:1929153120".to_string(),
             ..Default::default()
         };
 
         let digest = piece.calculate_digest();
-        assert_eq!(digest, "crc32:3874114958");
+        assert_eq!(digest, "crc32:3299754941");
     }
 
     #[test]

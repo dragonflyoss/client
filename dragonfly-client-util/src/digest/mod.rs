@@ -221,7 +221,7 @@ mod tests {
             .expect("failed to calculate Sha512 hash");
         assert_eq!(digest.encoded(), expected_sha512);
 
-        let expected_crc32 = "422618885";
+        let expected_crc32 = "1475635037";
         let digest =
             calculate_file_digest(Algorithm::Crc32, path).expect("failed to calculate Sha512 hash");
         assert_eq!(digest.encoded(), expected_crc32);

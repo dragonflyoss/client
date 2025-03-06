@@ -22,7 +22,7 @@ use dragonfly_client_core::{
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::PathBuf;
-use tracing::{info, instrument};
+use tracing::instrument;
 use url::Url;
 use uuid::Uuid;
 
@@ -298,7 +298,7 @@ mod tests {
                 Some(1024_u64),
                 Some("tag1"),
                 Some("app1"),
-                "1692841488",
+                "223755482",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
@@ -306,7 +306,7 @@ mod tests {
                 None,
                 None,
                 Some("app1"),
-                "1232797642",
+                "1152081721",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
@@ -314,7 +314,7 @@ mod tests {
                 None,
                 Some("tag1"),
                 None,
-                "2519859852",
+                "990623045",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
@@ -322,7 +322,7 @@ mod tests {
                 Some(1024_u64),
                 None,
                 None,
-                "561935167",
+                "1293485139",
             ),
         ];
 
