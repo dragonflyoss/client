@@ -310,7 +310,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_persistent_cache_piece_with_crc32_castagnoli(task_id, offset, reader)
+            .write_persistent_cache_piece(task_id, offset, reader)
             .await?;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
 
@@ -349,10 +349,7 @@ impl Storage {
         length: u64,
         reader: &mut R,
     ) -> Result<metadata::Piece> {
-        let response = self
-            .content
-            .write_piece_with_crc32_castagnoli(task_id, offset, reader)
-            .await?;
+        let response = self.content.write_piece(task_id, offset, reader).await?;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
 
         self.metadata.download_piece_finished(
@@ -375,10 +372,7 @@ impl Storage {
         parent_id: &str,
         reader: &mut R,
     ) -> Result<metadata::Piece> {
-        let response = self
-            .content
-            .write_piece_with_crc32_castagnoli(task_id, offset, reader)
-            .await?;
+        let response = self.content.write_piece(task_id, offset, reader).await?;
 
         let length = response.length;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
@@ -560,7 +554,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_persistent_cache_piece_with_crc32_castagnoli(task_id, offset, reader)
+            .write_persistent_cache_piece(task_id, offset, reader)
             .await?;
 
         let length = response.length;

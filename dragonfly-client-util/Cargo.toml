@@ -27,7 +27,7 @@ uuid.workspace = true
 hex.workspace = true
 openssl.workspace = true
 blake3.workspace = true
-crc.workspace = true
+crc32fast.workspace = true
 base16ct.workspace = true
 base64 = "0.22.1"
 
