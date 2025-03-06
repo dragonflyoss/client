@@ -139,10 +139,6 @@ impl IDGenerator {
         let mut buffer = [0; 4096];
         let mut reader = std::io::BufReader::with_capacity(buffer.len(), f);
         let mut hasher = crc32fast::Hasher::new();
-        info!(
-            "---------------------Implementation: {:?}",
-            hasher.get_implementation()
-        );
         loop {
             let n = reader.read(&mut buffer)?;
             if n == 0 {
