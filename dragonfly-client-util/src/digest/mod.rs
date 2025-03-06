@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-use crc::*;
 use dragonfly_client_core::Result as ClientResult;
 use sha2::Digest as Sha2Digest;
 use std::fmt;
@@ -137,17 +136,17 @@ pub fn calculate_file_digest(algorithm: Algorithm, path: &Path) -> ClientResult<
     match algorithm {
         Algorithm::Crc32 => {
             let mut buffer = [0; 4096];
-            let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
-            let mut digest = crc.digest();
+            let mut hasher = crc32fast::Hasher::new();
             loop {
                 let n = reader.read(&mut buffer)?;
                 if n == 0 {
                     break;
                 }
-                digest.update(&buffer[..n]);
+
+                hasher.update(&buffer[..n]);
             }
 
-            Ok(Digest::new(algorithm, digest.finalize().to_string()))
+            Ok(Digest::new(algorithm, hasher.finalize().to_string()))
         }
         Algorithm::Blake3 => {
             let mut hasher = blake3::Hasher::new();
@@ -222,7 +221,7 @@ mod tests {
             .expect("failed to calculate Sha512 hash");
         assert_eq!(digest.encoded(), expected_sha512);
 
-        let expected_crc32 = "422618885";
+        let expected_crc32 = "1475635037";
         let digest =
             calculate_file_digest(Algorithm::Crc32, path).expect("failed to calculate Sha512 hash");
         assert_eq!(digest.encoded(), expected_crc32);

@@ -61,7 +61,7 @@ rustls-pki-types = "1.11.0"
 rustls-pemfile = "2.2.0"
 sha2 = "0.10"
 blake3 = "1.6.0"
-crc = "3.2.1"
+crc32fast = "1.4.2"
 uuid = { version = "1.14", features = ["v4"] }
 hex = "0.4"
 rocksdb = "0.22.0"

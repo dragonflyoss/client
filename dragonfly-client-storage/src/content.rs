@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-use crc::*;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
@@ -334,10 +333,9 @@ impl Content {
         Ok((range_reader, reader))
     }
 
-    /// write_piece_with_crc32_castagnoli writes the piece to the content with crc32 castagnoli.
-    /// Calculate the hash of the piece by crc32 castagnoli with hardware acceleration.
+    /// write_piece writes the piece to the content and calculates the hash of the piece by crc32.
     #[instrument(skip_all)]
-    pub async fn write_piece_with_crc32_castagnoli<R: AsyncRead + Unpin + ?Sized>(
+    pub async fn write_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
         offset: u64,
@@ -363,11 +361,9 @@ impl Content {
         let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
 
         // Copy the piece to the file while updating the CRC32 value.
-        let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
-        let mut digest = crc.digest();
-
+        let mut hasher = crc32fast::Hasher::new();
         let mut tee = InspectReader::new(reader, |bytes| {
-            digest.update(bytes);
+            hasher.update(bytes);
         });
 
         let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
@@ -381,7 +377,7 @@ impl Content {
         // Calculate the hash of the piece.
         Ok(WritePieceResponse {
             length,
-            hash: digest.finalize().to_string(),
+            hash: hasher.finalize().to_string(),
         })
     }
 
@@ -551,12 +547,10 @@ impl Content {
         Ok((range_reader, reader))
     }
 
-    /// write_persistent_cache_piece_with_crc32_castagnoli writes the persistent cache piece to the content with crc32 castagnoli.
-    /// Calculate the hash of the piece by crc32 castagnoli with hardware acceleration.
+    /// write_persistent_cache_piece writes the persistent cache piece to the content and
+    /// calculates the hash of the piece by crc32.
     #[instrument(skip_all)]
-    pub async fn write_persistent_cache_piece_with_crc32_castagnoli<
-        R: AsyncRead + Unpin + ?Sized,
-    >(
+    pub async fn write_persistent_cache_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
         offset: u64,
@@ -584,11 +578,9 @@ impl Content {
         let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
 
         // Copy the piece to the file while updating the CRC32 value.
-        let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
-        let mut digest = crc.digest();
-
+        let mut hasher = crc32fast::Hasher::new();
         let mut tee = InspectReader::new(reader, |bytes| {
-            digest.update(bytes);
+            hasher.update(bytes);
         });
 
         let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
@@ -602,7 +594,7 @@ impl Content {
         // Calculate the hash of the piece.
         Ok(WritePieceResponse {
             length,
-            hash: digest.finalize().to_string(),
+            hash: hasher.finalize().to_string(),
         })
     }
 

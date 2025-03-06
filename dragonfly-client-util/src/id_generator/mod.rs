@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-use crc::*;
 use dragonfly_api::common::v2::TaskType;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -139,34 +138,33 @@ impl IDGenerator {
         let f = std::fs::File::open(path)?;
         let mut buffer = [0; 4096];
         let mut reader = std::io::BufReader::with_capacity(buffer.len(), f);
-        let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
-        let mut digest = crc.digest();
+        let mut hasher = crc32fast::Hasher::new();
         loop {
             let n = reader.read(&mut buffer)?;
             if n == 0 {
                 break;
             }
 
-            digest.update(&buffer[..n]);
+            hasher.update(&buffer[..n]);
         }
 
         // Add the tag to generate the persistent cache task id.
         if let Some(tag) = tag {
-            digest.update(tag.as_bytes());
+            hasher.update(tag.as_bytes());
         }
 
         // Add the application to generate the persistent cache task id.
         if let Some(application) = application {
-            digest.update(application.as_bytes());
+            hasher.update(application.as_bytes());
         }
 
         // Add the piece length to generate the persistent cache task id.
         if let Some(piece_length) = piece_length {
-            digest.update(piece_length.to_string().as_bytes());
+            hasher.update(piece_length.to_string().as_bytes());
         }
 
         // Generate the task id by crc32.
-        Ok(digest.finalize().to_string())
+        Ok(hasher.finalize().to_string())
     }
 
     /// peer_id generates the peer id.
@@ -300,7 +298,7 @@ mod tests {
                 Some(1024_u64),
                 Some("tag1"),
                 Some("app1"),
-                "1692841488",
+                "223755482",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
@@ -308,7 +306,7 @@ mod tests {
                 None,
                 None,
                 Some("app1"),
-                "1232797642",
+                "1152081721",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
@@ -316,7 +314,7 @@ mod tests {
                 None,
                 Some("tag1"),
                 None,
-                "2519859852",
+                "990623045",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
@@ -324,7 +322,7 @@ mod tests {
                 Some(1024_u64),
                 None,
                 None,
-                "561935167",
+                "1293485139",
             ),
         ];
 
