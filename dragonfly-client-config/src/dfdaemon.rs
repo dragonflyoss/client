@@ -1385,9 +1385,6 @@ pub struct Stats {
 pub struct Tracing {
     /// addr is the address to report tracing log.
     pub addr: Option<String>,
-
-    /// flamegraph indicates whether enable flamegraph tracing.
-    pub flamegraph: bool,
 }
 
 /// Config is the configuration for dfdaemon.

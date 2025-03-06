@@ -144,7 +144,6 @@ impl ImportCommand {
             self.log_level,
             self.log_max_files,
             None,
-            false,
             self.verbose,
         );
 
