@@ -126,7 +126,6 @@ fn main() {
         args.log_level,
         args.log_max_files,
         None,
-        false,
         args.verbose,
     );
 }

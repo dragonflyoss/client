@@ -20,7 +20,6 @@ use std::fs;
 use std::path::PathBuf;
 use tracing::{info, Level};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_flame::FlameLayer;
 use tracing_log::LogTracer;
 use tracing_subscriber::{
     filter::LevelFilter,
@@ -37,7 +36,6 @@ pub fn init_tracing(
     log_level: Level,
     log_max_files: usize,
     jaeger_addr: Option<String>,
-    flamegraph: bool,
     verbose: bool,
 ) -> Vec<WorkerGuard> {
     let mut guards = vec![];
@@ -90,20 +88,10 @@ pub fn init_tracing(
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::default().add_directive(log_level.into()));
 
-    // Setup flame layer.
-    let flame_layer = if flamegraph {
-        let (flame_layer, _guard) = FlameLayer::with_file(log_dir.join("tracing.folded"))
-            .expect("failed to create flame layer");
-        Some(flame_layer)
-    } else {
-        None
-    };
-
     let subscriber = Registry::default()
         .with(env_filter)
         .with(file_logging_layer)
-        .with(stdout_logging_layer)
-        .with(flame_layer);
+        .with(stdout_logging_layer);
 
     // Setup jaeger layer.
     if let Some(jaeger_addr) = jaeger_addr {

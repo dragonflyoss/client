@@ -292,7 +292,6 @@ async fn main() -> anyhow::Result<()> {
         args.log_level,
         args.log_max_files,
         None,
-        false,
         args.verbose,
     );
 
