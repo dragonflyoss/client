@@ -16,13 +16,34 @@
 
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
+use lazy_static::lazy_static;
+use lru::LruCache;
 use rcgen::{Certificate, CertificateParams, KeyPair};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::vec::Vec;
 use std::{fs, io};
 use tracing::instrument;
+
+/// DEFAULT_CERTS_CACHE_CAPACITY is the default capacity of the certificates cache.
+const DEFAULT_CERTS_CACHE_CAPACITY: usize = 1000;
+
+/// CertKeyPair is the type of the certificate and private key pair.
+type CertKeyPair = (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>);
+
+lazy_static! {
+    /// SELF_SIGNED_CERTS is a map that stores the self-signed certificates to avoid
+    /// generating the same certificates multiple times.
+    static ref SELF_SIGNED_CERTS: Arc<Mutex<LruCache<String, CertKeyPair>>> =
+        Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(DEFAULT_CERTS_CACHE_CAPACITY).unwrap())));
+
+    /// SIMPLE_SELF_SIGNED_CERTS is a map that stores the simple self-signed certificates to avoid
+    /// generating the same certificates multiple times.
+    static ref SIMPLE_SELF_SIGNED_CERTS: Arc<Mutex<LruCache<String, CertKeyPair>>> =
+        Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(DEFAULT_CERTS_CACHE_CAPACITY).unwrap())));
+}
 
 /// NoVerifier is a verifier that does not verify the server certificate.
 /// It is used for testing and should not be used in production.
@@ -124,8 +145,15 @@ pub fn generate_cert_from_pem(cert_path: &PathBuf) -> ClientResult<Vec<Certifica
 #[instrument(skip_all)]
 pub fn generate_self_signed_certs_by_ca_cert(
     ca_cert: &Certificate,
+    host: &str,
     subject_alt_names: Vec<String>,
 ) -> ClientResult<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+    let mut cache = SELF_SIGNED_CERTS.lock().unwrap();
+    if let Some((certs, key)) = cache.get(host) {
+        return Ok((certs.clone(), key.clone_key()));
+    };
+    drop(cache);
+
     // Sign certificate with CA certificate by given subject alternative names.
     let params = CertificateParams::new(subject_alt_names);
     let cert = Certificate::from_params(params).or_err(ErrorType::CertificateError)?;
@@ -143,14 +171,23 @@ pub fn generate_self_signed_certs_by_ca_cert(
     let key = rustls_pemfile::private_key(&mut key_pem_reader)?
         .ok_or_else(|| ClientError::Unknown("failed to load private key".to_string()))?;
 
+    let mut cache = SELF_SIGNED_CERTS.lock().unwrap();
+    cache.push(host.to_string(), (certs.clone(), key.clone_key()));
     Ok((certs, key))
 }
 
 /// generate_simple_self_signed_certs generates a simple self-signed certificates
 #[instrument(skip_all)]
 pub fn generate_simple_self_signed_certs(
+    host: &str,
     subject_alt_names: impl Into<Vec<String>>,
 ) -> ClientResult<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+    let mut cache = SIMPLE_SELF_SIGNED_CERTS.lock().unwrap();
+    if let Some((certs, key)) = cache.get(host) {
+        return Ok((certs.clone(), key.clone_key()));
+    };
+    drop(cache);
+
     let cert = rcgen::generate_simple_self_signed(subject_alt_names)
         .or_err(ErrorType::CertificateError)?;
     let key = rustls_pki_types::PrivateKeyDer::Pkcs8(cert.serialize_private_key_der().into());
@@ -159,6 +196,8 @@ pub fn generate_simple_self_signed_certs(
         .or_err(ErrorType::CertificateError)?
         .into()];
 
+    let mut cache = SIMPLE_SELF_SIGNED_CERTS.lock().unwrap();
+    cache.push(host.to_string(), (certs.clone(), key.clone_key()));
     Ok((certs, key))
 }
 
@@ -331,9 +370,10 @@ Z+yQ5jhu/fmSBNhqO/8Lp+Y=
             &ca_key_file.path().to_path_buf(),
         )
         .unwrap();
-        let subject_alt_names = vec!["example.com".to_string()];
+        let host = "example.com";
+        let subject_alt_names = vec![host.to_string()];
 
-        let result = generate_self_signed_certs_by_ca_cert(&ca_cert, subject_alt_names);
+        let result = generate_self_signed_certs_by_ca_cert(&ca_cert, host, subject_alt_names);
         assert!(result.is_ok());
         let (certs, key) = result.unwrap();
         assert!(!certs.is_empty());
