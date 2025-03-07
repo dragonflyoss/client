@@ -30,6 +30,7 @@ use dragonfly_client_util::id_generator::IDGenerator;
 use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -473,14 +474,6 @@ impl Piece {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
 
-        if is_prefetch {
-            // Acquire the prefetch rate limiter.
-            self.prefetch_rate_limiter.acquire(length as usize).await;
-        } else {
-            // Acquire the download rate limiter.
-            self.download_rate_limiter.acquire(length as usize).await;
-        }
-
         // Record the start of downloading piece.
         let piece = self
             .storage
@@ -491,6 +484,14 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             return Ok(piece);
+        }
+
+        if is_prefetch {
+            // Acquire the prefetch rate limiter.
+            self.prefetch_rate_limiter.acquire(length as usize).await;
+        } else {
+            // Acquire the download rate limiter.
+            self.download_rate_limiter.acquire(length as usize).await;
         }
 
         // Create a dfdaemon client.
@@ -519,6 +520,7 @@ impl Piece {
                     error!("set piece metadata failed: {}", err)
                 };
             })?;
+        let mut reader = Cursor::new(content);
 
         // Record the finish of downloading piece.
         match self
@@ -529,7 +531,7 @@ impl Piece {
                 offset,
                 digest.as_str(),
                 parent.id.as_str(),
-                &mut content.as_slice(),
+                &mut reader,
             )
             .await
         {
@@ -572,14 +574,6 @@ impl Piece {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
 
-        if is_prefetch {
-            // Acquire the prefetch rate limiter.
-            self.prefetch_rate_limiter.acquire(length as usize).await;
-        } else {
-            // Acquire the download rate limiter.
-            self.download_rate_limiter.acquire(length as usize).await;
-        }
-
         // Record the start of downloading piece.
         let piece = self
             .storage
@@ -590,6 +584,14 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             return Ok(piece);
+        }
+
+        if is_prefetch {
+            // Acquire the prefetch rate limiter.
+            self.prefetch_rate_limiter.acquire(length as usize).await;
+        } else {
+            // Acquire the download rate limiter.
+            self.download_rate_limiter.acquire(length as usize).await;
         }
 
         // Add range header to the request by offset and length.
@@ -880,6 +882,7 @@ impl Piece {
                     error!("set persistent cache piece metadata failed: {}", err)
                 };
             })?;
+        let mut reader = Cursor::new(content);
 
         // Record the finish of downloading piece.
         match self
@@ -890,7 +893,7 @@ impl Piece {
                 offset,
                 digest.as_str(),
                 parent.id.as_str(),
-                &mut content.as_slice(),
+                &mut reader,
             )
             .await
         {
