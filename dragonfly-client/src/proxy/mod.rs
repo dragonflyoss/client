@@ -48,6 +48,7 @@ use hyper_util::{
     client::legacy::Client,
     rt::{tokio::TokioIo, TokioExecutor},
 };
+use lazy_static::lazy_static;
 use rcgen::Certificate;
 use rustls::{RootCertStore, ServerConfig};
 use rustls_pki_types::CertificateDer;
@@ -64,6 +65,11 @@ use tracing::{debug, error, info, instrument, Instrument, Span};
 
 pub mod cache;
 pub mod header;
+
+lazy_static! {
+  /// SUPPORTED_HTTP_PROTOCOLS is the supported HTTP protocols, including http/1.1 and http/1.0.
+  static ref SUPPORTED_HTTP_PROTOCOLS: Vec<Vec<u8>> = vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()];
+}
 
 /// Response is the response of the proxy server.
 pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
@@ -520,7 +526,7 @@ async fn upgraded_tunnel(
         .with_no_client_auth()
         .with_single_cert(server_certs, server_key)
         .or_err(ErrorType::TLSConfigError)?;
-    server_config.alpn_protocols = vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()];
+    server_config.alpn_protocols = SUPPORTED_HTTP_PROTOCOLS.clone();
 
     let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
     let tls_stream = tls_acceptor.accept(TokioIo::new(upgraded)).await?;
