@@ -1127,6 +1127,8 @@ dependencies = [
  "http 1.2.0",
  "http-range-header",
  "hyper 1.6.0",
+ "lazy_static",
+ "lru",
  "openssl",
  "rcgen",
  "reqwest",

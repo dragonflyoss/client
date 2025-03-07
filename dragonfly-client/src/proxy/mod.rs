@@ -507,11 +507,11 @@ async fn upgraded_tunnel(
     let (server_certs, server_key) = match server_ca_cert.as_ref() {
         Some(server_ca_cert) => {
             info!("generate self-signed certificate by CA certificate");
-            generate_self_signed_certs_by_ca_cert(server_ca_cert, subject_alt_names)?
+            generate_self_signed_certs_by_ca_cert(server_ca_cert, host.as_ref(), subject_alt_names)?
         }
         None => {
             info!("generate simple self-signed certificate");
-            generate_simple_self_signed_certs(subject_alt_names)?
+            generate_simple_self_signed_certs(host.as_ref(), subject_alt_names)?
         }
     };
 
