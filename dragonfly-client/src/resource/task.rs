@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
+use super::*;
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::metrics::{
     collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
     collect_backend_request_started_metrics,
 };
+use crate::resource::parent_selector::ParentSelector;
 use dragonfly_api::common::v2::{
     Download, Hdfs, ObjectStorage, Peer, Piece, Range, Task as CommonTask, TrafficType,
 };
@@ -57,14 +59,12 @@ use std::time::Instant;
 use tokio::io::AsyncReadExt;
 use tokio::sync::{
     mpsc::{self, Sender},
-    Semaphore,
+    OwnedSemaphorePermit, Semaphore,
 };
 use tokio::task::JoinSet;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Status};
 use tracing::{debug, error, info, instrument, Instrument};
-
-use super::*;
 
 /// Task represents a task manager.
 pub struct Task {
@@ -85,6 +85,9 @@ pub struct Task {
 
     /// piece is the piece manager.
     pub piece: Arc<piece::Piece>,
+
+    /// parent_selector is the parent selector.
+    pub parent_selector: Arc<ParentSelector>,
 }
 
 /// Task implements the task manager.
@@ -97,6 +100,7 @@ impl Task {
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
+        parent_selector: Arc<ParentSelector>,
     ) -> ClientResult<Self> {
         let piece = piece::Piece::new(
             config.clone(),
@@ -113,6 +117,7 @@ impl Task {
             scheduler_client: scheduler_client.clone(),
             backend_factory: backend_factory.clone(),
             piece: piece.clone(),
+            parent_selector: parent_selector.clone(),
         })
     }
 
@@ -935,6 +940,7 @@ impl Task {
                     host: peer.host,
                 })
                 .collect(),
+            self.parent_selector.clone(),
         );
         let mut piece_collector_rx = piece_collector.run().await;
 
@@ -968,7 +974,7 @@ impl Task {
                 length: u64,
                 parent: piece_collector::CollectedParent,
                 piece_manager: Arc<piece::Piece>,
-                semaphore: Arc<Semaphore>,
+                permit: Arc<OwnedSemaphorePermit>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnouncePeerRequest>,
                 interrupt: Arc<AtomicBool>,
@@ -976,9 +982,6 @@ impl Task {
                 is_prefetch: bool,
                 need_piece_content: bool,
             ) -> ClientResult<metadata::Piece> {
-                // Limit the concurrent piece count.
-                let _permit = semaphore.acquire().await.unwrap();
-
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!(
                     "start to download piece {} from parent {:?}",
@@ -1109,8 +1112,19 @@ impl Task {
                 let mut finished_pieces = finished_pieces.lock().unwrap();
                 finished_pieces.push(metadata.clone());
 
+                drop(permit);
                 Ok(metadata)
             }
+
+            // Get optimal parent for this piece.
+            let mut parent = collect_piece.parent.clone();
+            if self.config.download.parent_selector.enable {
+                if let Ok(optimal_parent) = piece_collector.select_parent(collect_piece.number) {
+                    parent = optimal_parent;
+                    info!("update optimal parent to {}", parent.id.clone());
+                };
+            }
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
 
             join_set.spawn(
                 download_from_parent(
@@ -1119,9 +1133,9 @@ impl Task {
                     peer_id.to_string(),
                     collect_piece.number,
                     collect_piece.length,
-                    collect_piece.parent.clone(),
+                    parent.clone(),
                     self.piece.clone(),
-                    semaphore.clone(),
+                    permit.into(),
                     download_progress_tx.clone(),
                     in_stream_tx.clone(),
                     interrupt.clone(),
