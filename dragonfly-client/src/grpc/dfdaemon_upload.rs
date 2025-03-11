@@ -943,6 +943,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
         Span::current().record("remote_host_id", remote_host_id.as_str());
         Span::current().record("remote_peer_id", remote_peer_id.as_str());
+        info!("sync host in upload server");
 
         // Get the interface and the interface speed of this request ip.
         let mut request_interface = None;
@@ -1011,8 +1012,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         for (interface, data) in &networks {
                             if *interface == request_interface {
                                 if network.upload_rate
-                                    < data.transmitted() * Duration::from_secs(1).as_millis() as u64
-                                        / interval
+                                    < (data.transmitted()
+                                        * Duration::from_secs(1).as_millis() as u64
+                                        / interval)
                                 {
                                     network.upload_rate = 0;
                                 } else {
