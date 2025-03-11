@@ -919,8 +919,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             bits_per_sec / 8
         }
 
-        // Get request ip.
-        let request_ip = request.remote_addr();
+        // Get local addr.
+        let local_addr = request.local_addr();
 
         // Clone the request.
         let request = request.into_inner();
@@ -936,40 +936,32 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.clone());
-        match request_ip {
-            None => Span::current().record("request_ip", "None"),
-            Some(ip) => Span::current().record("request_ip", ip.to_string().as_str()),
-        };
-
         Span::current().record("remote_host_id", remote_host_id.as_str());
         Span::current().record("remote_peer_id", remote_peer_id.as_str());
         info!("sync host in upload server");
 
-        // Get the interface and the interface speed of this request ip.
-        let mut request_interface = None;
-        let mut request_interface_speed: u64 = 0;
-        if let Some(request_ip) = request_ip {
+        // Get the interface name and the interface max speed of local interface.
+        let mut local_interface_name = None;
+        let mut local_interface_speed: u64 = 0;
+        if let Some(local_addr) = local_addr {
             // Get the interface of this request ip.
             let interfaces = datalink::interfaces();
             for net in interfaces.iter() {
-                if net.ips.iter().any(|ip| ip.contains(request_ip.ip())) {
-                    request_interface = Some(net.name.clone());
+                if net.ips.iter().any(|ip| ip.contains(local_addr.ip())) {
+                    local_interface_name = Some(net.name.clone());
                     break;
                 }
             }
 
-            // Get speed of this interface.
-            if let Some(interface) = request_interface.clone() {
+            // Get max speed of this interface.
+            if let Some(interface) = local_interface_name.clone() {
                 let speed_path = format!("/sys/class/net/{}/speed", interface);
                 let content = fs::read_to_string(speed_path).unwrap_or_default();
                 if let Ok(speed) = content.trim().parse::<u64>() {
                     // Convert bits/sec to bytes/sec.
                     let speed = ByteSize::mb(bits_to_bytes(speed));
-                    info!(
-                        "interface {} speed is {} for request ip {}",
-                        &interface, speed, request_ip,
-                    );
-                    request_interface_speed = speed.as_u64();
+                    info!("interface {} speed is {}", &interface, speed,);
+                    local_interface_speed = speed.as_u64();
                 }
             }
         }
@@ -998,37 +990,31 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         .duration_since(last_refresh_time)
                         .unwrap()
                         .as_millis() as u64;
-                    // Reset last_refresh_time to now_time.
-                    last_refresh_time = now_time;
 
+                    // Update last_refresh_time to now_time.
+                    last_refresh_time = now_time;
                     let mut host = Host::default();
-                    let mut network = Network {
-                        upload_rate: request_interface_speed,
-                        ..Default::default()
-                    };
+                    let mut network = Network::default();
 
                     // Get interface available bandwidth.
-                    if let Some(request_interface) = request_interface.clone() {
-                        for (interface, data) in &networks {
-                            if *interface == request_interface {
-                                if network.upload_rate
-                                    < (data.transmitted()
-                                        * Duration::from_secs(1).as_millis() as u64
-                                        / interval)
-                                {
-                                    network.upload_rate = 0;
-                                } else {
-                                    network.upload_rate -= data.transmitted()
+                    if let Some(local_interface_name) = local_interface_name.clone() {
+                        if let Some(interface) = networks.get(&local_interface_name) {
+                            if network.upload_rate
+                                > (interface.transmitted()
+                                    * Duration::from_secs(1).as_millis() as u64
+                                    / interval)
+                            {
+                                network.upload_rate = local_interface_speed
+                                    - interface.transmitted()
                                         * Duration::from_secs(1).as_millis() as u64
                                         / interval;
-                                }
-                                debug!(
-                                    "refresh interface {} available bandwidth to {}",
-                                    interface,
-                                    ByteSize(network.upload_rate)
-                                );
-                                break;
                             }
+                            debug!(
+                                "refresh interface {} available bandwidth to {}",
+                                local_interface_name,
+                                ByteSize(network.upload_rate)
+                            );
+                            break;
                         }
                     }
                     host.network = Some(network);
