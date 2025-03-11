@@ -1,4 +1,4 @@
-FROM rust:1.82.0 AS builder
+FROM public.ecr.aws/docker/library/rust:1.82.0 AS builder
 
 WORKDIR /app/client
 
@@ -36,7 +36,7 @@ COPY dragonfly-client-init/src ./dragonfly-client-init/src
 RUN cargo build --release --verbose --bin dfget --bin dfdaemon --bin dfstore --bin dfcache
 RUN cargo install --git https://github.com/bvaisvil/zenith.git --root /usr/local
 
-FROM alpine:3.20 AS health
+FROM public.ecr.aws/docker/library/alpine:3.20 AS health
 
 ENV GRPC_HEALTH_PROBE_VERSION=v0.4.24
 
@@ -49,11 +49,11 @@ RUN if [ "$(uname -m)" = "ppc64le" ]; then \
     fi && \
     chmod +x /bin/grpc_health_probe
 
-FROM golang:1.23.0-alpine3.20 AS pprof
+FROM public.ecr.aws/docker/library/golang:1.23.0-alpine3.20 AS pprof
 
 RUN go install github.com/google/pprof@latest
 
-FROM debian:bookworm-slim
+FROM public.ecr.aws/debian/debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl bash-completion procps \
     apache2-utils ca-certificates binutils dnsutils iputils-ping llvm dstat \
