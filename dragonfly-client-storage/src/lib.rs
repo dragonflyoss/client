@@ -364,32 +364,35 @@ impl Storage {
         reader: &mut R,
         load_to_cache: bool,
     ) -> Result<metadata::Piece> {
-        let mut buffer = Vec::new();
-        let mut inspect_reader = InspectReader::new(reader, |bytes| {
-            buffer.extend_from_slice(bytes);
-        });
-
-        let response = self
-            .content
-            .write_piece_with_crc32_castagnoli(task_id, offset, &mut inspect_reader)
-            .await?;
-        let digest = Digest::new(Algorithm::Crc32, response.hash);
-
-        // Load piece content to cache.
-        if load_to_cache {
+        let response = if load_to_cache {
+            // Load piece content to cache.
+            let mut buffer = Vec::new();
+            let mut inspect_reader = InspectReader::new(reader, |bytes| {
+                buffer.extend_from_slice(bytes);
+            });
             match self
                 .cache
-                .write_piece(piece_id, &mut &buffer[..], length)
+                .write_piece(task_id, piece_id, &mut inspect_reader, length)
                 .await
             {
                 Ok(_) => {
-                    info!("load piece content to cache. piece: {}", piece_id);
+                    info!("load piece to cache. piece-id: {}", piece_id);
                 }
                 Err(err) => {
                     error!("load piece to cache failed: {}", err);
                 }
             }
-        }
+
+            self.content
+                .write_piece_with_crc32_castagnoli(task_id, offset, &mut &buffer[..])
+                .await?
+        } else {
+            self.content
+                .write_piece_with_crc32_castagnoli(task_id, offset, reader)
+                .await?
+        };
+
+        let digest = Digest::new(Algorithm::Crc32, response.hash);
 
         self.metadata.download_piece_finished(
             piece_id,
@@ -414,31 +417,33 @@ impl Storage {
         load_to_cache: bool,
         length: u64,
     ) -> Result<metadata::Piece> {
-        let mut buffer = Vec::new();
-        let mut inspect_reader = InspectReader::new(reader, |bytes| {
-            buffer.extend_from_slice(bytes);
-        });
-
-        // Load piece content to cache.
-        if load_to_cache {
+        let response = if load_to_cache {
+            // Load piece content to cache.
+            let mut buffer = Vec::new();
+            let mut inspect_reader = InspectReader::new(reader, |bytes| {
+                buffer.extend_from_slice(bytes);
+            });
             match self
                 .cache
-                .write_piece(piece_id, &mut inspect_reader, length)
+                .write_piece(task_id, piece_id, &mut inspect_reader, length)
                 .await
             {
                 Ok(_) => {
-                    info!("load piece content to cache. piece: {}", piece_id);
+                    info!("load piece to cache. piece-id: {}", piece_id);
                 }
                 Err(err) => {
                     error!("load piece to cache failed: {}", err);
                 }
             }
-        }
 
-        let response = self
-            .content
-            .write_piece_with_crc32_castagnoli(task_id, offset, &mut &buffer[..])
-            .await?;
+            self.content
+                .write_piece_with_crc32_castagnoli(task_id, offset, &mut &buffer[..])
+                .await?
+        } else {
+            self.content
+                .write_piece_with_crc32_castagnoli(task_id, offset, reader)
+                .await?
+        };
 
         let length = response.length;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
@@ -485,15 +490,14 @@ impl Storage {
         match self.metadata.get_piece(piece_id) {
             Ok(Some(piece)) => {
                 // Try to upload piece content from cache.
-                if self.cache.contains_piece(piece_id).await {
+                if self.cache.contains_piece(task_id, piece_id).await {
                     match self
                         .cache
-                        .read_piece(piece_id, piece.offset, piece.length, range)
+                        .read_piece(task_id, piece_id, piece.offset, piece.length, range)
                         .await
                     {
                         Ok(cache_reader) => {
                             // Finish uploading the task.
-                            info!("hit cache: {}", piece_id);
                             self.metadata.upload_task_finished(task_id)?;
                             return Ok(Either::Left(cache_reader));
                         }
@@ -577,6 +581,15 @@ impl Storage {
                 self.metadata.upload_task_failed(task_id)?;
                 Err(err)
             }
+        }
+    }
+
+    /// add_task_to_cache adds the task to the cache.
+    #[instrument(skip_all)]
+    pub async fn add_task_to_cache(&self, task_id: &str, content_length: u64) {
+        let mut cache = self.cache.clone();
+        if !cache.contains_task(task_id).await {
+            cache.put_task(task_id, content_length).await;
         }
     }
 

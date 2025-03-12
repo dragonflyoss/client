@@ -964,6 +964,12 @@ impl Task {
             self.config.download.concurrent_piece_count as usize,
         ));
 
+        if load_to_cache {
+            self.storage
+                .add_task_to_cache(task_id, task.content_length().unwrap_or(0))
+                .await;
+        }
+
         // Download the pieces from the parents.
         while let Some(collect_piece) = piece_collector_rx.recv().await {
             if interrupt.load(Ordering::SeqCst) {
@@ -1239,6 +1245,13 @@ impl Task {
 
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
+
+        if request.load_to_cache {
+            self.storage
+                .add_task_to_cache(task_id, task.content_length().unwrap_or(0))
+                .await;
+            info!("add task to cache: {}", task_id);
+        }
 
         // Download the piece from the local.
         let mut join_set = JoinSet::new();
