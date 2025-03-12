@@ -21,7 +21,7 @@ use crate::metrics::{
     collect_proxy_request_via_dfdaemon_and_cache_hits_metrics,
     collect_proxy_request_via_dfdaemon_metrics,
 };
-use crate::resource::task::Task;
+use crate::resource::{piece::MIN_PIECE_LENGTH, task::Task};
 use crate::shutdown;
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType, TrafficType};
@@ -48,24 +48,28 @@ use hyper_util::{
     client::legacy::Client,
     rt::{tokio::TokioIo, TokioExecutor},
 };
+use lazy_static::lazy_static;
 use rcgen::Certificate;
 use rustls::{RootCertStore, ServerConfig};
 use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Barrier};
-use tokio::time::sleep;
 use tokio_rustls::TlsAcceptor;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, instrument, Instrument, Span};
 
 pub mod cache;
 pub mod header;
+
+lazy_static! {
+  /// SUPPORTED_HTTP_PROTOCOLS is the supported HTTP protocols, including http/1.1 and http/1.0.
+  static ref SUPPORTED_HTTP_PROTOCOLS: Vec<Vec<u8>> = vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()];
+}
 
 /// Response is the response of the proxy server.
 pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
@@ -76,7 +80,7 @@ pub struct Proxy {
     config: Arc<Config>,
 
     /// cache is the cache manager for storing the piece content.
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
 
     /// task is the task manager.
     task: Arc<Task>,
@@ -110,7 +114,7 @@ impl Proxy {
     ) -> Self {
         let mut proxy = Self {
             config: config.clone(),
-            cache: Arc::new(cache::Cache::new(config.proxy.cache_capacity, task.clone()).unwrap()),
+            cache: None,
             task: task.clone(),
             addr: SocketAddr::new(config.proxy.server.ip.unwrap(), config.proxy.server.port),
             registry_cert: Arc::new(None),
@@ -118,6 +122,10 @@ impl Proxy {
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         };
+
+        if let Some(cache_capacity) = config.proxy.cache_capacity {
+            proxy.cache = Some(Arc::new(cache::Cache::new(cache_capacity, task).unwrap()));
+        }
 
         // Load and generate the registry certificates from the PEM format file.
         proxy.registry_cert = match config.proxy.registry_mirror.load_cert_der() {
@@ -150,6 +158,7 @@ impl Proxy {
     #[instrument(skip_all)]
     pub async fn run(&self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         let mut shutdown = self.shutdown.clone();
+        let read_buffer_size = self.config.proxy.read_buffer_size;
 
         // When the grpc server is started, notify the barrier. If the shutdown signal is received
         // before barrier is waited successfully, the server will shutdown immediately.
@@ -169,6 +178,25 @@ impl Proxy {
             DfdaemonDownloadClient::new_unix(self.config.download.server.socket_path.clone())
                 .await?;
 
+        #[derive(Clone)]
+        struct Context {
+            config: Arc<Config>,
+            cache: Option<Arc<cache::Cache>>,
+            task: Arc<Task>,
+            dfdaemon_download_client: DfdaemonDownloadClient,
+            registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+            server_ca_cert: Arc<Option<Certificate>>,
+        }
+
+        let context = Context {
+            config: self.config.clone(),
+            cache: self.cache.clone(),
+            task: self.task.clone(),
+            dfdaemon_download_client,
+            registry_cert: self.registry_cert.clone(),
+            server_ca_cert: self.server_ca_cert.clone(),
+        };
+
         let listener = TcpListener::bind(self.addr).await?;
         info!("proxy server listening on {}", self.addr);
 
@@ -183,21 +211,21 @@ impl Proxy {
                     let io = TokioIo::new(tcp);
                     debug!("accepted connection from {}", remote_address);
 
-                    let config = self.config.clone();
-                    let cache = self.cache.clone();
-                    let task = self.task.clone();
-                    let dfdaemon_download_client = dfdaemon_download_client.clone();
-
-                    let registry_cert = self.registry_cert.clone();
-                    let server_ca_cert = self.server_ca_cert.clone();
+                    let context = context.clone();
                     tokio::task::spawn(async move {
                         if let Err(err) = ServerBuilder::new()
                             .keep_alive(true)
+                            .max_buf_size(read_buffer_size)
                             .preserve_header_case(true)
                             .title_case_headers(true)
                             .serve_connection(
                                 io,
-                                service_fn(move |request| handler(config.clone(), cache.clone(), task.clone(), request, dfdaemon_download_client.clone(), registry_cert.clone(), server_ca_cert.clone())),
+                                service_fn(move |request|{
+                                    let context = context.clone();
+                                    async move {
+                                        handler(context.config, context.cache, context.task, request, context.dfdaemon_download_client, context.registry_cert, context.server_ca_cert).await
+                                    }
+                                } ),
                                 )
                             .with_upgrades()
                             .await
@@ -221,7 +249,7 @@ impl Proxy {
 #[instrument(skip_all, fields(uri, method))]
 pub async fn handler(
     config: Arc<Config>,
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -292,7 +320,7 @@ pub async fn handler(
 #[instrument(skip_all)]
 pub async fn registry_mirror_http_handler(
     config: Arc<Config>,
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -314,7 +342,7 @@ pub async fn registry_mirror_http_handler(
 #[instrument(skip_all)]
 pub async fn registry_mirror_https_handler(
     config: Arc<Config>,
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -338,7 +366,7 @@ pub async fn registry_mirror_https_handler(
 #[instrument(skip_all)]
 pub async fn http_handler(
     config: Arc<Config>,
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -423,7 +451,7 @@ pub async fn http_handler(
 #[instrument(skip_all)]
 pub async fn https_handler(
     config: Arc<Config>,
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -470,7 +498,7 @@ pub async fn https_handler(
 #[instrument(skip_all)]
 async fn upgraded_tunnel(
     config: Arc<Config>,
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     upgraded: Upgraded,
     host: String,
@@ -485,11 +513,11 @@ async fn upgraded_tunnel(
     let (server_certs, server_key) = match server_ca_cert.as_ref() {
         Some(server_ca_cert) => {
             info!("generate self-signed certificate by CA certificate");
-            generate_self_signed_certs_by_ca_cert(server_ca_cert, subject_alt_names)?
+            generate_self_signed_certs_by_ca_cert(server_ca_cert, host.as_ref(), subject_alt_names)?
         }
         None => {
             info!("generate simple self-signed certificate");
-            generate_simple_self_signed_certs(subject_alt_names)?
+            generate_simple_self_signed_certs(host.as_ref(), subject_alt_names)?
         }
     };
 
@@ -498,7 +526,7 @@ async fn upgraded_tunnel(
         .with_no_client_auth()
         .with_single_cert(server_certs, server_key)
         .or_err(ErrorType::TLSConfigError)?;
-    server_config.alpn_protocols = vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()];
+    server_config.alpn_protocols = SUPPORTED_HTTP_PROTOCOLS.clone();
 
     let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
     let tls_stream = tls_acceptor.accept(TokioIo::new(upgraded)).await?;
@@ -540,7 +568,7 @@ async fn upgraded_tunnel(
 #[instrument(skip_all, fields(uri, method))]
 pub async fn upgraded_handler(
     config: Arc<Config>,
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     host: String,
     mut request: Request<hyper::body::Incoming>,
@@ -634,7 +662,7 @@ pub async fn upgraded_handler(
 #[instrument(skip_all, fields(host_id, task_id, peer_id))]
 async fn proxy_via_dfdaemon(
     config: Arc<Config>,
-    cache: Arc<cache::Cache>,
+    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     rule: &Rule,
     request: Request<hyper::body::Incoming>,
@@ -655,32 +683,44 @@ async fn proxy_via_dfdaemon(
         }
     };
 
-    // Get the content from the cache by the request.
-    match cache.get_by_request(&download_task_request).await {
-        Ok(None) => {
-            debug!("cache miss");
-        }
-        Ok(Some(content)) => {
-            info!("cache hit");
+    // Skip cache lookup if output_path is set in the download task request.
+    // Rationale: When output_path is specified, the client expects to create the file itself,
+    // and returning cached content would prevent proper file creation.
+    let has_output_path = download_task_request
+        .download
+        .as_ref()
+        .is_some_and(|d| d.output_path.is_some());
 
-            // Collect the download piece traffic metrics and the proxy request via dfdaemon and
-            // cache hits metrics.
-            collect_proxy_request_via_dfdaemon_and_cache_hits_metrics();
-            collect_download_piece_traffic_metrics(
-                &TrafficType::LocalPeer,
-                TaskType::Standard as i32,
-                content.len() as u64,
-            );
+    // If has_output_path is false and cache is enabled, check the cache first.
+    if !has_output_path {
+        if let Some(cache) = cache.as_ref() {
+            match cache.get_by_request(&download_task_request).await {
+                Ok(None) => {
+                    debug!("cache miss");
+                }
+                Ok(Some(content)) => {
+                    info!("cache hit");
 
-            let body_boxed = Full::new(content).map_err(ClientError::from).boxed();
-            return Ok(Response::new(body_boxed));
-        }
-        Err(err) => {
-            error!("get content from cache failed: {}", err);
-            return Ok(make_error_response(
-                http::StatusCode::INTERNAL_SERVER_ERROR,
-                None,
-            ));
+                    // Collect the download piece traffic metrics and the proxy request via dfdaemon and
+                    // cache hits metrics.
+                    collect_proxy_request_via_dfdaemon_and_cache_hits_metrics();
+                    collect_download_piece_traffic_metrics(
+                        &TrafficType::LocalPeer,
+                        TaskType::Standard as i32,
+                        content.len() as u64,
+                    );
+
+                    let body_boxed = Full::new(content).map_err(ClientError::from).boxed();
+                    return Ok(Response::new(body_boxed));
+                }
+                Err(err) => {
+                    error!("get content from cache failed: {}", err);
+                    return Ok(make_error_response(
+                        http::StatusCode::INTERNAL_SERVER_ERROR,
+                        None,
+                    ));
+                }
+            }
         }
     }
 
@@ -749,14 +789,18 @@ async fn proxy_via_dfdaemon(
         ));
     };
 
-    // Write the task data to the reader.
-    let (reader, mut writer) = tokio::io::duplex(256 * 1024);
-
     // Write the status code to the writer.
     let (sender, mut receiver) = mpsc::channel(10 * 1024);
 
+    // Get the read buffer size from the config.
+    let read_buffer_size = config.proxy.read_buffer_size;
+
+    // Write the task data to the reader.
+    let (reader, writer) = tokio::io::duplex(read_buffer_size);
+    let mut writer = BufWriter::with_capacity(read_buffer_size, writer);
+    let reader_stream = ReaderStream::with_capacity(reader, read_buffer_size);
+
     // Construct the response body.
-    let reader_stream = ReaderStream::new(reader);
     let stream_body = StreamBody::new(reader_stream.map_ok(Frame::data).map_err(ClientError::from));
     let boxed_body = stream_body.boxed();
 
@@ -764,9 +808,6 @@ async fn proxy_via_dfdaemon(
     let mut response = Response::new(boxed_body);
     *response.headers_mut() = make_response_headers(download_task_started_response.clone())?;
     *response.status_mut() = http::StatusCode::OK;
-
-    // Get the read buffer size from the config.
-    let read_buffer_size = config.proxy.read_buffer_size;
 
     // Return the response if the client return the first piece.
     let mut initialized = false;
@@ -801,10 +842,6 @@ async fn proxy_via_dfdaemon(
                             ),
                         ) = message.response
                         {
-                            // Sleep for a while to avoid the out stream is aborted. If the task is small, proxy read the piece
-                            // before the task download is finished. It will cause `user body write aborted` error.
-                            sleep(Duration::from_millis(1)).await;
-
                             // Send the none response to the client, if the first piece is received.
                             if !initialized {
                                 debug!("first piece received, send response");
@@ -857,10 +894,8 @@ async fn proxy_via_dfdaemon(
                             // in the cache.
                             finished_piece_readers
                                 .insert(piece.number, (piece_range_reader, piece_reader));
-                            while let Some((mut piece_range_reader, piece_reader)) =
-                                finished_piece_readers
-                                    .get_mut(&need_piece_number)
-                                    .map(|(range_reader, reader)| (range_reader, reader))
+                            while let Some((mut piece_range_reader, mut piece_reader)) =
+                                finished_piece_readers.remove(&need_piece_number)
                             {
                                 debug!("copy piece {} to stream", need_piece_number);
                                 if let Err(err) =
@@ -874,30 +909,34 @@ async fn proxy_via_dfdaemon(
                                     return;
                                 }
 
-                                // If the piece is not in the cache, add it to the cache.
-                                let piece_id =
-                                    task.piece.id(message.task_id.as_str(), need_piece_number);
+                                // If cache is enabled, check the cache first.
+                                if let Some(cache) = cache.as_ref() {
+                                    // If the piece is not in the cache, add it to the cache.
+                                    let piece_id =
+                                        task.piece.id(message.task_id.as_str(), need_piece_number);
 
-                                if !cache.contains_piece(&piece_id) {
-                                    let mut content =
-                                        bytes::BytesMut::with_capacity(piece.length as usize);
-                                    loop {
-                                        let n = match piece_reader.read_buf(&mut content).await {
-                                            Ok(n) => n,
-                                            Err(err) => {
-                                                error!("read piece reader error: {}", err);
+                                    if !cache.contains_piece(&piece_id) {
+                                        let mut content =
+                                            bytes::BytesMut::with_capacity(piece.length as usize);
+                                        loop {
+                                            let n = match piece_reader.read_buf(&mut content).await
+                                            {
+                                                Ok(n) => n,
+                                                Err(err) => {
+                                                    error!("read piece reader error: {}", err);
+                                                    break;
+                                                }
+                                            };
+
+                                            // When the piece reader reads to the end, add the piece
+                                            // to the cache.
+                                            if n == 0 {
+                                                cache.add_piece(&piece_id, content.freeze());
                                                 break;
                                             }
-                                        };
-
-                                        // When the piece reader reads to the end, add the piece
-                                        // to the cache.
-                                        if n == 0 {
-                                            cache.add_piece(&piece_id, content.freeze());
-                                            break;
                                         }
                                     }
-                                }
+                                };
 
                                 need_piece_number += 1;
                             }
@@ -1092,6 +1131,17 @@ fn make_download_task_request(
     // Registry will return the 403 status code if the Host header is set.
     header.remove(reqwest::header::HOST);
 
+    // Validate the request arguments.
+    let piece_length = header::get_piece_length(&header).map(|piece_length| piece_length.as_u64());
+    if let Some(piece_length) = piece_length {
+        if piece_length < MIN_PIECE_LENGTH {
+            return Err(ClientError::ValidationError(format!(
+                "piece length {} is less than the minimum piece length {}",
+                piece_length, MIN_PIECE_LENGTH
+            )));
+        }
+    }
+
     Ok(DownloadTaskRequest {
         download: Some(Download {
             url: make_download_url(request.uri(), rule.use_tls, rule.redirect.clone())?,
@@ -1107,8 +1157,9 @@ fn make_download_task_request(
                 rule.filtered_query_params.clone(),
             ),
             request_header: headermap_to_hashmap(&header),
-            piece_length: None,
-            output_path: None,
+            piece_length,
+            // Need the absolute path.
+            output_path: header::get_output_path(&header),
             timeout: None,
             need_back_to_source: false,
             disable_back_to_source: config.proxy.disable_back_to_source,

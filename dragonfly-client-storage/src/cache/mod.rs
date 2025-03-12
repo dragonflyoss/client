@@ -119,13 +119,14 @@ pub struct Cache {
 /// Cache implements the cache for storing piece content by LRU algorithm.
 impl Cache {
     /// new creates a new cache with the specified capacity.
-    pub fn new(capacity: usize) -> Result<Self> {
+    pub fn new(capacity: usize, tasks_capacity: usize) -> Result<Self> {
         let capacity = NonZeroUsize::new(capacity).ok_or(Error::InvalidParameter)?;
-        let tasks = Arc::new(RwLock::new(LruCache::new(1)));
+        let tasks_capacity = NonZeroUsize::new(tasks_capacity).ok_or(Error::InvalidParameter)?;
+        let tasks = Arc::new(RwLock::new(LruCache::new(tasks_capacity)));
 
         Ok(Cache {
             size: 0,
-            capacity: capacity.into(),
+            capacity: capacity.get() as u64,
             tasks,
         })
     }

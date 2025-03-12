@@ -30,6 +30,7 @@ use dragonfly_client_util::id_generator::IDGenerator;
 use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -39,18 +40,21 @@ use tracing::{error, info, instrument, Span};
 /// than MAX_PIECE_COUNT, the piece length will be optimized by the file length.
 /// When piece length became the MAX_PIECE_LENGTH, the piece count
 /// probably will be upper than MAX_PIECE_COUNT.
-const MAX_PIECE_COUNT: u64 = 500;
+pub const MAX_PIECE_COUNT: u64 = 500;
 
 /// MIN_PIECE_LENGTH is the minimum piece length.
-const MIN_PIECE_LENGTH: u64 = 4 * 1024 * 1024;
+pub const MIN_PIECE_LENGTH: u64 = 4 * 1024 * 1024;
 
 /// MAX_PIECE_LENGTH is the maximum piece length.
-const MAX_PIECE_LENGTH: u64 = 16 * 1024 * 1024;
+pub const MAX_PIECE_LENGTH: u64 = 16 * 1024 * 1024;
 
 /// PieceLengthStrategy sets the optimization strategy of piece length.
 pub enum PieceLengthStrategy {
     /// OptimizeByFileLength optimizes the piece length by the file length.
-    OptimizeByFileLength,
+    OptimizeByFileLength(u64),
+
+    /// FixedPieceLength sets the fixed piece length.
+    FixedPieceLength(u64),
 }
 
 /// Piece represents a piece manager.
@@ -297,13 +301,9 @@ impl Piece {
     }
 
     /// calculate_piece_size calculates the piece size by content_length.
-    pub fn calculate_piece_length(
-        &self,
-        strategy: PieceLengthStrategy,
-        content_length: u64,
-    ) -> u64 {
+    pub fn calculate_piece_length(&self, strategy: PieceLengthStrategy) -> u64 {
         match strategy {
-            PieceLengthStrategy::OptimizeByFileLength => {
+            PieceLengthStrategy::OptimizeByFileLength(content_length) => {
                 let piece_length = (content_length as f64 / MAX_PIECE_COUNT as f64) as u64;
                 let actual_piece_length = piece_length.next_power_of_two();
 
@@ -316,6 +316,7 @@ impl Piece {
                     (false, _) => MIN_PIECE_LENGTH,
                 }
             }
+            PieceLengthStrategy::FixedPieceLength(piece_length) => piece_length,
         }
     }
 
@@ -474,14 +475,6 @@ impl Piece {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
 
-        if is_prefetch {
-            // Acquire the prefetch rate limiter.
-            self.prefetch_rate_limiter.acquire(length as usize).await;
-        } else {
-            // Acquire the download rate limiter.
-            self.download_rate_limiter.acquire(length as usize).await;
-        }
-
         // Record the start of downloading piece.
         let piece = self
             .storage
@@ -492,6 +485,14 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             return Ok(piece);
+        }
+
+        if is_prefetch {
+            // Acquire the prefetch rate limiter.
+            self.prefetch_rate_limiter.acquire(length as usize).await;
+        } else {
+            // Acquire the download rate limiter.
+            self.download_rate_limiter.acquire(length as usize).await;
         }
 
         // Create a dfdaemon client.
@@ -520,6 +521,7 @@ impl Piece {
                     error!("set piece metadata failed: {}", err)
                 };
             })?;
+        let mut reader = Cursor::new(content);
 
         // Record the finish of downloading piece.
         match self
@@ -530,7 +532,7 @@ impl Piece {
                 offset,
                 digest.as_str(),
                 parent.id.as_str(),
-                &mut content.as_slice(),
+                &mut reader,
                 load_to_cache,
                 length,
             )
@@ -576,14 +578,6 @@ impl Piece {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
 
-        if is_prefetch {
-            // Acquire the prefetch rate limiter.
-            self.prefetch_rate_limiter.acquire(length as usize).await;
-        } else {
-            // Acquire the download rate limiter.
-            self.download_rate_limiter.acquire(length as usize).await;
-        }
-
         // Record the start of downloading piece.
         let piece = self
             .storage
@@ -594,6 +588,14 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             return Ok(piece);
+        }
+
+        if is_prefetch {
+            // Acquire the prefetch rate limiter.
+            self.prefetch_rate_limiter.acquire(length as usize).await;
+        } else {
+            // Acquire the download rate limiter.
+            self.download_rate_limiter.acquire(length as usize).await;
         }
 
         // Add range header to the request by offset and length.
@@ -885,6 +887,7 @@ impl Piece {
                     error!("set persistent cache piece metadata failed: {}", err)
                 };
             })?;
+        let mut reader = Cursor::new(content);
 
         // Record the finish of downloading piece.
         match self
@@ -895,7 +898,7 @@ impl Piece {
                 offset,
                 digest.as_str(),
                 parent.id.as_str(),
-                &mut content.as_slice(),
+                &mut reader,
             )
             .await
         {
@@ -930,7 +933,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn should_calculate_interested() {
+    async fn test_calculate_interested() {
         let temp_dir = tempdir().unwrap();
 
         let config = Config::default();

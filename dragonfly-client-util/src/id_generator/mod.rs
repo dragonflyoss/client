@@ -20,13 +20,11 @@ use dragonfly_client_core::{
     Result,
 };
 use sha2::{Digest, Sha256};
-use std::hash::Hasher;
 use std::io::Read;
 use std::path::PathBuf;
 use tracing::instrument;
 use url::Url;
 use uuid::Uuid;
-use wyhash::WyHash;
 
 /// SEED_PEER_SUFFIX is the suffix of the seed peer.
 const SEED_PEER_SUFFIX: &str = "seed";
@@ -76,6 +74,7 @@ impl IDGenerator {
     pub fn task_id(
         &self,
         url: &str,
+        piece_length: Option<u64>,
         tag: Option<&str>,
         application: Option<&str>,
         filtered_query_params: Vec<String>,
@@ -116,6 +115,11 @@ impl IDGenerator {
             hasher.update(application);
         }
 
+        // Add the piece length to generate the task id.
+        if let Some(piece_length) = piece_length {
+            hasher.update(piece_length.to_string());
+        }
+
         // Generate the task id.
         Ok(hex::encode(hasher.finalize()))
     }
@@ -126,6 +130,7 @@ impl IDGenerator {
     pub fn persistent_cache_task_id(
         &self,
         path: &PathBuf,
+        piece_length: Option<u64>,
         tag: Option<&str>,
         application: Option<&str>,
     ) -> Result<String> {
@@ -133,35 +138,33 @@ impl IDGenerator {
         let f = std::fs::File::open(path)?;
         let mut buffer = [0; 4096];
         let mut reader = std::io::BufReader::with_capacity(buffer.len(), f);
-        let mut hasher = WyHash::default();
+        let mut hasher = crc32fast::Hasher::new();
         loop {
             let n = reader.read(&mut buffer)?;
             if n == 0 {
                 break;
             }
 
-            hasher.write(&buffer[..n]);
+            hasher.update(&buffer[..n]);
         }
 
         // Add the tag to generate the persistent cache task id.
         if let Some(tag) = tag {
-            hasher.write(tag.as_bytes());
+            hasher.update(tag.as_bytes());
         }
 
         // Add the application to generate the persistent cache task id.
         if let Some(application) = application {
-            hasher.write(application.as_bytes());
+            hasher.update(application.as_bytes());
         }
 
-        // Generate the task id by wyhash.
-        let id = hasher.finish().to_string();
+        // Add the piece length to generate the persistent cache task id.
+        if let Some(piece_length) = piece_length {
+            hasher.update(piece_length.to_string().as_bytes());
+        }
 
-        // Generate the persistent cache task ID. The original ID is too short, so we calculate the SHA-256
-        // hash to ensure it can be prefix-searched by the storage engine.
-        let mut hasher = Sha256::new();
-        hasher.update(id);
-
-        Ok(hex::encode(hasher.finalize()))
+        // Generate the task id by crc32.
+        Ok(hasher.finalize().to_string())
     }
 
     /// peer_id generates the peer id.
@@ -223,6 +226,16 @@ mod tests {
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
                 "https://example.com",
+                Some(1024_u64),
+                Some("foo"),
+                Some("bar"),
+                vec![],
+                "99a47b38e9d3321aebebd715bea0483c1400cef2f767f84d97458f9dcedff221",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                "https://example.com",
+                None,
                 Some("foo"),
                 Some("bar"),
                 vec![],
@@ -231,6 +244,7 @@ mod tests {
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
                 "https://example.com",
+                None,
                 Some("foo"),
                 None,
                 vec![],
@@ -240,13 +254,24 @@ mod tests {
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
                 "https://example.com",
                 None,
+                None,
                 Some("bar"),
                 vec![],
                 "63dee2822037636b0109876b58e95692233840753a882afa69b9b5ee82a6c57d",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                "https://example.com",
+                Some(1024_u64),
+                None,
+                None,
+                vec![],
+                "40c21de3ad2f1470ca1a19a2ad2577803a1829851f6cf862ffa2d4577ae51d38",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
                 "https://example.com?foo=foo&bar=bar",
+                None,
                 None,
                 None,
                 vec!["foo".to_string(), "bar".to_string()],
@@ -254,9 +279,11 @@ mod tests {
             ),
         ];
 
-        for (generator, url, tag, application, filtered_query_params, expected_id) in test_cases {
+        for (generator, url, piece_length, tag, application, filtered_query_params, expected_id) in
+            test_cases
+        {
             let task_id = generator
-                .task_id(url, tag, application, filtered_query_params)
+                .task_id(url, piece_length, tag, application, filtered_query_params)
                 .unwrap();
             assert_eq!(task_id, expected_id);
         }
@@ -268,34 +295,45 @@ mod tests {
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
                 "This is a test file",
+                Some(1024_u64),
                 Some("tag1"),
                 Some("app1"),
-                "ed401a8aa6b9a47b426d2aa01245127d9ac2d1b7974ca866719da59b5456ac4d",
+                "223755482",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
                 "This is a test file",
                 None,
+                None,
                 Some("app1"),
-                "4cbb2c5142f609e98a7d9a887c6404c7432475a52d6c64c52d543b5614a99c63",
+                "1152081721",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
                 "This is a test file",
+                None,
                 Some("tag1"),
                 None,
-                "65094f31f9997904f779a27ed0d1ce460c9c4082f214e7626a179f2ea491d34e",
+                "990623045",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                "This is a test file",
+                Some(1024_u64),
+                None,
+                None,
+                "1293485139",
             ),
         ];
 
-        for (generator, file_content, tag, application, expected_id) in test_cases {
+        for (generator, file_content, piece_length, tag, application, expected_id) in test_cases {
             let dir = tempdir().unwrap();
             let file_path = dir.path().join("testfile");
             let mut f = File::create(&file_path).unwrap();
             f.write_all(file_content.as_bytes()).unwrap();
 
             let task_id = generator
-                .persistent_cache_task_id(&file_path, tag, application)
+                .persistent_cache_task_id(&file_path, piece_length, tag, application)
                 .unwrap();
             assert_eq!(task_id, expected_id);
         }

@@ -59,7 +59,10 @@ impl Storage {
     pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf) -> Result<Self> {
         let metadata = metadata::Metadata::new(config.clone(), dir, &log_dir)?;
         let content = content::Content::new(config.clone(), dir).await?;
-        let cache = cache::Cache::new(config.storage.cache_capacity)?;
+        let cache = cache::Cache::new(
+            config.storage.cache_capacity,
+            config.storage.cache_tasks_capacity,
+        )?;
 
         Ok(Storage {
             config,
@@ -86,13 +89,8 @@ impl Storage {
 
     /// hard_link_or_copy_task hard links or copies the task content to the destination.
     #[instrument(skip_all)]
-    pub async fn hard_link_or_copy_task(
-        &self,
-        task: &metadata::Task,
-        to: &Path,
-        range: Option<Range>,
-    ) -> Result<()> {
-        self.content.hard_link_or_copy_task(task, to, range).await
+    pub async fn hard_link_or_copy_task(&self, task: &metadata::Task, to: &Path) -> Result<()> {
+        self.content.hard_link_or_copy_task(task, to).await
     }
 
     /// download_task_started updates the metadata of the task when the task downloads started.
@@ -324,7 +322,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_persistent_cache_piece_with_crc32_castagnoli(task_id, offset, reader)
+            .write_persistent_cache_piece(task_id, offset, reader)
             .await?;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
 
@@ -384,12 +382,10 @@ impl Storage {
             }
 
             self.content
-                .write_piece_with_crc32_castagnoli(task_id, offset, &mut &buffer[..])
+                .write_piece(task_id, offset, &mut &buffer[..])
                 .await?
         } else {
-            self.content
-                .write_piece_with_crc32_castagnoli(task_id, offset, reader)
-                .await?
+            self.content.write_piece(task_id, offset, reader).await?
         };
 
         let digest = Digest::new(Algorithm::Crc32, response.hash);
@@ -437,12 +433,10 @@ impl Storage {
             }
 
             self.content
-                .write_piece_with_crc32_castagnoli(task_id, offset, &mut &buffer[..])
+                .write_piece(task_id, offset, &mut &buffer[..])
                 .await?
         } else {
-            self.content
-                .write_piece_with_crc32_castagnoli(task_id, offset, reader)
-                .await?
+            self.content.write_piece(task_id, offset, reader).await?
         };
 
         let length = response.length;
@@ -651,7 +645,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_persistent_cache_piece_with_crc32_castagnoli(task_id, offset, reader)
+            .write_persistent_cache_piece(task_id, offset, reader)
             .await?;
 
         let length = response.length;

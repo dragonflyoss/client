@@ -131,10 +131,11 @@ impl DfdaemonDownloadServer {
 
         // Start download grpc server with unix domain socket.
         fs::create_dir_all(self.socket_path.parent().unwrap()).await?;
-        if self.socket_path.is_file() {
-            // Remove the old unix domain socket file if it exists.
-            fs::remove_file(&self.socket_path).await?;
-        }
+        fs::remove_file(self.socket_path.clone())
+            .await
+            .unwrap_or_else(|err| {
+                info!("remove {:?} failed: {}", self.socket_path, err);
+            });
 
         // Bind the unix domain socket and set the permissions for the socket.
         let uds = UnixListener::bind(&self.socket_path)?;
@@ -234,6 +235,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             .id_generator
             .task_id(
                 download.url.as_str(),
+                download.piece_length,
                 download.tag.as_deref(),
                 download.application.as_deref(),
                 download.filtered_query_params.clone(),
@@ -430,11 +432,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         if let Some(output_path) = download_clone.output_path.clone() {
                             // Hard link or copy the task content to the destination.
                             if let Err(err) = task_manager_clone
-                                .hard_link_or_copy(
-                                    &task_clone,
-                                    Path::new(output_path.as_str()),
-                                    download_clone.range,
-                                )
+                                .hard_link_or_copy(&task_clone, Path::new(output_path.as_str()))
                                 .await
                             {
                                 error!("hard link or copy task: {}", err);
@@ -906,6 +904,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 .id_generator
                 .persistent_cache_task_id(
                     &path.to_path_buf(),
+                    request.piece_length,
                     request.tag.as_deref(),
                     request.application.as_deref(),
                 )

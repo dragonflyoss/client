@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
+use bytesize::ByteSize;
 use clap::Parser;
 use dragonfly_api::dfdaemon::v2::UploadPersistentCacheTaskRequest;
+use dragonfly_client::resource::piece::MIN_PIECE_LENGTH;
 use dragonfly_client_config::dfcache::default_dfcache_persistent_replica_count;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -42,7 +44,7 @@ pub struct ImportCommand {
     #[arg(
         long = "id",
         required = false,
-        help = "Specify the id of the persistent cache task, its length must be 64 bytes. If id is none, dfdaemon will generate the new task id based on the file content, tag and application by wyhash algorithm."
+        help = "Specify the id of the persistent cache task. If id is none, dfdaemon will generate the new task id based on the file content, tag and application by crc32 algorithm."
     )]
     id: Option<String>,
 
@@ -54,9 +56,16 @@ pub struct ImportCommand {
     persistent_replica_count: u64,
 
     #[arg(
+        long = "piece-length",
+        required = false,
+        help = "Specify the piece length for downloading file. If the piece length is not specified, the piece length will be calculated according to the file size. Different piece lengths will be divided into different persistent cache tasks. The value needs to be set with human readable format and needs to be greater than or equal to 4mib, for example: 4mib, 1gib"
+    )]
+    piece_length: Option<ByteSize>,
+
+    #[arg(
         long = "application",
         required = false,
-        help = "Caller application which is used for statistics and access control"
+        help = "Different applications for the same url will be divided into different persistent cache tasks"
     )]
     application: Option<String>,
 
@@ -135,7 +144,6 @@ impl ImportCommand {
             self.log_level,
             self.log_max_files,
             None,
-            false,
             self.verbose,
         );
 
@@ -338,6 +346,7 @@ impl ImportCommand {
                 persistent_replica_count: self.persistent_replica_count,
                 tag: self.tag.clone(),
                 application: self.application.clone(),
+                piece_length: self.piece_length.map(|piece_length| piece_length.as_u64()),
                 ttl: Some(
                     prost_wkt_types::Duration::try_from(self.ttl).or_err(ErrorType::ParseError)?,
                 ),
@@ -384,6 +393,16 @@ impl ImportCommand {
                 "path {} does not exist",
                 self.path.display()
             )));
+        }
+
+        if let Some(piece_length) = self.piece_length {
+            if piece_length.as_u64() < MIN_PIECE_LENGTH {
+                return Err(Error::ValidationError(format!(
+                    "piece length {} bytes is less than the minimum piece length {} bytes",
+                    piece_length.as_u64(),
+                    MIN_PIECE_LENGTH
+                )));
+            }
         }
 
         Ok(())

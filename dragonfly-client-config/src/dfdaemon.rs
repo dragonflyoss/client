@@ -188,22 +188,28 @@ fn default_storage_keep() -> bool {
     false
 }
 
-/// default_storage_write_buffer_size is the default buffer size for writing piece to disk, default is 128KB.
+/// default_storage_write_buffer_size is the default buffer size for writing piece to disk, default is 4MB.
 #[inline]
 fn default_storage_write_buffer_size() -> usize {
-    128 * 1024
+    4 * 1024 * 1024
 }
 
-/// default_storage_read_buffer_size is the default buffer size for reading piece from disk, default is 128KB.
+/// default_storage_read_buffer_size is the default buffer size for reading piece from disk, default is 4MB.
 #[inline]
 fn default_storage_read_buffer_size() -> usize {
-    128 * 1024
+    4 * 1024 * 1024
 }
 
 /// default_storage_cache_capacity is the default cache capacity for the preheat job, default is 10GiB.
 #[inline]
 fn default_storage_cache_capacity() -> usize {
     10 * 1024 * 1024 * 1024
+}
+
+/// default_storage_cache_tasks_capacity is the default capacity of the tasks that can be stored in the cache, default is 1.
+#[inline]
+fn default_storage_cache_tasks_capacity() -> usize {
+    1
 }
 
 /// default_seed_peer_cluster_id is the default cluster id of seed peer.
@@ -248,16 +254,10 @@ pub fn default_proxy_server_port() -> u16 {
     4001
 }
 
-/// default_proxy_cache_capacity is the default cache capacity for the proxy server, default is 150.
-#[inline]
-pub fn default_proxy_cache_capacity() -> usize {
-    150
-}
-
-/// default_proxy_read_buffer_size is the default buffer size for reading piece, default is 32KB.
+/// default_proxy_read_buffer_size is the default buffer size for reading piece, default is 4MB.
 #[inline]
 pub fn default_proxy_read_buffer_size() -> usize {
-    32 * 1024
+    4 * 1024 * 1024
 }
 
 /// default_prefetch_rate_limit is the default rate limit of the prefetch speed in GiB/Mib/Kib per second. The prefetch request
@@ -982,6 +982,10 @@ pub struct Storage {
     /// ```
     #[serde(default = "default_storage_cache_capacity")]
     pub cache_capacity: usize,
+
+    /// cache_tasks_capacity is the capacity of the tasks that can be stored in the cache, default is 1.
+    #[serde(default = "default_storage_cache_tasks_capacity")]
+    pub cache_tasks_capacity: usize,
 }
 
 /// Storage implements Default.
@@ -994,6 +998,7 @@ impl Default for Storage {
             write_buffer_size: default_storage_write_buffer_size(),
             read_buffer_size: default_storage_read_buffer_size(),
             cache_capacity: default_storage_cache_capacity(),
+            cache_tasks_capacity: default_storage_cache_tasks_capacity(),
         }
     }
 }
@@ -1263,8 +1268,7 @@ pub struct Proxy {
     /// The cache is used to store the hot piece content of the task, piece length is 4MB~16MB.
     /// If the capacity is 150, the cache size is 600MB~2.4GB, need to adjust according to the
     /// memory size of the host.
-    #[serde(default = "default_proxy_cache_capacity")]
-    pub cache_capacity: usize,
+    pub cache_capacity: Option<usize>,
 
     /// read_buffer_size is the buffer size for reading piece from disk, default is 1KB.
     #[serde(default = "default_proxy_read_buffer_size")]
@@ -1281,7 +1285,7 @@ impl Default for Proxy {
             disable_back_to_source: false,
             prefetch: false,
             prefetch_rate_limit: default_prefetch_rate_limit(),
-            cache_capacity: default_proxy_cache_capacity(),
+            cache_capacity: None,
             read_buffer_size: default_proxy_read_buffer_size(),
         }
     }
@@ -1399,9 +1403,6 @@ pub struct Stats {
 pub struct Tracing {
     /// addr is the address to report tracing log.
     pub addr: Option<String>,
-
-    /// flamegraph indicates whether enable flamegraph tracing.
-    pub flamegraph: bool,
 }
 
 /// Config is the configuration for dfdaemon.

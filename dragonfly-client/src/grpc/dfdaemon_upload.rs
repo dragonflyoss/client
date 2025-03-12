@@ -223,6 +223,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             .id_generator
             .task_id(
                 download.url.as_str(),
+                download.piece_length,
                 download.tag.as_deref(),
                 download.application.as_deref(),
                 download.filtered_query_params.clone(),
@@ -420,11 +421,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         if let Some(output_path) = download_clone.output_path.clone() {
                             // Hard link or copy the task content to the destination.
                             if let Err(err) = task_manager_clone
-                                .hard_link_or_copy(
-                                    &task_clone,
-                                    Path::new(output_path.as_str()),
-                                    download_clone.range,
-                                )
+                                .hard_link_or_copy(&task_clone, Path::new(output_path.as_str()))
                                 .await
                             {
                                 error!("hard link or copy task: {}", err);
@@ -1447,7 +1444,11 @@ pub struct DfdaemonUploadClient {
 impl DfdaemonUploadClient {
     /// new creates a new DfdaemonUploadClient.
     #[instrument(skip_all)]
-    pub async fn new(config: Arc<Config>, addr: String) -> ClientResult<Self> {
+    pub async fn new(
+        config: Arc<Config>,
+        addr: String,
+        is_download_piece: bool,
+    ) -> ClientResult<Self> {
         let domain_name = Url::parse(addr.as_str())?
             .host_str()
             .ok_or_else(|| {
@@ -1455,6 +1456,14 @@ impl DfdaemonUploadClient {
                 ClientError::InvalidParameter
             })?
             .to_string();
+
+        // If it is download piece, use the download piece timeout, otherwise use the
+        // default request timeout.
+        let timeout = if is_download_piece {
+            config.download.piece_timeout
+        } else {
+            super::REQUEST_TIMEOUT
+        };
 
         let channel = match config
             .upload
@@ -1468,7 +1477,7 @@ impl DfdaemonUploadClient {
                     .tcp_nodelay(true)
                     .buffer_size(super::BUFFER_SIZE)
                     .connect_timeout(super::CONNECT_TIMEOUT)
-                    .timeout(super::REQUEST_TIMEOUT)
+                    .timeout(timeout)
                     .tcp_keepalive(Some(super::TCP_KEEPALIVE))
                     .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
                     .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
@@ -1483,7 +1492,7 @@ impl DfdaemonUploadClient {
                 .tcp_nodelay(true)
                 .buffer_size(super::BUFFER_SIZE)
                 .connect_timeout(super::CONNECT_TIMEOUT)
-                .timeout(super::REQUEST_TIMEOUT)
+                .timeout(timeout)
                 .tcp_keepalive(Some(super::TCP_KEEPALIVE))
                 .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
                 .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)

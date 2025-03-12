@@ -1,11 +1,4 @@
-use std::{
-    collections::HashMap,
-    hash::Hash,
-    num::NonZeroUsize,
-    ptr,
-    borrow::Borrow,
-    hash::Hasher,
-};
+use std::{borrow::Borrow, collections::HashMap, hash::Hash, hash::Hasher, num::NonZeroUsize, ptr};
 
 #[derive(Debug, Clone, Copy)]
 /// KeyRef is a reference to the key.
@@ -15,16 +8,16 @@ struct KeyRef<K> {
 
 impl<K: Hash> Hash for KeyRef<K> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        unsafe { 
+        unsafe {
             let key = &*self.k;
-            key.hash(state) 
+            key.hash(state)
         }
     }
 }
 
 impl<K: PartialEq> PartialEq for KeyRef<K> {
     fn eq(&self, other: &Self) -> bool {
-        unsafe { 
+        unsafe {
             let key1 = &*self.k;
             let key2 = &*other.k;
             key1.eq(key2)
@@ -134,48 +127,49 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// put puts the key and value into the cache.
     pub fn put(&mut self, key: K, value: V) -> Option<V> {
         let key_ref = KeyRef { k: &key };
-        
+
         if let Some(existing_entry) = self.map.get_mut(&key_ref) {
             let entry_ptr = existing_entry.as_mut() as *mut Entry<K, V>;
-            
-            let old_value = unsafe { 
+
+            let old_value = unsafe {
                 let old_value = ptr::read(&(*entry_ptr).value);
                 ptr::write(&mut (*entry_ptr).value, value);
                 old_value
             };
-            
+
             unsafe {
                 self.detach(entry_ptr);
                 self.attach(entry_ptr);
             }
-            
+
             return Some(old_value);
         }
-        
+
         let mut evicted_value = None;
         if self.map.len() >= self.cap.get() {
             if let Some(tail) = self.tail {
                 unsafe {
                     let tail_key_ref = KeyRef { k: &(*tail).key };
-                    
+
                     self.detach(tail);
-                    
+
                     if let Some(entry) = self.map.remove(&tail_key_ref) {
                         evicted_value = Some(entry.value);
                     }
                 }
             }
         }
-        
+
         let new_entry = Box::new(Entry::new(key, value));
         let key_ptr = &new_entry.key as *const K;
         let entry_ptr = Box::into_raw(new_entry);
-        
+
         unsafe {
             self.attach(entry_ptr);
-            self.map.insert(KeyRef { k: key_ptr }, Box::from_raw(entry_ptr));
+            self.map
+                .insert(KeyRef { k: key_ptr }, Box::from_raw(entry_ptr));
         }
-        
+
         evicted_value
     }
 
@@ -238,14 +232,16 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         if self.is_empty() {
             return None;
         }
-        
+
         let tail = self.tail?;
-        
+
         unsafe {
             self.detach(tail);
-            
+
             let tail_key_ref = KeyRef { k: &(*tail).key };
-            self.map.remove(&tail_key_ref).map(|entry| (entry.key, entry.value))
+            self.map
+                .remove(&tail_key_ref)
+                .map(|entry| (entry.key, entry.value))
         }
     }
 
@@ -268,25 +264,31 @@ impl<K, V> Drop for LruCache<K, V> {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
     use super::*;
+    use bytes::Bytes;
 
     #[test]
     fn test_put() {
         let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
-        
+
         assert_eq!(cache.put("key1".to_string(), "value1".to_string()), None);
         assert_eq!(cache.put("key2".to_string(), "value2".to_string()), None);
         assert_eq!(cache.put("key3".to_string(), "value3".to_string()), None);
-        
-        assert_eq!(cache.put("key2".to_string(), "value2_updated".to_string()), Some("value2".to_string()));
-        
+
+        assert_eq!(
+            cache.put("key2".to_string(), "value2_updated".to_string()),
+            Some("value2".to_string())
+        );
+
         assert_eq!(cache.get("key2"), Some(&"value2_updated".to_string()));
-        
-        assert_eq!(cache.put("key4".to_string(), "value4".to_string()), Some("value1".to_string()));
-        
+
+        assert_eq!(
+            cache.put("key4".to_string(), "value4".to_string()),
+            Some("value1".to_string())
+        );
+
         assert_eq!(cache.get("key1"), None);
-        
+
         assert!(cache.contains("key2"));
         assert!(cache.contains("key3"));
         assert!(cache.contains("key4"));
@@ -295,19 +297,19 @@ mod tests {
     #[test]
     fn test_get() {
         let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
-        
+
         cache.put("key1".to_string(), "value1".to_string());
         cache.put("key2".to_string(), "value2".to_string());
         cache.put("key3".to_string(), "value3".to_string());
-        
+
         assert_eq!(cache.get("key1"), Some(&"value1".to_string()));
         assert_eq!(cache.get("key2"), Some(&"value2".to_string()));
         assert_eq!(cache.get("key3"), Some(&"value3".to_string()));
-        
+
         assert_eq!(cache.get("key4"), None);
-        
+
         cache.put("key4".to_string(), "value4".to_string());
-        
+
         assert_eq!(cache.get("key1"), None);
         assert_eq!(cache.get("key2"), Some(&"value2".to_string()));
         assert_eq!(cache.get("key3"), Some(&"value3".to_string()));
@@ -317,36 +319,36 @@ mod tests {
     #[test]
     fn test_peek() {
         let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
-        
+
         cache.put("key1".to_string(), "value1".to_string());
         cache.put("key2".to_string(), "value2".to_string());
         cache.put("key3".to_string(), "value3".to_string());
-        
+
         assert_eq!(cache.peek("key1"), Some(&"value1".to_string()));
         assert_eq!(cache.peek("key2"), Some(&"value2".to_string()));
         assert_eq!(cache.peek("key3"), Some(&"value3".to_string()));
-        
+
         assert_eq!(cache.peek("key4"), None);
-        
+
         cache.put("key4".to_string(), "value4".to_string());
-        
+
         assert_eq!(cache.peek("key1"), None);
         assert_eq!(cache.peek("key2"), Some(&"value2".to_string()));
         assert_eq!(cache.peek("key3"), Some(&"value3".to_string()));
         assert_eq!(cache.peek("key4"), Some(&"value4".to_string()));
-        
+
         let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
         cache.put("key1".to_string(), "value1".to_string());
         cache.put("key2".to_string(), "value2".to_string());
-        
+
         cache.peek("key1");
         cache.put("key3".to_string(), "value3".to_string());
         assert_eq!(cache.peek("key1"), None);
-        
+
         let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
         cache.put("key1".to_string(), "value1".to_string());
         cache.put("key2".to_string(), "value2".to_string());
-        
+
         cache.get("key1");
         cache.put("key3".to_string(), "value3".to_string());
         assert_eq!(cache.peek("key2"), None);

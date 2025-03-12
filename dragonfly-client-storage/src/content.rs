@@ -14,10 +14,9 @@
  * limitations under the License.
  */
 
-use crc::*;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::Result;
+use dragonfly_client_core::{Error, Result};
 use std::cmp::{max, min};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -111,46 +110,68 @@ impl Content {
         Ok(true)
     }
 
+    /// is_same_dev_inode checks if the source and target are the same device and inode.
+    async fn is_same_dev_inode<P: AsRef<Path>, Q: AsRef<Path>>(
+        &self,
+        source: P,
+        target: Q,
+    ) -> Result<bool> {
+        let source_metadata = fs::metadata(source).await?;
+        let target_metadata = fs::metadata(target).await?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Ok(source_metadata.dev() == target_metadata.dev()
+                && source_metadata.ino() == target_metadata.ino())
+        }
+
+        #[cfg(not(unix))]
+        {
+            Err(Error::IO(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "platform not supported",
+            )))
+        }
+    }
+
     /// hard_link_or_copy_task hard links or copies the task content to the destination.
+    ///
+    /// 1. Destination exists:
+    ///     1.1. If the source and destination are the same device and inode, return directly.
+    ///     1.2. If the source and destination are not the same device and inode, return an error.
+    ///       Because the destination already exists, it is not allowed to overwrite the
+    ///       destination.
+    /// 2. Destination does not exist:
+    ///     2.1. Hard link the task content to the destination.
+    ///     2.2. If the hard link fails, copy the task content to the destination.
     #[instrument(skip_all)]
     pub async fn hard_link_or_copy_task(
         &self,
         task: &crate::metadata::Task,
         to: &Path,
-        range: Option<Range>,
     ) -> Result<()> {
         let task_path = self.get_task_path(task.id.as_str());
 
-        // Copy the task content to the destination by range
-        // if the range is specified.
-        if let Some(range) = range {
-            // If the range length is 0, no need to copy. Need to open the file to
-            // ensure the file exists.
-            if range.length == 0 {
-                info!("range length is 0, no need to copy");
-                File::create(to).await.inspect_err(|err| {
-                    error!("create {:?} failed: {}", to, err);
-                })?;
-
-                return Ok(());
-            }
-
-            self.copy_task_by_range(task.id.as_str(), to, range)
-                .await
-                .inspect_err(|err| {
-                    error!("copy range {:?} to {:?} failed: {}", task_path, to, err);
-                })?;
-
-            info!("copy range {:?} to {:?} success", task_path, to);
-            return Ok(());
+        // If the destination exists, check if the source and destination are the same device and
+        // inode. If they are the same, return directly. If not, return an error.
+        if to.exists() {
+            return match self.is_same_dev_inode(&task_path, to).await {
+                Ok(true) => {
+                    info!("hard already exists, no need to operate");
+                    Ok(())
+                }
+                Ok(false) => Err(Error::IO(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("{:?} already exists", to),
+                ))),
+                Err(err) => Err(err),
+            };
         }
 
+        // If the destination does not exist, hard link the task content to the destination.
         // If the hard link fails, copy the task content to the destination.
-        fs::remove_file(to).await.unwrap_or_else(|err| {
-            info!("remove {:?} failed: {}", to, err);
-        });
-
-        if let Err(err) = self.hard_link_task(task.id.as_str(), to).await {
+        if let Err(err) = fs::hard_link(task_path.clone(), to).await {
             warn!("hard link {:?} to {:?} failed: {}", task_path, to, err);
 
             // If the task is empty, no need to copy. Need to open the file to
@@ -175,13 +196,6 @@ impl Content {
         }
 
         info!("hard link {:?} to {:?} success", task_path, to);
-        Ok(())
-    }
-
-    /// hard_link_task hard links the task content.
-    #[instrument(skip_all)]
-    async fn hard_link_task(&self, task_id: &str, link: &Path) -> Result<()> {
-        fs::hard_link(self.get_task_path(task_id), link).await?;
         Ok(())
     }
 
@@ -319,10 +333,9 @@ impl Content {
         Ok((range_reader, reader))
     }
 
-    /// write_piece_with_crc32_castagnoli writes the piece to the content with crc32 castagnoli.
-    /// Calculate the hash of the piece by crc32 castagnoli with hardware acceleration.
+    /// write_piece writes the piece to the content and calculates the hash of the piece by crc32.
     #[instrument(skip_all)]
-    pub async fn write_piece_with_crc32_castagnoli<R: AsyncRead + Unpin + ?Sized>(
+    pub async fn write_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
         offset: u64,
@@ -344,16 +357,15 @@ impl Content {
             error!("seek {:?} failed: {}", task_path, err);
         })?;
 
-        // Copy the piece to the file while updating the CRC32 value.
         let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
-        let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
-        let mut digest = crc.digest();
+        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
 
+        // Copy the piece to the file while updating the CRC32 value.
+        let mut hasher = crc32fast::Hasher::new();
         let mut tee = InspectReader::new(reader, |bytes| {
-            digest.update(bytes);
+            hasher.update(bytes);
         });
 
-        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
         let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
             error!("copy {:?} failed: {}", task_path, err);
         })?;
@@ -365,7 +377,7 @@ impl Content {
         // Calculate the hash of the piece.
         Ok(WritePieceResponse {
             length,
-            hash: digest.finalize().to_string(),
+            hash: hasher.finalize().to_string(),
         })
     }
 
@@ -390,33 +402,50 @@ impl Content {
     }
 
     /// hard_link_or_copy_persistent_cache_task hard links or copies the task content to the destination.
+    ///
+    /// 1. Destination exists:
+    ///     1.1. If the source and destination are the same device and inode, return directly.
+    ///     1.2. If the source and destination are not the same device and inode, return an error.
+    ///       Because the destination already exists, it is not allowed to overwrite the
+    ///       destination.
+    /// 2. Destination does not exist:
+    ///     2.1. Hard link the task content to the destination.
+    ///     2.2. If the hard link fails, copy the task content to the destination.
     #[instrument(skip_all)]
     pub async fn hard_link_or_copy_persistent_cache_task(
         &self,
         task: &crate::metadata::PersistentCacheTask,
         to: &Path,
     ) -> Result<()> {
-        // Ensure the parent directory of the destination exists.
-        if let Some(parent) = to.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).await.inspect_err(|err| {
-                    error!("failed to create directory {:?}: {}", parent, err);
-                })?;
-            }
-        }
-
         // Get the persistent cache task path.
         let task_path = self.get_persistent_cache_task_path(task.id.as_str());
 
-        // If the hard link fails, copy the task content to the destination.
-        fs::remove_file(to).await.unwrap_or_else(|err| {
-            info!("remove {:?} failed: {}", to, err);
-        });
+        // If the destination exists, check if the source and destination are the same device and
+        // inode. If they are the same, return directly. If not, return an error.
+        if to.exists() {
+            return match self.is_same_dev_inode(&task_path, to).await {
+                Ok(true) => {
+                    info!("hard already exists, no need to operate");
+                    Ok(())
+                }
+                Ok(false) => Err(Error::IO(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("{:?} already exists", to),
+                ))),
+                Err(err) => {
+                    error!(
+                        "check if {:?} and {:?} are the same device and inode failed: {}",
+                        task_path, to, err
+                    );
 
-        if let Err(err) = self
-            .hard_link_persistent_cache_task(task.id.as_str(), to)
-            .await
-        {
+                    Err(err)
+                }
+            };
+        }
+
+        // If the destination does not exist, hard link the task content to the destination.
+        // If the hard link fails, copy the task content to the destination.
+        if let Err(err) = fs::hard_link(task_path.clone(), to).await {
             warn!("hard link {:?} to {:?} failed: {}", task_path, to, err);
 
             // If the persistent cache task is empty, no need to copy. Need to open the file to
@@ -518,12 +547,10 @@ impl Content {
         Ok((range_reader, reader))
     }
 
-    /// write_persistent_cache_piece_with_crc32_castagnoli writes the persistent cache piece to the content with crc32 castagnoli.
-    /// Calculate the hash of the piece by crc32 castagnoli with hardware acceleration.
+    /// write_persistent_cache_piece writes the persistent cache piece to the content and
+    /// calculates the hash of the piece by crc32.
     #[instrument(skip_all)]
-    pub async fn write_persistent_cache_piece_with_crc32_castagnoli<
-        R: AsyncRead + Unpin + ?Sized,
-    >(
+    pub async fn write_persistent_cache_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
         offset: u64,
@@ -547,16 +574,15 @@ impl Content {
             error!("seek {:?} failed: {}", task_path, err);
         })?;
 
-        // Copy the piece to the file while updating the CRC32 value.
         let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
-        let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
-        let mut digest = crc.digest();
+        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
 
+        // Copy the piece to the file while updating the CRC32 value.
+        let mut hasher = crc32fast::Hasher::new();
         let mut tee = InspectReader::new(reader, |bytes| {
-            digest.update(bytes);
+            hasher.update(bytes);
         });
 
-        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
         let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
             error!("copy {:?} failed: {}", task_path, err);
         })?;
@@ -568,15 +594,8 @@ impl Content {
         // Calculate the hash of the piece.
         Ok(WritePieceResponse {
             length,
-            hash: digest.finalize().to_string(),
+            hash: hasher.finalize().to_string(),
         })
-    }
-
-    /// hard_link_persistent_cache_task hard links the persistent cache task content.
-    #[instrument(skip_all)]
-    async fn hard_link_persistent_cache_task(&self, task_id: &str, link: &Path) -> Result<()> {
-        fs::hard_link(self.get_persistent_cache_task_path(task_id), link).await?;
-        Ok(())
     }
 
     /// copy_persistent_cache_task copies the persistent cache task content to the destination.
@@ -653,7 +672,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn should_calculate_piece_range() {
+    async fn test_calculate_piece_range() {
         let test_cases = vec![
             (1, 4, None, 1, 4),
             (
@@ -724,5 +743,18 @@ mod tests {
             assert_eq!(target_offset, expected_offset);
             assert_eq!(target_length, expected_length);
         }
+    }
+
+    #[tokio::test]
+    async fn test_has_enough_space() {
+        let config = Arc::new(Config::default());
+        let dir = PathBuf::from("/tmp/dragonfly_test");
+        let content = Content::new(config, &dir).await.unwrap();
+
+        let has_space = content.has_enough_space(1).unwrap();
+        assert!(has_space);
+
+        let has_space = content.has_enough_space(u64::MAX).unwrap();
+        assert!(!has_space);
     }
 }

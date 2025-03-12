@@ -20,7 +20,7 @@ use crate::metrics::{
     collect_backend_request_started_metrics,
 };
 use dragonfly_api::common::v2::{
-    Download, Hdfs, ObjectStorage, Peer, Piece, Range, Task as CommonTask, TrafficType,
+    Download, Hdfs, ObjectStorage, Peer, Piece, Task as CommonTask, TrafficType,
 };
 use dragonfly_api::dfdaemon::{
     self,
@@ -201,10 +201,17 @@ impl Task {
             None => return Err(Error::InvalidContentLength),
         };
 
-        let piece_length = self.piece.calculate_piece_length(
-            piece::PieceLengthStrategy::OptimizeByFileLength,
-            content_length,
-        );
+        let piece_length = match request.piece_length {
+            Some(piece_length) => self
+                .piece
+                .calculate_piece_length(piece::PieceLengthStrategy::FixedPieceLength(piece_length)),
+            None => {
+                self.piece
+                    .calculate_piece_length(piece::PieceLengthStrategy::OptimizeByFileLength(
+                        content_length,
+                    ))
+            }
+        };
 
         // If the task is not finished, check if the storage has enough space to
         // store the task.
@@ -249,13 +256,8 @@ impl Task {
 
     /// hard_link_or_copy hard links or copies the task content to the destination.
     #[instrument(skip_all)]
-    pub async fn hard_link_or_copy(
-        &self,
-        task: &metadata::Task,
-        to: &Path,
-        range: Option<Range>,
-    ) -> ClientResult<()> {
-        self.storage.hard_link_or_copy_task(task, to, range).await
+    pub async fn hard_link_or_copy(&self, task: &metadata::Task, to: &Path) -> ClientResult<()> {
+        self.storage.hard_link_or_copy_task(task, to).await
     }
 
     /// download downloads a task.
@@ -266,7 +268,7 @@ impl Task {
         task: &metadata::Task,
         host_id: &str,
         peer_id: &str,
-        mut request: Download,
+        request: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<()> {
         // Get the id of the task.
@@ -283,9 +285,6 @@ impl Task {
             error!("piece length not found");
             return Err(Error::InvalidPieceLength);
         };
-
-        // Add the piece length to the request for register task.
-        request.piece_length = Some(piece_length);
 
         // Calculate the interested pieces to download.
         let interested_pieces =

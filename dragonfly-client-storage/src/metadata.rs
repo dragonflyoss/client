@@ -15,7 +15,6 @@
  */
 
 use chrono::{NaiveDateTime, Utc};
-use crc::*;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::{digest, http::headermap_to_hashmap};
@@ -307,14 +306,13 @@ impl Piece {
     /// offset, length and content digest. The digest is used to check the integrity of the
     /// piece metadata.
     pub fn calculate_digest(&self) -> String {
-        let crc = Crc::<u32, Table<16>>::new(&CRC_32_ISCSI);
-        let mut digest = crc.digest();
-        digest.update(&self.number.to_be_bytes());
-        digest.update(&self.offset.to_be_bytes());
-        digest.update(&self.length.to_be_bytes());
-        digest.update(self.digest.as_bytes());
+        let mut hasher = crc32fast::Hasher::new();
+        hasher.update(&self.number.to_be_bytes());
+        hasher.update(&self.offset.to_be_bytes());
+        hasher.update(&self.length.to_be_bytes());
+        hasher.update(self.digest.as_bytes());
 
-        let encoded = digest.finalize().to_string();
+        let encoded = hasher.finalize().to_string();
         digest::Digest::new(digest::Algorithm::Crc32, encoded).to_string()
     }
 }
@@ -950,12 +948,12 @@ mod tests {
             number: 1,
             offset: 0,
             length: 1024,
-            digest: "crc32:3810626145".to_string(),
+            digest: "crc32:1929153120".to_string(),
             ..Default::default()
         };
 
         let digest = piece.calculate_digest();
-        assert_eq!(digest, "crc32:3874114958");
+        assert_eq!(digest, "crc32:3299754941");
     }
 
     #[test]

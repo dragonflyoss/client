@@ -24,6 +24,7 @@ use std::cmp::{max, min};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
+/// TODO(Gaius): Fix the memory leak issue.
 /// Cache is the cache for storing http response by LRU algorithm.
 #[derive(Clone)]
 pub struct Cache {
@@ -54,6 +55,7 @@ impl Cache {
 
         let task_id = self.task.id_generator.task_id(
             &download.url,
+            download.piece_length,
             download.tag.as_deref(),
             download.application.as_deref(),
             download.filtered_query_params.clone(),
@@ -123,7 +125,7 @@ impl Cache {
             return;
         }
 
-        pieces.put(id.to_string(), content);
+        pieces.push(id.to_string(), content);
     }
 
     /// contains_piece checks whether the piece exists in the cache.
@@ -152,7 +154,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn should_calculate_piece_range() {
+    async fn test_calculate_piece_range() {
         let test_cases = vec![
             (1, 4, None, 0, 4),
             (
