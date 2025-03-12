@@ -106,11 +106,11 @@ impl Task {
 /// Task is the metadata of the task.
 #[derive(Clone)]
 pub struct Cache {
-    /// size is the size of the cache.
+    /// size is the size of the cache in bytes.
     size: u64,
 
-    /// capacity_bytes is the maximum capacity of the cache in bytes.
-    capacity_bytes: u64,
+    /// capacity is the maximum capacity of the cache in bytes.
+    capacity: u64,
 
     /// tasks stores the tasks with their task id.
     tasks: Arc<RwLock<LruCache<String, Task>>>,
@@ -121,11 +121,11 @@ impl Cache {
     /// new creates a new cache with the specified capacity.
     pub fn new(capacity: usize) -> Result<Self> {
         let capacity = NonZeroUsize::new(capacity).ok_or(Error::InvalidParameter)?;
-        let tasks = Arc::new(RwLock::new(LruCache::new(capacity)));
+        let tasks = Arc::new(RwLock::new(LruCache::new(1)));
 
         Ok(Cache {
             size: 0,
-            capacity_bytes: 10000000,
+            capacity: capacity.into(),
             tasks,
         })
     }
@@ -212,7 +212,7 @@ impl Cache {
 
         let mut tasks = self.tasks.write().await;
         let new_task = Task::new(task_id.to_string(), content_length);
-        while self.size + content_length > self.capacity_bytes {
+        while self.size + content_length > self.capacity {
             match tasks.pop_lru() {
                 Some((_, task)) => {
                     self.size -= task.content_length();

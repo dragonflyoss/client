@@ -200,11 +200,10 @@ fn default_storage_read_buffer_size() -> usize {
     128 * 1024
 }
 
-/// default_storage_cache_capacity is the default cache capacity for the preheat job, default is
-/// 100.
+/// default_storage_cache_capacity is the default cache capacity for the preheat job, default is 10GiB.
 #[inline]
 fn default_storage_cache_capacity() -> usize {
-    100
+    10 * 1024 * 1024 * 1024
 }
 
 /// default_seed_peer_cluster_id is the default cluster id of seed peer.
