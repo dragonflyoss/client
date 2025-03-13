@@ -153,26 +153,26 @@ impl Content {
     ) -> Result<()> {
         let task_path = self.get_task_path(task.id.as_str());
 
-        // If the destination exists, check if the source and destination are the same device and
-        // inode. If they are the same, return directly. If not, return an error.
-        if to.exists() {
-            return match self.is_same_dev_inode(&task_path, to).await {
-                Ok(true) => {
-                    info!("hard already exists, no need to operate");
-                    Ok(())
-                }
-                Ok(false) => Err(Error::IO(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    format!("{:?} already exists", to),
-                ))),
-                Err(err) => Err(err),
-            };
-        }
-
         // If the destination does not exist, hard link the task content to the destination.
         // If the hard link fails, copy the task content to the destination.
         if let Err(err) = fs::hard_link(task_path.clone(), to).await {
             warn!("hard link {:?} to {:?} failed: {}", task_path, to, err);
+
+            // If the destination exists, check if the source and destination are the same device and
+            // inode. If they are the same, return directly. If not, return an error.
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                return match self.is_same_dev_inode(&task_path, to).await {
+                    Ok(true) => {
+                        info!("hard already exists, no need to operate");
+                        Ok(())
+                    }
+                    Ok(false) => Err(Error::IO(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!("{:?} already exists", to),
+                    ))),
+                    Err(err) => Err(err),
+                };
+            }
 
             // If the task is empty, no need to copy. Need to open the file to
             // ensure the file exists.
@@ -420,33 +420,26 @@ impl Content {
         // Get the persistent cache task path.
         let task_path = self.get_persistent_cache_task_path(task.id.as_str());
 
-        // If the destination exists, check if the source and destination are the same device and
-        // inode. If they are the same, return directly. If not, return an error.
-        if to.exists() {
-            return match self.is_same_dev_inode(&task_path, to).await {
-                Ok(true) => {
-                    info!("hard already exists, no need to operate");
-                    Ok(())
-                }
-                Ok(false) => Err(Error::IO(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    format!("{:?} already exists", to),
-                ))),
-                Err(err) => {
-                    error!(
-                        "check if {:?} and {:?} are the same device and inode failed: {}",
-                        task_path, to, err
-                    );
-
-                    Err(err)
-                }
-            };
-        }
-
         // If the destination does not exist, hard link the task content to the destination.
         // If the hard link fails, copy the task content to the destination.
         if let Err(err) = fs::hard_link(task_path.clone(), to).await {
             warn!("hard link {:?} to {:?} failed: {}", task_path, to, err);
+
+            // If the destination exists, check if the source and destination are the same device and
+            // inode. If they are the same, return directly. If not, return an error.
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                return match self.is_same_dev_inode(&task_path, to).await {
+                    Ok(true) => {
+                        info!("hard already exists, no need to operate");
+                        Ok(())
+                    }
+                    Ok(false) => Err(Error::IO(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!("{:?} already exists", to),
+                    ))),
+                    Err(err) => Err(err),
+                };
+            }
 
             // If the persistent cache task is empty, no need to copy. Need to open the file to
             // ensure the file exists.
