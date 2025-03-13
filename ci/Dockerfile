@@ -34,7 +34,6 @@ COPY dragonfly-client-init/Cargo.toml ./dragonfly-client-init/Cargo.toml
 COPY dragonfly-client-init/src ./dragonfly-client-init/src
 
 RUN cargo build --release --verbose --bin dfget --bin dfdaemon --bin dfstore --bin dfcache
-RUN cargo install bottom --locked --root /usr/local
 
 FROM public.ecr.aws/docker/library/alpine:3.20 AS health
 
@@ -56,14 +55,13 @@ RUN go install github.com/google/pprof@latest
 FROM public.ecr.aws/debian/debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl bash-completion procps \
-    apache2-utils ca-certificates binutils dnsutils iputils-ping llvm dstat \
+    apache2-utils ca-certificates binutils dnsutils iputils-ping llvm dstat sysstat net-tools \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/client/target/release/dfget /usr/local/bin/dfget
 COPY --from=builder /app/client/target/release/dfdaemon /usr/local/bin/dfdaemon
 COPY --from=builder /app/client/target/release/dfstore /usr/local/bin/dfstore
 COPY --from=builder /app/client/target/release/dfcache /usr/local/bin/dfcache
-COPY --from=builder /usr/local/bin/btm /usr/local/bin/
 COPY --from=pprof /go/bin/pprof /bin/pprof
 COPY --from=health /bin/grpc_health_probe /bin/grpc_health_probe
 
