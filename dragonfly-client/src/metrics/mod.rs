@@ -185,14 +185,6 @@ lazy_static! {
             &[]
         ).expect("metric can be created");
 
-    /// PROXY_REQUEST_VIA_DFDAEMON_AND_CACHE_HITS_COUNT is used to count the number of proxy request via
-    /// dfdaemon and cache hits.
-    pub static ref PROXY_REQUEST_VIA_DFDAEMON_AND_CACHE_HITS_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("proxy_request_via_dfdaemon_and_cache_hits_total", "Counter of the number of cache hits of the proxy request via dfdaemon.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
-
     /// UPDATE_TASK_COUNT is used to count the number of update tasks.
     pub static ref UPDATE_TASK_COUNT: IntCounterVec =
         IntCounterVec::new(
@@ -346,12 +338,6 @@ fn register_custom_metrics() {
         .expect("metric can be registered");
 
     REGISTRY
-        .register(Box::new(
-            PROXY_REQUEST_VIA_DFDAEMON_AND_CACHE_HITS_COUNT.clone(),
-        ))
-        .expect("metric can be registered");
-
-    REGISTRY
         .register(Box::new(UPDATE_TASK_COUNT.clone()))
         .expect("metric can be registered");
 
@@ -419,7 +405,6 @@ fn reset_custom_metrics() {
     PROXY_REQUEST_COUNT.reset();
     PROXY_REQUEST_FAILURE_COUNT.reset();
     PROXY_REQUEST_VIA_DFDAEMON_COUNT.reset();
-    PROXY_REQUEST_VIA_DFDAEMON_AND_CACHE_HITS_COUNT.reset();
     UPDATE_TASK_COUNT.reset();
     UPDATE_TASK_FAILURE_COUNT.reset();
     STAT_TASK_COUNT.reset();
@@ -758,14 +743,6 @@ pub fn collect_proxy_request_failure_metrics() {
 /// collect_proxy_request_via_dfdaemon_metrics collects the proxy request via dfdaemon metrics.
 pub fn collect_proxy_request_via_dfdaemon_metrics() {
     PROXY_REQUEST_VIA_DFDAEMON_COUNT
-        .with_label_values(&[])
-        .inc();
-}
-
-/// collect_proxy_request_via_dfdaemon_and_cache_hits_metrics collects the proxy request via
-/// dfdaemon and cache hits metrics.
-pub fn collect_proxy_request_via_dfdaemon_and_cache_hits_metrics() {
-    PROXY_REQUEST_VIA_DFDAEMON_AND_CACHE_HITS_COUNT
         .with_label_values(&[])
         .inc();
 }
