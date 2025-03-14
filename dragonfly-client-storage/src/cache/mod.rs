@@ -121,7 +121,6 @@ impl Cache {
     /// new creates a new cache with the specified capacity.
     pub fn new(capacity: usize, tasks_capacity: usize) -> Result<Self> {
         let capacity = NonZeroUsize::new(capacity).ok_or(Error::InvalidParameter)?;
-        let tasks_capacity = NonZeroUsize::new(tasks_capacity).ok_or(Error::InvalidParameter)?;
         let tasks = Arc::new(RwLock::new(LruCache::new(tasks_capacity)));
 
         Ok(Cache {

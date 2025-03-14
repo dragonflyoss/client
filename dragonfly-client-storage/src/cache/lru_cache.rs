@@ -1,11 +1,28 @@
-use std::{borrow::Borrow, collections::HashMap, hash::Hash, hash::Hasher, num::NonZeroUsize, ptr};
+/*
+ *     Copyright 2025 The Dragonfly Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-#[derive(Debug, Clone, Copy)]
+use std::{borrow::Borrow, collections::HashMap, hash::Hash, hash::Hasher};
+
 /// KeyRef is a reference to the key.
+#[derive(Debug, Clone, Copy)]
 struct KeyRef<K> {
     k: *const K,
 }
 
+/// KeyRef implements Hash for KeyRef.
 impl<K: Hash> Hash for KeyRef<K> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         unsafe {
@@ -15,6 +32,7 @@ impl<K: Hash> Hash for KeyRef<K> {
     }
 }
 
+/// KeyRef implements PartialEq for KeyRef.
 impl<K: PartialEq> PartialEq for KeyRef<K> {
     fn eq(&self, other: &Self) -> bool {
         unsafe {
@@ -25,12 +43,14 @@ impl<K: PartialEq> PartialEq for KeyRef<K> {
     }
 }
 
+/// KeyRef implements Eq for KeyRef.
 impl<K: Eq> Eq for KeyRef<K> {}
 
-#[repr(transparent)]
 /// KeyWrapper is a wrapper for the key.
+#[repr(transparent)]
 struct KeyWrapper<K: ?Sized>(K);
 
+/// KeyWrapper implements reference conversion.
 impl<K: ?Sized> KeyWrapper<K> {
     /// from_ref creates a new KeyWrapper from a reference to the key.
     fn from_ref(key: &K) -> &Self {
@@ -38,12 +58,14 @@ impl<K: ?Sized> KeyWrapper<K> {
     }
 }
 
+/// KeyWrapper implements Hash for KeyWrapper.
 impl<K: ?Sized + Hash> Hash for KeyWrapper<K> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.hash(state)
     }
 }
 
+/// KeyWrapper implements PartialEq for KeyWrapper.
 impl<K: ?Sized + PartialEq> PartialEq for KeyWrapper<K> {
     #![allow(unknown_lints)]
     #[allow(clippy::unconditional_recursion)]
@@ -52,13 +74,16 @@ impl<K: ?Sized + PartialEq> PartialEq for KeyWrapper<K> {
     }
 }
 
+/// KeyWrapper implements Eq for KeyWrapper.
 impl<K: ?Sized + Eq> Eq for KeyWrapper<K> {}
 
+/// KeyWrapper implements Borrow for KeyWrapper.
 impl<K, Q> Borrow<KeyWrapper<Q>> for KeyRef<K>
 where
     K: Borrow<Q>,
     Q: ?Sized,
 {
+    /// borrow borrows the key.
     fn borrow(&self) -> &KeyWrapper<Q> {
         unsafe {
             let key = &*self.k;
@@ -67,6 +92,7 @@ where
     }
 }
 
+/// Entry is a cache entry.
 struct Entry<K, V> {
     key: K,
     value: V,
@@ -74,7 +100,9 @@ struct Entry<K, V> {
     next: Option<*mut Entry<K, V>>,
 }
 
+/// Entry implements Drop for Entry.
 impl<K, V> Entry<K, V> {
+    /// new creates a new Entry.
     fn new(key: K, value: V) -> Self {
         Self {
             key,
@@ -85,25 +113,28 @@ impl<K, V> Entry<K, V> {
     }
 }
 
+/// LruCache is a least recently used cache.
 pub struct LruCache<K, V> {
-    cap: NonZeroUsize,
+    capacity: usize,
     map: HashMap<KeyRef<K>, Box<Entry<K, V>>>,
     head: Option<*mut Entry<K, V>>,
     tail: Option<*mut Entry<K, V>>,
     _marker: std::marker::PhantomData<K>,
 }
 
+/// LruCache implements LruCache.
 impl<K: Hash + Eq, V> LruCache<K, V> {
     /// new creates a new LruCache.
-    pub fn new(cap: NonZeroUsize) -> Self {
+    pub fn new(capacity: usize) -> Self {
         Self {
-            cap,
-            map: HashMap::with_capacity(cap.get()),
+            capacity,
+            map: HashMap::with_capacity(capacity),
             head: None,
             tail: None,
             _marker: std::marker::PhantomData,
         }
     }
+
     /// get gets the value of the key.
     pub fn get<'a, Q>(&'a mut self, k: &Q) -> Option<&'a V>
     where
@@ -113,11 +144,8 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         if let Some(entry) = self.map.get_mut(KeyWrapper::from_ref(k)) {
             let entry_ptr: *mut Entry<K, V> = &mut **entry;
 
-            unsafe {
-                self.detach(entry_ptr);
-                self.attach(entry_ptr);
-            }
-
+            self.detach(entry_ptr);
+            self.attach(entry_ptr);
             Some(&unsafe { &*entry_ptr }.value)
         } else {
             None
@@ -125,35 +153,24 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     }
 
     /// put puts the key and value into the cache.
-    pub fn put(&mut self, key: K, value: V) -> Option<V> {
-        let key_ref = KeyRef { k: &key };
+    pub fn put(&mut self, key: K, mut value: V) -> Option<V> {
+        if let Some(existing_entry) = self.map.get_mut(&KeyRef { k: &key }) {
+            let entry = existing_entry.as_mut();
+            std::mem::swap(&mut entry.value, &mut value);
 
-        if let Some(existing_entry) = self.map.get_mut(&key_ref) {
-            let entry_ptr = existing_entry.as_mut() as *mut Entry<K, V>;
-
-            let old_value = unsafe {
-                let old_value = ptr::read(&(*entry_ptr).value);
-                ptr::write(&mut (*entry_ptr).value, value);
-                old_value
-            };
-
-            unsafe {
-                self.detach(entry_ptr);
-                self.attach(entry_ptr);
-            }
-
-            return Some(old_value);
+            let entry_ptr: *mut Entry<K, V> = entry;
+            self.detach(entry_ptr);
+            self.attach(entry_ptr);
+            return Some(value);
         }
 
         let mut evicted_value = None;
-        if self.map.len() >= self.cap.get() {
+        if self.map.len() >= self.capacity {
             if let Some(tail) = self.tail {
+                self.detach(tail);
+
                 unsafe {
-                    let tail_key_ref = KeyRef { k: &(*tail).key };
-
-                    self.detach(tail);
-
-                    if let Some(entry) = self.map.remove(&tail_key_ref) {
+                    if let Some(entry) = self.map.remove(&KeyRef { k: &(*tail).key }) {
                         evicted_value = Some(entry.value);
                     }
                 }
@@ -161,7 +178,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         }
 
         let new_entry = Box::new(Entry::new(key, value));
-        let key_ptr = &new_entry.key as *const K;
+        let key_ptr: *const K = &new_entry.key;
         let entry_ptr = Box::into_raw(new_entry);
 
         unsafe {
@@ -174,30 +191,35 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     }
 
     /// detach detaches the entry from the cache.
-    unsafe fn detach(&mut self, entry: *mut Entry<K, V>) {
-        let prev = (*entry).prev;
-        let next = (*entry).next;
+    fn detach(&mut self, entry: *mut Entry<K, V>) {
+        unsafe {
+            let prev = (*entry).prev;
+            let next = (*entry).next;
 
-        match prev {
-            Some(prev) => (*prev).next = next,
-            None => self.head = next,
+            match prev {
+                Some(prev) => (*prev).next = next,
+                None => self.head = next,
+            }
+
+            match next {
+                Some(next) => (*next).prev = prev,
+                None => self.tail = prev,
+            }
+
+            (*entry).prev = None;
+            (*entry).next = None;
         }
-
-        match next {
-            Some(next) => (*next).prev = prev,
-            None => self.tail = prev,
-        }
-
-        (*entry).prev = None;
-        (*entry).next = None;
     }
 
     /// attach attaches the entry to the cache.
-    unsafe fn attach(&mut self, entry: *mut Entry<K, V>) {
+    fn attach(&mut self, entry: *mut Entry<K, V>) {
         match self.head {
-            Some(old_head) => {
-                (*entry).next = Some(old_head);
-                (*old_head).prev = Some(entry);
+            Some(head) => {
+                unsafe {
+                    (*entry).next = Some(head);
+                    (*head).prev = Some(entry);
+                }
+
                 self.head = Some(entry);
             }
             None => {
@@ -234,13 +256,11 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         }
 
         let tail = self.tail?;
+        self.detach(tail);
 
         unsafe {
-            self.detach(tail);
-
-            let tail_key_ref = KeyRef { k: &(*tail).key };
             self.map
-                .remove(&tail_key_ref)
+                .remove(&KeyRef { k: &(*tail).key })
                 .map(|entry| (entry.key, entry.value))
         }
     }
@@ -269,7 +289,7 @@ mod tests {
 
     #[test]
     fn test_put() {
-        let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+        let mut cache = LruCache::new(3);
 
         assert_eq!(cache.put("key1".to_string(), "value1".to_string()), None);
         assert_eq!(cache.put("key2".to_string(), "value2".to_string()), None);
@@ -296,7 +316,7 @@ mod tests {
 
     #[test]
     fn test_get() {
-        let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+        let mut cache = LruCache::new(3);
 
         cache.put("key1".to_string(), "value1".to_string());
         cache.put("key2".to_string(), "value2".to_string());
@@ -318,7 +338,7 @@ mod tests {
 
     #[test]
     fn test_peek() {
-        let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+        let mut cache = LruCache::new(3);
 
         cache.put("key1".to_string(), "value1".to_string());
         cache.put("key2".to_string(), "value2".to_string());
@@ -337,7 +357,7 @@ mod tests {
         assert_eq!(cache.peek("key3"), Some(&"value3".to_string()));
         assert_eq!(cache.peek("key4"), Some(&"value4".to_string()));
 
-        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = LruCache::new(2);
         cache.put("key1".to_string(), "value1".to_string());
         cache.put("key2".to_string(), "value2".to_string());
 
@@ -345,7 +365,7 @@ mod tests {
         cache.put("key3".to_string(), "value3".to_string());
         assert_eq!(cache.peek("key1"), None);
 
-        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = LruCache::new(2);
         cache.put("key1".to_string(), "value1".to_string());
         cache.put("key2".to_string(), "value2".to_string());
 
@@ -357,7 +377,7 @@ mod tests {
 
     #[test]
     fn test_contains() {
-        let mut cache = LruCache::new(NonZeroUsize::new(5).unwrap());
+        let mut cache = LruCache::new(5);
 
         let test_cases = vec![
             ("piece_1", Bytes::from("data 1"), false),
