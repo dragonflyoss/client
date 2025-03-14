@@ -470,7 +470,6 @@ impl Piece {
         length: u64,
         parent: piece_collector::CollectedParent,
         is_prefetch: bool,
-        load_to_cache: bool,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
@@ -533,8 +532,6 @@ impl Piece {
                 digest.as_str(),
                 parent.id.as_str(),
                 &mut reader,
-                load_to_cache,
-                length,
             )
             .await
         {
@@ -571,7 +568,6 @@ impl Piece {
         length: u64,
         request_header: HeaderMap,
         is_prefetch: bool,
-        load_to_cache: bool,
         object_storage: Option<ObjectStorage>,
         hdfs: Option<Hdfs>,
     ) -> Result<metadata::Piece> {
@@ -695,7 +691,6 @@ impl Piece {
                 offset,
                 length,
                 &mut response.reader,
-                load_to_cache,
             )
             .await
         {
