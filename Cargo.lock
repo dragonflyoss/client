@@ -1093,6 +1093,7 @@ version = "0.2.19"
 dependencies = [
  "base16ct",
  "bincode",
+ "bytes",
  "chrono",
  "crc32fast",
  "dragonfly-api",
@@ -1100,6 +1101,7 @@ dependencies = [
  "dragonfly-client-core",
  "dragonfly-client-util",
  "fs2",
+ "lru",
  "num_cpus",
  "prost-wkt-types",
  "rayon",
