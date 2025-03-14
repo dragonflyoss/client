@@ -16,15 +16,13 @@
 
 use crate::grpc::{dfdaemon_download::DfdaemonDownloadClient, REQUEST_TIMEOUT};
 use crate::metrics::{
-    collect_download_piece_traffic_metrics, collect_proxy_request_failure_metrics,
-    collect_proxy_request_started_metrics,
-    collect_proxy_request_via_dfdaemon_and_cache_hits_metrics,
+    collect_proxy_request_failure_metrics, collect_proxy_request_started_metrics,
     collect_proxy_request_via_dfdaemon_metrics,
 };
 use crate::resource::{piece::MIN_PIECE_LENGTH, task::Task};
 use crate::shutdown;
 use bytes::Bytes;
-use dragonfly_api::common::v2::{Download, TaskType, TrafficType};
+use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse,
 };
@@ -37,7 +35,7 @@ use dragonfly_client_util::{
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
 use futures_util::TryStreamExt;
-use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full, StreamBody};
+use http_body_util::{combinators::BoxBody, BodyExt, Empty, StreamBody};
 use hyper::body::Frame;
 use hyper::client::conn::http1::Builder as ClientBuilder;
 use hyper::server::conn::http1::Builder as ServerBuilder;
@@ -55,7 +53,7 @@ use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Barrier};
@@ -63,7 +61,6 @@ use tokio_rustls::TlsAcceptor;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, instrument, Instrument, Span};
 
-pub mod cache;
 pub mod header;
 
 lazy_static! {
@@ -78,9 +75,6 @@ pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
 pub struct Proxy {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
-
-    /// cache is the cache manager for storing the piece content.
-    cache: Option<Arc<cache::Cache>>,
 
     /// task is the task manager.
     task: Arc<Task>,
@@ -114,7 +108,6 @@ impl Proxy {
     ) -> Self {
         let mut proxy = Self {
             config: config.clone(),
-            cache: None,
             task: task.clone(),
             addr: SocketAddr::new(config.proxy.server.ip.unwrap(), config.proxy.server.port),
             registry_cert: Arc::new(None),
@@ -122,10 +115,6 @@ impl Proxy {
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         };
-
-        if let Some(cache_capacity) = config.proxy.cache_capacity {
-            proxy.cache = Some(Arc::new(cache::Cache::new(cache_capacity, task).unwrap()));
-        }
 
         // Load and generate the registry certificates from the PEM format file.
         proxy.registry_cert = match config.proxy.registry_mirror.load_cert_der() {
@@ -181,7 +170,6 @@ impl Proxy {
         #[derive(Clone)]
         struct Context {
             config: Arc<Config>,
-            cache: Option<Arc<cache::Cache>>,
             task: Arc<Task>,
             dfdaemon_download_client: DfdaemonDownloadClient,
             registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
@@ -190,7 +178,6 @@ impl Proxy {
 
         let context = Context {
             config: self.config.clone(),
-            cache: self.cache.clone(),
             task: self.task.clone(),
             dfdaemon_download_client,
             registry_cert: self.registry_cert.clone(),
@@ -223,7 +210,7 @@ impl Proxy {
                                 service_fn(move |request|{
                                     let context = context.clone();
                                     async move {
-                                        handler(context.config, context.cache, context.task, request, context.dfdaemon_download_client, context.registry_cert, context.server_ca_cert).await
+                                        handler(context.config, context.task, request, context.dfdaemon_download_client, context.registry_cert, context.server_ca_cert).await
                                     }
                                 } ),
                                 )
@@ -249,7 +236,6 @@ impl Proxy {
 #[instrument(skip_all, fields(uri, method))]
 pub async fn handler(
     config: Arc<Config>,
-    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -266,7 +252,6 @@ pub async fn handler(
         if Method::CONNECT == request.method() {
             return registry_mirror_https_handler(
                 config,
-                cache,
                 task,
                 request,
                 dfdaemon_download_client,
@@ -278,7 +263,6 @@ pub async fn handler(
 
         return registry_mirror_http_handler(
             config,
-            cache,
             task,
             request,
             dfdaemon_download_client,
@@ -295,7 +279,6 @@ pub async fn handler(
     if Method::CONNECT == request.method() {
         return https_handler(
             config,
-            cache,
             task,
             request,
             dfdaemon_download_client,
@@ -307,7 +290,6 @@ pub async fn handler(
 
     http_handler(
         config,
-        cache,
         task,
         request,
         dfdaemon_download_client,
@@ -320,7 +302,6 @@ pub async fn handler(
 #[instrument(skip_all)]
 pub async fn registry_mirror_http_handler(
     config: Arc<Config>,
-    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -329,7 +310,6 @@ pub async fn registry_mirror_http_handler(
     let request = make_registry_mirror_request(config.clone(), request)?;
     return http_handler(
         config,
-        cache,
         task,
         request,
         dfdaemon_download_client,
@@ -342,7 +322,6 @@ pub async fn registry_mirror_http_handler(
 #[instrument(skip_all)]
 pub async fn registry_mirror_https_handler(
     config: Arc<Config>,
-    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -352,7 +331,6 @@ pub async fn registry_mirror_https_handler(
     let request = make_registry_mirror_request(config.clone(), request)?;
     return https_handler(
         config,
-        cache,
         task,
         request,
         dfdaemon_download_client,
@@ -366,7 +344,6 @@ pub async fn registry_mirror_https_handler(
 #[instrument(skip_all)]
 pub async fn http_handler(
     config: Arc<Config>,
-    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -400,15 +377,7 @@ pub async fn http_handler(
             request.method(),
             request_uri
         );
-        return proxy_via_dfdaemon(
-            config,
-            cache,
-            task,
-            &rule,
-            request,
-            dfdaemon_download_client,
-        )
-        .await;
+        return proxy_via_dfdaemon(config, task, &rule, request, dfdaemon_download_client).await;
     }
 
     // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
@@ -421,7 +390,6 @@ pub async fn http_handler(
         );
         return proxy_via_dfdaemon(
             config,
-            cache,
             task,
             &Rule::default(),
             request,
@@ -451,7 +419,6 @@ pub async fn http_handler(
 #[instrument(skip_all)]
 pub async fn https_handler(
     config: Arc<Config>,
-    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
@@ -468,7 +435,6 @@ pub async fn https_handler(
                 Ok(upgraded) => {
                     if let Err(e) = upgraded_tunnel(
                         config,
-                        cache,
                         task,
                         upgraded,
                         host,
@@ -498,7 +464,6 @@ pub async fn https_handler(
 #[instrument(skip_all)]
 async fn upgraded_tunnel(
     config: Arc<Config>,
-    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     upgraded: Upgraded,
     host: String,
@@ -546,7 +511,6 @@ async fn upgraded_tunnel(
             service_fn(move |request| {
                 upgraded_handler(
                     config.clone(),
-                    cache.clone(),
                     task.clone(),
                     host.clone(),
                     request,
@@ -568,7 +532,6 @@ async fn upgraded_tunnel(
 #[instrument(skip_all, fields(uri, method))]
 pub async fn upgraded_handler(
     config: Arc<Config>,
-    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     host: String,
     mut request: Request<hyper::body::Incoming>,
@@ -611,15 +574,7 @@ pub async fn upgraded_handler(
             request.method(),
             request_uri
         );
-        return proxy_via_dfdaemon(
-            config,
-            cache,
-            task,
-            &rule,
-            request,
-            dfdaemon_download_client,
-        )
-        .await;
+        return proxy_via_dfdaemon(config, task, &rule, request, dfdaemon_download_client).await;
     }
 
     // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
@@ -632,7 +587,6 @@ pub async fn upgraded_handler(
         );
         return proxy_via_dfdaemon(
             config,
-            cache,
             task,
             &Rule::default(),
             request,
@@ -662,7 +616,6 @@ pub async fn upgraded_handler(
 #[instrument(skip_all, fields(host_id, task_id, peer_id))]
 async fn proxy_via_dfdaemon(
     config: Arc<Config>,
-    cache: Option<Arc<cache::Cache>>,
     task: Arc<Task>,
     rule: &Rule,
     request: Request<hyper::body::Incoming>,
@@ -682,47 +635,6 @@ async fn proxy_via_dfdaemon(
             ));
         }
     };
-
-    // Skip cache lookup if output_path is set in the download task request.
-    // Rationale: When output_path is specified, the client expects to create the file itself,
-    // and returning cached content would prevent proper file creation.
-    let has_output_path = download_task_request
-        .download
-        .as_ref()
-        .is_some_and(|d| d.output_path.is_some());
-
-    // If has_output_path is false and cache is enabled, check the cache first.
-    if !has_output_path {
-        if let Some(cache) = cache.as_ref() {
-            match cache.get_by_request(&download_task_request).await {
-                Ok(None) => {
-                    debug!("cache miss");
-                }
-                Ok(Some(content)) => {
-                    info!("cache hit");
-
-                    // Collect the download piece traffic metrics and the proxy request via dfdaemon and
-                    // cache hits metrics.
-                    collect_proxy_request_via_dfdaemon_and_cache_hits_metrics();
-                    collect_download_piece_traffic_metrics(
-                        &TrafficType::LocalPeer,
-                        TaskType::Standard as i32,
-                        content.len() as u64,
-                    );
-
-                    let body_boxed = Full::new(content).map_err(ClientError::from).boxed();
-                    return Ok(Response::new(body_boxed));
-                }
-                Err(err) => {
-                    error!("get content from cache failed: {}", err);
-                    return Ok(make_error_response(
-                        http::StatusCode::INTERNAL_SERVER_ERROR,
-                        None,
-                    ));
-                }
-            }
-        }
-    }
 
     // Download the task by the dfdaemon download client.
     let response = match dfdaemon_download_client
@@ -890,11 +802,10 @@ async fn proxy_via_dfdaemon(
                             let piece_range_reader =
                                 BufReader::with_capacity(read_buffer_size, piece_range_reader);
 
-                            // Write the piece data to the pipe in order and store the piece reader
-                            // in the cache.
+                            // Write the piece data to the pipe in order.
                             finished_piece_readers
                                 .insert(piece.number, (piece_range_reader, piece_reader));
-                            while let Some((mut piece_range_reader, mut piece_reader)) =
+                            while let Some((mut piece_range_reader, _)) =
                                 finished_piece_readers.remove(&need_piece_number)
                             {
                                 debug!("copy piece {} to stream", need_piece_number);
@@ -908,35 +819,6 @@ async fn proxy_via_dfdaemon(
 
                                     return;
                                 }
-
-                                // If cache is enabled, check the cache first.
-                                if let Some(cache) = cache.as_ref() {
-                                    // If the piece is not in the cache, add it to the cache.
-                                    let piece_id =
-                                        task.piece.id(message.task_id.as_str(), need_piece_number);
-
-                                    if !cache.contains_piece(&piece_id) {
-                                        let mut content =
-                                            bytes::BytesMut::with_capacity(piece.length as usize);
-                                        loop {
-                                            let n = match piece_reader.read_buf(&mut content).await
-                                            {
-                                                Ok(n) => n,
-                                                Err(err) => {
-                                                    error!("read piece reader error: {}", err);
-                                                    break;
-                                                }
-                                            };
-
-                                            // When the piece reader reads to the end, add the piece
-                                            // to the cache.
-                                            if n == 0 {
-                                                cache.add_piece(&piece_id, content.freeze());
-                                                break;
-                                            }
-                                        }
-                                    }
-                                };
 
                                 need_piece_number += 1;
                             }
