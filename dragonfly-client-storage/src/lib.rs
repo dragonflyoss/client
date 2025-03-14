@@ -25,8 +25,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
-use tracing::{debug, error, instrument, warn};
+use tokio_util::either::Either;
+use tokio_util::io::InspectReader;
+use tracing::{debug, error, info, instrument, warn};
 
+pub mod cache;
 pub mod content;
 pub mod metadata;
 pub mod storage_engine;
@@ -44,6 +47,9 @@ pub struct Storage {
 
     /// content implements the content storage.
     content: content::Content,
+
+    /// cache implements the cache for preheat task.
+    cache: cache::Cache,
 }
 
 /// Storage implements the storage.
@@ -53,10 +59,16 @@ impl Storage {
     pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf) -> Result<Self> {
         let metadata = metadata::Metadata::new(config.clone(), dir, &log_dir)?;
         let content = content::Content::new(config.clone(), dir).await?;
+        let cache = cache::Cache::new(
+            config.storage.cache_capacity,
+            config.storage.cache_tasks_capacity,
+        )?;
+
         Ok(Storage {
             config,
             metadata,
             content,
+            cache,
         })
     }
 
@@ -348,8 +360,34 @@ impl Storage {
         offset: u64,
         length: u64,
         reader: &mut R,
+        load_to_cache: bool,
     ) -> Result<metadata::Piece> {
-        let response = self.content.write_piece(task_id, offset, reader).await?;
+        let response = if load_to_cache {
+            // Load piece content to cache.
+            let mut buffer = Vec::new();
+            let mut inspect_reader = InspectReader::new(reader, |bytes| {
+                buffer.extend_from_slice(bytes);
+            });
+            match self
+                .cache
+                .write_piece(task_id, piece_id, &mut inspect_reader, length)
+                .await
+            {
+                Ok(_) => {
+                    info!("load piece to cache. piece-id: {}", piece_id);
+                }
+                Err(err) => {
+                    error!("load piece to cache failed: {}", err);
+                }
+            }
+
+            self.content
+                .write_piece(task_id, offset, &mut &buffer[..])
+                .await?
+        } else {
+            self.content.write_piece(task_id, offset, reader).await?
+        };
+
         let digest = Digest::new(Algorithm::Crc32, response.hash);
 
         self.metadata.download_piece_finished(
@@ -362,6 +400,7 @@ impl Storage {
     }
 
     /// download_piece_from_parent_finished is used for downloading piece from parent.
+    #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     pub async fn download_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
@@ -371,8 +410,34 @@ impl Storage {
         expected_digest: &str,
         parent_id: &str,
         reader: &mut R,
+        load_to_cache: bool,
+        length: u64,
     ) -> Result<metadata::Piece> {
-        let response = self.content.write_piece(task_id, offset, reader).await?;
+        let response = if load_to_cache {
+            // Load piece content to cache.
+            let mut buffer = Vec::new();
+            let mut inspect_reader = InspectReader::new(reader, |bytes| {
+                buffer.extend_from_slice(bytes);
+            });
+            match self
+                .cache
+                .write_piece(task_id, piece_id, &mut inspect_reader, length)
+                .await
+            {
+                Ok(_) => {
+                    info!("load piece to cache. piece-id: {}", piece_id);
+                }
+                Err(err) => {
+                    error!("load piece to cache failed: {}", err);
+                }
+            }
+
+            self.content
+                .write_piece(task_id, offset, &mut &buffer[..])
+                .await?
+        } else {
+            self.content.write_piece(task_id, offset, reader).await?
+        };
 
         let length = response.length;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
@@ -418,6 +483,23 @@ impl Storage {
         // Get the piece metadata and return the content of the piece.
         match self.metadata.get_piece(piece_id) {
             Ok(Some(piece)) => {
+                // Try to upload piece content from cache.
+                if self.cache.contains_piece(task_id, piece_id).await {
+                    match self
+                        .cache
+                        .read_piece(task_id, piece_id, piece.offset, piece.length, range)
+                        .await
+                    {
+                        Ok(cache_reader) => {
+                            // Finish uploading the task.
+                            self.metadata.upload_task_finished(task_id)?;
+                            return Ok(Either::Left(cache_reader));
+                        }
+                        Err(_err) => {}
+                    }
+                }
+
+                // Upload piece content from storage when cache entry is not hit.
                 match self
                     .content
                     .read_piece(task_id, piece.offset, piece.length, range)
@@ -426,7 +508,7 @@ impl Storage {
                     Ok(reader) => {
                         // Finish uploading the task.
                         self.metadata.upload_task_finished(task_id)?;
-                        Ok(reader)
+                        Ok(Either::Right(reader))
                     }
                     Err(err) => {
                         // Failed uploading the task.
@@ -493,6 +575,15 @@ impl Storage {
                 self.metadata.upload_task_failed(task_id)?;
                 Err(err)
             }
+        }
+    }
+
+    /// add_task_to_cache adds the task to the cache.
+    #[instrument(skip_all)]
+    pub async fn add_task_to_cache(&self, task_id: &str, content_length: u64) {
+        let mut cache = self.cache.clone();
+        if !cache.contains_task(task_id).await {
+            cache.put_task(task_id, content_length).await;
         }
     }
 
