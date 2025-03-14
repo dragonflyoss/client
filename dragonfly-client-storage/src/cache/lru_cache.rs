@@ -301,14 +301,12 @@ mod tests {
         );
 
         assert_eq!(cache.get("key2"), Some(&"value2_updated".to_string()));
-
         assert_eq!(
             cache.put("key4".to_string(), "value4".to_string()),
             Some("value1".to_string())
         );
 
         assert_eq!(cache.get("key1"), None);
-
         assert!(cache.contains("key2"));
         assert!(cache.contains("key3"));
         assert!(cache.contains("key4"));
@@ -325,7 +323,6 @@ mod tests {
         assert_eq!(cache.get("key1"), Some(&"value1".to_string()));
         assert_eq!(cache.get("key2"), Some(&"value2".to_string()));
         assert_eq!(cache.get("key3"), Some(&"value3".to_string()));
-
         assert_eq!(cache.get("key4"), None);
 
         cache.put("key4".to_string(), "value4".to_string());
@@ -347,7 +344,6 @@ mod tests {
         assert_eq!(cache.peek("key1"), Some(&"value1".to_string()));
         assert_eq!(cache.peek("key2"), Some(&"value2".to_string()));
         assert_eq!(cache.peek("key3"), Some(&"value3".to_string()));
-
         assert_eq!(cache.peek("key4"), None);
 
         cache.put("key4".to_string(), "value4".to_string());
@@ -360,17 +356,17 @@ mod tests {
         let mut cache = LruCache::new(2);
         cache.put("key1".to_string(), "value1".to_string());
         cache.put("key2".to_string(), "value2".to_string());
-
         cache.peek("key1");
         cache.put("key3".to_string(), "value3".to_string());
+
         assert_eq!(cache.peek("key1"), None);
 
         let mut cache = LruCache::new(2);
         cache.put("key1".to_string(), "value1".to_string());
         cache.put("key2".to_string(), "value2".to_string());
-
         cache.get("key1");
         cache.put("key3".to_string(), "value3".to_string());
+
         assert_eq!(cache.peek("key2"), None);
         assert_eq!(cache.peek("key1"), Some(&"value1".to_string()));
     }
@@ -394,7 +390,6 @@ mod tests {
         }
 
         let _ = cache.get("piece_2");
-
         let (piece_id, piece_content, _) = &test_cases[6];
         cache.put(piece_id.to_string(), piece_content.clone());
 

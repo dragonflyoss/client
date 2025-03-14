@@ -16,20 +16,20 @@
 
 use bytes::Bytes;
 use dragonfly_api::common::v2::Range;
+use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use lru_cache::LruCache;
 use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{info, warn};
 mod lru_cache;
 
-#[derive(Clone, Debug)]
 /// Task is the task content in the cache.
+#[derive(Clone, Debug)]
 struct Task {
     /// id is the id of the task.
     id: String,
@@ -41,6 +41,7 @@ struct Task {
     pieces: Arc<RwLock<HashMap<String, Bytes>>>,
 }
 
+/// Task implements the task content in the cache.
 impl Task {
     /// new creates a new task.
     fn new(id: String, content_length: u64) -> Self {
@@ -52,21 +53,21 @@ impl Task {
     }
 
     /// write_piece writes the piece content to the task.
-    async fn write_piece(&self, piece_id: &str, piece: Bytes) {
+    async fn write_piece(&self, id: &str, piece: Bytes) {
         let mut pieces = self.pieces.write().await;
-        pieces.insert(piece_id.to_string(), piece);
+        pieces.insert(id.to_string(), piece);
     }
 
     /// read_piece reads the piece content from the task.
-    async fn read_piece(&self, piece_id: &str) -> Option<Bytes> {
+    async fn read_piece(&self, id: &str) -> Option<Bytes> {
         let pieces = self.pieces.read().await;
-        pieces.get(piece_id).cloned()
+        pieces.get(id).cloned()
     }
 
     /// contains checks whether the piece exists in the task.
-    async fn contains(&self, piece_id: &str) -> bool {
+    async fn contains(&self, id: &str) -> bool {
         let pieces = self.pieces.read().await;
-        pieces.contains_key(piece_id)
+        pieces.contains_key(id)
     }
 
     /// content_length returns the content length of the task.
@@ -106,6 +107,9 @@ impl Task {
 /// Task is the metadata of the task.
 #[derive(Clone)]
 pub struct Cache {
+    /// config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
     /// size is the size of the cache in bytes.
     size: u64,
 
@@ -119,14 +123,15 @@ pub struct Cache {
 /// Cache implements the cache for storing piece content by LRU algorithm.
 impl Cache {
     /// new creates a new cache with the specified capacity.
-    pub fn new(capacity: usize, tasks_capacity: usize) -> Result<Self> {
-        let capacity = NonZeroUsize::new(capacity).ok_or(Error::InvalidParameter)?;
-        let tasks = Arc::new(RwLock::new(LruCache::new(tasks_capacity)));
-
+    pub fn new(config: Arc<Config>) -> Result<Self> {
         Ok(Cache {
+            config: config.clone(),
             size: 0,
-            capacity: capacity.get() as u64,
-            tasks,
+            capacity: config.storage.cache_capacity.as_u64(),
+            // LRU cache capacity is set to usize::MAX to avoid evicting tasks. LRU cache will evict tasks
+            // by cache capacity(cache size) itself, and used pop_lru to evict the least recently
+            // used task.
+            tasks: Arc::new(RwLock::new(LruCache::new(usize::MAX))),
         })
     }
 
@@ -135,28 +140,31 @@ impl Cache {
         &self,
         task_id: &str,
         piece_id: &str,
-        offset: u64,
-        length: u64,
+        piece: super::metadata::Piece,
         range: Option<Range>,
     ) -> Result<impl AsyncRead> {
-        // Try to get the piece content from the task.
         let mut tasks = self.tasks.write().await;
         let Some(task) = tasks.get(task_id) else {
             return Err(Error::TaskNotFound(task_id.to_string()));
         };
+
         let Some(piece_content) = task.read_piece(piece_id).await else {
             return Err(Error::PieceNotFound(piece_id.to_string()));
         };
+        drop(tasks);
 
         // Calculate the range of bytes to return based on the range provided.
         let (target_offset, target_length) = if let Some(range) = range {
-            let target_offset = max(offset, range.start) - offset;
-            let target_length =
-                min(offset + length - 1, range.start + range.length - 1) - target_offset - offset
-                    + 1;
+            let target_offset = max(piece.offset, range.start) - piece.offset;
+            let target_length = min(
+                piece.offset + piece.length - 1,
+                range.start + range.length - 1,
+            ) - target_offset
+                - piece.offset
+                + 1;
             (target_offset as usize, target_length as usize)
         } else {
-            (0, length as usize)
+            (0, piece.length as usize)
         };
 
         // Check if the target range is valid.
@@ -166,7 +174,9 @@ impl Cache {
             return Err(Error::InvalidParameter);
         }
 
-        let reader = BufReader::new(Cursor::new(piece_content.slice(begin..end)));
+        let content = piece_content.slice(begin..end);
+        let reader =
+            BufReader::with_capacity(self.config.storage.read_buffer_size, Cursor::new(content));
         Ok(reader)
     }
 
@@ -183,22 +193,19 @@ impl Cache {
             return Err(Error::TaskNotFound(task_id.to_string()));
         };
 
-        // The piece already exists in the cache.
         if task.contains(piece_id).await {
-            return Err(Error::Unknown(format!(
-                "overwrite existing piece {}",
-                piece_id
-            )));
+            warn!("piece {} already exists in cache", piece_id);
+            return Ok(());
         }
 
-        let mut buffer = Vec::with_capacity(length as usize);
-        match reader.read_to_end(&mut buffer).await {
+        let mut buffer = bytes::BytesMut::with_capacity(length as usize);
+        match reader.read_buf(&mut buffer).await {
             Ok(_) => {
-                task.write_piece(piece_id, Bytes::from(buffer)).await;
+                task.write_piece(piece_id, buffer.freeze()).await;
                 Ok(())
             }
             Err(err) => Err(Error::Unknown(format!(
-                "Failed to read piece data for {}: {}",
+                "failed to read piece data for {}: {}",
                 piece_id, err
             ))),
         }
@@ -206,12 +213,22 @@ impl Cache {
 
     /// put_task puts a new task into the cache, constrained by the capacity of the cache.
     pub async fn put_task(&mut self, task_id: &str, content_length: u64) {
+        // If the content length is 0, we don't cache the task.
         if content_length == 0 {
             return;
         }
 
+        // If the content length is larger than the cache capacity, we don't cache the task.
+        if content_length >= self.capacity {
+            info!(
+                "task {} is too large to cache, size: {}",
+                task_id, content_length
+            );
+
+            return;
+        }
+
         let mut tasks = self.tasks.write().await;
-        let new_task = Task::new(task_id.to_string(), content_length);
         while self.size + content_length > self.capacity {
             match tasks.pop_lru() {
                 Some((_, task)) => {
@@ -223,7 +240,9 @@ impl Cache {
                 }
             }
         }
-        tasks.put(task_id.to_string(), new_task);
+
+        let task = Task::new(task_id.to_string(), content_length);
+        tasks.put(task_id.to_string(), task);
         self.size += content_length;
     }
 
