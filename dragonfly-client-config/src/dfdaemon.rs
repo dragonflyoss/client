@@ -200,16 +200,11 @@ fn default_storage_read_buffer_size() -> usize {
     4 * 1024 * 1024
 }
 
-/// default_storage_cache_capacity is the default cache capacity for the preheat job, default is 10GiB.
+/// default_storage_cache_capacity is the default cache capacity for the storage server, default is
+/// 128MiB.
 #[inline]
-fn default_storage_cache_capacity() -> usize {
-    10 * 1024 * 1024 * 1024
-}
-
-/// default_storage_cache_tasks_capacity is the default capacity of the tasks that can be stored in the cache, default is 1.
-#[inline]
-fn default_storage_cache_tasks_capacity() -> usize {
-    1
+fn default_storage_cache_capacity() -> ByteSize {
+    ByteSize::mb(128)
 }
 
 /// default_seed_peer_cluster_id is the default cluster id of seed peer.
@@ -980,12 +975,8 @@ pub struct Storage {
     /// |                                                  |
     /// +--------------------------------------------------+
     /// ```
-    #[serde(default = "default_storage_cache_capacity")]
-    pub cache_capacity: usize,
-
-    /// cache_tasks_capacity is the capacity of the tasks that can be stored in the cache, default is 1.
-    #[serde(default = "default_storage_cache_tasks_capacity")]
-    pub cache_tasks_capacity: usize,
+    #[serde(with = "bytesize_serde", default = "default_storage_cache_capacity")]
+    pub cache_capacity: ByteSize,
 }
 
 /// Storage implements Default.
@@ -998,7 +989,6 @@ impl Default for Storage {
             write_buffer_size: default_storage_write_buffer_size(),
             read_buffer_size: default_storage_read_buffer_size(),
             cache_capacity: default_storage_cache_capacity(),
-            cache_tasks_capacity: default_storage_cache_tasks_capacity(),
         }
     }
 }
