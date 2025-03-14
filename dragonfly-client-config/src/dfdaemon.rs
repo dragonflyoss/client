@@ -1254,12 +1254,6 @@ pub struct Proxy {
     #[serde(with = "bytesize_serde", default = "default_prefetch_rate_limit")]
     pub prefetch_rate_limit: ByteSize,
 
-    /// cache_capacity is the capacity of the cache by LRU algorithm for HTTP proxy, default is 150.
-    /// The cache is used to store the hot piece content of the task, piece length is 4MB~16MB.
-    /// If the capacity is 150, the cache size is 600MB~2.4GB, need to adjust according to the
-    /// memory size of the host.
-    pub cache_capacity: Option<usize>,
-
     /// read_buffer_size is the buffer size for reading piece from disk, default is 1KB.
     #[serde(default = "default_proxy_read_buffer_size")]
     pub read_buffer_size: usize,
@@ -1275,7 +1269,6 @@ impl Default for Proxy {
             disable_back_to_source: false,
             prefetch: false,
             prefetch_rate_limit: default_prefetch_rate_limit(),
-            cache_capacity: None,
             read_buffer_size: default_proxy_read_buffer_size(),
         }
     }
