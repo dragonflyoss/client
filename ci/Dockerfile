@@ -54,7 +54,7 @@ RUN go install github.com/google/pprof@latest
 
 FROM public.ecr.aws/debian/debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl bash-completion procps \
+RUN apt-get update && apt-get install -y --no-install-recommends curl bash-completion procps infiniband-diags ibverbs-utils \
     apache2-utils ca-certificates binutils dnsutils iputils-ping llvm dstat sysstat net-tools \
     && rm -rf /var/lib/apt/lists/*
 
