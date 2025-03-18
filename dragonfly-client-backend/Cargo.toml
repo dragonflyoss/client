@@ -31,7 +31,7 @@ libloading = "0.8.6"
 
 [dev-dependencies]
 tempfile.workspace = true
-wiremock = "0.6.2"
+wiremock = "0.6.3"
 rustls-pki-types.workspace = true
 rustls-pemfile.workspace = true
 hyper.workspace = true
