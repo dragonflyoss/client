@@ -161,7 +161,7 @@ impl Cache {
                 range.start + range.length - 1,
             ) - target_offset
                 - piece.offset
-                    + 1;
+                + 1;
             (target_offset as usize, target_length as usize)
         } else {
             (0, piece.length as usize)
@@ -444,9 +444,9 @@ mod tests {
 
         // Test piece ID with special characters
         let mut content = Cursor::new("test data");
-            cache
+        cache
             .write_piece("task1", "piece#$%^&*", &mut content, 9)
-                .await
+            .await
             .unwrap();
         assert!(cache.contains_piece("task1", "piece#$%^&*").await);
 

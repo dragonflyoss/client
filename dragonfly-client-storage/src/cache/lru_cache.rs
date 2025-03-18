@@ -166,10 +166,10 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
 
         let mut evicted_value = None;
         if self.map.len() >= self.capacity {
-                if let Some(tail) = self.tail {
+            if let Some(tail) = self.tail {
                 self.detach(tail);
 
-                    unsafe {
+                unsafe {
                     if let Some(entry) = self.map.remove(&KeyRef { k: &(*tail).key }) {
                         evicted_value = Some(entry.value);
                     }
@@ -193,21 +193,21 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// detach detaches the entry from the cache.
     fn detach(&mut self, entry: *mut Entry<K, V>) {
         unsafe {
-        let prev = (*entry).prev;
-        let next = (*entry).next;
+            let prev = (*entry).prev;
+            let next = (*entry).next;
 
-        match prev {
-            Some(prev) => (*prev).next = next,
-            None => self.head = next,
-        }
+            match prev {
+                Some(prev) => (*prev).next = next,
+                None => self.head = next,
+            }
 
-        match next {
-            Some(next) => (*next).prev = prev,
-            None => self.tail = prev,
-        }
+            match next {
+                Some(next) => (*next).prev = prev,
+                None => self.tail = prev,
+            }
 
-        (*entry).prev = None;
-        (*entry).next = None;
+            (*entry).prev = None;
+            (*entry).next = None;
         }
     }
 
