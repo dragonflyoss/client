@@ -128,7 +128,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity,
-            map: HashMap::with_capacity(capacity),
+            map: HashMap::new(),
             head: None,
             tail: None,
             _marker: std::marker::PhantomData,
@@ -166,10 +166,10 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
 
         let mut evicted_value = None;
         if self.map.len() >= self.capacity {
-            if let Some(tail) = self.tail {
+                if let Some(tail) = self.tail {
                 self.detach(tail);
 
-                unsafe {
+                    unsafe {
                     if let Some(entry) = self.map.remove(&KeyRef { k: &(*tail).key }) {
                         evicted_value = Some(entry.value);
                     }
@@ -193,21 +193,21 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
     /// detach detaches the entry from the cache.
     fn detach(&mut self, entry: *mut Entry<K, V>) {
         unsafe {
-            let prev = (*entry).prev;
-            let next = (*entry).next;
+        let prev = (*entry).prev;
+        let next = (*entry).next;
 
-            match prev {
-                Some(prev) => (*prev).next = next,
-                None => self.head = next,
-            }
+        match prev {
+            Some(prev) => (*prev).next = next,
+            None => self.head = next,
+        }
 
-            match next {
-                Some(next) => (*next).prev = prev,
-                None => self.tail = prev,
-            }
+        match next {
+            Some(next) => (*next).prev = prev,
+            None => self.tail = prev,
+        }
 
-            (*entry).prev = None;
-            (*entry).next = None;
+        (*entry).prev = None;
+        (*entry).next = None;
         }
     }
 
@@ -285,117 +285,239 @@ impl<K, V> Drop for LruCache<K, V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
+
+    #[test]
+    fn test_new() {
+        // Test normal capacity
+        let cache: LruCache<String, i32> = LruCache::new(5);
+        assert!(cache.is_empty());
+        assert_eq!(cache.capacity, 5);
+
+        // Test edge case with capacity of 1
+        let cache: LruCache<String, i32> = LruCache::new(1);
+        assert!(cache.is_empty());
+        assert_eq!(cache.capacity, 1);
+
+        // Test edge case with maximum capacity
+        let cache: LruCache<String, i32> = LruCache::new(0);
+        assert!(cache.is_empty());
+        assert_eq!(cache.capacity, 0);
+
+        // Test edge case with maximum capacity
+        let cache: LruCache<String, i32> = LruCache::new(usize::MAX);
+        assert!(cache.is_empty());
+        assert_eq!(cache.capacity, usize::MAX);
+
+    }
 
     #[test]
     fn test_put() {
         let mut cache = LruCache::new(3);
 
-        assert_eq!(cache.put("key1".to_string(), "value1".to_string()), None);
-        assert_eq!(cache.put("key2".to_string(), "value2".to_string()), None);
-        assert_eq!(cache.put("key3".to_string(), "value3".to_string()), None);
+        // Test basic insertion
+        // LRU state after: [key1(1)]
+        assert_eq!(cache.put("key1".to_string(), 1), None);
+        // LRU state after: [key2(2), key1(1)]
+        assert_eq!(cache.put("key2".to_string(), 2), None);
+        // LRU state after: [key3(3), key2(2), key1(1)]
+        assert_eq!(cache.put("key3".to_string(), 3), None);
+        assert_eq!(cache.get("key1"), Some(&1));
+        assert_eq!(cache.get("key2"), Some(&2));
+        assert_eq!(cache.get("key3"), Some(&3));
 
-        assert_eq!(
-            cache.put("key2".to_string(), "value2_updated".to_string()),
-            Some("value2".to_string())
-        );
+        // Test updating existing value
+        // LRU state after: [key2(22), key3(3), key1(1)]
+        assert_eq!(cache.put("key2".to_string(), 22), Some(2));
+        assert_eq!(cache.get("key2"), Some(&22));
 
-        assert_eq!(cache.get("key2"), Some(&"value2_updated".to_string()));
-        assert_eq!(
-            cache.put("key4".to_string(), "value4".to_string()),
-            Some("value1".to_string())
-        );
-
+        // Test LRU eviction when cache is full
+        // LRU state after: [key4(4), key2(22), key3(3)] - key1 is evicted
+        assert_eq!(cache.put("key4".to_string(), 4), Some(1));
         assert_eq!(cache.get("key1"), None);
-        assert!(cache.contains("key2"));
-        assert!(cache.contains("key3"));
-        assert!(cache.contains("key4"));
+        assert_eq!(cache.get("key4"), Some(&4));
+
+        // Test edge case with capacity of 1
+        let mut cache = LruCache::new(1);
+        // LRU state after: [key1(1)]
+        assert_eq!(cache.put("key1".to_string(), 1), None);
+        // LRU state after: [key2(2)] - key1 is evicted
+        assert_eq!(cache.put("key2".to_string(), 2), Some(1));
+        assert_eq!(cache.get("key1"), None);
+        assert_eq!(cache.get("key2"), Some(&2));
     }
 
     #[test]
     fn test_get() {
         let mut cache = LruCache::new(3);
 
-        cache.put("key1".to_string(), "value1".to_string());
-        cache.put("key2".to_string(), "value2".to_string());
-        cache.put("key3".to_string(), "value3".to_string());
+        // Test get on empty cache
+        assert_eq!(cache.get("nonexistent"), None);
 
-        assert_eq!(cache.get("key1"), Some(&"value1".to_string()));
-        assert_eq!(cache.get("key2"), Some(&"value2".to_string()));
-        assert_eq!(cache.get("key3"), Some(&"value3".to_string()));
-        assert_eq!(cache.get("key4"), None);
+        // Test basic get operations
+        // LRU state after: [key1(1)]
+        cache.put("key1".to_string(), 1);
+        // LRU state after: [key2(2), key1(1)]
+        cache.put("key2".to_string(), 2);
+        assert_eq!(cache.get("key1"), Some(&1));
+        assert_eq!(cache.get("key2"), Some(&2));
 
-        cache.put("key4".to_string(), "value4".to_string());
+        // Test LRU order update on get
+        // LRU state after: [key3(3), key2(2), key1(1)]
+        cache.put("key3".to_string(), 3);
+        // LRU state after: [key1(1), key3(3), key2(2)]
+        assert_eq!(cache.get("key1"), Some(&1));
+        // LRU state after: [key4(4), key1(1), key3(3)] - key2 is evicted
+        cache.put("key4".to_string(), 4);
+        assert_eq!(cache.get("key2"), None);
+        assert_eq!(cache.get("key1"), Some(&1));
+        assert_eq!(cache.get("key3"), Some(&3));
+        assert_eq!(cache.get("key4"), Some(&4));
 
+        // Test edge case with capacity of 1
+        let mut cache = LruCache::new(1);
+        // LRU state after: [key1(1)]
+        cache.put("key1".to_string(), 1);
+        assert_eq!(cache.get("key1"), Some(&1));
+        // LRU state after: [key2(2)] - key1 is evicted
+        cache.put("key2".to_string(), 2);
         assert_eq!(cache.get("key1"), None);
-        assert_eq!(cache.get("key2"), Some(&"value2".to_string()));
-        assert_eq!(cache.get("key3"), Some(&"value3".to_string()));
-        assert_eq!(cache.get("key4"), Some(&"value4".to_string()));
     }
 
     #[test]
     fn test_peek() {
         let mut cache = LruCache::new(3);
 
-        cache.put("key1".to_string(), "value1".to_string());
-        cache.put("key2".to_string(), "value2".to_string());
-        cache.put("key3".to_string(), "value3".to_string());
+        // Test peek on empty cache
+        assert_eq!(cache.peek("nonexistent"), None);
 
-        assert_eq!(cache.peek("key1"), Some(&"value1".to_string()));
-        assert_eq!(cache.peek("key2"), Some(&"value2".to_string()));
-        assert_eq!(cache.peek("key3"), Some(&"value3".to_string()));
-        assert_eq!(cache.peek("key4"), None);
+        // Test basic peek operations
+        // LRU state after: [key1(1)]
+        cache.put("key1".to_string(), 1);
+        // LRU state after: [key2(2), key1(1)]
+        cache.put("key2".to_string(), 2);
+        assert_eq!(cache.peek("key1"), Some(&1));
+        assert_eq!(cache.peek("key2"), Some(&2));
 
-        cache.put("key4".to_string(), "value4".to_string());
-
-        assert_eq!(cache.peek("key1"), None);
-        assert_eq!(cache.peek("key2"), Some(&"value2".to_string()));
-        assert_eq!(cache.peek("key3"), Some(&"value3".to_string()));
-        assert_eq!(cache.peek("key4"), Some(&"value4".to_string()));
-
-        let mut cache = LruCache::new(2);
-        cache.put("key1".to_string(), "value1".to_string());
-        cache.put("key2".to_string(), "value2".to_string());
+        // Test that peek doesn't affect LRU order
+        // LRU state after: [key3(3), key2(2), key1(1)]
+        cache.put("key3".to_string(), 3);
+        // LRU state remains: [key3(3), key2(2), key1(1)]
         cache.peek("key1");
-        cache.put("key3".to_string(), "value3".to_string());
-
+        // LRU state after: [key4(4), key3(3), key2(2)] - key1 is evicted
+        cache.put("key4".to_string(), 4);
         assert_eq!(cache.peek("key1"), None);
+        assert_eq!(cache.peek("key2"), Some(&2));
+        assert_eq!(cache.peek("key3"), Some(&3));
+        assert_eq!(cache.peek("key4"), Some(&4));
 
-        let mut cache = LruCache::new(2);
-        cache.put("key1".to_string(), "value1".to_string());
-        cache.put("key2".to_string(), "value2".to_string());
-        cache.get("key1");
-        cache.put("key3".to_string(), "value3".to_string());
-
-        assert_eq!(cache.peek("key2"), None);
-        assert_eq!(cache.peek("key1"), Some(&"value1".to_string()));
+        // Test edge case with capacity of 1
+        let mut cache = LruCache::new(1);
+        // LRU state after: [key1(1)]
+        cache.put("key1".to_string(), 1);
+        assert_eq!(cache.peek("key1"), Some(&1));
+        // LRU state after: [key2(2)] - key1 is evicted
+        cache.put("key2".to_string(), 2);
+        assert_eq!(cache.peek("key1"), None);
     }
 
     #[test]
     fn test_contains() {
-        let mut cache = LruCache::new(5);
+        let mut cache = LruCache::new(3);
 
-        let test_cases = vec![
-            ("piece_1", Bytes::from("data 1"), false),
-            ("piece_2", Bytes::from("data 2"), true),
-            ("piece_3", Bytes::from("data 3"), false),
-            ("piece_4", Bytes::from("data 4"), true),
-            ("piece_5", Bytes::from("data 5"), true),
-            ("piece_6", Bytes::from("data 6"), true),
-            ("piece_7", Bytes::from("data 7"), true),
-        ];
+        // Test contains on empty cache
+        assert!(!cache.contains("nonexistent"));
 
-        for (piece_id, piece_content, _) in test_cases[0..6].iter() {
-            cache.put(piece_id.to_string(), piece_content.clone());
-        }
+        // Test basic contains operations
+        // LRU state after: [key1(1)]
+        cache.put("key1".to_string(), 1);
+        // LRU state after: [key2(2), key1(1)]
+        cache.put("key2".to_string(), 2);
+        assert!(cache.contains("key1"));
+        assert!(cache.contains("key2"));
+        assert!(!cache.contains("key3"));
 
-        let _ = cache.get("piece_2");
-        let (piece_id, piece_content, _) = &test_cases[6];
-        cache.put(piece_id.to_string(), piece_content.clone());
+        // Test that contains doesn't affect LRU order
+        // LRU state after: [key3(3), key2(2), key1(1)]
+        cache.put("key3".to_string(), 3);
+        // LRU state remains: [key3(3), key2(2), key1(1)]
+        cache.contains("key1");
+        // LRU state after: [key4(4), key3(3), key2(2)] - key1 is evicted
+        cache.put("key4".to_string(), 4);
+        assert!(!cache.contains("key1"));
+        assert!(cache.contains("key2"));
+        assert!(cache.contains("key3"));
+        assert!(cache.contains("key4"));
 
-        for (piece_id, _, expected_existence) in test_cases {
-            let exists = cache.contains(piece_id);
-            assert_eq!(exists, expected_existence);
-        }
+        // Test edge case with capacity of 1
+        let mut cache = LruCache::new(1);
+        // LRU state after: [key1(1)]
+        cache.put("key1".to_string(), 1);
+        assert!(cache.contains("key1"));
+        // LRU state after: [key2(2)] - key1 is evicted
+        cache.put("key2".to_string(), 2);
+        assert!(!cache.contains("key1"));
+        assert!(cache.contains("key2"));
+    }
+
+    #[test]
+    fn test_pop_lru() {
+        let mut cache = LruCache::new(3);
+
+        // Test pop_lru on empty cache
+        assert_eq!(cache.pop_lru(), None);
+
+        // Test basic pop_lru operations
+        // LRU state after: [key1(1)]
+        cache.put("key1".to_string(), 1);
+        // LRU state after: [key2(2), key1(1)]
+        cache.put("key2".to_string(), 2);
+        // LRU state after: [key3(3), key2(2), key1(1)]
+        cache.put("key3".to_string(), 3);
+
+        // Test that pop_lru removes the least recently used item
+        // LRU state after: [key3(3), key2(2)]
+        assert_eq!(cache.pop_lru(), Some(("key1".to_string(), 1)));
+        assert_eq!(cache.get("key1"), None);
+        assert_eq!(cache.get("key2"), Some(&2));
+        assert_eq!(cache.get("key3"), Some(&3));
+
+        // Test edge case with capacity of 1
+        let mut cache = LruCache::new(1);
+        // LRU state after: [key1(1)]
+        cache.put("key1".to_string(), 1);
+        // LRU state after: [] - empty
+        assert_eq!(cache.pop_lru(), Some(("key1".to_string(), 1)));
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_complex_operations() {
+        let mut cache = LruCache::new(3);
+
+        // Test mixed operations
+        // LRU state after: [key1(1)]
+        cache.put("key1".to_string(), 1);
+        // LRU state after: [key2(2), key1(1)]
+        cache.put("key2".to_string(), 2);
+        // LRU state after: [key1(1), key2(2)]
+        assert_eq!(cache.get("key1"), Some(&1));
+        // LRU state after: [key3(3), key1(1), key2(2)]
+        cache.put("key3".to_string(), 3);
+        // LRU state remains: [key3(3), key1(1), key2(2)] - peek doesn't affect order
+        cache.peek("key2");
+        // LRU state after: [key4(4), key3(3), key1(1)] - key2 is evicted
+        cache.put("key4".to_string(), 4);
+        assert_eq!(cache.get("key1"), Some(&1));
+        assert_eq!(cache.get("key2"), None);
+        assert_eq!(cache.peek("key3"), Some(&3));
+        assert_eq!(cache.get("key4"), Some(&4));
+
+        // Test combination of updates and accesses
+        // LRU state after: [key2(22), key4(4), key3(3)] - key1 is evicted
+        cache.put("key2".to_string(), 22);
+        assert_eq!(cache.peek("key2"), Some(&22));
+        // LRU state after: [key5(5), key2(22), key4(4)] - key3 is evicted
+        cache.put("key5".to_string(), 5);
+        assert_eq!(cache.get("key3"), None);
     }
 }
