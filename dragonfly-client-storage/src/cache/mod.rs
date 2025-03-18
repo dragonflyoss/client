@@ -161,7 +161,7 @@ impl Cache {
                 range.start + range.length - 1,
             ) - target_offset
                 - piece.offset
-                + 1;
+                    + 1;
             (target_offset as usize, target_length as usize)
         } else {
             (0, piece.length as usize)
@@ -265,11 +265,11 @@ impl Cache {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use dragonfly_api::common::v2::Range;
     use super::super::metadata::Piece;
-    use dragonfly_client_config::dfdaemon::Storage;
+    use super::*;
     use bytesize::ByteSize;
+    use dragonfly_api::common::v2::Range;
+    use dragonfly_client_config::dfdaemon::Storage;
     use std::io::Cursor;
     use tokio::io::AsyncReadExt;
 
@@ -284,9 +284,11 @@ mod tests {
 
         // Test initialization with custom configuration
         // Initial cache size should be 0 and cache capacity should match configuration (100MB)
-        let mut config = Config::default();
-        config.storage = Storage {
-            cache_capacity: ByteSize::mb(100),
+        let config = Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mb(100),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let cache = Cache::new(Arc::new(config)).unwrap();
@@ -295,9 +297,11 @@ mod tests {
 
         // Test initialization with zero capacity
         // Both initial cache size and capacity should be 0
-        let mut config = Config::default();
-        config.storage = Storage {
-            cache_capacity: ByteSize::b(0),
+        let config = Config {
+            storage: Storage {
+                cache_capacity: ByteSize::b(0),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let cache = Cache::new(Arc::new(config)).unwrap();
@@ -308,9 +312,11 @@ mod tests {
     #[tokio::test]
     async fn test_contains_task() {
         // Initialize cache with 10MiB capacity
-        let mut config = Config::default();
-        config.storage = Storage {
-            cache_capacity: ByteSize::mib(10),
+        let config = Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let cache = Cache::new(Arc::new(config)).unwrap();
@@ -338,7 +344,7 @@ mod tests {
         tasks.put("task1".to_string(), task1);
         tasks.put("task2".to_string(), task2);
         drop(tasks);
-        
+
         assert!(cache.contains_task("task1").await);
         assert!(cache.contains_task("task2").await);
         assert!(!cache.contains_task("task3").await);
@@ -347,9 +353,11 @@ mod tests {
     #[tokio::test]
     async fn test_put_task() {
         // Initialize cache configuration with 10MiB capacity
-        let mut config = Config::default();
-        config.storage = Storage {
-            cache_capacity: ByteSize::mib(10),
+        let config = Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut cache = Cache::new(Arc::new(config)).unwrap();
@@ -381,11 +389,11 @@ mod tests {
         for i in 0..5 {
             cache.put_task(&format!("lru_task_{}", i), task_size).await;
         }
-        
+
         // Earliest task should be evicted and most recent task should exist
         assert!(!cache.contains_task("normal_task").await);
         assert!(cache.contains_task("lru_task_4").await);
-        
+
         // Cache size should not exceed capacity
         assert!(cache.size <= cache_capacity);
 
@@ -401,9 +409,11 @@ mod tests {
     #[tokio::test]
     async fn test_contains_piece() {
         // Initialize cache with 10MiB capacity and 8KB read buffer
-        let mut config = Config::default();
-        config.storage = Storage {
-            cache_capacity: ByteSize::mib(10),
+        let config = Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut cache = Cache::new(Arc::new(config)).unwrap();
@@ -420,7 +430,10 @@ mod tests {
 
         // Add piece and verify existence
         let mut content = Cursor::new("test data");
-        cache.write_piece("task1", "piece1", &mut content, 9).await.unwrap();
+        cache
+            .write_piece("task1", "piece1", &mut content, 9)
+            .await
+            .unwrap();
         assert!(cache.contains_piece("task1", "piece1").await);
 
         // Should return false for empty piece ID in existing task
@@ -431,7 +444,10 @@ mod tests {
 
         // Test piece ID with special characters
         let mut content = Cursor::new("test data");
-        cache.write_piece("task1", "piece#$%^&*", &mut content, 9).await.unwrap();
+            cache
+            .write_piece("task1", "piece#$%^&*", &mut content, 9)
+                .await
+            .unwrap();
         assert!(cache.contains_piece("task1", "piece#$%^&*").await);
 
         // Test concurrent read access to the same piece
@@ -439,9 +455,8 @@ mod tests {
         let mut handles = Vec::new();
         for _ in 0..10 {
             let cache_clone = cache_arc.clone();
-            let handle = tokio::spawn(async move {
-                cache_clone.contains_piece("task1", "piece1").await
-            });
+            let handle =
+                tokio::spawn(async move { cache_clone.contains_piece("task1", "piece1").await });
             handles.push(handle);
         }
 
@@ -454,25 +469,32 @@ mod tests {
     #[tokio::test]
     async fn test_contains_piece_with_eviction() {
         // Initialize cache with 10MiB capacity
-        let mut config = Config::default();
-        config.storage = Storage {
-            cache_capacity: ByteSize::mib(10),
+        let config = Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut cache = Cache::new(Arc::new(config)).unwrap();
-        
+
         // Add initial task with 1MiB size
         cache.put_task("task1", ByteSize::mib(2).as_u64()).await;
         let mut content = Cursor::new("test data");
-        cache.write_piece("task1", "piece1", &mut content, 9).await.unwrap();
+        cache
+            .write_piece("task1", "piece1", &mut content, 9)
+            .await
+            .unwrap();
         assert!(cache.contains_piece("task1", "piece1").await);
 
         // Add a larger task that forces eviction of the first task
-        cache.put_task("large_task", ByteSize::mib(9).as_u64()).await;
-        
+        cache
+            .put_task("large_task", ByteSize::mib(9).as_u64())
+            .await;
+
         // Verify first task's piece is no longer accessible
         assert!(!cache.contains_piece("task1", "piece1").await);
-        
+
         // Verify the new task exists
         assert!(cache.contains_task("large_task").await);
     }
@@ -480,17 +502,21 @@ mod tests {
     #[tokio::test]
     async fn test_write_piece() {
         // Initialize cache with 10MiB capacity and 8KB read buffer
-        let mut config = Config::default();
-        config.storage = Storage {
-            cache_capacity: ByteSize::mib(10),
-            read_buffer_size: 8192,
+        let config = Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                read_buffer_size: 8192,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut cache = Cache::new(Arc::new(config)).unwrap();
 
         // Test writing to non-existent task
         let mut content = Cursor::new("test data");
-        let result = cache.write_piece("non_existent", "piece1", &mut content, 9).await;
+        let result = cache
+            .write_piece("non_existent", "piece1", &mut content, 9)
+            .await;
         assert!(matches!(result, Err(Error::TaskNotFound(_))));
 
         // Add task and write piece
@@ -508,7 +534,9 @@ mod tests {
         // Test writing piece with different ID
         let test_content = b"another piece";
         let mut content = Cursor::new(test_content);
-        let result = cache.write_piece("task1", "piece2", &mut content, test_content.len() as u64).await;
+        let result = cache
+            .write_piece("task1", "piece2", &mut content, test_content.len() as u64)
+            .await;
         assert!(result.is_ok());
         assert!(cache.contains_piece("task1", "piece2").await);
 
@@ -525,7 +553,10 @@ mod tests {
             created_at: chrono::Utc::now().naive_utc(),
             finished_at: None,
         };
-        let mut reader = cache.read_piece("task1", "piece2", piece, None).await.unwrap();
+        let mut reader = cache
+            .read_piece("task1", "piece2", piece, None)
+            .await
+            .unwrap();
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await.unwrap();
         assert_eq!(buffer, test_content);
@@ -539,7 +570,9 @@ mod tests {
             let content = format!("concurrent data {}", i);
             let handle = tokio::spawn(async move {
                 let mut cursor = Cursor::new(content.as_bytes());
-                cache_clone.write_piece("task1", &piece_id, &mut cursor, content.len() as u64).await
+                cache_clone
+                    .write_piece("task1", &piece_id, &mut cursor, content.len() as u64)
+                    .await
             });
             handles.push(handle);
         }
@@ -552,7 +585,11 @@ mod tests {
 
         // Verify all concurrent pieces exist
         for i in 0..3 {
-            assert!(cache_arc.contains_piece("task1", &format!("concurrent_piece_{}", i)).await);
+            assert!(
+                cache_arc
+                    .contains_piece("task1", &format!("concurrent_piece_{}", i))
+                    .await
+            );
         }
 
         // Test concurrent writes to the same piece
@@ -563,7 +600,9 @@ mod tests {
             let content = same_piece_content;
             let handle = tokio::spawn(async move {
                 let mut cursor = Cursor::new(content);
-                cache_clone.write_piece("task1", "same_piece", &mut cursor, content.len() as u64).await
+                cache_clone
+                    .write_piece("task1", "same_piece", &mut cursor, content.len() as u64)
+                    .await
             });
             handles.push(handle);
         }
@@ -581,10 +620,12 @@ mod tests {
     #[tokio::test]
     async fn test_read_piece() {
         // Initialize cache with 10MiB capacity and 8KB read buffer
-        let mut config = Config::default();
-        config.storage = Storage {
-            cache_capacity: ByteSize::mib(10),
-            read_buffer_size: 8192,
+        let config = Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                read_buffer_size: 8192,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut cache = Cache::new(Arc::new(config)).unwrap();
@@ -679,21 +720,31 @@ mod tests {
         // Write all pieces
         for (id, content, _) in &test_pieces {
             let mut cursor = Cursor::new(content);
-            cache.write_piece("task1", id, &mut cursor, content.len() as u64).await.unwrap();
+            cache
+                .write_piece("task1", id, &mut cursor, content.len() as u64)
+                .await
+                .unwrap();
             assert!(cache.contains_piece("task1", id).await);
         }
 
         // Test reading from non-existent task
-        let result = cache.read_piece("non_existent", "piece1", test_pieces[0].2.clone(), None).await;
+        let result = cache
+            .read_piece("non_existent", "piece1", test_pieces[0].2.clone(), None)
+            .await;
         assert!(matches!(result, Err(Error::TaskNotFound(_))));
 
         // Test reading non-existent piece
-        let result = cache.read_piece("task1", "non_existent", test_pieces[0].2.clone(), None).await;
+        let result = cache
+            .read_piece("task1", "non_existent", test_pieces[0].2.clone(), None)
+            .await;
         assert!(matches!(result, Err(Error::PieceNotFound(_))));
 
         // Test full read for each piece
         for (id, content, meta) in &test_pieces {
-            let mut reader = cache.read_piece("task1", id, meta.clone(), None).await.unwrap();
+            let mut reader = cache
+                .read_piece("task1", id, meta.clone(), None)
+                .await
+                .unwrap();
             let mut buffer = Vec::new();
             reader.read_to_end(&mut buffer).await.unwrap();
             assert_eq!(buffer, *content);
@@ -705,7 +756,10 @@ mod tests {
                 start: meta.offset,
                 length: 5,
             };
-            let mut reader = cache.read_piece("task1", id, meta.clone(), Some(range)).await.unwrap();
+            let mut reader = cache
+                .read_piece("task1", id, meta.clone(), Some(range))
+                .await
+                .unwrap();
             let mut buffer = Vec::new();
             reader.read_to_end(&mut buffer).await.unwrap();
             assert_eq!(buffer, content[..5].to_vec());
@@ -720,7 +774,10 @@ mod tests {
             let expected_content = content.clone();
             let piece_meta = meta.clone();
             let handle = tokio::spawn(async move {
-                let mut reader = cache_clone.read_piece("task1", &piece_id, piece_meta, None).await.unwrap();
+                let mut reader = cache_clone
+                    .read_piece("task1", &piece_id, piece_meta, None)
+                    .await
+                    .unwrap();
                 let mut buffer = Vec::new();
                 reader.read_to_end(&mut buffer).await.unwrap();
                 assert_eq!(buffer, expected_content);

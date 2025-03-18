@@ -307,7 +307,6 @@ mod tests {
         let cache: LruCache<String, i32> = LruCache::new(usize::MAX);
         assert!(cache.is_empty());
         assert_eq!(cache.capacity, usize::MAX);
-
     }
 
     #[test]
