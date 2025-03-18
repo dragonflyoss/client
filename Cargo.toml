@@ -62,7 +62,7 @@ rustls-pemfile = "2.2.0"
 sha2 = "0.10"
 blake3 = "1.6.0"
 crc32fast = "1.4.2"
-uuid = { version = "1.15", features = ["v4"] }
+uuid = { version = "1.16", features = ["v4"] }
 hex = "0.4"
 rocksdb = "0.22.0"
 serde = { version = "1.0", features = ["derive"] }
