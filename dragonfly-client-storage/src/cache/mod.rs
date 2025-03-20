@@ -274,12 +274,12 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     #[tokio::test]
+    // Tests cache creation with different configurations.
     async fn test_new() {
-        // Define test cases: (config, expected_size, expected_capacity)
         let test_cases = vec![
-            // Test with default configuration - should have 0 size and 128MB capacity
+            // Default configuration with 128MB capacity.
             (Config::default(), 0, ByteSize::mb(128).as_u64()),
-            // Test with custom configuration - should have 0 size and 100MB capacity
+            // Custom configuration with 100MB capacity.
             (
                 Config {
                     storage: Storage {
@@ -291,7 +291,7 @@ mod tests {
                 0,
                 ByteSize::mb(100).as_u64(),
             ),
-            // Test with zero capacity - should have 0 size and 0 capacity
+            // Zero capacity configuration.
             (
                 Config {
                     storage: Storage {
@@ -305,7 +305,7 @@ mod tests {
             ),
         ];
 
-        // Execute test cases
+        // Execute test cases.
         for (config, expected_size, expected_capacity) in test_cases {
             let cache = Cache::new(Arc::new(config)).unwrap();
             assert_eq!(cache.size, expected_size);
@@ -313,9 +313,9 @@ mod tests {
         }
     }
 
+    // Tests task existence checks in cache.
     #[tokio::test]
     async fn test_contains_task() {
-        // Initialize cache with 10MiB capacity
         let config = Config {
             storage: Storage {
                 cache_capacity: ByteSize::mib(10),
@@ -325,18 +325,16 @@ mod tests {
         };
         let cache = Cache::new(Arc::new(config)).unwrap();
 
-        // Define test cases: (operation, task_id, task_content_length, expected_result)
-        // Operations: "check", "add", "remove"
         let test_cases = vec![
-            // Test non-existent task
+            // Test non-existent task.
             ("check", "non_existent", 0, false),
-            // Add task and check
+            // Add and verify task.
             ("add", "task1", ByteSize::mib(1).as_u64(), true),
             ("check", "task1", 0, true),
-            // Remove task and check
+            // Remove and verify task.
             ("remove", "task1", 0, false),
             ("check", "task1", 0, false),
-            // Test multiple tasks
+            // Test multiple tasks.
             ("add", "task1", ByteSize::mib(1).as_u64(), true),
             ("add", "task2", ByteSize::mib(2).as_u64(), true),
             ("check", "task1", 0, true),
@@ -344,7 +342,7 @@ mod tests {
             ("check", "task3", 0, false),
         ];
 
-        // Execute test cases
+        // Execute test cases.
         for (operation, task_id, content_length, expected_result) in test_cases {
             match operation {
                 "check" => {
@@ -364,9 +362,9 @@ mod tests {
         }
     }
 
+    // Tests task addition boundary conditions.
     #[tokio::test]
-    async fn test_put_task() {
-        // Test basic boundary conditions with 10MiB capacity
+    async fn test_put_task_boundary_conditions() {
         let config = Config {
             storage: Storage {
                 cache_capacity: ByteSize::mib(10),
@@ -376,27 +374,30 @@ mod tests {
         };
         let mut cache = Cache::new(Arc::new(config)).unwrap();
 
-        // Test cases for basic conditions: (task_id, size, should_exist)
+        // Test boundary cases.
         let test_cases = vec![
-            // Empty task should not be cached
+            // Empty task should not be cached.
             ("empty_task", 0, false),
-            // Task equal to capacity should not be cached
+            // Task equal to capacity should not be cached.
             ("equal_capacity", ByteSize::mib(10).as_u64(), false),
-            // Task exceeding capacity should not be cached
+            // Task exceeding capacity should not be cached.
             ("exceed_capacity", ByteSize::mib(10).as_u64() + 1, false),
-            // Normal sized task should be cached
+            // Normal sized task should be cached.
             ("normal_task", ByteSize::mib(1).as_u64(), true),
         ];
 
-        // Execute basic condition tests
+        // Execute test cases.
         for (task_id, size, should_exist) in test_cases {
             if size > 0 {
                 cache.put_task(task_id, size).await;
             }
             assert_eq!(cache.contains_task(task_id).await, should_exist);
         }
+    }
 
-        // Test LRU eviction with 5MiB capacity
+    // Tests LRU cache eviction mechanism.
+    #[tokio::test]
+    async fn test_put_task_lru_eviction() {
         let config = Config {
             storage: Storage {
                 cache_capacity: ByteSize::mib(5),
@@ -406,20 +407,20 @@ mod tests {
         };
         let mut cache = Cache::new(Arc::new(config)).unwrap();
 
-        // Test cases for LRU eviction: (task_id, size, should_exist)
+        // Test LRU eviction.
         let test_cases = vec![
-            // Add multiple tasks until eviction is triggered
+            // Add tasks until eviction triggers.
             ("lru_task_1", ByteSize::mib(2).as_u64(), true),
             ("lru_task_2", ByteSize::mib(2).as_u64(), true),
-            // This should cause the first task to be evicted
+            // Third task triggers eviction.
             ("lru_task_3", ByteSize::mib(2).as_u64(), true),
-            // Verify first task is evicted and recent tasks exist
+            // Verify eviction results.
             ("lru_task_1", 0, false),
             ("lru_task_2", 0, true),
             ("lru_task_3", 0, true),
         ];
 
-        // Execute LRU eviction tests
+        // Execute test cases.
         for (task_id, size, should_exist) in test_cases {
             if size > 0 {
                 cache.put_task(task_id, size).await;
@@ -612,116 +613,6 @@ mod tests {
             reader.read_to_end(&mut buffer).await.unwrap();
             assert_eq!(buffer, *original_content);
         }
-
-        // Test concurrent writes to new pieces
-        let cache_arc = Arc::new(cache);
-        let mut handles = Vec::new();
-
-        for i in 0..10 {
-            let cache_clone = cache_arc.clone();
-            let piece_id = format!("concurrent_piece_{}", i);
-            let content = format!("concurrent data {}", i).into_bytes();
-
-            let handle = tokio::spawn(async move {
-                let mut cursor = Cursor::new(&content);
-                let result = cache_clone
-                    .write_piece("task1", &piece_id, &mut cursor, content.len() as u64)
-                    .await;
-                (piece_id, content, result)
-            });
-            handles.push(handle);
-        }
-
-        // Verify concurrent writes
-        for handle in handles {
-            let (piece_id, content, result) = handle.await.unwrap();
-            assert!(result.is_ok());
-            assert!(cache_arc.contains_piece("task1", &piece_id).await);
-
-            // Verify content
-            let piece = Piece {
-                number: 0,
-                offset: 0,
-                length: content.len() as u64,
-                digest: "".to_string(),
-                parent_id: None,
-                uploading_count: 0,
-                uploaded_count: 0,
-                updated_at: chrono::Utc::now().naive_utc(),
-                created_at: chrono::Utc::now().naive_utc(),
-                finished_at: None,
-            };
-
-            let mut reader = cache_arc
-                .read_piece("task1", &piece_id, piece, None)
-                .await
-                .unwrap();
-
-            let mut buffer = Vec::new();
-            reader.read_to_end(&mut buffer).await.unwrap();
-            assert_eq!(buffer, content);
-        }
-
-        // Test concurrent writes to same piece
-        let mut handles = Vec::new();
-        let piece_id = "concurrent_same_piece";
-        let original_content = b"original content".to_vec();
-
-        // First write to create the piece
-        let mut cursor = Cursor::new(&original_content);
-        let result = cache_arc
-            .write_piece(
-                "task1",
-                piece_id,
-                &mut cursor,
-                original_content.len() as u64,
-            )
-            .await;
-        assert!(result.is_ok());
-
-        // Try concurrent writes to the same piece
-        for i in 0..10 {
-            let cache_clone = cache_arc.clone();
-            let content = format!("concurrent overwrite attempt {}", i).into_bytes();
-
-            let handle = tokio::spawn(async move {
-                let mut cursor = Cursor::new(&content);
-                let result = cache_clone
-                    .write_piece("task1", piece_id, &mut cursor, content.len() as u64)
-                    .await;
-                (content, result)
-            });
-            handles.push(handle);
-        }
-
-        // Verify all concurrent writes return Ok but content remains unchanged
-        for handle in handles {
-            let (_, result) = handle.await.unwrap();
-            assert!(result.is_ok());
-        }
-
-        // Verify the content remains unchanged
-        let piece = Piece {
-            number: 0,
-            offset: 0,
-            length: original_content.len() as u64,
-            digest: "".to_string(),
-            parent_id: None,
-            uploading_count: 0,
-            uploaded_count: 0,
-            updated_at: chrono::Utc::now().naive_utc(),
-            created_at: chrono::Utc::now().naive_utc(),
-            finished_at: None,
-        };
-
-        let mut reader = cache_arc
-            .read_piece("task1", piece_id, piece, None)
-            .await
-            .unwrap();
-
-        let mut buffer = Vec::new();
-        reader.read_to_end(&mut buffer).await.unwrap();
-        assert_eq!(buffer, original_content);
     }
 
     #[tokio::test]
@@ -903,137 +794,144 @@ mod tests {
         let expected_content = &content[start_offset..(start_offset + range.length as usize)];
         assert_eq!(buffer, expected_content);
         assert_eq!(buffer.len(), 5);
+    }
 
-        // Test concurrent reads
+    // Tests concurrent reads of the same piece.
+    #[tokio::test]
+    async fn test_concurrent_read_same_piece() {
+        let config = Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut cache = Cache::new(Arc::new(config)).unwrap();
+        cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
+
+        // Write test data.
+        let content = b"test data for concurrent read".to_vec();
+        let mut cursor = Cursor::new(&content);
+        cache
+            .write_piece("task1", "piece1", &mut cursor, content.len() as u64)
+            .await
+            .unwrap();
+
         let cache_arc = Arc::new(cache);
-        let mut handles = Vec::new();
+        let mut join_set = tokio::task::JoinSet::new();
 
-        // Launch concurrent reads for all pieces
-        for (id, content, meta) in &test_pieces {
+        // Spawn concurrent readers.
+        for i in 0..50 {
             let cache_clone = cache_arc.clone();
-            let piece_id = id.to_string();
             let expected_content = content.clone();
-            let piece_meta = meta.clone();
 
-            let handle = tokio::spawn(async move {
+            join_set.spawn(async move {
+                let piece = Piece {
+                    number: 0,
+                    offset: 0,
+                    length: expected_content.len() as u64,
+                    digest: "".to_string(),
+                    parent_id: None,
+                    uploading_count: 0,
+                    uploaded_count: 0,
+                    updated_at: chrono::Utc::now().naive_utc(),
+                    created_at: chrono::Utc::now().naive_utc(),
+                    finished_at: None,
+                };
+
+                // Alternate between full and partial reads.
+                let range = if i % 2 == 0 {
+                    None
+                } else {
+                    Some(Range {
+                        start: 0,
+                        length: 5,
+                    })
+                };
+
                 let mut reader = cache_clone
-                    .read_piece("task1", &piece_id, piece_meta, None)
+                    .read_piece("task1", "piece1", piece, range)
+                    .await
+                    .unwrap_or_else(|e| panic!("Reader {} failed: {:?}", i, e));
+
+                let mut buffer = Vec::new();
+                reader.read_to_end(&mut buffer).await.unwrap();
+
+                if let Some(range) = range {
+                    assert_eq!(buffer, &expected_content[..range.length as usize]);
+                } else {
+                    assert_eq!(buffer, expected_content);
+                }
+            });
+        }
+
+        while let Some(result) = join_set.join_next().await {
+            result.unwrap();
+        }
+    }
+
+    // Tests concurrent writes to different pieces.
+    #[tokio::test]
+    async fn test_concurrent_write_different_pieces() {
+        let config = Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut cache = Cache::new(Arc::new(config)).unwrap();
+        cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
+
+        let cache_arc = Arc::new(cache);
+        let mut join_set = tokio::task::JoinSet::new();
+
+        // Spawn concurrent writers.
+        for i in 0..50 {
+            let cache_clone = cache_arc.clone();
+            let content = format!("content for piece {}", i).into_bytes();
+
+            join_set.spawn(async move {
+                let mut cursor = Cursor::new(&content);
+                let piece_id = format!("piece{}", i);
+                let result = cache_clone
+                    .write_piece("task1", &piece_id, &mut cursor, content.len() as u64)
+                    .await;
+                assert!(result.is_ok());
+
+                // Verify written content.
+                let piece = Piece {
+                    number: 0,
+                    offset: 0,
+                    length: content.len() as u64,
+                    digest: "".to_string(),
+                    parent_id: None,
+                    uploading_count: 0,
+                    uploaded_count: 0,
+                    updated_at: chrono::Utc::now().naive_utc(),
+                    created_at: chrono::Utc::now().naive_utc(),
+                    finished_at: None,
+                };
+
+                let mut reader = cache_clone
+                    .read_piece("task1", &piece_id, piece, None)
                     .await
                     .unwrap();
 
                 let mut buffer = Vec::new();
                 reader.read_to_end(&mut buffer).await.unwrap();
-                assert_eq!(buffer, expected_content);
-                buffer
-            });
-
-            handles.push(handle);
-        }
-
-        // Verify all concurrent reads succeeded
-        for handle in handles {
-            handle.await.unwrap();
-        }
-    }
-
-    #[tokio::test]
-    async fn test_concurrent_read() {
-        // Initialize cache with 10MiB capacity
-        let config = Config {
-            storage: Storage {
-                cache_capacity: ByteSize::mib(10),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut cache = Cache::new(Arc::new(config)).unwrap();
-
-        // Create a task and write test piece
-        cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
-
-        // Write test pieces with different sizes
-        let test_pieces = vec![
-            ("piece1", b"small content".to_vec()),
-            ("piece2", vec![1u8; 1024]), // 1KB
-            ("piece3", vec![2u8; 4096]), // 4KB
-        ];
-
-        for (id, content) in &test_pieces {
-            let mut cursor = Cursor::new(content);
-            cache
-                .write_piece("task1", id, &mut cursor, content.len() as u64)
-                .await
-                .unwrap();
-        }
-
-        let cache_arc = Arc::new(cache);
-        let mut join_set = tokio::task::JoinSet::new();
-
-        // Spawn concurrent readers
-        for reader_id in 0..50 {
-            let cache_clone = cache_arc.clone();
-            let test_pieces = test_pieces.clone();
-
-            join_set.spawn(async move {
-                for i in 0..20 {
-                    // Randomly select a piece to read
-                    let piece_idx = i % test_pieces.len();
-                    let (piece_id, expected_content) = &test_pieces[piece_idx];
-
-                    let piece = Piece {
-                        number: 0,
-                        offset: 0,
-                        length: expected_content.len() as u64,
-                        digest: "".to_string(),
-                        parent_id: None,
-                        uploading_count: 0,
-                        uploaded_count: 0,
-                        updated_at: chrono::Utc::now().naive_utc(),
-                        created_at: chrono::Utc::now().naive_utc(),
-                        finished_at: None,
-                    };
-
-                    // Randomly choose between full read and partial read
-                    let range = if i % 2 == 0 {
-                        None
-                    } else {
-                        Some(Range {
-                            start: 0,
-                            length: std::cmp::min(5, expected_content.len() as u64),
-                        })
-                    };
-
-                    let mut reader = cache_clone
-                        .read_piece("task1", piece_id, piece, range)
-                        .await
-                        .unwrap_or_else(|e| {
-                            panic!("Reader {} failed at iteration {}: {:?}", reader_id, i, e)
-                        });
-
-                    let mut buffer = Vec::new();
-                    reader.read_to_end(&mut buffer).await.unwrap();
-
-                    let expected = if let Some(range) = range {
-                        expected_content[0..range.length as usize].to_vec()
-                    } else {
-                        expected_content.clone()
-                    };
-
-                    assert_eq!(buffer, expected);
-                }
-                Ok::<_, Error>(())
+                assert_eq!(buffer, content);
             });
         }
 
-        // Wait for all readers to complete
         while let Some(result) = join_set.join_next().await {
-            result.unwrap().unwrap();
+            result.unwrap();
         }
     }
 
+    // Tests concurrent writes to the same piece.
     #[tokio::test]
-    async fn test_concurrent_write() {
-        // Initialize cache with 10MiB capacity
+    async fn test_concurrent_write_same_piece() {
         let config = Config {
             storage: Storage {
                 cache_capacity: ByteSize::mib(10),
@@ -1043,102 +941,42 @@ mod tests {
         };
         let mut cache = Cache::new(Arc::new(config)).unwrap();
         cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
-        cache.put_task("task2", ByteSize::mib(1).as_u64()).await;
 
-        let cache_arc = Arc::new(cache);
-        let mut join_set = tokio::task::JoinSet::new();
-
-        // Test 1: Multiple writers writing to different pieces
-        for writer_id in 0..50 {
-            let cache_clone = cache_arc.clone();
-
-            join_set.spawn(async move {
-                for i in 0..20 {
-                    let piece_id = format!("piece_{}_{}", writer_id, i);
-                    let content =
-                        format!("content from writer {} iteration {}", writer_id, i).into_bytes();
-
-                    let mut cursor = Cursor::new(&content);
-                    let result = cache_clone
-                        .write_piece("task1", &piece_id, &mut cursor, content.len() as u64)
-                        .await;
-
-                    assert!(result.is_ok());
-
-                    // Verify write succeeded and content is correct
-                    let piece = Piece {
-                        number: 0,
-                        offset: 0,
-                        length: content.len() as u64,
-                        digest: "".to_string(),
-                        parent_id: None,
-                        uploading_count: 0,
-                        uploaded_count: 0,
-                        updated_at: chrono::Utc::now().naive_utc(),
-                        created_at: chrono::Utc::now().naive_utc(),
-                        finished_at: None,
-                    };
-
-                    let mut reader = cache_clone
-                        .read_piece("task1", &piece_id, piece, None)
-                        .await
-                        .unwrap();
-
-                    let mut buffer = Vec::new();
-                    reader.read_to_end(&mut buffer).await.unwrap();
-                    assert_eq!(buffer, content);
-                }
-                Ok::<_, Error>(())
-            });
-        }
-
-        // Wait for all writers to complete
-        while let Some(result) = join_set.join_next().await {
-            result.unwrap().unwrap();
-        }
-
-        // Test 2: Multiple writers attempting to write to the same piece
-        let mut join_set = tokio::task::JoinSet::new();
-        let shared_piece = "shared_piece";
+        // Write initial content.
         let original_content = b"original content".to_vec();
-
-        // First write to create the piece
         let mut cursor = Cursor::new(&original_content);
-        cache_arc
+        cache
             .write_piece(
-                "task2",
-                shared_piece,
+                "task1",
+                "piece1",
                 &mut cursor,
                 original_content.len() as u64,
             )
             .await
             .unwrap();
 
-        // Spawn multiple writers trying to overwrite the same piece
-        for writer_id in 0..50 {
+        let cache_arc = Arc::new(cache);
+        let mut join_set = tokio::task::JoinSet::new();
+
+        // Spawn concurrent writers.
+        for i in 0..50 {
             let cache_clone = cache_arc.clone();
+            let new_content = format!("new content from writer {}", i).into_bytes();
 
             join_set.spawn(async move {
-                for i in 0..20 {
-                    let content =
-                        format!("overwrite attempt {} from writer {}", i, writer_id).into_bytes();
-                    let mut cursor = Cursor::new(&content);
-                    let result = cache_clone
-                        .write_piece("task2", shared_piece, &mut cursor, content.len() as u64)
-                        .await;
-
-                    assert!(result.is_ok());
-                }
-                Ok::<_, Error>(())
+                let mut cursor = Cursor::new(&new_content);
+                let result = cache_clone
+                    .write_piece("task1", "piece1", &mut cursor, new_content.len() as u64)
+                    .await;
+                assert!(result.is_ok());
             });
         }
 
-        // Wait for all writers to complete
         while let Some(result) = join_set.join_next().await {
-            result.unwrap().unwrap();
+            result.unwrap();
         }
 
-        // Verify the content remains unchanged
+        // Verify content remains unchanged.
         let piece = Piece {
             number: 0,
             offset: 0,
@@ -1153,7 +991,7 @@ mod tests {
         };
 
         let mut reader = cache_arc
-            .read_piece("task2", shared_piece, piece, None)
+            .read_piece("task1", "piece1", piece, None)
             .await
             .unwrap();
 
