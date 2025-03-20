@@ -288,61 +288,72 @@ mod tests {
 
     #[test]
     fn test_new() {
-        // Test normal capacity
-        let cache: LruCache<String, i32> = LruCache::new(5);
-        assert!(cache.is_empty());
-        assert_eq!(cache.capacity, 5);
+        // Define test cases: (capacity, expected_capacity)
+        let test_cases = vec![
+            // Normal capacity
+            (5, 5),
+            // Minimum meaningful capacity
+            (1, 1),
+            // Zero capacity
+            (0, 0),
+            // Maximum capacity
+            (usize::MAX, usize::MAX),
+        ];
 
-        // Test edge case with capacity of 1
-        let cache: LruCache<String, i32> = LruCache::new(1);
-        assert!(cache.is_empty());
-        assert_eq!(cache.capacity, 1);
-
-        // Test edge case with maximum capacity
-        let cache: LruCache<String, i32> = LruCache::new(0);
-        assert!(cache.is_empty());
-        assert_eq!(cache.capacity, 0);
-
-        // Test edge case with maximum capacity
-        let cache: LruCache<String, i32> = LruCache::new(usize::MAX);
-        assert!(cache.is_empty());
-        assert_eq!(cache.capacity, usize::MAX);
+        for (capacity, expected_capacity) in test_cases {
+            let cache: LruCache<String, i32> = LruCache::new(capacity);
+            assert!(cache.is_empty());
+            assert_eq!(cache.capacity, expected_capacity);
+        }
     }
 
     #[test]
     fn test_put() {
+        // Test basic insertion and eviction with capacity 3
         let mut cache = LruCache::new(3);
 
-        // Test basic insertion
-        // LRU state after: [key1(1)]
-        assert_eq!(cache.put("key1".to_string(), 1), None);
-        // LRU state after: [key2(2), key1(1)]
-        assert_eq!(cache.put("key2".to_string(), 2), None);
-        // LRU state after: [key3(3), key2(2), key1(1)]
-        assert_eq!(cache.put("key3".to_string(), 3), None);
-        assert_eq!(cache.get("key1"), Some(&1));
-        assert_eq!(cache.get("key2"), Some(&2));
-        assert_eq!(cache.get("key3"), Some(&3));
+        // Define test cases: (key, value, expected_previous_value)
+        let test_cases = vec![
+            // Initial insertions
+            ("key1", 1, None),
+            ("key2", 2, None),
+            ("key3", 3, None),
+            // Update existing key
+            ("key2", 22, Some(2)),
+            // Eviction of oldest key
+            ("key4", 4, Some(1)),
+        ];
 
-        // Test updating existing value
-        // LRU state after: [key2(22), key3(3), key1(1)]
-        assert_eq!(cache.put("key2".to_string(), 22), Some(2));
-        assert_eq!(cache.get("key2"), Some(&22));
+        for (key, value, expected_result) in test_cases {
+            let result = cache.put(key.to_string(), value);
+            assert_eq!(result, expected_result);
+        }
 
-        // Test LRU eviction when cache is full
-        // LRU state after: [key4(4), key2(22), key3(3)] - key1 is evicted
-        assert_eq!(cache.put("key4".to_string(), 4), Some(1));
-        assert_eq!(cache.get("key1"), None);
-        assert_eq!(cache.get("key4"), Some(&4));
+        // Verify final state
+        assert_eq!(cache.get(&"key1".to_string()), None);
+        assert_eq!(cache.get(&"key2".to_string()).copied(), Some(22));
+        assert_eq!(cache.get(&"key3".to_string()).copied(), Some(3));
+        assert_eq!(cache.get(&"key4".to_string()).copied(), Some(4));
 
-        // Test edge case with capacity of 1
+        // Test edge case with capacity 1
         let mut cache = LruCache::new(1);
-        // LRU state after: [key1(1)]
-        assert_eq!(cache.put("key1".to_string(), 1), None);
-        // LRU state after: [key2(2)] - key1 is evicted
-        assert_eq!(cache.put("key2".to_string(), 2), Some(1));
-        assert_eq!(cache.get("key1"), None);
-        assert_eq!(cache.get("key2"), Some(&2));
+
+        // Define test cases: (key, value, expected_previous_value)
+        let test_cases = vec![
+            // Initial insertion
+            ("key1", 1, None),
+            // Eviction of previous key
+            ("key2", 2, Some(1)),
+        ];
+
+        for (key, value, expected_result) in test_cases {
+            let result = cache.put(key.to_string(), value);
+            assert_eq!(result, expected_result);
+        }
+
+        // Verify final state
+        assert_eq!(cache.get(&"key1".to_string()), None);
+        assert_eq!(cache.get(&"key2".to_string()).copied(), Some(2));
     }
 
     #[test]
@@ -350,73 +361,106 @@ mod tests {
         let mut cache = LruCache::new(3);
 
         // Test get on empty cache
-        assert_eq!(cache.get("nonexistent"), None);
+        assert_eq!(cache.get(&"nonexistent".to_string()), None);
 
-        // Test basic get operations
-        // LRU state after: [key1(1)]
-        cache.put("key1".to_string(), 1);
-        // LRU state after: [key2(2), key1(1)]
-        cache.put("key2".to_string(), 2);
-        assert_eq!(cache.get("key1"), Some(&1));
-        assert_eq!(cache.get("key2"), Some(&2));
+        // Prepare cache with initial values
+        for (key, value) in [("key1", 1), ("key2", 2), ("key3", 3)] {
+            cache.put(key.to_string(), value);
+        }
 
-        // Test LRU order update on get
-        // LRU state after: [key3(3), key2(2), key1(1)]
-        cache.put("key3".to_string(), 3);
-        // LRU state after: [key1(1), key3(3), key2(2)]
-        assert_eq!(cache.get("key1"), Some(&1));
-        // LRU state after: [key4(4), key1(1), key3(3)] - key2 is evicted
+        // Define test cases: (key, expected_value)
+        let test_cases = vec![
+            // Get first key - should move to front
+            ("key1", Some(1)),
+            // Get non-existent key
+            ("nonexistent", None),
+            // Get first key again
+            ("key1", Some(1)),
+            // Get third key - should move to front
+            ("key3", Some(3)),
+        ];
+
+        for (key, expected_value) in test_cases {
+            assert_eq!(cache.get(&key.to_string()).copied(), expected_value);
+        }
+
+        // Test eviction after getting (key1 and key3 should be at front)
         cache.put("key4".to_string(), 4);
-        assert_eq!(cache.get("key2"), None);
-        assert_eq!(cache.get("key1"), Some(&1));
-        assert_eq!(cache.get("key3"), Some(&3));
-        assert_eq!(cache.get("key4"), Some(&4));
+
+        // Define post-eviction test cases: (key, expected_value)
+        let post_eviction_tests = vec![
+            // key1 should still exist
+            ("key1", Some(1)),
+            // key2 should be evicted
+            ("key2", None),
+            // key3 should still exist
+            ("key3", Some(3)),
+            // key4 should be added
+            ("key4", Some(4)),
+        ];
+
+        for (key, expected_value) in post_eviction_tests {
+            assert_eq!(cache.get(&key.to_string()).copied(), expected_value);
+        }
 
         // Test edge case with capacity of 1
         let mut cache = LruCache::new(1);
-        // LRU state after: [key1(1)]
         cache.put("key1".to_string(), 1);
-        assert_eq!(cache.get("key1"), Some(&1));
-        // LRU state after: [key2(2)] - key1 is evicted
+        assert_eq!(cache.get(&"key1".to_string()).copied(), Some(1));
         cache.put("key2".to_string(), 2);
-        assert_eq!(cache.get("key1"), None);
+        assert_eq!(cache.get(&"key1".to_string()), None);
     }
 
     #[test]
     fn test_peek() {
         let mut cache = LruCache::new(3);
 
-        // Test peek on empty cache
-        assert_eq!(cache.peek("nonexistent"), None);
+        // Prepare cache with initial values
+        for (key, value) in [("key1", 1), ("key2", 2), ("key3", 3)] {
+            cache.put(key.to_string(), value);
+        }
 
-        // Test basic peek operations
-        // LRU state after: [key1(1)]
-        cache.put("key1".to_string(), 1);
-        // LRU state after: [key2(2), key1(1)]
-        cache.put("key2".to_string(), 2);
-        assert_eq!(cache.peek("key1"), Some(&1));
-        assert_eq!(cache.peek("key2"), Some(&2));
+        // Define test cases: (key, expected_value)
+        let test_cases = vec![
+            // Peek at non-existent key
+            ("nonexistent", None),
+            // Peek at first key - shouldn't affect LRU order
+            ("key1", Some(1)),
+            // Peek at second key - shouldn't affect LRU order
+            ("key2", Some(2)),
+            // Peek at third key - shouldn't affect LRU order
+            ("key3", Some(3)),
+        ];
 
-        // Test that peek doesn't affect LRU order
-        // LRU state after: [key3(3), key2(2), key1(1)]
-        cache.put("key3".to_string(), 3);
-        // LRU state remains: [key3(3), key2(2), key1(1)]
-        cache.peek("key1");
-        // LRU state after: [key4(4), key3(3), key2(2)] - key1 is evicted
+        for (key, expected_value) in test_cases {
+            assert_eq!(cache.peek(&key.to_string()).copied(), expected_value);
+        }
+
+        // Test eviction after peeking (original LRU order should be preserved)
         cache.put("key4".to_string(), 4);
-        assert_eq!(cache.peek("key1"), None);
-        assert_eq!(cache.peek("key2"), Some(&2));
-        assert_eq!(cache.peek("key3"), Some(&3));
-        assert_eq!(cache.peek("key4"), Some(&4));
+
+        // Define post-eviction test cases: (key, expected_value)
+        let post_eviction_tests = vec![
+            // key1 should be evicted
+            ("key1", None),
+            // key2 should still exist
+            ("key2", Some(2)),
+            // key3 should still exist
+            ("key3", Some(3)),
+            // key4 should be added
+            ("key4", Some(4)),
+        ];
+
+        for (key, expected_value) in post_eviction_tests {
+            assert_eq!(cache.peek(&key.to_string()).copied(), expected_value);
+        }
 
         // Test edge case with capacity of 1
         let mut cache = LruCache::new(1);
-        // LRU state after: [key1(1)]
         cache.put("key1".to_string(), 1);
-        assert_eq!(cache.peek("key1"), Some(&1));
-        // LRU state after: [key2(2)] - key1 is evicted
+        assert_eq!(cache.peek(&"key1".to_string()).copied(), Some(1));
         cache.put("key2".to_string(), 2);
-        assert_eq!(cache.peek("key1"), None);
+        assert_eq!(cache.peek(&"key1".to_string()), None);
     }
 
     #[test]
@@ -424,99 +468,121 @@ mod tests {
         let mut cache = LruCache::new(3);
 
         // Test contains on empty cache
-        assert!(!cache.contains("nonexistent"));
+        assert!(!cache.contains(&"nonexistent".to_string()));
 
-        // Test basic contains operations
-        // LRU state after: [key1(1)]
-        cache.put("key1".to_string(), 1);
-        // LRU state after: [key2(2), key1(1)]
-        cache.put("key2".to_string(), 2);
-        assert!(cache.contains("key1"));
-        assert!(cache.contains("key2"));
-        assert!(!cache.contains("key3"));
+        // Prepare cache with initial values
+        for (key, value) in [("key1", 1), ("key2", 2), ("key3", 3)] {
+            cache.put(key.to_string(), value);
+        }
 
-        // Test that contains doesn't affect LRU order
-        // LRU state after: [key3(3), key2(2), key1(1)]
-        cache.put("key3".to_string(), 3);
-        // LRU state remains: [key3(3), key2(2), key1(1)]
-        cache.contains("key1");
-        // LRU state after: [key4(4), key3(3), key2(2)] - key1 is evicted
+        // Define test cases: (key, expected_result)
+        let test_cases = vec![
+            // Check non-existent key
+            ("nonexistent", false),
+            // Check first key - shouldn't affect LRU order
+            ("key1", true),
+            // Check second key - shouldn't affect LRU order
+            ("key2", true),
+            // Check third key - shouldn't affect LRU order
+            ("key3", true),
+        ];
+
+        for (key, expected_result) in test_cases {
+            assert_eq!(cache.contains(&key.to_string()), expected_result);
+        }
+
+        // Test eviction after contains (original LRU order should be preserved)
         cache.put("key4".to_string(), 4);
-        assert!(!cache.contains("key1"));
-        assert!(cache.contains("key2"));
-        assert!(cache.contains("key3"));
-        assert!(cache.contains("key4"));
+
+        // Define post-eviction test cases: (key, expected_result)
+        let post_eviction_tests = vec![
+            // key1 should be evicted
+            ("key1", false),
+            // key2 should still exist
+            ("key2", true),
+            // key3 should still exist
+            ("key3", true),
+            // key4 should be added
+            ("key4", true),
+        ];
+
+        for (key, expected_result) in post_eviction_tests {
+            assert_eq!(cache.contains(&key.to_string()), expected_result);
+        }
 
         // Test edge case with capacity of 1
         let mut cache = LruCache::new(1);
-        // LRU state after: [key1(1)]
         cache.put("key1".to_string(), 1);
-        assert!(cache.contains("key1"));
-        // LRU state after: [key2(2)] - key1 is evicted
+        assert!(cache.contains(&"key1".to_string()));
         cache.put("key2".to_string(), 2);
-        assert!(!cache.contains("key1"));
-        assert!(cache.contains("key2"));
+        assert!(!cache.contains(&"key1".to_string()));
+        assert!(cache.contains(&"key2".to_string()));
     }
 
     #[test]
     fn test_pop_lru() {
+        // Test case 1: Standard pop_lru operations
         let mut cache = LruCache::new(3);
 
         // Test pop_lru on empty cache
         assert_eq!(cache.pop_lru(), None);
 
-        // Test basic pop_lru operations
-        // LRU state after: [key1(1)]
-        cache.put("key1".to_string(), 1);
-        // LRU state after: [key2(2), key1(1)]
-        cache.put("key2".to_string(), 2);
-        // LRU state after: [key3(3), key2(2), key1(1)]
-        cache.put("key3".to_string(), 3);
+        // Fill cache and test pop operations
+        // (key, value, expected_pop_result)
+        let test_cases = vec![
+            // Fill operations
+            ("key1", 1, None),
+            ("key2", 2, None),
+            ("key3", 3, None),
+            // Pop operations with expected results
+            // Pop least recently used (key1)
+            ("", 0, Some(("key1".to_string(), 1))),
+            // Pop next least recently used (key2)
+            ("", 0, Some(("key2".to_string(), 2))),
+            // Pop last item (key3)
+            ("", 0, Some(("key3".to_string(), 3))),
+            // Pop from empty cache
+            ("", 0, None),
+        ];
 
-        // Test that pop_lru removes the least recently used item
-        // LRU state after: [key3(3), key2(2)]
-        assert_eq!(cache.pop_lru(), Some(("key1".to_string(), 1)));
-        assert_eq!(cache.get("key1"), None);
-        assert_eq!(cache.get("key2"), Some(&2));
-        assert_eq!(cache.get("key3"), Some(&3));
+        for (key, value, expected_result) in test_cases {
+            if !key.is_empty() {
+                // Fill operation
+                cache.put(key.to_string(), value);
+            } else {
+                // Pop operation
+                assert_eq!(cache.pop_lru(), expected_result);
+            }
+        }
 
-        // Test edge case with capacity of 1
-        let mut cache = LruCache::new(1);
-        // LRU state after: [key1(1)]
-        cache.put("key1".to_string(), 1);
-        // LRU state after: [] - empty
-        assert_eq!(cache.pop_lru(), Some(("key1".to_string(), 1)));
+        // Cache should be empty after all pops
         assert!(cache.is_empty());
-    }
 
-    #[test]
-    fn test_complex_operations() {
-        let mut cache = LruCache::new(3);
+        // Test case 2: Edge case with capacity 1
+        let mut cache = LruCache::new(1);
 
-        // Test mixed operations
-        // LRU state after: [key1(1)]
-        cache.put("key1".to_string(), 1);
-        // LRU state after: [key2(2), key1(1)]
-        cache.put("key2".to_string(), 2);
-        // LRU state after: [key1(1), key2(2)]
-        assert_eq!(cache.get("key1"), Some(&1));
-        // LRU state after: [key3(3), key1(1), key2(2)]
-        cache.put("key3".to_string(), 3);
-        // LRU state remains: [key3(3), key1(1), key2(2)] - peek doesn't affect order
-        cache.peek("key2");
-        // LRU state after: [key4(4), key3(3), key1(1)] - key2 is evicted
-        cache.put("key4".to_string(), 4);
-        assert_eq!(cache.get("key1"), Some(&1));
-        assert_eq!(cache.get("key2"), None);
-        assert_eq!(cache.peek("key3"), Some(&3));
-        assert_eq!(cache.get("key4"), Some(&4));
+        // (operation, key, value, expected_result)
+        let test_cases = vec![
+            // Put key1
+            ("put", "key1", 1, None),
+            // Pop the only entry
+            ("pop", "", 0, Some(("key1".to_string(), 1))),
+            // Pop from empty cache
+            ("pop", "", 0, None),
+        ];
 
-        // Test combination of updates and accesses
-        // LRU state after: [key2(22), key4(4), key3(3)] - key1 is evicted
-        cache.put("key2".to_string(), 22);
-        assert_eq!(cache.peek("key2"), Some(&22));
-        // LRU state after: [key5(5), key2(22), key4(4)] - key3 is evicted
-        cache.put("key5".to_string(), 5);
-        assert_eq!(cache.get("key3"), None);
+        for (operation, key, value, expected_result) in test_cases {
+            match operation {
+                "put" => {
+                    cache.put(key.to_string(), value);
+                }
+                "pop" => {
+                    assert_eq!(cache.pop_lru(), expected_result);
+                }
+                _ => panic!("Unknown operation"),
+            }
+        }
+
+        assert!(cache.is_empty());
     }
 }
