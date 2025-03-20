@@ -364,7 +364,7 @@ mod tests {
 
     // Tests task addition boundary conditions.
     #[tokio::test]
-    async fn test_put_task_boundary_conditions() {
+    async fn test_put_task() {
         let config = Config {
             storage: Storage {
                 cache_capacity: ByteSize::mib(10),
@@ -397,7 +397,7 @@ mod tests {
 
     // Tests LRU cache eviction mechanism.
     #[tokio::test]
-    async fn test_put_task_lru_eviction() {
+    async fn test_put_task_lru() {
         let config = Config {
             storage: Storage {
                 cache_capacity: ByteSize::mib(5),
