@@ -409,7 +409,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_contains_piece() {
-        // Initialize cache with 10MiB capacity and 8KB read buffer
+        // Initialize cache with 10MiB capacity
         let config = Config {
             storage: Storage {
                 cache_capacity: ByteSize::mib(10),
@@ -502,11 +502,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_piece() {
-        // Initialize cache with 10MiB capacity and 8KB read buffer
+        // Initialize cache with 10MiB capacity
         let config = Config {
             storage: Storage {
                 cache_capacity: ByteSize::mib(10),
-                read_buffer_size: 8192,
                 ..Default::default()
             },
             ..Default::default()
@@ -620,11 +619,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_piece() {
-        // Initialize cache with 10MiB capacity and 8KB read buffer
+        // Initialize cache with 10MiB capacity
         let config = Config {
             storage: Storage {
                 cache_capacity: ByteSize::mib(10),
-                read_buffer_size: 8192,
                 ..Default::default()
             },
             ..Default::default()
@@ -794,11 +792,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent() {
-        // Initialize cache with 10MiB capacity and 8KB read buffer
+        // Initialize cache with 10MiB capacity
         let config = Config {
             storage: Storage {
                 cache_capacity: ByteSize::mib(10),
-                read_buffer_size: 8192,
                 ..Default::default()
             },
             ..Default::default()
