@@ -272,6 +272,7 @@ mod tests {
     use dragonfly_client_config::dfdaemon::Storage;
     use std::io::Cursor;
     use tokio::io::AsyncReadExt;
+    use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn test_new() {
@@ -789,5 +790,238 @@ mod tests {
         for handle in handles {
             handle.await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn test_concurrent() {
+        // Initialize cache with 10MiB capacity and 8KB read buffer
+        let config = Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                read_buffer_size: 8192,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut cache = Cache::new(Arc::new(config)).unwrap();
+
+        // Add task before wrapping cache in Arc for concurrent testing
+        cache
+            .put_task("concurrent_task1", ByteSize::mib(1).as_u64())
+            .await;
+
+        // Wrap cache in Arc for concurrent access
+        let cache_arc = Arc::new(cache);
+
+        // Test concurrent write operations to different pieces
+        // This tests the ability to handle multiple concurrent write operations to different pieces
+        // within the same task, verifying thread safety and proper synchronization.
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let tx = Arc::new(tx);
+
+        let num_writers = 10;
+        let mut handles = Vec::new();
+
+        for i in 0..num_writers {
+            let cache_clone = cache_arc.clone();
+            let tx_clone = tx.clone();
+            let piece_id = format!("piece_{}", i);
+            let piece_content = format!("content_{}", i);
+
+            // Spawn concurrent writers
+            handles.push(tokio::spawn(async move {
+                let mut cursor = Cursor::new(piece_content.as_bytes());
+                let result = cache_clone
+                    .write_piece(
+                        "concurrent_task1",
+                        &piece_id,
+                        &mut cursor,
+                        piece_content.len() as u64,
+                    )
+                    .await;
+                assert!(result.is_ok());
+                tx_clone.send(()).unwrap();
+            }));
+        }
+
+        // Wait for all writers to complete
+        for _ in 0..num_writers {
+            rx.recv().await.unwrap();
+        }
+
+        // Verify all pieces were written correctly
+        for i in 0..num_writers {
+            let piece_id = format!("piece_{}", i);
+            assert!(
+                cache_arc
+                    .contains_piece("concurrent_task1", &piece_id)
+                    .await
+            );
+        }
+
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // Test concurrent reads of the same piece
+        // This tests the ability to handle multiple concurrent read operations to the same piece,
+        // verifying read concurrency and data consistency.
+        let piece_id = "shared_piece";
+        let piece_content = b"shared content for concurrent reading";
+        let mut cursor = Cursor::new(piece_content);
+
+        // Write the shared piece
+        cache_arc
+            .write_piece(
+                "concurrent_task1",
+                piece_id,
+                &mut cursor,
+                piece_content.len() as u64,
+            )
+            .await
+            .unwrap();
+
+        // Create piece metadata
+        let piece_meta = Piece {
+            number: 0,
+            offset: 0,
+            length: piece_content.len() as u64,
+            digest: "".to_string(),
+            parent_id: None,
+            uploading_count: 0,
+            uploaded_count: 0,
+            updated_at: chrono::Utc::now().naive_utc(),
+            created_at: chrono::Utc::now().naive_utc(),
+            finished_at: None,
+        };
+
+        // Create a channel to track read completion
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let tx = Arc::new(tx);
+
+        // Prepare concurrent read operations on the same piece
+        let num_readers = 50;
+        let mut handles = Vec::new();
+
+        for _ in 0..num_readers {
+            let cache_clone = cache_arc.clone();
+            let tx_clone = tx.clone();
+            let piece_meta_clone = piece_meta.clone();
+
+            // Spawn concurrent readers
+            handles.push(tokio::spawn(async move {
+                let mut reader = cache_clone
+                    .read_piece("concurrent_task1", piece_id, piece_meta_clone, None)
+                    .await
+                    .unwrap();
+
+                let mut buffer = Vec::new();
+                reader.read_to_end(&mut buffer).await.unwrap();
+                assert_eq!(buffer, piece_content);
+                tx_clone.send(()).unwrap();
+            }));
+        }
+
+        // Wait for all readers to complete
+        for _ in 0..num_readers {
+            rx.recv().await.unwrap();
+        }
+
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // Test simultaneous reads and writes to the same piece
+        // This tests a real-world scenario where the same piece is being read and written concurrently,
+        // verifying the cache's ability to handle read-write contention without data corruption.
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let tx = Arc::new(tx);
+
+        // Prepare piece data
+        let piece_id = "rw_piece";
+        let original_content = b"original content";
+        let new_content = b"new content for the piece";
+
+        // Write original piece content
+        let mut cursor = Cursor::new(original_content);
+        cache_arc
+            .write_piece(
+                "concurrent_task1",
+                piece_id,
+                &mut cursor,
+                original_content.len() as u64,
+            )
+            .await
+            .unwrap();
+
+        // Create piece metadata
+        let piece_meta = Piece {
+            number: 1,
+            offset: 100,
+            length: original_content.len() as u64,
+            digest: "".to_string(),
+            parent_id: None,
+            uploading_count: 0,
+            uploaded_count: 0,
+            updated_at: chrono::Utc::now().naive_utc(),
+            created_at: chrono::Utc::now().naive_utc(),
+            finished_at: None,
+        };
+
+        let num_ops = 20; // 10 readers and 10 writers
+        let mut handles = Vec::new();
+
+        // Create concurrent readers
+        for _ in 0..num_ops / 2 {
+            let cache_clone = cache_arc.clone();
+            let tx_clone = tx.clone();
+            let piece_meta_clone = piece_meta.clone();
+
+            handles.push(tokio::spawn(async move {
+                let mut reader = cache_clone
+                    .read_piece("concurrent_task1", piece_id, piece_meta_clone, None)
+                    .await
+                    .unwrap();
+
+                let mut buffer = Vec::new();
+                reader.read_to_end(&mut buffer).await.unwrap();
+                // Content could be either original or new, just check it's one of them
+                assert!(buffer == original_content || buffer == new_content);
+                tx_clone.send(()).unwrap();
+            }));
+        }
+
+        // Create concurrent writers
+        for _ in 0..num_ops / 2 {
+            let cache_clone = cache_arc.clone();
+            let tx_clone = tx.clone();
+
+            handles.push(tokio::spawn(async move {
+                let mut cursor = Cursor::new(new_content);
+                let result = cache_clone
+                    .write_piece(
+                        "concurrent_task1",
+                        piece_id,
+                        &mut cursor,
+                        new_content.len() as u64,
+                    )
+                    .await;
+                // Write may succeed or early return because piece exists
+                assert!(result.is_ok());
+                tx_clone.send(()).unwrap();
+            }));
+        }
+
+        // Wait for all operations to complete
+        for _ in 0..num_ops {
+            rx.recv().await.unwrap();
+        }
+
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // Verify the piece still exists
+        assert!(cache_arc.contains_piece("concurrent_task1", piece_id).await);
     }
 }
