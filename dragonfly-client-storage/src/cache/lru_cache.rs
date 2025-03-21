@@ -291,13 +291,13 @@ mod tests {
     fn test_new() {
         // Define test cases: (capacity, expected_capacity).
         let test_cases = vec![
-            // Normal capacity
+            // Normal capacity.
             (5, 5),
-            // Minimum meaningful capacity
+            // Minimum meaningful capacity.
             (1, 1),
-            // Zero capacity
+            // Zero capacity.
             (0, 0),
-            // Maximum capacity
+            // Maximum capacity.
             (usize::MAX, usize::MAX),
         ];
 
