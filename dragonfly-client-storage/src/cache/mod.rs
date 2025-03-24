@@ -194,7 +194,7 @@ impl Cache {
         };
 
         if task.contains(piece_id).await {
-            warn!("piece {} already exists in cache.", piece_id);
+            warn!("piece {} already exists in cache", piece_id);
             return Ok(());
         }
 
@@ -205,7 +205,7 @@ impl Cache {
                 Ok(())
             }
             Err(err) => Err(Error::Unknown(format!(
-                "failed to read piece data for {}: {}.",
+                "failed to read piece data for {}: {}",
                 piece_id, err
             ))),
         }
@@ -221,7 +221,7 @@ impl Cache {
         // If the content length is larger than the cache capacity, we don't cache the task.
         if content_length >= self.capacity {
             info!(
-                "task {} is too large to cache, size: {}.",
+                "task {} is too large to cache, size: {}",
                 task_id, content_length
             );
 
@@ -233,7 +233,7 @@ impl Cache {
             match tasks.pop_lru() {
                 Some((_, task)) => {
                     self.size -= task.content_length();
-                    info!("evicted task in cache: {}.", task.id);
+                    info!("evicted task in cache: {}", task.id);
                 }
                 None => {
                     break;
@@ -607,16 +607,43 @@ mod tests {
     async fn test_read_piece() {
         let config = Config {
             storage: Storage {
-                cache_capacity: ByteSize::mib(10),
+                cache_capacity: ByteSize::mib(100),
                 ..Default::default()
             },
             ..Default::default()
         };
         let mut cache = Cache::new(Arc::new(config)).unwrap();
-        cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
+
+        // Test error cases first.
+        let piece = Piece {
+            number: 0,
+            offset: 0,
+            length: 11,
+            digest: "".to_string(),
+            parent_id: None,
+            uploading_count: 0,
+            uploaded_count: 0,
+            updated_at: chrono::Utc::now().naive_utc(),
+            created_at: chrono::Utc::now().naive_utc(),
+            finished_at: None,
+        };
+
+        let result = cache
+            .read_piece("non_existent", "piece1", piece.clone(), None)
+            .await;
+        assert!(matches!(result, Err(Error::TaskNotFound(_))));
+
+        // Create task for testing.
+        cache.put_task("task1", ByteSize::mib(50).as_u64()).await;
+
+        let result = cache
+            .read_piece("task1", "non_existent", piece.clone(), None)
+            .await;
+        assert!(matches!(result, Err(Error::PieceNotFound(_))));
 
         // Define test pieces with corresponding metadata and read ranges.
         let test_pieces = vec![
+            // Small pieces for basic functionality testing
             (
                 "piece1",
                 b"hello world".to_vec(),
@@ -633,9 +660,7 @@ mod tests {
                     finished_at: None,
                 },
                 vec![
-                    // Full read.
                     (None, b"hello world".to_vec()),
-                    // Partial read.
                     (
                         Some(Range {
                             start: 0,
@@ -661,14 +686,14 @@ mod tests {
                     finished_at: None,
                 },
                 vec![
-                    (None, b"rust lang".to_vec()), // Full read
+                    (None, b"rust lang".to_vec()),
                     (
                         Some(Range {
                             start: 11,
                             length: 4,
                         }),
                         b"rust".to_vec(),
-                    ), // Partial read
+                    ),
                 ],
             ),
             (
@@ -687,19 +712,68 @@ mod tests {
                     finished_at: None,
                 },
                 vec![
-                    (None, b"unit test".to_vec()), // Full read
+                    (None, b"unit test".to_vec()),
                     (
                         Some(Range {
                             start: 20,
                             length: 4,
                         }),
                         b"unit".to_vec(),
-                    ), // Partial read
+                    ),
+                ],
+            ),
+            // Large piece for boundary testing
+            (
+                "large_piece",
+                {
+                    let size = ByteSize::mib(50).as_u64();
+                    (0..size).map(|i| (i % 256) as u8).collect()
+                },
+                Piece {
+                    number: 2,
+                    offset: 0,
+                    length: ByteSize::mib(50).as_u64(),
+                    digest: "".to_string(),
+                    parent_id: None,
+                    uploading_count: 0,
+                    uploaded_count: 0,
+                    updated_at: chrono::Utc::now().naive_utc(),
+                    created_at: chrono::Utc::now().naive_utc(),
+                    finished_at: None,
+                },
+                vec![
+                    // Full read
+                    (
+                        None,
+                        (0..ByteSize::mib(50).as_u64())
+                            .map(|i| (i % 256) as u8)
+                            .collect(),
+                    ),
+                    // Read first 1MiB
+                    (
+                        Some(Range {
+                            start: 0,
+                            length: ByteSize::mib(1).as_u64(),
+                        }),
+                        (0..ByteSize::mib(1).as_u64())
+                            .map(|i| (i % 256) as u8)
+                            .collect(),
+                    ),
+                    // Read last 1MiB
+                    (
+                        Some(Range {
+                            start: ByteSize::mib(49).as_u64(),
+                            length: ByteSize::mib(1).as_u64(),
+                        }),
+                        (ByteSize::mib(49).as_u64()..ByteSize::mib(50).as_u64())
+                            .map(|i| (i % 256) as u8)
+                            .collect(),
+                    ),
                 ],
             ),
         ];
 
-        // Write all pieces.
+        // Write all pieces
         for (id, content, _, _) in &test_pieces {
             let mut cursor = Cursor::new(content);
             cache
@@ -708,18 +782,7 @@ mod tests {
                 .unwrap();
         }
 
-        // Test error cases.
-        let result = cache
-            .read_piece("non_existent", "piece1", test_pieces[0].2.clone(), None)
-            .await;
-        assert!(matches!(result, Err(Error::TaskNotFound(_))));
-
-        let result = cache
-            .read_piece("task1", "non_existent", test_pieces[0].2.clone(), None)
-            .await;
-        assert!(matches!(result, Err(Error::PieceNotFound(_))));
-
-        // Test all pieces with their read ranges.
+        // Test all pieces with their read ranges
         for (id, _, piece, ranges) in &test_pieces {
             for (range, expected_content) in ranges {
                 let mut reader = cache
@@ -730,81 +793,6 @@ mod tests {
                 reader.read_to_end(&mut buffer).await.unwrap();
                 assert_eq!(&buffer, expected_content);
             }
-        }
-    }
-
-    #[tokio::test]
-    /// Tests boundary reads of the same piece.
-    async fn test_read_piece_boundary() {
-        // Initialize cache with large capacity (100MiB).
-        let config = Config {
-            storage: Storage {
-                cache_capacity: ByteSize::mib(100),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut cache = Cache::new(Arc::new(config)).unwrap();
-
-        // Create a large task (50MiB).
-        let task_size = ByteSize::mib(50).as_u64();
-        cache.put_task("large_task", task_size).await;
-
-        // Create a large piece with incrementing bytes for easy verification.
-        let piece_content: Vec<u8> = (0..task_size).map(|i| (i % 256) as u8).collect();
-        let mut cursor = Cursor::new(&piece_content);
-        cache
-            .write_piece("large_task", "large_piece", &mut cursor, task_size)
-            .await
-            .unwrap();
-
-        let piece = Piece {
-            number: 0,
-            offset: 0,
-            length: task_size,
-            digest: "".to_string(),
-            parent_id: None,
-            uploading_count: 0,
-            uploaded_count: 0,
-            updated_at: chrono::Utc::now().naive_utc(),
-            created_at: chrono::Utc::now().naive_utc(),
-            finished_at: None,
-        };
-
-        // Test cases for different read ranges.
-        let test_cases = vec![
-            // Read first 1MiB.
-            (
-                Some(Range {
-                    start: 0,
-                    length: ByteSize::mib(1).as_u64(),
-                }),
-                0..ByteSize::mib(1).as_u64(),
-            ),
-            // Read last 1MiB.
-            (
-                Some(Range {
-                    start: task_size - ByteSize::mib(1).as_u64(),
-                    length: ByteSize::mib(1).as_u64(),
-                }),
-                (task_size - ByteSize::mib(1).as_u64())..task_size,
-            ),
-            // Read entire content.
-            (None, 0..task_size),
-        ];
-
-        for (range, expected_range) in test_cases {
-            let mut reader = cache
-                .read_piece("large_task", "large_piece", piece.clone(), range)
-                .await
-                .unwrap();
-
-            let mut buffer = Vec::new();
-            reader.read_to_end(&mut buffer).await.unwrap();
-
-            // Verify the content matches the expected range.
-            let expected_content: Vec<u8> = expected_range.map(|i| (i % 256) as u8).collect();
-            assert_eq!(buffer, expected_content);
         }
     }
 
