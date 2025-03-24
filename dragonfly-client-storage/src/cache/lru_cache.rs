@@ -287,9 +287,7 @@ mod tests {
     use super::*;
 
     #[test]
-    /// Test new.
     fn test_new() {
-        // Define test cases: (capacity, expected_capacity).
         let test_cases = vec![
             // Normal capacity.
             (5, 5),
@@ -309,11 +307,8 @@ mod tests {
     }
 
     #[test]
-    /// Test get with normal cache capacity.
     fn test_get() {
         let mut cache: LruCache<String, i32> = LruCache::new(3);
-
-        // Test cases for basic operations.
         let test_cases = vec![
             // Initial insertions.
             ("key1", 1, None),
@@ -325,7 +320,6 @@ mod tests {
             ("key4", 4, Some(1)),
         ];
 
-        // Execute test cases.
         for (key, value, expected_result) in test_cases {
             let result = cache.put(key.to_string(), value);
             assert_eq!(result, expected_result);
@@ -339,11 +333,8 @@ mod tests {
     }
 
     #[test]
-    /// Test get after evction
     fn test_get_after_evction() {
         let mut cache = LruCache::new(3);
-
-        // Test get on empty cache
         assert_eq!(cache.get(&"nonexistent".to_string()), None);
 
         // Prepare cache with initial values.
@@ -351,7 +342,6 @@ mod tests {
             cache.put(key.to_string(), value);
         }
 
-        // Test cases for basic get operations.
         let test_cases = vec![
             ("key1", Some(1)),
             ("nonexistent", None),
@@ -371,13 +361,9 @@ mod tests {
         assert_eq!(cache.get(&"key4".to_string()).copied(), Some(4));
     }
 
-    // Tests put with different cache capacities.
     #[test]
     fn test_put() {
-        // Test with normal capacity.
         let mut cache = LruCache::new(3);
-
-        // Test cases for normal capacity.
         let test_cases = vec![
             // Initial insertions within capacity.
             ("key1", 1, None),
@@ -390,7 +376,6 @@ mod tests {
             ("key4", 44, Some(4)),
         ];
 
-        // Execute test cases.
         for (key, value, expected_result) in test_cases {
             let result = cache.put(key.to_string(), value);
             assert_eq!(result, expected_result);
@@ -404,12 +389,9 @@ mod tests {
         assert_eq!(cache.get(&"key5".to_string()).copied(), Some(5));
     }
 
-    /// Test peek.
     #[test]
     fn test_peek() {
         let mut cache: LruCache<String, i32> = LruCache::new(3);
-
-        // Test empty cache.
         assert_eq!(cache.peek(&"nonexistent".to_string()), None);
 
         // Prepare cache with initial values.
@@ -417,7 +399,6 @@ mod tests {
             cache.put(key.to_string(), value);
         }
 
-        // Test cases for basic peek operations.
         let test_cases = vec![
             ("nonexistent", None),
             ("key1", Some(1)),
@@ -437,12 +418,9 @@ mod tests {
         assert_eq!(cache.peek(&"key4".to_string()).copied(), Some(4));
     }
 
-    // Tests contains operations with normal cache capacity.
     #[test]
     fn test_contains() {
         let mut cache: LruCache<String, i32> = LruCache::new(3);
-
-        // Test empty cache.
         assert!(!cache.contains(&"nonexistent".to_string()));
 
         // Prepare cache with initial values.
@@ -450,7 +428,6 @@ mod tests {
             cache.put(key.to_string(), value);
         }
 
-        // Test cases for basic contains operations.
         let test_cases = vec![
             ("nonexistent", false),
             ("key1", true),
@@ -470,20 +447,15 @@ mod tests {
         assert!(cache.contains(&"key4".to_string()));
     }
 
-    // Tests pop_lru operations with normal cache capacity.
     #[test]
     fn test_pop_lru() {
         let mut cache: LruCache<String, i32> = LruCache::new(3);
-
-        // Test empty cache.
         assert_eq!(cache.pop_lru(), None);
 
-        // Fill cache.
         for (key, value) in [("key1", 1), ("key2", 2), ("key3", 3)] {
             cache.put(key.to_string(), value);
         }
 
-        // Test pop operations.
         assert_eq!(cache.pop_lru(), Some(("key1".to_string(), 1)));
         assert_eq!(cache.pop_lru(), Some(("key2".to_string(), 2)));
         assert_eq!(cache.pop_lru(), Some(("key3".to_string(), 3)));
