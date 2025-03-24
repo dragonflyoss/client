@@ -34,9 +34,3 @@ rayon = "1.10.0"
 
 [dev-dependencies]
 tempdir = "0.3"
-criterion = { version = "0.5", features = ["async_tokio"] }
-
-[[bench]]
-name = "dragonfly-client-storage"
-path = "benches/dragonfly-client-storage/main.rs"
-harness = false
