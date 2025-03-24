@@ -1183,6 +1183,7 @@ dependencies = [
  "base16ct",
  "bincode",
  "bytes",
+ "bytesize",
  "chrono",
  "crc32fast",
  "dragonfly-api",

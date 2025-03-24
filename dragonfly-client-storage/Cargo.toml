@@ -28,6 +28,7 @@ base16ct.workspace = true
 fs2.workspace = true
 lru.workspace = true
 bytes.workspace = true
+bytesize.workspace = true
 num_cpus = "1.0"
 bincode = "1.3.3"
 rayon = "1.10.0"
