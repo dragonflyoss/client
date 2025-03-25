@@ -766,6 +766,7 @@ async fn download(
                 object_storage,
                 hdfs,
                 load_to_cache: false,
+                force_hard_link: false,
             }),
         })
         .await
