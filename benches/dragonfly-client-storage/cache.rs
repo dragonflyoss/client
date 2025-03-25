@@ -175,7 +175,9 @@ pub fn bench_concurrent_operations(c: &mut Criterion) {
                     let task_id = "task1";
 
                     // Create task first.
-                    cache.put_task(task_id, (data_size * piece_count) as u64).await;
+                    cache
+                        .put_task(task_id, (data_size * piece_count) as u64)
+                        .await;
 
                     for piece_id in 0..piece_count {
                         let data = data.clone();
@@ -270,7 +272,9 @@ pub fn bench_concurrent_operations(c: &mut Criterion) {
 
                 rt.block_on(async {
                     // Create task and write all pieces first.
-                    cache.put_task(task_id, (data_size * piece_count) as u64).await;
+                    cache
+                        .put_task(task_id, (data_size * piece_count) as u64)
+                        .await;
                     for piece_id in 0..piece_count {
                         let piece_id = piece_id.to_string();
                         let mut cursor = Cursor::new(data.clone());
@@ -294,7 +298,8 @@ pub fn bench_concurrent_operations(c: &mut Criterion) {
                             let piece_id = piece_id.to_string();
                             let piece = Piece {
                                 number: piece_id.parse::<u32>().unwrap(),
-                                offset: (piece_id.parse::<u32>().unwrap() * data_size as u32) as u64,
+                                offset: (piece_id.parse::<u32>().unwrap() * data_size as u32)
+                                    as u64,
                                 length: data_size as u64,
                                 digest: "".to_string(),
                                 parent_id: None,
