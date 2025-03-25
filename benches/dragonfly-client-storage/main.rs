@@ -19,8 +19,9 @@ use criterion::{criterion_group, criterion_main};
 mod cache;
 
 criterion_group!(
-    benches,
+    cache_operations,
     cache::bench_single_task_operations,
     cache::bench_concurrent_operations
 );
-criterion_main!(benches); 
+
+criterion_main!(cache_operations);

@@ -20,6 +20,6 @@ bytes.workspace = true
 bytesize.workspace = true
 
 [[bench]]
-name = "cache"
+name = "dragonfly-client-storage"
 path = "dragonfly-client-storage/main.rs"
 harness = false
