@@ -19,13 +19,23 @@ use dragonfly_api::dfdaemon::v2::{DownloadPersistentCachePieceRequest, DownloadP
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_storage::metadata;
+use std::collections::{hash_map::Entry, HashMap};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use tracing::{error, instrument};
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
+use tracing::{debug, error, instrument};
+
+/// DEFAULT_DOWNLOADER_CAPACITY is the default capacity of the downloader to store the clients.
+const DEFAULT_DOWNLOADER_CAPACITY: usize = 2000;
+
+/// DEFAULT_DOWNLOADER_IDLE_TIMEOUT is the default idle timeout for the downloader.
+const DEFAULT_DOWNLOADER_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Downloader is the interface for downloading pieces, which is implemented by different
 /// protocols. The downloader is used to download pieces from the other peers.
 #[tonic::async_trait]
-pub trait Downloader {
+pub trait Downloader: Send + Sync {
     /// download_piece downloads a piece from the other peer by different protocols.
     async fn download_piece(
         &self,
@@ -59,7 +69,11 @@ impl DownloaderFactory {
     #[instrument(skip_all)]
     pub fn new(protocol: &str, config: Arc<Config>) -> Result<Self> {
         let downloader = match protocol {
-            "grpc" => Arc::new(GRPCDownloader::new(config.clone())),
+            "grpc" => Arc::new(GRPCDownloader::new(
+                config.clone(),
+                DEFAULT_DOWNLOADER_CAPACITY,
+                DEFAULT_DOWNLOADER_IDLE_TIMEOUT,
+            )),
             _ => {
                 error!("downloader unsupported protocol: {}", protocol);
                 return Err(Error::InvalidParameter);
@@ -71,23 +85,176 @@ impl DownloaderFactory {
 
     /// build returns the downloader.
     #[instrument(skip_all)]
-    pub fn build(&self) -> Arc<dyn Downloader + Send + Sync> {
+    pub fn build(&self) -> Arc<dyn Downloader> {
         self.downloader.clone()
     }
 }
 
+/// RequestGuard is the guard for the request.
+struct RequestGuard {
+    /// active_requests is the number of the active requests.
+    active_requests: Arc<AtomicUsize>,
+}
+
+/// RequestGuard implements the guard for the request to add or subtract the active requests.
+impl RequestGuard {
+    /// new returns a new RequestGuard.
+    fn new(active_requests: Arc<AtomicUsize>) -> Self {
+        active_requests.fetch_add(1, Ordering::SeqCst);
+        Self { active_requests }
+    }
+}
+
+/// RequestGuard implements the Drop trait.
+impl Drop for RequestGuard {
+    /// drop subtracts the active requests.
+    fn drop(&mut self) {
+        self.active_requests.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// DfdaemonUploadClientEntry is the entry of the dfdaemon upload client.
+#[derive(Clone)]
+struct DfdaemonUploadClientEntry {
+    /// client is the dfdaemon upload client.
+    client: DfdaemonUploadClient,
+
+    /// active_requests is the number of the active requests.
+    active_requests: Arc<AtomicUsize>,
+
+    /// actived_at is the time when the client is the last active time.
+    actived_at: Arc<std::sync::Mutex<Instant>>,
+}
+
 /// GRPCDownloader is the downloader for downloading pieces by the gRPC protocol.
+/// It will reuse the dfdaemon upload clients to download pieces from the other peers by
+/// peer's address.
 pub struct GRPCDownloader {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
+
+    /// clients is the map of the dfdaemon upload clients.
+    clients: Arc<Mutex<HashMap<String, DfdaemonUploadClientEntry>>>,
+
+    /// capacity is the capacity of the dfdaemon upload clients. If the number of the
+    /// clients exceeds the capacity, it will clean up the idle clients.
+    capacity: usize,
+
+    /// client_idle_timeout is the idle timeout for the client. If the client is idle for a long
+    /// time, it will be removed when cleaning up the idle clients.
+    idle_timeout: Duration,
+
+    /// cleanup_at is the time when the client is the last cleanup time.
+    cleanup_at: Arc<Mutex<Instant>>,
 }
 
 /// GRPCDownloader implements the downloader with the gRPC protocol.
 impl GRPCDownloader {
     /// new returns a new GRPCDownloader.
     #[instrument(skip_all)]
-    pub fn new(config: Arc<Config>) -> Self {
-        Self { config }
+    pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
+        Self {
+            config,
+            clients: Arc::new(Mutex::new(HashMap::new())),
+            capacity,
+            idle_timeout,
+            cleanup_at: Arc::new(Mutex::new(Instant::now())),
+        }
+    }
+
+    /// client returns the dfdaemon upload client by the address.
+    ///
+    /// Opterations:
+    /// 1. If the client entry exists, it will return the client directly to reuse the client by
+    ///    the address.
+    /// 2. If the client entry does not exist, it will create a new client entry and insert it
+    ///    into the clients map.
+    async fn client(&self, addr: &str) -> Result<DfdaemonUploadClient> {
+        // Cleanup the idle clients first to avoid the clients exceeding the capacity and the
+        // clients are idle for a long time.
+        self.cleanup_idle_client_entries().await;
+
+        let mut clients = self.clients.lock().await;
+        let entry = match clients.entry(addr.to_string()) {
+            Entry::Occupied(entry) => {
+                debug!("reusing client: {}", addr);
+                entry.into_mut()
+            }
+            Entry::Vacant(entry) => {
+                debug!("creating client: {}", addr);
+                let client = DfdaemonUploadClient::new(
+                    self.config.clone(),
+                    format!("http://{}", addr),
+                    true,
+                )
+                .await?;
+
+                entry.insert(DfdaemonUploadClientEntry {
+                    client,
+                    active_requests: Arc::new(AtomicUsize::new(0)),
+                    actived_at: Arc::new(std::sync::Mutex::new(Instant::now())),
+                })
+            }
+        };
+
+        Ok(entry.client.clone())
+    }
+
+    /// get_client_entry returns the client entry by the address.
+    async fn get_client_entry(&self, addr: &str) -> Option<DfdaemonUploadClientEntry> {
+        let clients = self.clients.lock().await;
+        clients.get(addr).cloned()
+    }
+
+    /// remove_client_entry removes the client entry if it is idle.
+    async fn remove_client_entry(&self, addr: &str) {
+        let mut clients = self.clients.lock().await;
+        if let Some(entry) = clients.get(addr) {
+            if entry.active_requests.load(Ordering::SeqCst) == 0 {
+                clients.remove(addr);
+            }
+        }
+    }
+
+    /// cleanup_idle_clients cleans up the idle clients, which are idle for a long time or have no
+    /// active requests.
+    async fn cleanup_idle_client_entries(&self) {
+        let now = Instant::now();
+
+        // Avoid hot cleanup for the clients.
+        let cleanup_at = self.cleanup_at.lock().await;
+        let interval = self.idle_timeout / 2;
+        if now.duration_since(*cleanup_at) < interval {
+            debug!("avoid hot cleanup");
+            return;
+        }
+        drop(cleanup_at);
+
+        let mut clients = self.clients.lock().await;
+        let exceeds_capacity = clients.len() > self.capacity;
+        clients.retain(|addr, entry| {
+            let active_requests = entry.active_requests.load(Ordering::SeqCst);
+            let is_active = active_requests > 0;
+            let actived_at = entry.actived_at.lock().unwrap();
+            let idel_duration = now.duration_since(*actived_at);
+            let is_recent = idel_duration <= self.idle_timeout;
+
+            // Retain the client if it is active or not exceeds the capacity and is recent.
+            let should_retain = is_active || (!exceeds_capacity && is_recent);
+            if !should_retain {
+                debug!(
+                    "removing idle client: {}, exceeds_capacity: {}, idle_duration: {}s",
+                    addr,
+                    exceeds_capacity,
+                    idel_duration.as_secs(),
+                );
+            }
+
+            should_retain
+        });
+
+        // Update the cleanup time.
+        *self.cleanup_at.lock().await = now;
     }
 }
 
@@ -103,11 +270,15 @@ impl Downloader for GRPCDownloader {
         host_id: &str,
         task_id: &str,
     ) -> Result<(Vec<u8>, u64, String)> {
-        let dfdaemon_upload_client =
-            DfdaemonUploadClient::new(self.config.clone(), format!("http://{}", addr), true)
-                .await?;
+        let client = self.client(addr).await?;
 
-        let response = dfdaemon_upload_client
+        let entry = self
+            .get_client_entry(addr)
+            .await
+            .ok_or(Error::UnexpectedResponse)?;
+        let request_guard = RequestGuard::new(entry.active_requests.clone());
+
+        let response = match client
             .download_piece(
                 DownloadPieceRequest {
                     host_id: host_id.to_string(),
@@ -116,7 +287,17 @@ impl Downloader for GRPCDownloader {
                 },
                 self.config.download.piece_timeout,
             )
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                // If the request fails, it will drop the request guard and remove the client
+                // entry to avoid using the invalid client.
+                drop(request_guard);
+                self.remove_client_entry(addr).await;
+                return Err(err);
+            }
+        };
 
         let Some(piece) = response.piece else {
             return Err(Error::InvalidParameter);
@@ -159,11 +340,15 @@ impl Downloader for GRPCDownloader {
         host_id: &str,
         task_id: &str,
     ) -> Result<(Vec<u8>, u64, String)> {
-        let dfdaemon_upload_client =
-            DfdaemonUploadClient::new(self.config.clone(), format!("http://{}", addr), true)
-                .await?;
+        let client = self.client(addr).await?;
 
-        let response = dfdaemon_upload_client
+        let entry = self
+            .get_client_entry(addr)
+            .await
+            .ok_or(Error::UnexpectedResponse)?;
+        let request_guard = RequestGuard::new(entry.active_requests.clone());
+
+        let response = match client
             .download_persistent_cache_piece(
                 DownloadPersistentCachePieceRequest {
                     host_id: host_id.to_string(),
@@ -172,7 +357,17 @@ impl Downloader for GRPCDownloader {
                 },
                 self.config.download.piece_timeout,
             )
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                // If the request fails, it will drop the request guard and remove the client
+                // entry to avoid using the invalid client.
+                drop(request_guard);
+                self.remove_client_entry(addr).await;
+                return Err(err);
+            }
+        };
 
         let Some(piece) = response.piece else {
             return Err(Error::InvalidParameter);

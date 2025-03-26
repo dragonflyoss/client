@@ -32,7 +32,7 @@ pub mod manager;
 pub mod scheduler;
 
 /// CONNECT_TIMEOUT is the timeout for GRPC connection.
-pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// REQUEST_TIMEOUT is the timeout for GRPC requests.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
