@@ -17,11 +17,18 @@
 use criterion::{criterion_group, criterion_main};
 
 mod cache;
+mod lru_cache;
 
 criterion_group!(
-    cache_operations,
-    cache::bench_single_task_operations,
-    cache::bench_concurrent_operations
+    benches,
+    cache::put_task_in_cache,
+    cache::write_piece_in_cache,
+    cache::read_piece_from_cache,
+    lru_cache::lru_put,
+    lru_cache::lru_get,
+    lru_cache::lru_peek,
+    lru_cache::lru_contains,
+    lru_cache::lru_pop_lru,
 );
 
-criterion_main!(cache_operations);
+criterion_main!(benches);

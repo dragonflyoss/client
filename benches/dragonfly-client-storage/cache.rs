@@ -22,311 +22,367 @@ use std::io::Cursor;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::runtime::Runtime;
-use tokio::task::JoinSet;
 
-/// Benchmark single task operations with different data sizes.
-pub fn bench_single_task_operations(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
-    let mut group = c.benchmark_group("single_task_operations");
+// Number of pieces to write/read in each benchmark
+const PIECE_COUNT: usize = 100;
 
-    // Define test data sizes.
-    let sizes = vec![
-        ("10MB", ByteSize::mb(10)),
-        ("100MB", ByteSize::mb(100)),
-        ("1GB", ByteSize::gb(1)),
-    ];
-
-    // Configure cache with 2GB capacity.
-    let config = Config {
+fn create_config(capacity: ByteSize) -> Config {
+    Config {
         storage: Storage {
-            cache_capacity: ByteSize::gb(2),
+            cache_capacity: capacity,
             ..Default::default()
         },
         ..Default::default()
-    };
+    }
+}
 
-    for (size_name, size) in sizes {
-        let data = vec![1u8; size.as_u64() as usize];
+fn create_base_piece(length: u64) -> Piece {
+    Piece {
+        number: 0,
+        offset: 0,
+        length,
+        digest: String::new(),
+        parent_id: None,
+        uploading_count: 0,
+        uploaded_count: 0,
+        updated_at: chrono::Utc::now().naive_utc(),
+        created_at: chrono::Utc::now().naive_utc(),
+        finished_at: None,
+    }
+}
 
-        // Benchmark write operations.
-        group.bench_with_input(BenchmarkId::new("write", size_name), &data, |b, data| {
+pub fn put_task_in_cache(c: &mut Criterion) {
+    let rt: Runtime = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("Put Task");
+
+    group.bench_with_input(
+        BenchmarkId::new("Put Task", "10MB"),
+        &ByteSize::mb(10),
+        |b, size| {
             b.iter_batched(
-                || Cache::new(Arc::new(config.clone())).unwrap(),
+                || Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap(),
                 |mut cache| {
                     rt.block_on(async {
-                        cache.put_task("task1", black_box(data.len() as u64)).await;
-                        let mut cursor = Cursor::new(data);
-                        cache
-                            .write_piece("task1", "piece1", &mut cursor, data.len() as u64)
-                            .await
-                            .unwrap();
+                        cache.put_task("task", black_box(size.as_u64())).await;
                     });
                 },
                 criterion::BatchSize::SmallInput,
             );
-        });
+        },
+    );
 
-        // Benchmark read operations.
-        group.bench_with_input(BenchmarkId::new("read", size_name), &data, |b, data| {
+    group.bench_with_input(
+        BenchmarkId::new("Put Task", "100MB"),
+        &ByteSize::mb(100),
+        |b, size| {
+            b.iter_batched(
+                || Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap(),
+                |mut cache| {
+                    rt.block_on(async {
+                        cache.put_task("task", black_box(size.as_u64())).await;
+                    });
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
+
+    group.bench_with_input(
+        BenchmarkId::new("Put Task", "1GB"),
+        &ByteSize::gb(1),
+        |b, size| {
+            b.iter_batched(
+                || Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap(),
+                |mut cache| {
+                    rt.block_on(async {
+                        cache.put_task("task", black_box(size.as_u64())).await;
+                    });
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
+
+    group.finish();
+}
+
+pub fn write_piece_in_cache(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("Write Piece");
+
+    group.bench_with_input(
+        BenchmarkId::new("Write Piece", "4MB"),
+        &vec![1u8; ByteSize::mb(4).as_u64() as usize],
+        |b, data| {
             b.iter_batched(
                 || {
-                    let mut cache = Cache::new(Arc::new(config.clone())).unwrap();
+                    let mut cache = Cache::new(Arc::new(create_config(
+                        ByteSize::mb(4) * PIECE_COUNT as u64 * 2u64,
+                    )))
+                    .unwrap();
                     rt.block_on(async {
-                        cache.put_task("task1", data.len() as u64).await;
-                        let mut cursor = Cursor::new(data);
                         cache
-                            .write_piece("task1", "piece1", &mut cursor, data.len() as u64)
-                            .await
-                            .unwrap();
+                            .put_task("task", (ByteSize::mb(4) * PIECE_COUNT as u64).as_u64())
+                            .await;
                     });
                     cache
                 },
                 |cache| {
                     rt.block_on(async {
-                        let piece = Piece {
-                            number: 0,
-                            offset: 0,
-                            length: data.len() as u64,
-                            digest: "".to_string(),
-                            parent_id: None,
-                            uploading_count: 0,
-                            uploaded_count: 0,
-                            updated_at: chrono::Utc::now().naive_utc(),
-                            created_at: chrono::Utc::now().naive_utc(),
-                            finished_at: None,
-                        };
-
-                        let mut reader = cache
-                            .read_piece("task1", "piece1", piece, None)
-                            .await
-                            .unwrap();
-                        let mut buffer = Vec::new();
-                        reader.read_to_end(&mut buffer).await.unwrap();
+                        for i in 0..PIECE_COUNT {
+                            let mut cursor = Cursor::new(data);
+                            cache
+                                .write_piece(
+                                    "task",
+                                    &format!("piece{}", i),
+                                    &mut cursor,
+                                    data.len() as u64,
+                                )
+                                .await
+                                .unwrap();
+                        }
                     });
                 },
                 criterion::BatchSize::SmallInput,
             );
-        });
-    }
+        },
+    );
+
+    group.bench_with_input(
+        BenchmarkId::new("Write Piece", "10MB"),
+        &vec![1u8; ByteSize::mb(10).as_u64() as usize],
+        |b, data| {
+            b.iter_batched(
+                || {
+                    let mut cache = Cache::new(Arc::new(create_config(
+                        ByteSize::mb(10) * PIECE_COUNT as u64 * 2u64,
+                    )))
+                    .unwrap();
+                    rt.block_on(async {
+                        cache
+                            .put_task("task", (ByteSize::mb(10) * PIECE_COUNT as u64).as_u64())
+                            .await;
+                    });
+                    cache
+                },
+                |cache| {
+                    rt.block_on(async {
+                        for i in 0..PIECE_COUNT {
+                            let mut cursor = Cursor::new(data);
+                            cache
+                                .write_piece(
+                                    "task",
+                                    &format!("piece{}", i),
+                                    &mut cursor,
+                                    data.len() as u64,
+                                )
+                                .await
+                                .unwrap();
+                        }
+                    });
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
+
+    group.bench_with_input(
+        BenchmarkId::new("Write Piece", "16MB"),
+        &vec![1u8; ByteSize::mb(16).as_u64() as usize],
+        |b, data| {
+            b.iter_batched(
+                || {
+                    let mut cache = Cache::new(Arc::new(create_config(
+                        ByteSize::mb(16) * PIECE_COUNT as u64 * 2u64,
+                    )))
+                    .unwrap();
+                    rt.block_on(async {
+                        cache
+                            .put_task("task", (ByteSize::mb(16) * PIECE_COUNT as u64).as_u64())
+                            .await;
+                    });
+                    cache
+                },
+                |cache| {
+                    rt.block_on(async {
+                        for i in 0..PIECE_COUNT {
+                            let mut cursor = Cursor::new(data);
+                            cache
+                                .write_piece(
+                                    "task",
+                                    &format!("piece{}", i),
+                                    &mut cursor,
+                                    data.len() as u64,
+                                )
+                                .await
+                                .unwrap();
+                        }
+                    });
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
 
     group.finish();
 }
 
-/// Benchmark concurrent operations with different concurrency levels.
-pub fn bench_concurrent_operations(c: &mut Criterion) {
+pub fn read_piece_from_cache(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let mut group = c.benchmark_group("concurrent_operations");
+    let mut group = c.benchmark_group("Read Piece");
 
-    // Define test parameters.
-    let data_size = ByteSize::mb(1).as_u64() as usize;
-    let task_count = 10;
-    let piece_count = 10;
-
-    // Configure cache with 200MB capacity.
-    let config = Config {
-        storage: Storage {
-            cache_capacity: ByteSize::mb(200),
-            ..Default::default()
+    group.bench_with_input(
+        BenchmarkId::new("Read Piece", "4MB"),
+        &vec![1u8; ByteSize::mb(4).as_u64() as usize],
+        |b, data| {
+            b.iter_batched(
+                || {
+                    let mut cache = Cache::new(Arc::new(create_config(
+                        ByteSize::mb(4) * PIECE_COUNT as u64 * 2u64,
+                    )))
+                    .unwrap();
+                    rt.block_on(async {
+                        cache
+                            .put_task("task", (ByteSize::mb(4) * PIECE_COUNT as u64).as_u64())
+                            .await;
+                        for i in 0..PIECE_COUNT {
+                            let mut cursor = Cursor::new(data);
+                            cache
+                                .write_piece(
+                                    "task",
+                                    &format!("piece{}", i),
+                                    &mut cursor,
+                                    data.len() as u64,
+                                )
+                                .await
+                                .unwrap();
+                        }
+                    });
+                    cache
+                },
+                |cache| {
+                    rt.block_on(async {
+                        for i in 0..PIECE_COUNT {
+                            let mut reader = cache
+                                .read_piece(
+                                    "task",
+                                    &format!("piece{}", i),
+                                    create_base_piece(data.len() as u64),
+                                    None,
+                                )
+                                .await
+                                .unwrap();
+                            let mut buffer = Vec::new();
+                            reader.read_to_end(&mut buffer).await.unwrap();
+                        }
+                    });
+                },
+                criterion::BatchSize::SmallInput,
+            );
         },
-        ..Default::default()
-    };
+    );
 
-    // Benchmark concurrent write operations for multiple tasks.
-    group.bench_function("concurrent_task_write", |b| {
-        b.iter_batched(
-            || Cache::new(Arc::new(config.clone())).unwrap(),
-            |cache| {
-                rt.block_on(async {
-                    let mut join_set = JoinSet::new();
-                    let data = vec![1u8; data_size];
-
-                    for task_id in 0..task_count {
-                        let mut cache = cache.clone();
-                        let data = data.clone();
-
-                        join_set.spawn(async move {
-                            let task_id = format!("task{}", task_id);
-                            cache.put_task(&task_id, data_size as u64).await;
-                            let mut cursor = Cursor::new(data);
-                            cache
-                                .write_piece(&task_id, "piece1", &mut cursor, data_size as u64)
-                                .await
-                                .unwrap();
-                        });
-                    }
-
-                    while let Some(result) = join_set.join_next().await {
-                        result.unwrap();
-                    }
-                });
-            },
-            criterion::BatchSize::SmallInput,
-        );
-    });
-
-    // Benchmark concurrent write operations for multiple pieces in a single task.
-    group.bench_function("concurrent_piece_write", |b| {
-        b.iter_batched(
-            || Cache::new(Arc::new(config.clone())).unwrap(),
-            |mut cache| {
-                rt.block_on(async {
-                    let mut join_set = JoinSet::new();
-                    let data = vec![1u8; data_size];
-                    let task_id = "task1";
-
-                    // Create task first.
-                    cache
-                        .put_task(task_id, (data_size * piece_count) as u64)
-                        .await;
-
-                    for piece_id in 0..piece_count {
-                        let data = data.clone();
-                        let cache = cache.clone();
-
-                        join_set.spawn(async move {
-                            let piece_id = format!("piece{}", piece_id);
-                            let mut cursor = Cursor::new(data);
-                            cache
-                                .write_piece(task_id, &piece_id, &mut cursor, data_size as u64)
-                                .await
-                                .unwrap();
-                        });
-                    }
-
-                    while let Some(result) = join_set.join_next().await {
-                        result.unwrap();
-                    }
-                });
-            },
-            criterion::BatchSize::SmallInput,
-        );
-    });
-
-    // Benchmark concurrent read operations for multiple tasks.
-    group.bench_function("concurrent_task_read", |b| {
-        b.iter_batched(
-            || {
-                let mut cache = Cache::new(Arc::new(config.clone())).unwrap();
-                let data = vec![1u8; data_size];
-
-                rt.block_on(async {
-                    for task_id in 0..task_count {
-                        let task_id = format!("task{}", task_id);
-                        cache.put_task(&task_id, data_size as u64).await;
-                        let mut cursor = Cursor::new(data.clone());
+    group.bench_with_input(
+        BenchmarkId::new("Read Piece", "10MB"),
+        &vec![1u8; ByteSize::mb(10).as_u64() as usize],
+        |b, data| {
+            b.iter_batched(
+                || {
+                    let mut cache = Cache::new(Arc::new(create_config(
+                        ByteSize::mb(10) * PIECE_COUNT as u64 * 2u64,
+                    )))
+                    .unwrap();
+                    rt.block_on(async {
                         cache
-                            .write_piece(&task_id, "piece1", &mut cursor, data_size as u64)
-                            .await
-                            .unwrap();
-                    }
-                });
-                cache
-            },
-            |cache| {
-                rt.block_on(async {
-                    let mut join_set = JoinSet::new();
-
-                    for task_id in 0..task_count {
-                        let cache = cache.clone();
-
-                        join_set.spawn(async move {
-                            let task_id = format!("task{}", task_id);
-                            let piece = Piece {
-                                number: 0,
-                                offset: 0,
-                                length: data_size as u64,
-                                digest: "".to_string(),
-                                parent_id: None,
-                                uploading_count: 0,
-                                uploaded_count: 0,
-                                updated_at: chrono::Utc::now().naive_utc(),
-                                created_at: chrono::Utc::now().naive_utc(),
-                                finished_at: None,
-                            };
-
+                            .put_task("task", (ByteSize::mb(10) * PIECE_COUNT as u64).as_u64())
+                            .await;
+                        for i in 0..PIECE_COUNT {
+                            let mut cursor = Cursor::new(data);
+                            cache
+                                .write_piece(
+                                    "task",
+                                    &format!("piece{}", i),
+                                    &mut cursor,
+                                    data.len() as u64,
+                                )
+                                .await
+                                .unwrap();
+                        }
+                    });
+                    cache
+                },
+                |cache| {
+                    rt.block_on(async {
+                        for i in 0..PIECE_COUNT {
                             let mut reader = cache
-                                .read_piece(&task_id, "piece1", piece, None)
+                                .read_piece(
+                                    "task",
+                                    &format!("piece{}", i),
+                                    create_base_piece(data.len() as u64),
+                                    None,
+                                )
                                 .await
                                 .unwrap();
                             let mut buffer = Vec::new();
                             reader.read_to_end(&mut buffer).await.unwrap();
-                        });
-                    }
+                        }
+                    });
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
 
-                    while let Some(result) = join_set.join_next().await {
-                        result.unwrap();
-                    }
-                });
-            },
-            criterion::BatchSize::SmallInput,
-        );
-    });
-
-    // Benchmark concurrent read operations for multiple pieces in a single task.
-    group.bench_function("concurrent_piece_read", |b| {
-        b.iter_batched(
-            || {
-                let mut cache = Cache::new(Arc::new(config.clone())).unwrap();
-                let data = vec![1u8; data_size];
-                let task_id = "task1";
-
-                rt.block_on(async {
-                    // Create task and write all pieces first.
-                    cache
-                        .put_task(task_id, (data_size * piece_count) as u64)
-                        .await;
-                    for piece_id in 0..piece_count {
-                        let piece_id = piece_id.to_string();
-                        let mut cursor = Cursor::new(data.clone());
+    group.bench_with_input(
+        BenchmarkId::new("Read Piece", "16MB"),
+        &vec![1u8; ByteSize::mb(16).as_u64() as usize],
+        |b, data| {
+            b.iter_batched(
+                || {
+                    let mut cache = Cache::new(Arc::new(create_config(
+                        ByteSize::mb(16) * PIECE_COUNT as u64 * 2u64,
+                    )))
+                    .unwrap();
+                    rt.block_on(async {
                         cache
-                            .write_piece(task_id, &piece_id, &mut cursor, data_size as u64)
-                            .await
-                            .unwrap();
-                    }
-                });
-                cache
-            },
-            |cache| {
-                rt.block_on(async {
-                    let mut join_set = JoinSet::new();
-                    let task_id = "task1";
-
-                    for piece_id in 0..piece_count {
-                        let cache = cache.clone();
-
-                        join_set.spawn(async move {
-                            let piece_id = piece_id.to_string();
-                            let piece = Piece {
-                                number: piece_id.parse::<u32>().unwrap(),
-                                offset: (piece_id.parse::<u32>().unwrap() * data_size as u32)
-                                    as u64,
-                                length: data_size as u64,
-                                digest: "".to_string(),
-                                parent_id: None,
-                                uploading_count: 0,
-                                uploaded_count: 0,
-                                updated_at: chrono::Utc::now().naive_utc(),
-                                created_at: chrono::Utc::now().naive_utc(),
-                                finished_at: None,
-                            };
-
+                            .put_task("task", (ByteSize::mb(16) * PIECE_COUNT as u64).as_u64())
+                            .await;
+                        for i in 0..PIECE_COUNT {
+                            let mut cursor = Cursor::new(data);
+                            cache
+                                .write_piece(
+                                    "task",
+                                    &format!("piece{}", i),
+                                    &mut cursor,
+                                    data.len() as u64,
+                                )
+                                .await
+                                .unwrap();
+                        }
+                    });
+                    cache
+                },
+                |cache| {
+                    rt.block_on(async {
+                        for i in 0..PIECE_COUNT {
                             let mut reader = cache
-                                .read_piece(task_id, &piece_id, piece, None)
+                                .read_piece(
+                                    "task",
+                                    &format!("piece{}", i),
+                                    create_base_piece(data.len() as u64),
+                                    None,
+                                )
                                 .await
                                 .unwrap();
                             let mut buffer = Vec::new();
                             reader.read_to_end(&mut buffer).await.unwrap();
-                        });
-                    }
-
-                    while let Some(result) = join_set.join_next().await {
-                        result.unwrap();
-                    }
-                });
-            },
-            criterion::BatchSize::SmallInput,
-        );
-    });
+                        }
+                    });
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
 
     group.finish();
 }

@@ -26,7 +26,8 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
-mod lru_cache;
+
+pub mod lru_cache;
 
 /// Task is the task content in the cache.
 #[derive(Clone, Debug)]
