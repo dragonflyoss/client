@@ -31,7 +31,8 @@ use dragonfly_api::dfdaemon::v2::{
     DeletePersistentCacheTaskRequest, DeleteTaskRequest, DownloadPersistentCachePieceRequest,
     DownloadPersistentCachePieceResponse, DownloadPersistentCacheTaskRequest,
     DownloadPersistentCacheTaskResponse, DownloadPieceRequest, DownloadPieceResponse,
-    DownloadTaskRequest, DownloadTaskResponse, StatPersistentCacheTaskRequest, StatTaskRequest,
+    DownloadTaskRequest, DownloadTaskResponse, ExchangeIbVerbsQueuePairEndpointRequest,
+    ExchangeIbVerbsQueuePairEndpointResponse, StatPersistentCacheTaskRequest, StatTaskRequest,
     SyncHostRequest, SyncPersistentCachePiecesRequest, SyncPersistentCachePiecesResponse,
     SyncPiecesRequest, SyncPiecesResponse, UpdatePersistentCacheTaskRequest,
 };
@@ -1431,6 +1432,15 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             digest: Some(piece.calculate_digest()),
         }))
     }
+
+    // ExchangeIbVerbsQueuePairEndpoint exchanges the ib verbs queue pair endpoint.
+    #[instrument(skip_all, fields(num, lid, gid))]
+    async fn exchange_ib_verbs_queue_pair_endpoint(
+        &self,
+        _request: Request<ExchangeIbVerbsQueuePairEndpointRequest>,
+    ) -> Result<Response<ExchangeIbVerbsQueuePairEndpointResponse>, Status> {
+        unimplemented!()
+    }
 }
 
 /// DfdaemonUploadClient is a wrapper of DfdaemonUploadGRPCClient.
@@ -1650,6 +1660,21 @@ impl DfdaemonUploadClient {
             .client
             .clone()
             .download_persistent_cache_piece(request)
+            .await?;
+        Ok(response.into_inner())
+    }
+
+    /// exchange_ib_verbs_queue_pair_endpoint exchanges ib verbs queue pair endpoint.
+    #[instrument(skip_all)]
+    pub async fn exchange_ib_verbs_queue_pair_endpoint(
+        &self,
+        request: ExchangeIbVerbsQueuePairEndpointRequest,
+    ) -> ClientResult<ExchangeIbVerbsQueuePairEndpointResponse> {
+        let request = Self::make_request(request);
+        let response = self
+            .client
+            .clone()
+            .exchange_ib_verbs_queue_pair_endpoint(request)
             .await?;
         Ok(response.into_inner())
     }

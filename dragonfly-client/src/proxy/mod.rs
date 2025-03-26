@@ -1051,6 +1051,7 @@ fn make_download_task_request(
             is_prefetch: false,
             need_piece_content: false,
             load_to_cache: false,
+            force_hard_link: false,
         }),
     })
 }
