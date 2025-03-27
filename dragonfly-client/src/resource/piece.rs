@@ -68,8 +68,8 @@ pub struct Piece {
     /// storage is the local storage.
     storage: Arc<Storage>,
 
-    /// downloader_factory is the piece downloader factory.
-    downloader_factory: Arc<piece_downloader::DownloaderFactory>,
+    /// downloader is the piece downloader.
+    downloader: Arc<dyn piece_downloader::Downloader>,
 
     /// backend_factory is the backend factory.
     backend_factory: Arc<BackendFactory>,
@@ -98,10 +98,11 @@ impl Piece {
             config: config.clone(),
             id_generator,
             storage,
-            downloader_factory: Arc::new(piece_downloader::DownloaderFactory::new(
+            downloader: piece_downloader::DownloaderFactory::new(
                 config.storage.server.protocol.as_str(),
                 config.clone(),
-            )?),
+            )?
+            .build(),
             backend_factory,
             download_rate_limiter: Arc::new(
                 RateLimiter::builder()
@@ -505,8 +506,7 @@ impl Piece {
         })?;
 
         let (content, offset, digest) = self
-            .downloader_factory
-            .build()
+            .downloader
             .download_piece(
                 format!("{}:{}", host.ip, host.port).as_str(),
                 number,
@@ -863,8 +863,7 @@ impl Piece {
         })?;
 
         let (content, offset, digest) = self
-            .downloader_factory
-            .build()
+            .downloader
             .download_persistent_cache_piece(
                 format!("{}:{}", host.ip, host.port).as_str(),
                 number,
