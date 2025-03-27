@@ -21,11 +21,11 @@ use dragonfly_client_storage::cache::lru_cache::LruCache;
 // Number of operations to perform in each benchmark
 const OPERATION_COUNT: usize = 1000;
 
-pub fn lru_put(c: &mut Criterion) {
-    let mut group = c.benchmark_group("Lru Put");
+pub fn lru_cache_put(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Lru Cache Put");
 
     group.bench_with_input(
-        BenchmarkId::new("Lru Put", "4MB"),
+        BenchmarkId::new("Lru Cache Put", "4MB"),
         &ByteSize::mb(4),
         |b, size| {
             b.iter_batched(
@@ -41,7 +41,7 @@ pub fn lru_put(c: &mut Criterion) {
     );
 
     group.bench_with_input(
-        BenchmarkId::new("Lru Put", "10MB"),
+        BenchmarkId::new("Lru Cache Put", "10MB"),
         &ByteSize::mb(10),
         |b, size| {
             b.iter_batched(
@@ -57,7 +57,7 @@ pub fn lru_put(c: &mut Criterion) {
     );
 
     group.bench_with_input(
-        BenchmarkId::new("Lru Put", "16MB"),
+        BenchmarkId::new("Lru Cache Put", "16MB"),
         &ByteSize::mb(16),
         |b, size| {
             b.iter_batched(
@@ -75,11 +75,11 @@ pub fn lru_put(c: &mut Criterion) {
     group.finish();
 }
 
-pub fn lru_get(c: &mut Criterion) {
-    let mut group = c.benchmark_group("Lru Get");
+pub fn lru_cache_get(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Lru Cache Get");
 
     group.bench_with_input(
-        BenchmarkId::new("Lru Get", "4MB"),
+        BenchmarkId::new("Lru Cache Get", "4MB"),
         &ByteSize::mb(4),
         |b, size| {
             b.iter_batched(
@@ -101,7 +101,7 @@ pub fn lru_get(c: &mut Criterion) {
     );
 
     group.bench_with_input(
-        BenchmarkId::new("Lru Get", "10MB"),
+        BenchmarkId::new("Lru Cache Get", "10MB"),
         &ByteSize::mb(10),
         |b, size| {
             b.iter_batched(
@@ -123,7 +123,7 @@ pub fn lru_get(c: &mut Criterion) {
     );
 
     group.bench_with_input(
-        BenchmarkId::new("Lru Get", "16MB"),
+        BenchmarkId::new("Lru Cache Get", "16MB"),
         &ByteSize::mb(16),
         |b, size| {
             b.iter_batched(
@@ -147,11 +147,11 @@ pub fn lru_get(c: &mut Criterion) {
     group.finish();
 }
 
-pub fn lru_peek(c: &mut Criterion) {
-    let mut group = c.benchmark_group("Lru Peek");
+pub fn lru_cache_peek(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Lru Cache Peek");
 
     group.bench_with_input(
-        BenchmarkId::new("Lru Peek", "4MB"),
+        BenchmarkId::new("Lru Cache Peek", "4MB"),
         &ByteSize::mb(4),
         |b, size| {
             b.iter_batched(
@@ -173,7 +173,7 @@ pub fn lru_peek(c: &mut Criterion) {
     );
 
     group.bench_with_input(
-        BenchmarkId::new("Lru Peek", "10MB"),
+        BenchmarkId::new("Lru Cache Peek", "10MB"),
         &ByteSize::mb(10),
         |b, size| {
             b.iter_batched(
@@ -195,7 +195,7 @@ pub fn lru_peek(c: &mut Criterion) {
     );
 
     group.bench_with_input(
-        BenchmarkId::new("Lru Peek", "16MB"),
+        BenchmarkId::new("Lru Cache Peek", "16MB"),
         &ByteSize::mb(16),
         |b, size| {
             b.iter_batched(
@@ -219,11 +219,11 @@ pub fn lru_peek(c: &mut Criterion) {
     group.finish();
 }
 
-pub fn lru_contains(c: &mut Criterion) {
-    let mut group = c.benchmark_group("Lru Contains");
+pub fn lru_cache_contains(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Lru Cache Contains");
 
     group.bench_with_input(
-        BenchmarkId::new("Lru Contains", "4MB"),
+        BenchmarkId::new("Lru Cache Contains", "4MB"),
         &ByteSize::mb(4),
         |b, size| {
             b.iter_batched(
@@ -245,7 +245,7 @@ pub fn lru_contains(c: &mut Criterion) {
     );
 
     group.bench_with_input(
-        BenchmarkId::new("Lru Contains", "10MB"),
+        BenchmarkId::new("Lru Cache Contains", "10MB"),
         &ByteSize::mb(10),
         |b, size| {
             b.iter_batched(
@@ -267,7 +267,7 @@ pub fn lru_contains(c: &mut Criterion) {
     );
 
     group.bench_with_input(
-        BenchmarkId::new("Lru Contains", "16MB"),
+        BenchmarkId::new("Lru Cache Contains", "16MB"),
         &ByteSize::mb(16),
         |b, size| {
             b.iter_batched(
@@ -291,11 +291,11 @@ pub fn lru_contains(c: &mut Criterion) {
     group.finish();
 }
 
-pub fn lru_pop_lru(c: &mut Criterion) {
-    let mut group = c.benchmark_group("Lru Pop Lru");
+pub fn lru_cache_pop_lru(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Lru Cache Pop Lru");
 
     group.bench_with_input(
-        BenchmarkId::new("Lru Pop Lru", "4MB"),
+        BenchmarkId::new("Lru Cache Pop Lru", "4MB"),
         &ByteSize::mb(4),
         |b, size| {
             b.iter_batched(
@@ -317,7 +317,7 @@ pub fn lru_pop_lru(c: &mut Criterion) {
     );
 
     group.bench_with_input(
-        BenchmarkId::new("Lru Pop Lru", "10MB"),
+        BenchmarkId::new("Lru Cache Pop Lru", "10MB"),
         &ByteSize::mb(10),
         |b, size| {
             b.iter_batched(
@@ -339,7 +339,7 @@ pub fn lru_pop_lru(c: &mut Criterion) {
     );
 
     group.bench_with_input(
-        BenchmarkId::new("Lru Pop Lru", "16MB"),
+        BenchmarkId::new("Lru Cache Pop Lru", "16MB"),
         &ByteSize::mb(16),
         |b, size| {
             b.iter_batched(

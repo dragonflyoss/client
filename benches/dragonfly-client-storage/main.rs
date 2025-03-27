@@ -24,11 +24,11 @@ criterion_group!(
     cache::put_task_in_cache,
     cache::write_piece_in_cache,
     cache::read_piece_from_cache,
-    lru_cache::lru_put,
-    lru_cache::lru_get,
-    lru_cache::lru_peek,
-    lru_cache::lru_contains,
-    lru_cache::lru_pop_lru,
+    lru_cache::lru_cache_put,
+    lru_cache::lru_cache_get,
+    lru_cache::lru_cache_peek,
+    lru_cache::lru_cache_contains,
+    lru_cache::lru_cache_pop_lru,
 );
 
 criterion_main!(benches);
