@@ -212,7 +212,7 @@ impl PieceCollector {
                     // different parents.
                     {
                         let mut collected_pieces_guard = collected_pieces.lock().await;
-                        if let None = collected_pieces_guard.remove(&message.number) {
+                        if collected_pieces_guard.remove(&message.number).is_none() {
                             continue;
                         }
                     }
@@ -448,7 +448,7 @@ impl PersistentCachePieceCollector {
                     // different parents.
                     {
                         let mut collected_pieces_guard = collected_pieces.lock().await;
-                        if let None = collected_pieces_guard.remove(&message.number) {
+                        if collected_pieces_guard.remove(&message.number).is_none() {
                             continue;
                         }
                     }
