@@ -35,3 +35,12 @@ rayon = "1.10.0"
 
 [dev-dependencies]
 tempdir = "0.3"
+criterion = "0.5"
+
+[[bench]]
+name = "cache"
+harness = false
+
+[[bench]]
+name = "lru_cache"
+harness = false

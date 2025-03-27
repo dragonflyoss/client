@@ -15,7 +15,7 @@
  */
 
 use bytesize::ByteSize;
-use criterion::{black_box, BenchmarkId, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use dragonfly_client_storage::cache::lru_cache::LruCache;
 
 // Number of operations to perform in each benchmark
@@ -362,3 +362,14 @@ pub fn lru_cache_pop_lru(c: &mut Criterion) {
 
     group.finish();
 }
+
+criterion_group!(
+    benches,
+    lru_cache_put,
+    lru_cache_get,
+    lru_cache_peek,
+    lru_cache_contains,
+    lru_cache_pop_lru,
+);
+
+criterion_main!(benches);
