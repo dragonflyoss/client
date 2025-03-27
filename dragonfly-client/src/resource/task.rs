@@ -945,7 +945,8 @@ impl Task {
                     host: peer.host,
                 })
                 .collect(),
-        );
+        )
+        .await;
         let mut piece_collector_rx = piece_collector.run().await;
 
         // Initialize the interrupt. If download from parent failed with scheduler or download
