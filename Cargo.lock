@@ -371,7 +371,7 @@ checksum = "8c3c1a368f70d6cf7302d78f8f7093da241fb8e8807c05cc9e51a125895a6d5b"
 
 [[package]]
 name = "benches"
-version = "0.2.19"
+version = "0.2.20"
 dependencies = [
  "bytes",
  "bytesize",
