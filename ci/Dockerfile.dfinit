@@ -20,6 +20,7 @@ COPY dragonfly-client-config/build.rs ./dragonfly-client-config/build.rs
 
 COPY dragonfly-client-storage/Cargo.toml ./dragonfly-client-storage/Cargo.toml
 COPY dragonfly-client-storage/src ./dragonfly-client-storage/src
+COPY dragonfly-client-storage/benches ./dragonfly-client-storage/benches
 
 COPY dragonfly-client-backend/Cargo.toml ./dragonfly-client-backend/Cargo.toml
 COPY dragonfly-client-backend/src ./dragonfly-client-backend/src
