@@ -9,7 +9,6 @@ members = [
     "dragonfly-client-storage",
     "dragonfly-client-util",
     "dragonfly-client-backend/examples/plugin",
-    "benches",
 ]
 
 [workspace.package]

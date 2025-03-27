@@ -15,7 +15,7 @@
  */
 
 use bytesize::ByteSize;
-use criterion::{black_box, BenchmarkId, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use dragonfly_client_config::dfdaemon::{Config, Storage};
 use dragonfly_client_storage::{cache::Cache, metadata::Piece};
 use std::io::Cursor;
@@ -23,7 +23,7 @@ use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::runtime::Runtime;
 
-// Number of pieces to write/read in each benchmark
+// Number of pieces to write/read in each benchmark.
 const PIECE_COUNT: usize = 100;
 
 fn create_config(capacity: ByteSize) -> Config {
@@ -36,7 +36,7 @@ fn create_config(capacity: ByteSize) -> Config {
     }
 }
 
-fn create_base_piece(length: u64) -> Piece {
+fn create_piece(length: u64) -> Piece {
     Piece {
         number: 0,
         offset: 0,
@@ -51,7 +51,7 @@ fn create_base_piece(length: u64) -> Piece {
     }
 }
 
-pub fn put_task_in_cache(c: &mut Criterion) {
+pub fn put_task(c: &mut Criterion) {
     let rt: Runtime = Runtime::new().unwrap();
     let mut group = c.benchmark_group("Put Task");
 
@@ -106,7 +106,7 @@ pub fn put_task_in_cache(c: &mut Criterion) {
     group.finish();
 }
 
-pub fn write_piece_in_cache(c: &mut Criterion) {
+pub fn write_piece(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let mut group = c.benchmark_group("Write Piece");
 
@@ -120,6 +120,7 @@ pub fn write_piece_in_cache(c: &mut Criterion) {
                         ByteSize::mb(4) * PIECE_COUNT as u64 * 2u64,
                     )))
                     .unwrap();
+
                     rt.block_on(async {
                         cache
                             .put_task("task", (ByteSize::mb(4) * PIECE_COUNT as u64).as_u64())
@@ -158,6 +159,7 @@ pub fn write_piece_in_cache(c: &mut Criterion) {
                         ByteSize::mb(10) * PIECE_COUNT as u64 * 2u64,
                     )))
                     .unwrap();
+
                     rt.block_on(async {
                         cache
                             .put_task("task", (ByteSize::mb(10) * PIECE_COUNT as u64).as_u64())
@@ -196,6 +198,7 @@ pub fn write_piece_in_cache(c: &mut Criterion) {
                         ByteSize::mb(16) * PIECE_COUNT as u64 * 2u64,
                     )))
                     .unwrap();
+
                     rt.block_on(async {
                         cache
                             .put_task("task", (ByteSize::mb(16) * PIECE_COUNT as u64).as_u64())
@@ -227,7 +230,7 @@ pub fn write_piece_in_cache(c: &mut Criterion) {
     group.finish();
 }
 
-pub fn read_piece_from_cache(c: &mut Criterion) {
+pub fn read_piece(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let mut group = c.benchmark_group("Read Piece");
 
@@ -241,6 +244,7 @@ pub fn read_piece_from_cache(c: &mut Criterion) {
                         ByteSize::mb(4) * PIECE_COUNT as u64 * 2u64,
                     )))
                     .unwrap();
+
                     rt.block_on(async {
                         cache
                             .put_task("task", (ByteSize::mb(4) * PIECE_COUNT as u64).as_u64())
@@ -267,7 +271,7 @@ pub fn read_piece_from_cache(c: &mut Criterion) {
                                 .read_piece(
                                     "task",
                                     &format!("piece{}", i),
-                                    create_base_piece(data.len() as u64),
+                                    create_piece(data.len() as u64),
                                     None,
                                 )
                                 .await
@@ -292,6 +296,7 @@ pub fn read_piece_from_cache(c: &mut Criterion) {
                         ByteSize::mb(10) * PIECE_COUNT as u64 * 2u64,
                     )))
                     .unwrap();
+
                     rt.block_on(async {
                         cache
                             .put_task("task", (ByteSize::mb(10) * PIECE_COUNT as u64).as_u64())
@@ -318,7 +323,7 @@ pub fn read_piece_from_cache(c: &mut Criterion) {
                                 .read_piece(
                                     "task",
                                     &format!("piece{}", i),
-                                    create_base_piece(data.len() as u64),
+                                    create_piece(data.len() as u64),
                                     None,
                                 )
                                 .await
@@ -343,6 +348,7 @@ pub fn read_piece_from_cache(c: &mut Criterion) {
                         ByteSize::mb(16) * PIECE_COUNT as u64 * 2u64,
                     )))
                     .unwrap();
+
                     rt.block_on(async {
                         cache
                             .put_task("task", (ByteSize::mb(16) * PIECE_COUNT as u64).as_u64())
@@ -369,7 +375,7 @@ pub fn read_piece_from_cache(c: &mut Criterion) {
                                 .read_piece(
                                     "task",
                                     &format!("piece{}", i),
-                                    create_base_piece(data.len() as u64),
+                                    create_piece(data.len() as u64),
                                     None,
                                 )
                                 .await
@@ -386,3 +392,7 @@ pub fn read_piece_from_cache(c: &mut Criterion) {
 
     group.finish();
 }
+
+criterion_group!(benches, put_task, write_piece, read_piece,);
+
+criterion_main!(benches);
