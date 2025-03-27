@@ -19,7 +19,7 @@ use dragonfly_api::dfdaemon::v2::{DownloadPersistentCachePieceRequest, DownloadP
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_storage::metadata;
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -170,33 +170,39 @@ impl GRPCDownloader {
     /// 2. If the client entry does not exist, it will create a new client entry and insert it
     ///    into the clients map.
     async fn client(&self, addr: &str) -> Result<DfdaemonUploadClient> {
+        let now = Instant::now();
+
         // Cleanup the idle clients first to avoid the clients exceeding the capacity and the
         // clients are idle for a long time.
         self.cleanup_idle_client_entries().await;
 
-        let mut clients = self.clients.lock().await;
-        let entry = match clients.entry(addr.to_string()) {
-            Entry::Occupied(entry) => {
-                debug!("reusing client: {}", addr);
-                entry.into_mut()
-            }
-            Entry::Vacant(entry) => {
-                debug!("creating client: {}", addr);
-                let client = DfdaemonUploadClient::new(
-                    self.config.clone(),
-                    format!("http://{}", addr),
-                    true,
-                )
+        let clients = self.clients.lock().await;
+        if let Some(entry) = clients.get(addr) {
+            debug!("reusing client: {}", addr);
+            *entry.actived_at.lock().unwrap() = now;
+            return Ok(entry.client.clone());
+        }
+        drop(clients);
+
+        // If there are many concurrent requests to create the client, it will create multiple
+        // clients for the same address. But it will reuse the same client by entry operation.
+        debug!("creating client: {}", addr);
+        let client =
+            DfdaemonUploadClient::new(self.config.clone(), format!("http://{}", addr), true)
                 .await?;
 
-                entry.insert(DfdaemonUploadClientEntry {
-                    client,
-                    active_requests: Arc::new(AtomicUsize::new(0)),
-                    actived_at: Arc::new(std::sync::Mutex::new(Instant::now())),
-                })
-            }
-        };
+        let mut clients = self.clients.lock().await;
+        let entry = clients
+            .entry(addr.to_string())
+            .or_insert(DfdaemonUploadClientEntry {
+                client: client.clone(),
+                active_requests: Arc::new(AtomicUsize::new(0)),
+                actived_at: Arc::new(std::sync::Mutex::new(now)),
+            });
 
+        // If it is created by other concurrent requests and reused client, need to update the
+        // last active time.
+        *entry.actived_at.lock().unwrap() = now;
         Ok(entry.client.clone())
     }
 
