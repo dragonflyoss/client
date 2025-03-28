@@ -456,14 +456,40 @@ impl PersistentCacheTask {
             }
         }
 
-        self.storage.download_persistent_cache_task_started(
-            task_id,
-            ttl,
-            request.persistent,
-            response.piece_length,
-            response.content_length,
-            created_at.naive_utc(),
-        )
+        let task = self
+            .storage
+            .download_persistent_cache_task_started(
+                task_id,
+                ttl,
+                request.persistent,
+                response.piece_length,
+                response.content_length,
+                created_at.naive_utc(),
+            )
+            .await?;
+
+        // Attempt to create a hard link from the task file to the output path.
+        //
+        // Behavior based on force_hard_link setting:
+        // 1. force_hard_link is true:
+        //    - Success: Continue processing
+        //    - Failure: Return error immediately
+        // 2. force_hard_link is false:
+        //    - Success: Continue processing
+        //    - Failure: Fall back to copying the file instead
+        if let Some(output_path) = &request.output_path {
+            if let Err(err) = self
+                .storage
+                .hard_link_persistent_cache_task(task_id, Path::new(output_path.as_str()))
+                .await
+            {
+                if request.force_hard_link {
+                    return Err(err);
+                }
+            }
+        }
+
+        Ok(task)
     }
 
     /// download_finished updates the metadata of the persistent cache task when the task downloads finished.
@@ -482,16 +508,18 @@ impl PersistentCacheTask {
         Ok(())
     }
 
-    /// hard_link_or_copy hard links or copies the persistent cache task content to the destination.
+    /// is_same_dev_inode checks if the persistent cache task is on the same device inode as the given path.
     #[instrument(skip_all)]
-    pub async fn hard_link_or_copy(
-        &self,
-        task: &metadata::PersistentCacheTask,
-        to: &Path,
-    ) -> ClientResult<()> {
+    pub async fn is_same_dev_inode(&self, id: &str, to: &Path) -> ClientResult<bool> {
         self.storage
-            .hard_link_or_copy_persistent_cache_task(task, to)
+            .is_same_dev_inode_as_persistent_cache_task(id, to)
             .await
+    }
+
+    //// copy_task copies the persistent cache task content to the destination.
+    #[instrument(skip_all)]
+    pub async fn copy_task(&self, id: &str, to: &Path) -> ClientResult<()> {
+        self.storage.copy_persistent_cache_task(id, to).await
     }
 
     /// download downloads a persistent cache task.

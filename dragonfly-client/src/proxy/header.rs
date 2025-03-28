@@ -54,16 +54,10 @@ pub const DRAGONFLY_PREFETCH_HEADER: &str = "X-Dragonfly-Prefetch";
 
 /// DRAGONFLY_OUTPUT_PATH_HEADER is the header key of absolute output path in http request.
 ///
-/// When this header is present in a request, following rules apply:
-/// - If the path exists:
-///   - If it's the same file as the cache (same dev/inode): Request succeeds
-///   - If it's a different file: Request fails with error message
-///
-/// - If the path doesn't exist:
-///   - A new file will be created at the specified location
-///
-/// Note: When X-Dragonfly-Output-Path is specified, the client expects to create the
-/// file itself, and returning cached content would prevent proper file creation.
+/// If `X-Dragonfly-Output-Path` is set, the downloaded file will be saved to the specified path.
+/// Dfdaemon will try to create hard link to the output path before starting the download. If hard link creation fails,
+/// it will copy the file to the output path after the download is completed.
+/// For more details refer to https://github.com/dragonflyoss/design/blob/main/systems-analysis/file-download-workflow-with-hard-link/README.md.
 pub const DRAGONFLY_OUTPUT_PATH_HEADER: &str = "X-Dragonfly-Output-Path";
 
 /// DRAGONFLY_PIECE_LENGTH is the header key of piece length in http request.

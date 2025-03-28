@@ -102,6 +102,13 @@ struct Args {
     transfer_from_dfdaemon: bool,
 
     #[arg(
+        long = "force-hard-link",
+        default_value_t = false,
+        help = "Specify whether the download file must be hard linked to the output path. If hard link is failed, download will be failed. If it is false, dfdaemon will copy the file to the output path if hard link is failed."
+    )]
+    force_hard_link: bool,
+
+    #[arg(
         short = 'O',
         long = "output",
         help = "Specify the output path of downloading file"
@@ -766,7 +773,7 @@ async fn download(
                 object_storage,
                 hdfs,
                 load_to_cache: false,
-                force_hard_link: false,
+                force_hard_link: args.force_hard_link,
             }),
         })
         .await

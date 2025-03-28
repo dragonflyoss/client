@@ -49,6 +49,13 @@ pub struct ExportCommand {
     transfer_from_dfdaemon: bool,
 
     #[arg(
+        long = "force-hard-link",
+        default_value_t = false,
+        help = "Specify whether the download file must be hard linked to the output path. If hard link is failed, download will be failed. If it is false, dfdaemon will copy the file to the output path if hard link is failed."
+    )]
+    force_hard_link: bool,
+
+    #[arg(
         long = "application",
         default_value = "",
         help = "Caller application which is used for statistics and access control"
@@ -447,6 +454,7 @@ impl ExportCommand {
                         .or_err(ErrorType::ParseError)?,
                 ),
                 need_piece_content,
+                force_hard_link: self.force_hard_link,
             })
             .await
             .inspect_err(|err| {
