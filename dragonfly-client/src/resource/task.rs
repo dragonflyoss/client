@@ -62,7 +62,7 @@ use tokio::sync::{
 use tokio::task::JoinSet;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Status};
-use tracing::{debug, error, info, instrument, Instrument};
+use tracing::{debug, error, info, instrument, warn, Instrument};
 
 use super::*;
 
@@ -128,7 +128,32 @@ impl Task {
         id: &str,
         request: Download,
     ) -> ClientResult<metadata::Task> {
-        let task = self.storage.download_task_started(id, None, None, None)?;
+        let task = self
+            .storage
+            .download_task_started(id, None, None, None)
+            .await?;
+
+        // Attempt to create a hard link from the task file to the output path.
+        //
+        // Behavior based on force_hard_link setting:
+        // 1. force_hard_link is true:
+        //    - Success: Continue processing
+        //    - Failure: Return error immediately
+        // 2. force_hard_link is false:
+        //    - Success: Continue processing
+        //    - Failure: Fall back to copying the file instead
+        if let Some(output_path) = &request.output_path {
+            if let Err(err) = self
+                .storage
+                .hard_link_task(id, Path::new(output_path.as_str()))
+                .await
+            {
+                if request.force_hard_link {
+                    return Err(err);
+                }
+            }
+        }
+
         if task.content_length.is_some() && task.piece_length.is_some() {
             return Ok(task);
         }
@@ -222,12 +247,14 @@ impl Task {
             )));
         }
 
-        self.storage.download_task_started(
-            id,
-            Some(piece_length),
-            Some(content_length),
-            response.http_header,
-        )
+        self.storage
+            .download_task_started(
+                id,
+                Some(piece_length),
+                Some(content_length),
+                response.http_header,
+            )
+            .await
     }
 
     /// download_finished updates the metadata of the task when the task downloads finished.
@@ -254,10 +281,16 @@ impl Task {
         self.storage.prefetch_task_failed(id).await
     }
 
-    /// hard_link_or_copy hard links or copies the task content to the destination.
+    /// is_same_dev_inode checks if the task is on the same device inode as the given path.
     #[instrument(skip_all)]
-    pub async fn hard_link_or_copy(&self, task: &metadata::Task, to: &Path) -> ClientResult<()> {
-        self.storage.hard_link_or_copy_task(task, to).await
+    pub async fn is_same_dev_inode(&self, id: &str, to: &Path) -> ClientResult<bool> {
+        self.storage.is_same_dev_inode_as_task(id, to).await
+    }
+
+    //// copy_task copies the task content to the destination.
+    #[instrument(skip_all)]
+    pub async fn copy_task(&self, id: &str, to: &Path) -> ClientResult<()> {
+        self.storage.copy_task(id, to).await
     }
 
     /// download downloads a task.

@@ -50,6 +50,7 @@ use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::Sender;
 use tokio::sync::Barrier;
 use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
 use tonic::service::interceptor::InterceptedService;
@@ -389,6 +390,21 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let task_manager_clone = task_manager.clone();
         let task_clone = task.clone();
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
+
+        // Define the error handler to send the error to the stream.
+        async fn handle_error(
+            out_stream_tx: &Sender<Result<DownloadTaskResponse, Status>>,
+            err: impl std::error::Error,
+        ) {
+            out_stream_tx
+                .send_timeout(
+                    Err(Status::internal(err.to_string())),
+                    super::REQUEST_TIMEOUT,
+                )
+                .await
+                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+        }
+
         tokio::spawn(
             async move {
                 match task_manager_clone
@@ -424,28 +440,52 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                 task_manager_clone.download_finished(task_clone.id.as_str())
                             {
                                 error!("download task finished: {}", err);
+                                handle_error(&out_stream_tx, err).await;
+                                return;
                             }
-                        }
 
-                        // Check whether the output path is empty. If output path is empty,
-                        // should not hard link or copy the task content to the destination.
-                        if let Some(output_path) = download_clone.output_path.clone() {
-                            // Hard link or copy the task content to the destination.
-                            if let Err(err) = task_manager_clone
-                                .hard_link_or_copy(&task_clone, Path::new(output_path.as_str()))
-                                .await
-                            {
-                                error!("hard link or copy task: {}", err);
-                                out_stream_tx
-                                    .send_timeout(
-                                        Err(Status::internal(err.to_string())),
-                                        super::REQUEST_TIMEOUT,
-                                    )
-                                    .await
-                                    .unwrap_or_else(|err| {
-                                        error!("send download progress error: {:?}", err)
-                                    });
-                            };
+                            if let Some(output_path) = &download_clone.output_path {
+                                if !download_clone.force_hard_link {
+                                    let output_path = Path::new(output_path.as_str());
+                                    if output_path.exists() {
+                                        match task_manager_clone
+                                            .is_same_dev_inode(task_clone.id.as_str(), output_path)
+                                            .await
+                                        {
+                                            Ok(true) => {}
+                                            Ok(false) => {
+                                                error!(
+                                                    "output path {} is already exists",
+                                                    output_path.display()
+                                                );
+
+                                                handle_error(
+                                                    &out_stream_tx,
+                                                    Status::internal(format!(
+                                                        "output path {} is already exists",
+                                                        output_path.display()
+                                                    )),
+                                                )
+                                                .await;
+                                            }
+                                            Err(err) => {
+                                                error!("check output path: {}", err);
+                                                handle_error(&out_stream_tx, err).await;
+                                            }
+                                        }
+
+                                        return;
+                                    }
+
+                                    if let Err(err) = task_manager_clone
+                                        .copy_task(task_clone.id.as_str(), output_path)
+                                        .await
+                                    {
+                                        error!("copy task: {}", err);
+                                        handle_error(&out_stream_tx, err).await;
+                                    }
+                                }
+                            }
                         }
                     }
                     Err(ClientError::BackendError(err)) => {
@@ -472,31 +512,19 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             status_code: err.status_code.map(|code| code.as_u16() as i32),
                         }) {
                             Ok(json) => {
-                                out_stream_tx
-                                    .send_timeout(
-                                        Err(Status::with_details(
-                                            Code::Internal,
-                                            err.to_string(),
-                                            json.into(),
-                                        )),
-                                        super::REQUEST_TIMEOUT,
-                                    )
-                                    .await
-                                    .unwrap_or_else(|err| {
-                                        error!("send download progress error: {:?}", err)
-                                    });
+                                handle_error(
+                                    &out_stream_tx,
+                                    Status::with_details(
+                                        Code::Internal,
+                                        err.to_string(),
+                                        json.into(),
+                                    ),
+                                )
+                                .await;
                             }
                             Err(err) => {
-                                out_stream_tx
-                                    .send_timeout(
-                                        Err(Status::internal(err.to_string())),
-                                        super::REQUEST_TIMEOUT,
-                                    )
-                                    .await
-                                    .unwrap_or_else(|err| {
-                                        error!("send download progress error: {:?}", err)
-                                    });
                                 error!("serialize error: {}", err);
+                                handle_error(&out_stream_tx, err).await;
                             }
                         }
                     }
@@ -521,15 +549,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             .await
                             .unwrap_or_else(|err| error!("download task failed: {}", err));
 
-                        out_stream_tx
-                            .send_timeout(
-                                Err(Status::internal(err.to_string())),
-                                super::REQUEST_TIMEOUT,
-                            )
-                            .await
-                            .unwrap_or_else(|err| {
-                                error!("send download progress error: {:?}", err)
-                            });
+                        handle_error(&out_stream_tx, err).await;
                     }
                 }
 
@@ -788,6 +808,21 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let task_manager_clone = self.persistent_cache_task.clone();
         let task_clone = task.clone();
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
+
+        // Define the error handler to send the error to the stream.
+        async fn handle_error(
+            out_stream_tx: &Sender<Result<DownloadPersistentCacheTaskResponse, Status>>,
+            err: impl std::error::Error,
+        ) {
+            out_stream_tx
+                .send_timeout(
+                    Err(Status::internal(err.to_string())),
+                    super::REQUEST_TIMEOUT,
+                )
+                .await
+                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+        }
+
         tokio::spawn(
             async move {
                 match task_manager_clone
@@ -822,28 +857,56 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             task_manager_clone.download_finished(task_clone.id.as_str())
                         {
                             error!("download persistent cache task finished: {}", err);
+                            handle_error(&out_stream_tx, err).await;
+                            return;
                         }
 
-                        // Hard link or copy the persistent cache task content to the destination.
-                        if let Some(output_path) = request_clone.output_path {
-                            if let Err(err) = task_manager_clone
-                                .hard_link_or_copy(&task_clone, Path::new(output_path.as_str()))
-                                .await
-                            {
-                                error!("hard link or copy persistent cache task: {}", err);
-                                out_stream_tx
-                                    .send_timeout(
-                                        Err(Status::internal(err.to_string())),
-                                        super::REQUEST_TIMEOUT,
-                                    )
+                        if let Some(output_path) = &request_clone.output_path {
+                            if !request_clone.force_hard_link {
+                                let output_path = Path::new(output_path.as_str());
+                                if output_path.exists() {
+                                    match task_manager_clone
+                                        .is_same_dev_inode(task_clone.id.as_str(), output_path)
+                                        .await
+                                    {
+                                        Ok(true) => {}
+                                        Ok(false) => {
+                                            error!(
+                                                "output path {} is already exists",
+                                                output_path.display()
+                                            );
+
+                                            handle_error(
+                                                &out_stream_tx,
+                                                Status::internal(format!(
+                                                    "output path {} is already exists",
+                                                    output_path.display()
+                                                )),
+                                            )
+                                            .await;
+                                        }
+                                        Err(err) => {
+                                            error!("check output path: {}", err);
+                                            handle_error(&out_stream_tx, err).await;
+                                        }
+                                    }
+
+                                    return;
+                                }
+
+                                if let Err(err) = task_manager_clone
+                                    .copy_task(task_clone.id.as_str(), output_path)
                                     .await
-                                    .unwrap_or_else(|err| {
-                                        error!("send download progress error: {:?}", err)
-                                    });
-                            };
+                                {
+                                    error!("copy task: {}", err);
+                                    handle_error(&out_stream_tx, err).await;
+                                }
+                            }
                         }
                     }
                     Err(err) => {
+                        error!("download persistent cache task failed: {}", err);
+
                         // Collect download task failure metrics.
                         collect_download_task_failure_metrics(
                             task_type,
@@ -851,8 +914,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             request.application.clone().unwrap_or_default().as_str(),
                             task_priority.to_string().as_str(),
                         );
-
-                        error!("download persistent cache task failed: {}", err);
 
                         // Download task failed.
                         task_manager_clone
@@ -862,15 +923,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                 error!("download persistent cache task failed: {}", err)
                             });
 
-                        out_stream_tx
-                            .send_timeout(
-                                Err(Status::internal(err.to_string())),
-                                super::REQUEST_TIMEOUT,
-                            )
-                            .await
-                            .unwrap_or_else(|err| {
-                                error!("send download progress error: {:?}", err)
-                            });
+                        handle_error(&out_stream_tx, err).await;
                     }
                 }
 
