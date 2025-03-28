@@ -203,6 +203,7 @@ impl Content {
     #[instrument(skip_all)]
     pub async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
         fs::copy(self.get_task_path(task_id), to).await?;
+        info!("copy to {:?} success", to);
         Ok(())
     }
 
@@ -452,6 +453,7 @@ impl Content {
     #[instrument(skip_all)]
     pub async fn copy_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
         fs::copy(self.get_persistent_cache_task_path(task_id), to).await?;
+        info!("copy to {:?} success", to);
         Ok(())
     }
 
