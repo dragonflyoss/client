@@ -63,37 +63,61 @@ impl Storage {
     }
 
     /// total_space returns the total space of the disk.
+    #[instrument(skip_all)]
     pub fn total_space(&self) -> Result<u64> {
         self.content.total_space()
     }
 
     /// available_space returns the available space of the disk.
+    #[instrument(skip_all)]
     pub fn available_space(&self) -> Result<u64> {
         self.content.available_space()
     }
 
     /// has_enough_space checks if the storage has enough space to store the content.
+    #[instrument(skip_all)]
     pub fn has_enough_space(&self, content_length: u64) -> Result<bool> {
         self.content.has_enough_space(content_length)
     }
 
-    /// hard_link_or_copy_task hard links or copies the task content to the destination.
+    /// hard_link_task hard links the task content to the destination.
     #[instrument(skip_all)]
-    pub async fn hard_link_or_copy_task(&self, task: &metadata::Task, to: &Path) -> Result<()> {
-        self.content.hard_link_or_copy_task(task, to).await
+    pub async fn hard_link_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        self.content.hard_link_task(task_id, to).await
     }
 
-    /// download_task_started updates the metadata of the task when the task downloads started.
+    /// copy_task copies the task content to the destination.
     #[instrument(skip_all)]
-    pub fn download_task_started(
+    pub async fn copy_task(&self, id: &str, to: &Path) -> Result<()> {
+        self.content.copy_task(id, to).await
+    }
+
+    /// is_same_dev_inode_as_task checks if the task content is on the same device inode as the
+    /// destination.
+    #[instrument(skip_all)]
+    pub async fn is_same_dev_inode_as_task(&self, id: &str, to: &Path) -> Result<bool> {
+        self.content.is_same_dev_inode_as_task(id, to).await
+    }
+
+    /// download_task_started updates the metadata of the task and create task content
+    /// when the task downloads started.
+    #[instrument(skip_all)]
+    pub async fn download_task_started(
         &self,
         id: &str,
         piece_length: Option<u64>,
         content_length: Option<u64>,
         response_header: Option<HeaderMap>,
     ) -> Result<metadata::Task> {
-        self.metadata
-            .download_task_started(id, piece_length, content_length, response_header)
+        let metadata = self.metadata.download_task_started(
+            id,
+            piece_length,
+            content_length,
+            response_header,
+        )?;
+
+        self.content.create_task(id).await?;
+        Ok(metadata)
     }
 
     /// download_task_finished updates the metadata of the task when the task downloads finished.
@@ -160,15 +184,30 @@ impl Storage {
         });
     }
 
-    /// hard_link_or_copy_persistent_cache_task hard links or copies the persistent cache task content to the destination.
+    /// hard_link_persistent_cache_task hard links the persistent cache task content to the destination.
     #[instrument(skip_all)]
-    pub async fn hard_link_or_copy_persistent_cache_task(
-        &self,
-        task: &metadata::PersistentCacheTask,
-        to: &Path,
-    ) -> Result<()> {
+    pub async fn hard_link_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
         self.content
-            .hard_link_or_copy_persistent_cache_task(task, to)
+            .hard_link_persistent_cache_task(task_id, to)
+            .await
+    }
+
+    /// copy_taskcopy_persistent_cache_taskcopies the persistent cache task content to the destination.
+    #[instrument(skip_all)]
+    pub async fn copy_persistent_cache_task(&self, id: &str, to: &Path) -> Result<()> {
+        self.content.copy_persistent_cache_task(id, to).await
+    }
+
+    /// is_same_dev_inode_as_persistent_cache_task checks if the persistent cache task content is on the same device inode as the
+    /// destination.
+    #[instrument(skip_all)]
+    pub async fn is_same_dev_inode_as_persistent_cache_task(
+        &self,
+        id: &str,
+        to: &Path,
+    ) -> Result<bool> {
+        self.content
+            .is_same_dev_inode_as_persistent_cache_task(id, to)
             .await
     }
 
@@ -181,8 +220,15 @@ impl Storage {
         piece_length: u64,
         content_length: u64,
     ) -> Result<metadata::PersistentCacheTask> {
-        self.metadata
-            .create_persistent_cache_task_started(id, ttl, piece_length, content_length)
+        let metadata = self.metadata.create_persistent_cache_task_started(
+            id,
+            ttl,
+            piece_length,
+            content_length,
+        )?;
+
+        self.content.create_persistent_cache_task(id).await?;
+        Ok(metadata)
     }
 
     /// create_persistent_cache_task_finished updates the metadata of the persistent cache task
@@ -203,9 +249,9 @@ impl Storage {
     }
 
     /// download_persistent_cache_task_started updates the metadata of the persistent cache task
-    /// when the persistent cache task downloads started.
+    /// and creates the persistent cache task content when the persistent cache task downloads started.
     #[instrument(skip_all)]
-    pub fn download_persistent_cache_task_started(
+    pub async fn download_persistent_cache_task_started(
         &self,
         id: &str,
         ttl: Duration,
@@ -214,14 +260,17 @@ impl Storage {
         content_length: u64,
         created_at: NaiveDateTime,
     ) -> Result<metadata::PersistentCacheTask> {
-        self.metadata.download_persistent_cache_task_started(
+        let metadata = self.metadata.download_persistent_cache_task_started(
             id,
             ttl,
             persistent,
             piece_length,
             content_length,
             created_at,
-        )
+        )?;
+
+        self.content.create_persistent_cache_task(id).await?;
+        Ok(metadata)
     }
 
     /// download_persistent_cache_task_finished updates the metadata of the persistent cache task when the persistent cache task downloads finished.

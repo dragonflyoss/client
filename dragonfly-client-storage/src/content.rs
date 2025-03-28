@@ -84,18 +84,21 @@ impl Content {
     }
 
     /// available_space returns the available space of the disk.
+    #[instrument(skip_all)]
     pub fn available_space(&self) -> Result<u64> {
         let stat = fs2::statvfs(&self.dir)?;
         Ok(stat.available_space())
     }
 
     /// total_space returns the total space of the disk.
+    #[instrument(skip_all)]
     pub fn total_space(&self) -> Result<u64> {
         let stat = fs2::statvfs(&self.dir)?;
         Ok(stat.total_space())
     }
 
     /// has_enough_space checks if the storage has enough space to store the content.
+    #[instrument(skip_all)]
     pub fn has_enough_space(&self, content_length: u64) -> Result<bool> {
         let available_space = self.available_space()?;
         if available_space < content_length {
@@ -111,6 +114,7 @@ impl Content {
     }
 
     /// is_same_dev_inode checks if the source and target are the same device and inode.
+    #[instrument(skip_all)]
     async fn is_same_dev_inode<P: AsRef<Path>, Q: AsRef<Path>>(
         &self,
         source: P,
@@ -135,64 +139,60 @@ impl Content {
         }
     }
 
-    /// hard_link_or_copy_task hard links or copies the task content to the destination.
-    ///
-    /// 1. Destination exists:
-    ///     1.1. If the source and destination are the same device and inode, return directly.
-    ///     1.2. If the source and destination are not the same device and inode, return an error.
-    ///       Because the destination already exists, it is not allowed to overwrite the
-    ///       destination.
-    /// 2. Destination does not exist:
-    ///     2.1. Hard link the task content to the destination.
-    ///     2.2. If the hard link fails, copy the task content to the destination.
+    /// is_same_dev_inode_as_task checks if the task and target are the same device and inode.
     #[instrument(skip_all)]
-    pub async fn hard_link_or_copy_task(
-        &self,
-        task: &crate::metadata::Task,
-        to: &Path,
-    ) -> Result<()> {
-        let task_path = self.get_task_path(task.id.as_str());
+    pub async fn is_same_dev_inode_as_task(&self, task_id: &str, to: &Path) -> Result<bool> {
+        let task_path = self.get_task_path(task_id);
+        self.is_same_dev_inode(&task_path, to).await
+    }
 
-        // If the destination does not exist, hard link the task content to the destination.
-        // If the hard link fails, copy the task content to the destination.
+    /// create_task creates a new task content.
+    ///
+    /// Behavior of `create_task`:
+    /// 1. If the task already exists, return the task path.
+    /// 2. If the task does not exist, create the task directory and file.
+    pub async fn create_task(&self, task_id: &str) -> Result<PathBuf> {
+        let task_path = self.get_task_path(task_id);
+        if task_path.exists() {
+            return Ok(task_path);
+        }
+
+        let task_dir = self.dir.join(DEFAULT_TASK_DIR).join(&task_id[..3]);
+        fs::create_dir_all(&task_dir).await.inspect_err(|err| {
+            error!("create {:?} failed: {}", task_dir, err);
+        })?;
+
+        fs::File::create(task_dir.join(task_id))
+            .await
+            .inspect_err(|err| {
+                error!("create {:?} failed: {}", task_dir, err);
+            })?;
+
+        Ok(task_dir.join(task_id))
+    }
+
+    /// Hard links the task content to the destination.
+    ///
+    /// Behavior of `hard_link_task`:
+    /// 1. If the destination exists:
+    ///    1.1. If the source and destination share the same device and inode, return immediately.
+    ///    1.2. Otherwise, return an error.
+    /// 2. If the destination does not exist:
+    ///    2.1. If the hard link succeeds, return immediately.
+    ///    2.2. If the hard link fails, copy the task content to the destination once the task is finished, then return immediately.
+    #[instrument(skip_all)]
+    pub async fn hard_link_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        let task_path = self.get_task_path(task_id);
         if let Err(err) = fs::hard_link(task_path.clone(), to).await {
-            warn!("hard link {:?} to {:?} failed: {}", task_path, to, err);
-
-            // If the destination exists, check if the source and destination are the same device and
-            // inode. If they are the same, return directly. If not, return an error.
             if err.kind() == std::io::ErrorKind::AlreadyExists {
-                return match self.is_same_dev_inode(&task_path, to).await {
-                    Ok(true) => {
-                        info!("hard already exists, no need to operate");
-                        Ok(())
-                    }
-                    Ok(false) => Err(Error::IO(io::Error::new(
-                        io::ErrorKind::AlreadyExists,
-                        format!("{:?} already exists", to),
-                    ))),
-                    Err(err) => Err(err),
-                };
+                if let Ok(true) = self.is_same_dev_inode(&task_path, to).await {
+                    info!("hard already exists, no need to operate");
+                    return Ok(());
+                }
             }
 
-            // If the task is empty, no need to copy. Need to open the file to
-            // ensure the file exists.
-            if task.is_empty() {
-                info!("task is empty, no need to copy");
-                File::create(to).await.inspect_err(|err| {
-                    error!("create {:?} failed: {}", to, err);
-                })?;
-
-                return Ok(());
-            }
-
-            self.copy_task(task.id.as_str(), to)
-                .await
-                .inspect_err(|err| {
-                    error!("copy {:?} to {:?} failed: {}", task_path, to, err);
-                })?;
-
-            info!("copy {:?} to {:?} success", task_path, to);
-            return Ok(());
+            warn!("hard link {:?} to {:?} failed: {}", task_path, to, err);
+            return Err(Error::IO(err));
         }
 
         info!("hard link {:?} to {:?} success", task_path, to);
@@ -201,16 +201,7 @@ impl Content {
 
     /// copy_task copies the task content to the destination.
     #[instrument(skip_all)]
-    async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        // Ensure the parent directory of the destination exists.
-        if let Some(parent) = to.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).await.inspect_err(|err| {
-                    error!("failed to create directory {:?}: {}", parent, err);
-                })?;
-            }
-        }
-
+    pub async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
         fs::copy(self.get_task_path(task_id), to).await?;
         Ok(())
     }
@@ -342,9 +333,8 @@ impl Content {
         reader: &mut R,
     ) -> Result<WritePieceResponse> {
         // Open the file and seek to the offset.
-        let task_path = self.create_or_get_task_path(task_id).await?;
+        let task_path = self.get_task_path(task_id);
         let mut f = OpenOptions::new()
-            .create(true)
             .truncate(false)
             .write(true)
             .open(task_path.as_path())
@@ -390,79 +380,78 @@ impl Content {
         self.dir.join(DEFAULT_TASK_DIR).join(sub_dir).join(task_id)
     }
 
-    /// create_or_get_task_path creates parent directories or returns the task path by task id.
+    /// is_same_dev_inode_as_persistent_cache_task checks if the persistent cache task and target
+    /// are the same device and inode.
     #[instrument(skip_all)]
-    async fn create_or_get_task_path(&self, task_id: &str) -> Result<PathBuf> {
-        let task_dir = self.dir.join(DEFAULT_TASK_DIR).join(&task_id[..3]);
+    pub async fn is_same_dev_inode_as_persistent_cache_task(
+        &self,
+        task_id: &str,
+        to: &Path,
+    ) -> Result<bool> {
+        let task_path = self.get_persistent_cache_task_path(task_id);
+        self.is_same_dev_inode(&task_path, to).await
+    }
+
+    /// create_persistent_cache_task creates a new persistent cache task content.
+    ///
+    /// Behavior of `create_persistent_cache_task`:
+    /// 1. If the persistent cache task already exists, return the persistent cache task path.
+    /// 2. If the persistent cache task does not exist, create the persistent cache task directory and file.
+    pub async fn create_persistent_cache_task(&self, task_id: &str) -> Result<PathBuf> {
+        let task_path = self.get_persistent_cache_task_path(task_id);
+        if task_path.exists() {
+            return Ok(task_path);
+        }
+
+        let task_dir = self
+            .dir
+            .join(DEFAULT_PERSISTENT_CACHE_TASK_DIR)
+            .join(&task_id[..3]);
         fs::create_dir_all(&task_dir).await.inspect_err(|err| {
             error!("create {:?} failed: {}", task_dir, err);
         })?;
 
+        fs::File::create(task_dir.join(task_id))
+            .await
+            .inspect_err(|err| {
+                error!("create {:?} failed: {}", task_dir, err);
+            })?;
+
         Ok(task_dir.join(task_id))
     }
 
-    /// hard_link_or_copy_persistent_cache_task hard links or copies the task content to the destination.
+    /// Hard links the persistent cache task content to the destination.
     ///
-    /// 1. Destination exists:
-    ///     1.1. If the source and destination are the same device and inode, return directly.
-    ///     1.2. If the source and destination are not the same device and inode, return an error.
-    ///       Because the destination already exists, it is not allowed to overwrite the
-    ///       destination.
-    /// 2. Destination does not exist:
-    ///     2.1. Hard link the task content to the destination.
-    ///     2.2. If the hard link fails, copy the task content to the destination.
+    /// Behavior of `hard_link_persistent_cache_task`:
+    /// 1. If the destination exists:
+    ///    1.1. If the source and destination share the same device and inode, return immediately.
+    ///    1.2. Otherwise, return an error.
+    /// 2. If the destination does not exist:
+    ///    2.1. If the hard link succeeds, return immediately.
+    ///    2.2. If the hard link fails, copy the persistent cache task content to the destination once the task is finished, then return immediately.
     #[instrument(skip_all)]
-    pub async fn hard_link_or_copy_persistent_cache_task(
-        &self,
-        task: &crate::metadata::PersistentCacheTask,
-        to: &Path,
-    ) -> Result<()> {
-        // Get the persistent cache task path.
-        let task_path = self.get_persistent_cache_task_path(task.id.as_str());
-
-        // If the destination does not exist, hard link the task content to the destination.
-        // If the hard link fails, copy the task content to the destination.
+    pub async fn hard_link_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        let task_path = self.get_persistent_cache_task_path(task_id);
         if let Err(err) = fs::hard_link(task_path.clone(), to).await {
-            warn!("hard link {:?} to {:?} failed: {}", task_path, to, err);
-
-            // If the destination exists, check if the source and destination are the same device and
-            // inode. If they are the same, return directly. If not, return an error.
             if err.kind() == std::io::ErrorKind::AlreadyExists {
-                return match self.is_same_dev_inode(&task_path, to).await {
-                    Ok(true) => {
-                        info!("hard already exists, no need to operate");
-                        Ok(())
-                    }
-                    Ok(false) => Err(Error::IO(io::Error::new(
-                        io::ErrorKind::AlreadyExists,
-                        format!("{:?} already exists", to),
-                    ))),
-                    Err(err) => Err(err),
-                };
+                if let Ok(true) = self.is_same_dev_inode(&task_path, to).await {
+                    info!("hard already exists, no need to operate");
+                    return Ok(());
+                }
             }
 
-            // If the persistent cache task is empty, no need to copy. Need to open the file to
-            // ensure the file exists.
-            if task.is_empty() {
-                info!("persistent cache task is empty, no need to copy");
-                File::create(to).await.inspect_err(|err| {
-                    error!("create {:?} failed: {}", to, err);
-                })?;
-
-                return Ok(());
-            }
-
-            self.copy_persistent_cache_task(task.id.as_str(), to)
-                .await
-                .inspect_err(|err| {
-                    error!("copy {:?} to {:?} failed: {}", task_path, to, err);
-                })?;
-
-            info!("copy {:?} to {:?} success", task_path, to);
-            return Ok(());
+            warn!("hard link {:?} to {:?} failed: {}", task_path, to, err);
+            return Err(Error::IO(err));
         }
 
         info!("hard link {:?} to {:?} success", task_path, to);
+        Ok(())
+    }
+
+    /// copy_persistent_cache_task copies the persistent cache task content to the destination.
+    #[instrument(skip_all)]
+    pub async fn copy_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        fs::copy(self.get_persistent_cache_task_path(task_id), to).await?;
         Ok(())
     }
 
@@ -550,11 +539,8 @@ impl Content {
         reader: &mut R,
     ) -> Result<WritePieceResponse> {
         // Open the file and seek to the offset.
-        let task_path = self
-            .create_or_get_persistent_cache_task_path(task_id)
-            .await?;
+        let task_path = self.get_persistent_cache_task_path(task_id);
         let mut f = OpenOptions::new()
-            .create(true)
             .truncate(false)
             .write(true)
             .open(task_path.as_path())
@@ -591,22 +577,6 @@ impl Content {
         })
     }
 
-    /// copy_persistent_cache_task copies the persistent cache task content to the destination.
-    #[instrument(skip_all)]
-    async fn copy_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        // Ensure the parent directory of the destination exists.
-        if let Some(parent) = to.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).await.inspect_err(|err| {
-                    error!("failed to create directory {:?}: {}", parent, err);
-                })?;
-            }
-        }
-
-        fs::copy(self.get_persistent_cache_task_path(task_id), to).await?;
-        Ok(())
-    }
-
     /// delete_task deletes the persistent cache task content.
     #[instrument(skip_all)]
     pub async fn delete_persistent_cache_task(&self, task_id: &str) -> Result<()> {
@@ -629,21 +599,6 @@ impl Content {
             .join(DEFAULT_PERSISTENT_CACHE_TASK_DIR)
             .join(&task_id[..3])
             .join(task_id)
-    }
-
-    /// create_or_get_persistent_cache_task_path creates parent directories or returns the persistent cache task path by task id.
-    #[instrument(skip_all)]
-    async fn create_or_get_persistent_cache_task_path(&self, task_id: &str) -> Result<PathBuf> {
-        let task_dir = self
-            .dir
-            .join(DEFAULT_PERSISTENT_CACHE_TASK_DIR)
-            .join(&task_id[..3]);
-
-        fs::create_dir_all(&task_dir).await.inspect_err(|err| {
-            error!("create {:?} failed: {}", task_dir, err);
-        })?;
-
-        Ok(task_dir.join(task_id))
     }
 }
 
