@@ -16,11 +16,7 @@
 
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
 use tracing::{debug, error, instrument};
 
 #[tonic::async_trait]
@@ -37,9 +33,20 @@ impl ServerFactory {
     /// new returns a new DownloadFactory.
     pub fn new(protocol: &str, config: Arc<Config>) -> Result<Self> {
         match protocol {
-            "rdma" => Ok(Self {
-                server: Arc::new(RDMAServer::new(config)),
-            }),
+            "rdma" => {
+                #[cfg(target_os = "linux")]
+                {
+                    Ok(Self {
+                        server: Arc::new(RDMAServer::new(config)),
+                    })
+                }
+
+                #[cfg(not(target_os = "linux"))]
+                {
+                    error!("RDMA is only supported on Linux");
+                    Err(Error::InvalidParameter)
+                }
+            }
             _ => {
                 error!("unsupported protocol: {}", protocol);
                 Err(Error::InvalidParameter)
@@ -52,16 +59,19 @@ impl ServerFactory {
     }
 }
 
+#[cfg(target_os = "linux")]
 pub struct RDMAServer {
     config: Arc<Config>,
 }
 
+#[cfg(target_os = "linux")]
 impl RDMAServer {
     pub fn new(config: Arc<Config>) -> Self {
         Self { config }
     }
 }
 
+#[cfg(target_os = "linux")]
 #[tonic::async_trait]
 impl Server for RDMAServer {
     async fn run(&self) -> Result<()> {
