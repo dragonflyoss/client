@@ -28,8 +28,10 @@ use tokio::io::AsyncRead;
 use tracing::{debug, error, instrument, warn};
 
 pub mod cache;
+pub mod client;
 pub mod content;
 pub mod metadata;
+pub mod server;
 pub mod storage_engine;
 
 /// DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.

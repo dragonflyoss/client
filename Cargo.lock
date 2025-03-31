@@ -1188,6 +1188,7 @@ dependencies = [
  "tempdir",
  "tokio",
  "tokio-util",
+ "tonic",
  "tracing",
 ]
 
