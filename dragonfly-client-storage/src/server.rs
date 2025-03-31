@@ -15,7 +15,7 @@
  */
 
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::Result;
+use dragonfly_client_core::{Error, Result};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -23,24 +23,48 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tracing::{debug, error, instrument};
 
-/// DownloaderFactory is the factory for creating different downloaders by different protocols.
+#[tonic::async_trait]
+pub trait Server: Send + Sync {
+    async fn run(&self) -> Result<()>;
+}
+
 pub struct ServerFactory {
-    config: Arc<Config>,
+    server: Arc<dyn Server + Send + Sync>,
 }
 
 /// DownloadFactory implements the DownloadFactory trait.
 impl ServerFactory {
     /// new returns a new DownloadFactory.
-    #[instrument(skip_all)]
     pub fn new(protocol: &str, config: Arc<Config>) -> Result<Self> {
-        Ok(Self { config })
+        match protocol {
+            "rdma" => Ok(Self {
+                server: Arc::new(RDMAServer::new(config)),
+            }),
+            _ => {
+                error!("unsupported protocol: {}", protocol);
+                Err(Error::InvalidParameter)
+            }
+        }
     }
 
-    pub async fn run(&self) -> Result<()> {
-        Ok(())
+    pub fn build(&self) -> Result<Arc<dyn Server>> {
+        Ok(self.server.clone())
     }
 }
 
 pub struct RDMAServer {
     config: Arc<Config>,
+}
+
+impl RDMAServer {
+    pub fn new(config: Arc<Config>) -> Self {
+        Self { config }
+    }
+}
+
+#[tonic::async_trait]
+impl Server for RDMAServer {
+    async fn run(&self) -> Result<()> {
+        Ok(())
+    }
 }
