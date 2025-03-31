@@ -16,8 +16,10 @@
 
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
+#[cfg(target_os = "linux")]
+use ibverbs::devices;
 use std::sync::Arc;
-use tracing::{debug, error, instrument};
+use tracing::error;
 
 #[tonic::async_trait]
 pub trait Server: Send + Sync {
@@ -37,7 +39,7 @@ impl ServerFactory {
                 #[cfg(target_os = "linux")]
                 {
                     Ok(Self {
-                        server: Arc::new(RDMAServer::new(config)),
+                        server: Arc::new(RDMAServer::new(config)?),
                     })
                 }
 
@@ -62,12 +64,40 @@ impl ServerFactory {
 #[cfg(target_os = "linux")]
 pub struct RDMAServer {
     config: Arc<Config>,
+    ctx: Arc<ibverbs::Context>,
+    cp: Arc<ibverbs::CompletionQueue>,
+    pd: Arc<ibverbs::ProtectionDomain>,
 }
 
 #[cfg(target_os = "linux")]
 impl RDMAServer {
-    pub fn new(config: Arc<Config>) -> Self {
-        Self { config }
+    pub fn new(config: Arc<Config>) -> Result<Self> {
+        if let Some(device_name) = config.storage.server.device {
+            let devices = devices()?;
+            for device in devices.iter() {
+                if device.name().unwrap().to_bytes() == device_name.as_bytes() {
+                    let ctx = Arc::new(device.open()?);
+                    let cp = Arc::new(ctx.create_cq(1024, 0)?);
+                    let pd = Arc::new(ctx.alloc_pd()?);
+                    return Ok(Self {
+                        config,
+                        ctx,
+                        cp,
+                        pd,
+                    });
+                }
+            }
+        }
+
+        let ctx = Arc::new(devices()?.iter().next().unwrap().open()?);
+        let cp = Arc::new(ctx.create_cq(1024, 0)?);
+        let pd = Arc::new(ctx.alloc_pd()?);
+        Ok(Self {
+            config,
+            ctx,
+            cp,
+            pd,
+        })
     }
 }
 

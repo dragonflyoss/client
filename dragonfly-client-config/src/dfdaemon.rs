@@ -908,12 +908,19 @@ impl Default for Dynconfig {
 #[serde(default, rename_all = "camelCase")]
 pub struct StorageServer {
     /// protocol is the protocol of the storage server. The protocol used for downloading pieces
-    /// between different peers, now only support gRPC.
+    /// between different peers, now only support to set `grpc` or `rdma`.
     ///
     /// gRPC Protocol: The storage server will start a gRPC service in the DfdaemonUploadServer,
     /// refer to https://github.com/dragonflyoss/api/blob/main/proto/dfdaemon.proto#L185.
+    ///
+    /// RDMA Protocol: The storage server will start a RDMA service in the DfdaemonUploadServer,
+    /// the server will call ibverbs to create a RDMA server, refer to https://en.wikipedia.org/wiki/Remote_direct_memory_access.
     #[serde(default = "default_storage_server_protocol")]
     pub protocol: String,
+
+    /// device is the device name of the RDMA, it is only used when the protocol is `rdma`.
+    /// If the device needs to be specified, the device name should be set for the RDMA.
+    pub device: Option<String>,
 }
 
 /// Storage implements Default.
@@ -921,6 +928,7 @@ impl Default for StorageServer {
     fn default() -> Self {
         StorageServer {
             protocol: default_storage_server_protocol(),
+            device: None,
         }
     }
 }
