@@ -84,8 +84,8 @@ impl Task {
 ///    For more details, refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L443.
 /// 2. If the download hits the memory cache, it will be faster than reading from the disk, because there is no
 ///    page cache for the first read.
-/// ```
 ///
+/// ```text
 ///     1.Preheat
 ///         |
 ///         |
