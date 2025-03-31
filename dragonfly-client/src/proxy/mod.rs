@@ -430,6 +430,7 @@ pub async fn https_handler(
     // Proxy the request directly  to the remote server.
     if let Some(host) = request.uri().host() {
         let host = host.to_string();
+        let port = request.uri().port_u16().unwrap_or(443);
         tokio::task::spawn(async move {
             match hyper::upgrade::on(request).await {
                 Ok(upgraded) => {
@@ -438,6 +439,7 @@ pub async fn https_handler(
                         task,
                         upgraded,
                         host,
+                        port,
                         dfdaemon_download_client,
                         registry_cert,
                         server_ca_cert,
@@ -467,6 +469,7 @@ async fn upgraded_tunnel(
     task: Arc<Task>,
     upgraded: Upgraded,
     host: String,
+    port: u16,
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
@@ -513,6 +516,7 @@ async fn upgraded_tunnel(
                     config.clone(),
                     task.clone(),
                     host.clone(),
+                    port,
                     request,
                     dfdaemon_download_client.clone(),
                     registry_cert.clone(),
@@ -534,6 +538,7 @@ pub async fn upgraded_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     host: String,
+    port: u16,
     mut request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
@@ -558,8 +563,18 @@ pub async fn upgraded_handler(
 
     // If the scheme is not set, set the scheme to https.
     if request.uri().scheme().is_none() {
-        *request.uri_mut() = format!("https://{}{}", host, request.uri())
-            .parse()
+        let builder = http::uri::Builder::new();
+        *request.uri_mut() = builder
+            .scheme("https")
+            .authority(format!("{}:{}", host, port))
+            .path_and_query(
+                request
+                    .uri()
+                    .path_and_query()
+                    .map(|v| v.as_str())
+                    .unwrap_or("/"),
+            )
+            .build()
             .or_err(ErrorType::ParseError)?;
     }
 
