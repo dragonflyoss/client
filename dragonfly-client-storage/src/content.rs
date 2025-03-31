@@ -620,6 +620,267 @@ pub fn calculate_piece_range(offset: u64, length: u64, range: Option<Range>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+    use tempdir::TempDir;
+
+    #[tokio::test]
+    async fn test_create_task() {
+        let temp_dir = TempDir::new("content").unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "60409bd0ec44160f44c53c39b3fe1c5fdfb23faded0228c68bee83bc15a200e3";
+        let task_path = content.create_task(task_id).await.unwrap();
+        assert!(task_path.exists());
+        assert_eq!(task_path, temp_dir.path().join("content/tasks/604/60409bd0ec44160f44c53c39b3fe1c5fdfb23faded0228c68bee83bc15a200e3"));
+
+        let task_path_exists = content.create_task(task_id).await.unwrap();
+        assert_eq!(task_path, task_path_exists);
+    }
+
+    #[tokio::test]
+    async fn test_hard_link_task() {
+        let temp_dir = TempDir::new("content").unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4";
+        content.create_task(task_id).await.unwrap();
+
+        let to = temp_dir
+            .path()
+            .join("c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4");
+        content.hard_link_task(task_id, &to).await.unwrap();
+        assert!(to.exists());
+
+        content.hard_link_task(task_id, &to).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_copy_task() {
+        let temp_dir = TempDir::new("content").unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "bfd3c02fb31a7373e25b405fd5fd3082987ccfbaf210889153af9e65bbf13002";
+        content.create_task(task_id).await.unwrap();
+
+        let to = temp_dir
+            .path()
+            .join("bfd3c02fb31a7373e25b405fd5fd3082987ccfbaf210889153af9e65bbf13002");
+        content.copy_task(task_id, &to).await.unwrap();
+        assert!(to.exists());
+    }
+
+    #[tokio::test]
+    async fn test_delete_task() {
+        let temp_dir = TempDir::new("content").unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "4e19f03b0fceb38f23ff4f657681472a53ef335db3660ae5494912570b7a2bb7";
+        let task_path = content.create_task(task_id).await.unwrap();
+        assert!(task_path.exists());
+
+        content.delete_task(task_id).await.unwrap();
+        assert!(!task_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_read_piece() {
+        let temp_dir = TempDir::new("content").unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "c794a3bbae81e06d1c8d362509bdd42a7c105b0fb28d80ffe27f94b8f04fc845";
+        content.create_task(task_id).await.unwrap();
+
+        let data = b"hello, world!";
+        let mut reader = Cursor::new(data);
+        content.write_piece(task_id, 0, &mut reader).await.unwrap();
+
+        let mut reader = content.read_piece(task_id, 0, 13, None).await.unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, data);
+
+        let mut reader = content
+            .read_piece(
+                task_id,
+                0,
+                13,
+                Some(Range {
+                    start: 0,
+                    length: 5,
+                }),
+            )
+            .await
+            .unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, b"hello");
+    }
+
+    #[tokio::test]
+    async fn test_write_piece() {
+        let temp_dir = TempDir::new("content").unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "60b48845606946cea72084f14ed5cce61ec96e69f80a30f891a6963dccfd5b4f";
+        content.create_task(task_id).await.unwrap();
+
+        let data = b"test";
+        let mut reader = Cursor::new(data);
+        let response = content.write_piece(task_id, 0, &mut reader).await.unwrap();
+        assert_eq!(response.length, 4);
+        assert!(!response.hash.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_create_persistent_task() {
+        let temp_dir = TempDir::new("content").unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "c4f108ab1d2b8cfdffe89ea9676af35123fa02e3c25167d62538f630d5d44745";
+        let task_path = content.create_persistent_cache_task(task_id).await.unwrap();
+        assert!(task_path.exists());
+        assert_eq!(task_path, temp_dir.path().join("content/persistent-cache-tasks/c4f/c4f108ab1d2b8cfdffe89ea9676af35123fa02e3c25167d62538f630d5d44745"));
+
+        let task_path_exists = content.create_persistent_cache_task(task_id).await.unwrap();
+        assert_eq!(task_path, task_path_exists);
+    }
+
+    #[tokio::test]
+    async fn test_hard_link_persistent_cache_task() {
+        let temp_dir = TempDir::new("content").unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "5e81970eb2b048910cc84cab026b951f2ceac0a09c72c0717193bb6e466e11cd";
+        content.create_persistent_cache_task(task_id).await.unwrap();
+
+        let to = temp_dir
+            .path()
+            .join("5e81970eb2b048910cc84cab026b951f2ceac0a09c72c0717193bb6e466e11cd");
+        content
+            .hard_link_persistent_cache_task(task_id, &to)
+            .await
+            .unwrap();
+        assert!(to.exists());
+
+        content
+            .hard_link_persistent_cache_task(task_id, &to)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_copy_persistent_cache_task() {
+        let temp_dir = TempDir::new("content").unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "194b9c2018429689fb4e596a506c7e9db564c187b9709b55b33b96881dfb6dd5";
+        content.create_persistent_cache_task(task_id).await.unwrap();
+
+        let to = temp_dir
+            .path()
+            .join("194b9c2018429689fb4e596a506c7e9db564c187b9709b55b33b96881dfb6dd5");
+        content
+            .copy_persistent_cache_task(task_id, &to)
+            .await
+            .unwrap();
+        assert!(to.exists());
+    }
+
+    #[tokio::test]
+    async fn test_delete_persistent_cache_task() {
+        let temp_dir = TempDir::new("content").unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "17430ba545c3ce82790e9c9f77e64dca44bb6d6a0c9e18be175037c16c73713d";
+        let task_path = content.create_persistent_cache_task(task_id).await.unwrap();
+        assert!(task_path.exists());
+
+        content.delete_persistent_cache_task(task_id).await.unwrap();
+        assert!(!task_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_read_persistent_cache_piece() {
+        let temp_dir = TempDir::new("content").unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "9cb27a4af09aee4eb9f904170217659683f4a0ea7cd55e1a9fbcb99ddced659a";
+        content.create_persistent_cache_task(task_id).await.unwrap();
+
+        let data = b"hello, world!";
+        let mut reader = Cursor::new(data);
+        content
+            .write_persistent_cache_piece(task_id, 0, &mut reader)
+            .await
+            .unwrap();
+
+        let mut reader = content
+            .read_persistent_cache_piece(task_id, 0, 13, None)
+            .await
+            .unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, data);
+
+        let mut reader = content
+            .read_persistent_cache_piece(
+                task_id,
+                0,
+                13,
+                Some(Range {
+                    start: 0,
+                    length: 5,
+                }),
+            )
+            .await
+            .unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, b"hello");
+    }
+
+    #[tokio::test]
+    async fn test_write_persistent_cache_piece() {
+        let temp_dir = TempDir::new("content").unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "ca1afaf856e8a667fbd48093ca3ca1b8eeb4bf735912fbe551676bc5817a720a";
+        content.create_persistent_cache_task(task_id).await.unwrap();
+
+        let data = b"test";
+        let mut reader = Cursor::new(data);
+        let response = content
+            .write_persistent_cache_piece(task_id, 0, &mut reader)
+            .await
+            .unwrap();
+        assert_eq!(response.length, 4);
+        assert!(!response.hash.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_has_enough_space() {
+        let config = Arc::new(Config::default());
+        let dir = PathBuf::from("/tmp/dragonfly_test");
+        let content = Content::new(config, &dir).await.unwrap();
+
+        let has_space = content.has_enough_space(1).unwrap();
+        assert!(has_space);
+
+        let has_space = content.has_enough_space(u64::MAX).unwrap();
+        assert!(!has_space);
+    }
 
     #[tokio::test]
     async fn test_calculate_piece_range() {
@@ -693,18 +954,5 @@ mod tests {
             assert_eq!(target_offset, expected_offset);
             assert_eq!(target_length, expected_length);
         }
-    }
-
-    #[tokio::test]
-    async fn test_has_enough_space() {
-        let config = Arc::new(Config::default());
-        let dir = PathBuf::from("/tmp/dragonfly_test");
-        let content = Content::new(config, &dir).await.unwrap();
-
-        let has_space = content.has_enough_space(1).unwrap();
-        assert!(has_space);
-
-        let has_space = content.has_enough_space(u64::MAX).unwrap();
-        assert!(!has_space);
     }
 }

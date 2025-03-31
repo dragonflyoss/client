@@ -605,7 +605,8 @@ impl UploadClient {
 /// the host info in real-time from the parents and then select the parents for downloading.
 ///
 /// The workflow diagram is as follows:
-///```
+///
+///```text
 ///                              +----------+
 ///              ----------------|  Parent  |---------------
 ///              |               +----------+              |
@@ -954,8 +955,8 @@ pub struct Storage {
     ///    For more details, refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L443.
     /// 2. If the download hits the memory cache, it will be faster than reading from the disk, because there is no
     ///    page cache for the first read.
-    /// ```
     ///
+    /// ```text
     ///     1.Preheat
     ///         |
     ///         |
