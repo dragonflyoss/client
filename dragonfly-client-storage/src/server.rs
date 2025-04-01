@@ -24,6 +24,8 @@ use tracing::error;
 #[tonic::async_trait]
 pub trait Server: Send + Sync {
     async fn run(&self) -> Result<()>;
+
+    async fn create_qp(&self) -> Result<()>;
 }
 
 pub struct ServerFactory {
@@ -65,38 +67,29 @@ impl ServerFactory {
 pub struct RDMAServer {
     config: Arc<Config>,
     ctx: Arc<ibverbs::Context>,
-    cp: Arc<ibverbs::CompletionQueue>,
-    pd: Arc<ibverbs::ProtectionDomain>,
 }
 
 #[cfg(target_os = "linux")]
 impl RDMAServer {
     pub fn new(config: Arc<Config>) -> Result<Self> {
-        if let Some(device_name) = config.storage.server.device {
-            let devices = devices()?;
-            for device in devices.iter() {
-                if device.name().unwrap().to_bytes() == device_name.as_bytes() {
-                    let ctx = Arc::new(device.open()?);
-                    let cp = Arc::new(ctx.create_cq(1024, 0)?);
-                    let pd = Arc::new(ctx.alloc_pd()?);
-                    return Ok(Self {
-                        config,
-                        ctx,
-                        cp,
-                        pd,
-                    });
-                }
-            }
-        }
+        let devices = devices()?;
+        let ctx = match config.storage.server.device.clone() {
+            Some(device_name) => devices
+                .iter()
+                .find(|d| d.name().unwrap().to_bytes() == device_name.as_bytes())
+                .map(|d| d.open())
+                .transpose()?
+                .ok_or_else(|| Error::InvalidParameter)?,
+            None => devices
+                .iter()
+                .next()
+                .ok_or_else(|| Error::InvalidParameter)?
+                .open()?,
+        };
 
-        let ctx = Arc::new(devices()?.iter().next().unwrap().open()?);
-        let cp = Arc::new(ctx.create_cq(1024, 0)?);
-        let pd = Arc::new(ctx.alloc_pd()?);
         Ok(Self {
             config,
-            ctx,
-            cp,
-            pd,
+            ctx: Arc::new(ctx),
         })
     }
 }
@@ -105,6 +98,12 @@ impl RDMAServer {
 #[tonic::async_trait]
 impl Server for RDMAServer {
     async fn run(&self) -> Result<()> {
+        Ok(())
+    }
+
+    async fn create_qp(&self) -> Result<()> {
+        let cp = self.ctx.create_cq(1024, 0)?;
+        let pd = self.ctx.alloc_pd()?;
         Ok(())
     }
 }
