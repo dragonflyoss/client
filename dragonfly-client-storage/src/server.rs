@@ -25,7 +25,7 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tracing::error;
 
-const MAX_CQ_SIZE: u64 = 1024 * 1024;
+const MAX_CQ_SIZE: u64 = 16 * 1024;
 
 #[tonic::async_trait]
 pub trait Server: Send + Sync {
