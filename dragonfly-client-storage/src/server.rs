@@ -17,15 +17,19 @@
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 #[cfg(target_os = "linux")]
-use ibverbs::devices;
+use ibverbs::{devices, CompletionQueue};
+use std::collections::HashSet;
+use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
 use tracing::error;
+
+const MAX_CQ_SIZE: u64 = 8192;
 
 #[tonic::async_trait]
 pub trait Server: Send + Sync {
-    async fn run(&self) -> Result<()>;
-
-    async fn create_qp(&self) -> Result<()>;
+    async fn run(self: Arc<Self>) -> Result<()>;
 }
 
 pub struct ServerFactory {
@@ -35,13 +39,16 @@ pub struct ServerFactory {
 /// DownloadFactory implements the DownloadFactory trait.
 impl ServerFactory {
     /// new returns a new DownloadFactory.
-    pub fn new(protocol: &str, config: Arc<Config>) -> Result<Self> {
+    pub fn new(protocol: &str, addr: SocketAddr, config: Arc<Config>) -> Result<Self> {
         match protocol {
             "rdma" => {
                 #[cfg(target_os = "linux")]
                 {
                     Ok(Self {
-                        server: Arc::new(RDMAServer::new(config)?),
+                        server: Arc::new(RDMAServer::new(
+                            addr,
+                            config.storage.server.device.clone(),
+                        )?),
                     })
                 }
 
@@ -65,15 +72,18 @@ impl ServerFactory {
 
 #[cfg(target_os = "linux")]
 pub struct RDMAServer {
-    config: Arc<Config>,
     ctx: Arc<ibverbs::Context>,
+
+    addr: SocketAddr,
+
+    cp_ids: Arc<Mutex<HashSet<u64>>>,
 }
 
 #[cfg(target_os = "linux")]
 impl RDMAServer {
-    pub fn new(config: Arc<Config>) -> Result<Self> {
+    pub fn new(addr: SocketAddr, device: Option<String>) -> Result<Self> {
         let devices = devices()?;
-        let ctx = match config.storage.server.device.clone() {
+        let ctx = match device {
             Some(device_name) => devices
                 .iter()
                 .find(|d| d.name().unwrap().to_bytes() == device_name.as_bytes())
@@ -88,22 +98,42 @@ impl RDMAServer {
         };
 
         Ok(Self {
-            config,
             ctx: Arc::new(ctx),
+            addr,
+            cp_ids: Arc::new(Mutex::new(HashSet::new())),
         })
+    }
+
+    async fn get_cp_id(&self) -> Result<u64> {
+        loop {
+            let cp_id = rand::random_range(..MAX_CQ_SIZE);
+            let mut cp_ids = self.cp_ids.lock().await;
+            if !cp_ids.contains(&cp_id) {
+                cp_ids.insert(cp_id);
+                return Ok(cp_id);
+            }
+        }
+    }
+
+    async fn handle_connection(&self, stream: TcpStream, ctx: Arc<ibverbs::Context>) -> Result<()> {
+        Ok(())
     }
 }
 
 #[cfg(target_os = "linux")]
 #[tonic::async_trait]
 impl Server for RDMAServer {
-    async fn run(&self) -> Result<()> {
-        Ok(())
-    }
-
-    async fn create_qp(&self) -> Result<()> {
-        let cp = self.ctx.create_cq(1024, 0)?;
-        let pd = self.ctx.alloc_pd()?;
-        Ok(())
+    async fn run(self: Arc<Self>) -> Result<()> {
+        let listener = TcpListener::bind(&self.addr).await?;
+        loop {
+            let (stream, _) = listener.accept().await?;
+            let ctx = self.ctx.clone();
+            let self_clone = self.clone();
+            tokio::spawn(async move {
+                if let Err(err) = self_clone.handle_connection(stream, ctx).await {
+                    error!("failed to handle connection: {}", err);
+                }
+            });
+        }
     }
 }

@@ -181,6 +181,11 @@ fn default_dynconfig_refresh_interval() -> Duration {
 fn default_storage_server_protocol() -> String {
     "grpc".to_string()
 }
+/// default_storage_server_port is the default port of the storage server.
+#[inline]
+fn default_storage_server_port() -> u16 {
+    4005
+}
 
 /// default_storage_keep is the default keep of the task's metadata and content when the dfdaemon restarts.
 #[inline]
@@ -921,6 +926,13 @@ pub struct StorageServer {
     /// device is the device name of the RDMA, it is only used when the protocol is `rdma`.
     /// If the device needs to be specified, the device name should be set for the RDMA.
     pub device: Option<String>,
+
+    /// ip is the listen ip of the storage server.
+    pub ip: Option<IpAddr>,
+
+    /// port is the port to the storage server.
+    #[serde(default = "default_storage_server_port")]
+    pub port: u16,
 }
 
 /// Storage implements Default.
@@ -929,6 +941,8 @@ impl Default for StorageServer {
         StorageServer {
             protocol: default_storage_server_protocol(),
             device: None,
+            ip: None,
+            port: default_storage_server_port(),
         }
     }
 }
@@ -1538,6 +1552,15 @@ impl Config {
         // Convert proxy server listen ip.
         if self.proxy.server.ip.is_none() {
             self.proxy.server.ip = if self.network.enable_ipv6 {
+                Some(Ipv6Addr::UNSPECIFIED.into())
+            } else {
+                Some(Ipv4Addr::UNSPECIFIED.into())
+            }
+        }
+
+        // Convert storage server listen ip.
+        if self.storage.server.ip.is_none() {
+            self.storage.server.ip = if self.network.enable_ipv6 {
                 Some(Ipv6Addr::UNSPECIFIED.into())
             } else {
                 Some(Ipv4Addr::UNSPECIFIED.into())
