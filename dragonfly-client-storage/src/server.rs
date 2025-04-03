@@ -20,12 +20,12 @@ use dragonfly_client_core::{Error, Result};
 use ibverbs::{devices, CompletionQueue};
 use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
 use tracing::error;
 
-const MAX_CQ_SIZE: u64 = 8192;
+const MAX_CQ_SIZE: u64 = 1024 * 1024;
 
 #[tonic::async_trait]
 pub trait Server: Send + Sync {
@@ -76,7 +76,7 @@ pub struct RDMAServer {
 
     addr: SocketAddr,
 
-    cp_ids: Arc<Mutex<HashSet<u64>>>,
+    cp_id_counter: AtomicU64,
 }
 
 #[cfg(target_os = "linux")]
@@ -100,19 +100,18 @@ impl RDMAServer {
         Ok(Self {
             ctx: Arc::new(ctx),
             addr,
-            cp_ids: Arc::new(Mutex::new(HashSet::new())),
+            cp_id_counter: AtomicU64::new(0),
         })
     }
 
     async fn get_cp_id(&self) -> Result<u64> {
-        loop {
-            let cp_id = rand::random_range(..MAX_CQ_SIZE);
-            let mut cp_ids = self.cp_ids.lock().await;
-            if !cp_ids.contains(&cp_id) {
-                cp_ids.insert(cp_id);
-                return Ok(cp_id);
-            }
+        let cp_id = self.cp_id_counter.fetch_add(1, Ordering::SeqCst);
+        if cp_id >= MAX_CQ_SIZE {
+            self.cp_id_counter.store(0, Ordering::SeqCst);
+            return Ok(0);
         }
+
+        Ok(cp_id)
     }
 
     async fn handle_connection(&self, stream: TcpStream, ctx: Arc<ibverbs::Context>) -> Result<()> {
