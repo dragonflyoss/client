@@ -154,7 +154,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
 
     /// put puts the key and value into the cache.
     pub fn put(&mut self, key: K, mut value: V) -> Option<V> {
-        if let Some(existing_entry) = self.map.get_mut(&KeyRef { k: &key }) {
+        if let Some(existing_entry) = self.map.get_mut(KeyWrapper::from_ref(&key)) {
             let entry = existing_entry.as_mut();
             std::mem::swap(&mut entry.value, &mut value);
 
@@ -170,7 +170,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
                 self.detach(tail);
 
                 unsafe {
-                    if let Some(entry) = self.map.remove(&KeyRef { k: &(*tail).key }) {
+                    if let Some(entry) = self.map.remove(KeyWrapper::from_ref(&(*tail).key)) {
                         evicted_value = Some(entry.value);
                     }
                 }
@@ -260,8 +260,28 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
 
         unsafe {
             self.map
-                .remove(&KeyRef { k: &(*tail).key })
+                .remove(KeyWrapper::from_ref(&(*tail).key))
                 .map(|entry| (entry.key, entry.value))
+        }
+    }
+
+    /// pop removes and returns the value for a given key, if it does not exist, it returns None.
+    pub fn pop<Q>(&mut self, k: &Q) -> Option<(K, V)>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        match self.map.remove(KeyWrapper::from_ref(k)) {
+            None => None,
+            Some(entry) => {
+                let entry_ptr: *mut Entry<K, V> = Box::into_raw(entry);
+                self.detach(entry_ptr);
+
+                unsafe {
+                    let entry = Box::from_raw(entry_ptr);
+                    Some((entry.key, entry.value))
+                }
+            }
         }
     }
 
@@ -460,6 +480,30 @@ mod tests {
         assert_eq!(cache.pop_lru(), Some(("key2".to_string(), 2)));
         assert_eq!(cache.pop_lru(), Some(("key3".to_string(), 3)));
         assert_eq!(cache.pop_lru(), None);
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_pop() {
+        let mut cache: LruCache<String, i32> = LruCache::new(3);
+
+        let test_cases = vec![
+            ("key1".to_string(), Some(("key1".to_string(), 1))),
+            ("key2".to_string(), Some(("key2".to_string(), 2))),
+            ("key3".to_string(), Some(("key3".to_string(), 3))),
+            ("key1".to_string(), None),
+            ("key2".to_string(), None),
+            ("key3".to_string(), None),
+        ];
+
+        cache.put("key1".to_string(), 1);
+        cache.put("key2".to_string(), 2);
+        cache.put("key3".to_string(), 3);
+
+        for (key, expected) in test_cases {
+            assert_eq!(cache.pop(&key), expected);
+        }
+
         assert!(cache.is_empty());
     }
 }

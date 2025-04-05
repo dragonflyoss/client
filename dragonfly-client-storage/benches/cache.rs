@@ -60,7 +60,13 @@ pub fn put_task(c: &mut Criterion) {
         &ByteSize::mb(10),
         |b, size| {
             b.iter_batched(
-                || Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap(),
+                || {
+                    rt.block_on(async {
+                        Cache::new(Arc::new(create_config(ByteSize::gb(2))))
+                            .await
+                            .unwrap()
+                    })
+                },
                 |mut cache| {
                     rt.block_on(async {
                         cache.put_task("task", black_box(size.as_u64())).await;
@@ -76,7 +82,13 @@ pub fn put_task(c: &mut Criterion) {
         &ByteSize::mb(100),
         |b, size| {
             b.iter_batched(
-                || Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap(),
+                || {
+                    rt.block_on(async {
+                        Cache::new(Arc::new(create_config(ByteSize::gb(2))))
+                            .await
+                            .unwrap()
+                    })
+                },
                 |mut cache| {
                     rt.block_on(async {
                         cache.put_task("task", black_box(size.as_u64())).await;
@@ -92,7 +104,13 @@ pub fn put_task(c: &mut Criterion) {
         &ByteSize::gb(1),
         |b, size| {
             b.iter_batched(
-                || Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap(),
+                || {
+                    rt.block_on(async {
+                        Cache::new(Arc::new(create_config(ByteSize::gb(2))))
+                            .await
+                            .unwrap()
+                    })
+                },
                 |mut cache| {
                     rt.block_on(async {
                         cache.put_task("task", black_box(size.as_u64())).await;
@@ -116,10 +134,13 @@ pub fn write_piece(c: &mut Criterion) {
         |b, data| {
             b.iter_batched(
                 || {
-                    let mut cache = Cache::new(Arc::new(create_config(
-                        ByteSize::mb(4) * PIECE_COUNT as u64 * 2u64,
-                    )))
-                    .unwrap();
+                    let mut cache = rt.block_on(async {
+                        Cache::new(Arc::new(create_config(
+                            ByteSize::mb(4) * PIECE_COUNT as u64,
+                        )))
+                        .await
+                        .unwrap()
+                    });
 
                     rt.block_on(async {
                         cache
@@ -155,10 +176,13 @@ pub fn write_piece(c: &mut Criterion) {
         |b, data| {
             b.iter_batched(
                 || {
-                    let mut cache = Cache::new(Arc::new(create_config(
-                        ByteSize::mb(10) * PIECE_COUNT as u64 * 2u64,
-                    )))
-                    .unwrap();
+                    let mut cache = rt.block_on(async {
+                        Cache::new(Arc::new(create_config(
+                            ByteSize::mb(10) * PIECE_COUNT as u64,
+                        )))
+                        .await
+                        .unwrap()
+                    });
 
                     rt.block_on(async {
                         cache
@@ -194,10 +218,13 @@ pub fn write_piece(c: &mut Criterion) {
         |b, data| {
             b.iter_batched(
                 || {
-                    let mut cache = Cache::new(Arc::new(create_config(
-                        ByteSize::mb(16) * PIECE_COUNT as u64 * 2u64,
-                    )))
-                    .unwrap();
+                    let mut cache = rt.block_on(async {
+                        Cache::new(Arc::new(create_config(
+                            ByteSize::mb(16) * PIECE_COUNT as u64,
+                        )))
+                        .await
+                        .unwrap()
+                    });
 
                     rt.block_on(async {
                         cache
@@ -240,10 +267,13 @@ pub fn read_piece(c: &mut Criterion) {
         |b, data| {
             b.iter_batched(
                 || {
-                    let mut cache = Cache::new(Arc::new(create_config(
-                        ByteSize::mb(4) * PIECE_COUNT as u64 * 2u64,
-                    )))
-                    .unwrap();
+                    let mut cache = rt.block_on(async {
+                        Cache::new(Arc::new(create_config(
+                            ByteSize::mb(4) * PIECE_COUNT as u64,
+                        )))
+                        .await
+                        .unwrap()
+                    });
 
                     rt.block_on(async {
                         cache
@@ -292,10 +322,13 @@ pub fn read_piece(c: &mut Criterion) {
         |b, data| {
             b.iter_batched(
                 || {
-                    let mut cache = Cache::new(Arc::new(create_config(
-                        ByteSize::mb(10) * PIECE_COUNT as u64 * 2u64,
-                    )))
-                    .unwrap();
+                    let mut cache = rt.block_on(async {
+                        Cache::new(Arc::new(create_config(
+                            ByteSize::mb(10) * PIECE_COUNT as u64,
+                        )))
+                        .await
+                        .unwrap()
+                    });
 
                     rt.block_on(async {
                         cache
@@ -344,10 +377,13 @@ pub fn read_piece(c: &mut Criterion) {
         |b, data| {
             b.iter_batched(
                 || {
-                    let mut cache = Cache::new(Arc::new(create_config(
-                        ByteSize::mb(16) * PIECE_COUNT as u64 * 2u64,
-                    )))
-                    .unwrap();
+                    let mut cache = rt.block_on(async {
+                        Cache::new(Arc::new(create_config(
+                            ByteSize::mb(16) * PIECE_COUNT as u64,
+                        )))
+                        .await
+                        .unwrap()
+                    });
 
                     rt.block_on(async {
                         cache
