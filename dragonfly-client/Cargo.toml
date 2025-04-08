@@ -86,7 +86,7 @@ fslock = "0.2.1"
 leaky-bucket = "1.1.2"
 http-body-util = "0.1.3"
 futures-util = "0.3.31"
-termion = "4.0.4"
+termion = "4.0.5"
 tabled = "0.18.0"
 path-absolutize = "3.1.1"
 
