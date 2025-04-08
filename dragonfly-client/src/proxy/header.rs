@@ -60,6 +60,12 @@ pub const DRAGONFLY_PREFETCH_HEADER: &str = "X-Dragonfly-Prefetch";
 /// For more details refer to https://github.com/dragonflyoss/design/blob/main/systems-analysis/file-download-workflow-with-hard-link/README.md.
 pub const DRAGONFLY_OUTPUT_PATH_HEADER: &str = "X-Dragonfly-Output-Path";
 
+/// DRAGONFLY_FORCE_HARD_LINK_HEADER is the header key of force hard link in http request.
+///
+/// `X-Dragonfly-Force-Hard-Link` is the flag to indicate whether the download file must be hard linked to the output path.
+/// For more details refer to https://github.com/dragonflyoss/design/blob/main/systems-analysis/file-download-workflow-with-hard-link/README.md.
+pub const DRAGONFLY_FORCE_HARD_LINK_HEADER: &str = "X-Dragonfly-Force-Hard-Link";
+
 /// DRAGONFLY_PIECE_LENGTH is the header key of piece length in http request.
 /// If the value is set, the piece length will be used to download the file.
 /// Different piece length will generate different task id. The value needs to
@@ -170,6 +176,21 @@ pub fn get_output_path(header: &HeaderMap) -> Option<String> {
         .get(DRAGONFLY_OUTPUT_PATH_HEADER)
         .and_then(|output_path| output_path.to_str().ok())
         .map(|output_path| output_path.to_string())
+}
+
+/// get_force_hard_link gets the force hard link from http header.
+#[instrument(skip_all)]
+pub fn get_force_hard_link(header: &HeaderMap) -> bool {
+    match header.get(DRAGONFLY_FORCE_HARD_LINK_HEADER) {
+        Some(value) => match value.to_str() {
+            Ok(value) => value.eq_ignore_ascii_case("true"),
+            Err(err) => {
+                error!("get force hard link from header failed: {}", err);
+                false
+            }
+        },
+        None => false,
+    }
 }
 
 /// get_piece_length gets the piece length from http header.
@@ -308,6 +329,25 @@ mod tests {
 
         let empty_headers = HeaderMap::new();
         assert_eq!(get_output_path(&empty_headers), None);
+    }
+
+    #[test]
+    fn test_get_force_hard_link() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            DRAGONFLY_FORCE_HARD_LINK_HEADER,
+            HeaderValue::from_static("true"),
+        );
+        assert!(get_force_hard_link(&headers));
+
+        headers.insert(
+            DRAGONFLY_FORCE_HARD_LINK_HEADER,
+            HeaderValue::from_static("false"),
+        );
+        assert!(!get_force_hard_link(&headers));
+
+        let empty_headers = HeaderMap::new();
+        assert!(!get_force_hard_link(&empty_headers));
     }
 
     #[test]
