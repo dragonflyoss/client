@@ -221,6 +221,10 @@ pub enum DFError {
     /// ValidationError is the error for validate.
     #[error("validate failed: {0}")]
     ValidationError(String),
+
+    /// ResourceExhausted is the error for resource exhausted.
+    #[error("resource exhausted: {0}")]
+    ResourceExhausted(String),
 }
 
 /// SendError is the error for send.

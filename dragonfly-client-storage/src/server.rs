@@ -18,14 +18,14 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 #[cfg(target_os = "linux")]
 use ibverbs::{devices, CompletionQueue};
-use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
 use tracing::error;
 
-const MAX_CQ_SIZE: u64 = 16 * 1024;
+const MAX_CQ_SIZE: usize = 16 * 1024;
 
 #[tonic::async_trait]
 pub trait Server: Send + Sync {
@@ -76,7 +76,7 @@ pub struct RDMAServer {
 
     addr: SocketAddr,
 
-    cp_id_counter: AtomicU64,
+    available_cp_ids: Mutex<VecDeque<u64>>,
 }
 
 #[cfg(target_os = "linux")]
@@ -97,21 +97,29 @@ impl RDMAServer {
                 .open()?,
         };
 
+        let mut initial_ids = VecDeque::with_capacity(MAX_CQ_SIZE);
+        for i in 0..MAX_CQ_SIZE as u64 {
+            initial_ids.push_back(i);
+        }
+
         Ok(Self {
             ctx: Arc::new(ctx),
             addr,
-            cp_id_counter: AtomicU64::new(0),
+            available_cp_ids: Mutex::new(initial_ids),
         })
     }
 
-    async fn get_cp_id(&self) -> Result<u64> {
-        let cp_id = self.cp_id_counter.fetch_add(1, Ordering::SeqCst);
-        if cp_id >= MAX_CQ_SIZE {
-            self.cp_id_counter.store(0, Ordering::SeqCst);
-            return Ok(0);
-        }
+    async fn acquire_cp_id(&self) -> Result<u64> {
+        let mut available_cp_ids = self.available_cp_ids.lock().await;
+        available_cp_ids.pop_front().ok_or_else(|| {
+            error!("connection pool exhausted");
+            Error::ResourceExhausted("connection pool exhausted".to_string())
+        })
+    }
 
-        Ok(cp_id)
+    async fn release_cp_id(&self, cp_id: u64) {
+        let mut available_cp_ids = self.available_cp_ids.lock().await;
+        available_cp_ids.push_back(cp_id);
     }
 
     async fn handle_connection(&self, stream: TcpStream, ctx: Arc<ibverbs::Context>) -> Result<()> {
