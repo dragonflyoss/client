@@ -199,10 +199,10 @@ impl Cache {
             return Ok(());
         }
 
-        let mut buffer = bytes::BytesMut::with_capacity(length as usize);
-        match reader.read_buf(&mut buffer).await {
+        let mut buffer = Vec::with_capacity(length as usize);
+        match reader.read_to_end(&mut buffer).await {
             Ok(_) => {
-                task.write_piece(piece_id, buffer.freeze()).await;
+                task.write_piece(piece_id, bytes::Bytes::from(buffer)).await;
                 Ok(())
             }
             Err(err) => Err(Error::Unknown(format!(
@@ -245,6 +245,15 @@ impl Cache {
         let task = Task::new(task_id.to_string(), content_length);
         tasks.put(task_id.to_string(), task);
         self.size += content_length;
+    }
+
+    pub async fn delete_task(&mut self, task_id: &str) -> Result<()> {
+        let mut tasks = self.tasks.write().await;
+        let Some((_id, task)) = tasks.pop(task_id) else {
+            return Err(Error::TaskNotFound(task_id.to_string()));
+        };
+        self.size -= task.content_length();
+        Ok(())
     }
 
     /// contains_task checks whether the task exists in the cache.
@@ -419,6 +428,51 @@ mod tests {
             }
             assert_eq!(cache.contains_task(task_id).await, should_exist);
         }
+    }
+
+    #[tokio::test]
+    async fn test_delete_task() {
+        let config = Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut cache = Cache::new(Arc::new(config)).unwrap();
+
+        cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
+        cache.put_task("task2", ByteSize::mib(1).as_u64()).await;
+        cache.put_task("task3", ByteSize::mib(1).as_u64()).await;
+
+        let test_cases = vec![
+            ("task1", true),
+            ("task2", true),
+            ("task3", true),
+            ("nonexistent", false),
+            ("", false),
+            ("large_task", false),
+        ];
+
+        for (task_id, exists) in test_cases {
+            assert_eq!(cache.contains_task(task_id).await, exists);
+
+            let result = cache.delete_task(task_id).await;
+            if exists {
+                assert!(result.is_ok());
+            } else {
+                assert!(result.is_err());
+            }
+
+            assert!(!cache.contains_task(task_id).await);
+        }
+
+        assert!(!cache.contains_task("task1").await);
+        assert!(!cache.contains_task("task2").await);
+        assert!(!cache.contains_task("task3").await);
+        assert!(!cache.contains_task("nonexistent").await);
+        assert!(!cache.contains_task("").await);
+        assert!(!cache.contains_task("large_task").await);
     }
 
     #[tokio::test]
