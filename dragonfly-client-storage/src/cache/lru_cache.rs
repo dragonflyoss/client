@@ -274,7 +274,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         match self.map.remove(KeyWrapper::from_ref(k)) {
             None => None,
             Some(entry) => {
-                let entry_ptr: *mut Entry<K, V> = Box::into_raw(entry);
+                let entry_ptr = Box::into_raw(entry);
                 self.detach(entry_ptr);
 
                 unsafe {

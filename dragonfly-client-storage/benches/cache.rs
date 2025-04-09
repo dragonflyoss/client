@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
+use bytes::Bytes;
 use bytesize::ByteSize;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use dragonfly_client_config::dfdaemon::{Config, Storage};
 use dragonfly_client_storage::{cache::Cache, metadata::Piece};
-use std::io::Cursor;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::runtime::Runtime;
@@ -60,11 +60,7 @@ pub fn put_task(c: &mut Criterion) {
         &ByteSize::mb(10),
         |b, size| {
             b.iter_batched(
-                || {
-                    rt.block_on(async {
-                        Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap()
-                    })
-                },
+                || rt.block_on(async { Cache::new(Arc::new(create_config(ByteSize::gb(2)))) }),
                 |mut cache| {
                     rt.block_on(async {
                         cache.put_task("task", black_box(size.as_u64())).await;
@@ -80,11 +76,7 @@ pub fn put_task(c: &mut Criterion) {
         &ByteSize::mb(100),
         |b, size| {
             b.iter_batched(
-                || {
-                    rt.block_on(async {
-                        Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap()
-                    })
-                },
+                || rt.block_on(async { Cache::new(Arc::new(create_config(ByteSize::gb(2)))) }),
                 |mut cache| {
                     rt.block_on(async {
                         cache.put_task("task", black_box(size.as_u64())).await;
@@ -100,11 +92,7 @@ pub fn put_task(c: &mut Criterion) {
         &ByteSize::gb(1),
         |b, size| {
             b.iter_batched(
-                || {
-                    rt.block_on(async {
-                        Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap()
-                    })
-                },
+                || rt.block_on(async { Cache::new(Arc::new(create_config(ByteSize::gb(2)))) }),
                 |mut cache| {
                     rt.block_on(async {
                         cache.put_task("task", black_box(size.as_u64())).await;
@@ -128,9 +116,8 @@ pub fn delete_task(c: &mut Criterion) {
         |b, size| {
             b.iter_batched(
                 || {
-                    let mut cache = rt.block_on(async {
-                        Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap()
-                    });
+                    let mut cache =
+                        rt.block_on(async { Cache::new(Arc::new(create_config(ByteSize::gb(2)))) });
                     rt.block_on(async {
                         cache.put_task("task", black_box(size.as_u64())).await;
                     });
@@ -152,9 +139,8 @@ pub fn delete_task(c: &mut Criterion) {
         |b, size| {
             b.iter_batched(
                 || {
-                    let mut cache = rt.block_on(async {
-                        Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap()
-                    });
+                    let mut cache =
+                        rt.block_on(async { Cache::new(Arc::new(create_config(ByteSize::gb(2)))) });
                     rt.block_on(async {
                         cache.put_task("task", black_box(size.as_u64())).await;
                     });
@@ -176,9 +162,8 @@ pub fn delete_task(c: &mut Criterion) {
         |b, size| {
             b.iter_batched(
                 || {
-                    let mut cache = rt.block_on(async {
-                        Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap()
-                    });
+                    let mut cache =
+                        rt.block_on(async { Cache::new(Arc::new(create_config(ByteSize::gb(2)))) });
                     rt.block_on(async {
                         cache.put_task("task", black_box(size.as_u64())).await;
                     });
@@ -211,7 +196,6 @@ pub fn write_piece(c: &mut Criterion) {
                         Cache::new(Arc::new(create_config(
                             ByteSize::mb(4) * PIECE_COUNT as u64 + 1u64,
                         )))
-                        .unwrap()
                     });
 
                     rt.block_on(async {
@@ -224,13 +208,11 @@ pub fn write_piece(c: &mut Criterion) {
                 |cache| {
                     rt.block_on(async {
                         for i in 0..PIECE_COUNT {
-                            let mut cursor = Cursor::new(data);
                             cache
                                 .write_piece(
                                     "task",
                                     &format!("piece{}", i),
-                                    &mut cursor,
-                                    data.len() as u64,
+                                    Bytes::copy_from_slice(data),
                                 )
                                 .await
                                 .unwrap();
@@ -252,7 +234,6 @@ pub fn write_piece(c: &mut Criterion) {
                         Cache::new(Arc::new(create_config(
                             ByteSize::mb(10) * PIECE_COUNT as u64 + 1u64,
                         )))
-                        .unwrap()
                     });
 
                     rt.block_on(async {
@@ -265,13 +246,11 @@ pub fn write_piece(c: &mut Criterion) {
                 |cache| {
                     rt.block_on(async {
                         for i in 0..PIECE_COUNT {
-                            let mut cursor = Cursor::new(data);
                             cache
                                 .write_piece(
                                     "task",
                                     &format!("piece{}", i),
-                                    &mut cursor,
-                                    data.len() as u64,
+                                    Bytes::copy_from_slice(data),
                                 )
                                 .await
                                 .unwrap();
@@ -293,7 +272,6 @@ pub fn write_piece(c: &mut Criterion) {
                         Cache::new(Arc::new(create_config(
                             ByteSize::mb(16) * PIECE_COUNT as u64 + 1u64,
                         )))
-                        .unwrap()
                     });
 
                     rt.block_on(async {
@@ -306,13 +284,11 @@ pub fn write_piece(c: &mut Criterion) {
                 |cache| {
                     rt.block_on(async {
                         for i in 0..PIECE_COUNT {
-                            let mut cursor = Cursor::new(data);
                             cache
                                 .write_piece(
                                     "task",
                                     &format!("piece{}", i),
-                                    &mut cursor,
-                                    data.len() as u64,
+                                    Bytes::copy_from_slice(data),
                                 )
                                 .await
                                 .unwrap();
@@ -341,7 +317,6 @@ pub fn read_piece(c: &mut Criterion) {
                         Cache::new(Arc::new(create_config(
                             ByteSize::mb(4) * PIECE_COUNT as u64 + 1u64,
                         )))
-                        .unwrap()
                     });
 
                     rt.block_on(async {
@@ -349,13 +324,11 @@ pub fn read_piece(c: &mut Criterion) {
                             .put_task("task", (ByteSize::mb(4) * PIECE_COUNT as u64).as_u64())
                             .await;
                         for i in 0..PIECE_COUNT {
-                            let mut cursor = Cursor::new(data);
                             cache
                                 .write_piece(
                                     "task",
                                     &format!("piece{}", i),
-                                    &mut cursor,
-                                    data.len() as u64,
+                                    Bytes::copy_from_slice(data),
                                 )
                                 .await
                                 .unwrap();
@@ -395,7 +368,6 @@ pub fn read_piece(c: &mut Criterion) {
                         Cache::new(Arc::new(create_config(
                             ByteSize::mb(10) * PIECE_COUNT as u64 + 1u64,
                         )))
-                        .unwrap()
                     });
 
                     rt.block_on(async {
@@ -403,13 +375,11 @@ pub fn read_piece(c: &mut Criterion) {
                             .put_task("task", (ByteSize::mb(10) * PIECE_COUNT as u64).as_u64())
                             .await;
                         for i in 0..PIECE_COUNT {
-                            let mut cursor = Cursor::new(data);
                             cache
                                 .write_piece(
                                     "task",
                                     &format!("piece{}", i),
-                                    &mut cursor,
-                                    data.len() as u64,
+                                    Bytes::copy_from_slice(data),
                                 )
                                 .await
                                 .unwrap();
@@ -449,7 +419,6 @@ pub fn read_piece(c: &mut Criterion) {
                         Cache::new(Arc::new(create_config(
                             ByteSize::mb(16) * PIECE_COUNT as u64 + 1u64,
                         )))
-                        .unwrap()
                     });
 
                     rt.block_on(async {
@@ -457,13 +426,11 @@ pub fn read_piece(c: &mut Criterion) {
                             .put_task("task", (ByteSize::mb(16) * PIECE_COUNT as u64).as_u64())
                             .await;
                         for i in 0..PIECE_COUNT {
-                            let mut cursor = Cursor::new(data);
                             cache
                                 .write_piece(
                                     "task",
                                     &format!("piece{}", i),
-                                    &mut cursor,
-                                    data.len() as u64,
+                                    Bytes::copy_from_slice(data),
                                 )
                                 .await
                                 .unwrap();
