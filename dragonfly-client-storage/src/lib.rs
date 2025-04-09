@@ -59,13 +59,7 @@ impl Storage {
     pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf) -> Result<Self> {
         let metadata = metadata::Metadata::new(config.clone(), dir, &log_dir)?;
         let content = content::Content::new(config.clone(), dir).await?;
-        let cache = match cache::Cache::new(config.clone()) {
-            Ok(cache) => cache,
-            Err(err) => {
-                error!("create cache failed: {}", err);
-                return Err(err);
-            }
-        };
+        let cache = cache::Cache::new(config.clone());
 
         Ok(Storage {
             config,
@@ -136,7 +130,6 @@ impl Storage {
             if let Some(content_length) = content_length {
                 let mut cache = self.cache.clone();
                 cache.put_task(id, content_length).await;
-                debug!("put task in cache: {}", id);
             }
         }
 
@@ -430,26 +423,23 @@ impl Storage {
         load_to_cache: bool,
     ) -> Result<metadata::Piece> {
         let response = if load_to_cache {
-            let mut buffer = Vec::new();
-            let mut inspect_reader = InspectReader::new(reader, |bytes| {
+            let mut buffer = Vec::with_capacity(length as usize);
+            let mut tee = InspectReader::new(reader, |bytes| {
                 buffer.extend_from_slice(bytes);
             });
-            self.cache
-                .write_piece(task_id, piece_id, &mut inspect_reader, length)
-                .await
-                .inspect_err(|err| {
-                    error!("load piece to cache failed: {}", err);
-                })?;
 
-            self.content
-                .write_piece(task_id, offset, &mut &buffer[..])
-                .await?
+            let response = self.content.write_piece(task_id, offset, &mut tee).await?;
+
+            self.cache
+                .write_piece(task_id, piece_id, bytes::Bytes::from(buffer))
+                .await?;
+
+            response
         } else {
             self.content.write_piece(task_id, offset, reader).await?
         };
 
         let digest = Digest::new(Algorithm::Crc32, response.hash);
-
         self.metadata.download_piece_finished(
             piece_id,
             offset,
@@ -474,20 +464,18 @@ impl Storage {
         load_to_cache: bool,
     ) -> Result<metadata::Piece> {
         let response = if load_to_cache {
-            let mut buffer = Vec::new();
-            let mut inspect_reader = InspectReader::new(reader, |bytes| {
+            let mut buffer = Vec::with_capacity(length as usize);
+            let mut tee = InspectReader::new(reader, |bytes| {
                 buffer.extend_from_slice(bytes);
             });
-            self.cache
-                .write_piece(task_id, piece_id, &mut inspect_reader, length)
-                .await
-                .inspect_err(|err| {
-                    error!("load piece to cache failed: {}", err);
-                })?;
 
-            self.content
-                .write_piece(task_id, offset, &mut &buffer[..])
-                .await?
+            let response = self.content.write_piece(task_id, offset, &mut tee).await?;
+
+            self.cache
+                .write_piece(task_id, piece_id, bytes::Bytes::from(buffer))
+                .await?;
+
+            response
         } else {
             self.content.write_piece(task_id, offset, reader).await?
         };
@@ -537,19 +525,17 @@ impl Storage {
         match self.metadata.get_piece(piece_id) {
             Ok(Some(piece)) => {
                 if self.cache.contains_piece(task_id, piece_id).await {
-                    debug!("hit cache: {}", piece_id);
                     match self
                         .cache
                         .read_piece(task_id, piece_id, piece.clone(), range)
                         .await
                     {
-                        Ok(cache_reader) => {
+                        Ok(reader) => {
                             // Finish uploading the task.
                             self.metadata.upload_task_finished(task_id)?;
-                            return Ok(Either::Left(cache_reader));
+                            return Ok(Either::Left(reader));
                         }
                         Err(err) => {
-                            error!("read piece from cache failed: {}", err);
                             return Err(err);
                         }
                     }
