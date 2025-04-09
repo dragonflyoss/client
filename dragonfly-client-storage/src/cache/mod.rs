@@ -124,7 +124,7 @@ pub struct Cache {
 /// Cache implements the cache for storing piece content by LRU algorithm.
 impl Cache {
     /// new creates a new cache with the specified capacity.
-    pub async fn new(config: Arc<Config>) -> Result<Self> {
+    pub fn new(config: Arc<Config>) -> Result<Self> {
         Ok(Cache {
             config: config.clone(),
             size: 0,
@@ -202,7 +202,7 @@ impl Cache {
         let mut buffer = Vec::with_capacity(length as usize);
         match reader.read_to_end(&mut buffer).await {
             Ok(_) => {
-                task.write_piece(piece_id, Bytes::from(buffer)).await;
+                task.write_piece(piece_id, bytes::Bytes::from(buffer)).await;
                 Ok(())
             }
             Err(err) => Err(Error::Unknown(format!(
@@ -249,10 +249,10 @@ impl Cache {
 
     pub async fn delete_task(&mut self, task_id: &str) -> Result<()> {
         let mut tasks = self.tasks.write().await;
-        let Some(task) = tasks.pop(task_id) else {
+        let Some((_id, task)) = tasks.pop(task_id) else {
             return Err(Error::TaskNotFound(task_id.to_string()));
         };
-        self.size -= task.1.content_length();
+        self.size -= task.content_length();
         Ok(())
     }
 
@@ -315,7 +315,7 @@ mod tests {
         ];
 
         for (config, expected_size, expected_capacity) in test_cases {
-            let cache = Cache::new(Arc::new(config)).await.unwrap();
+            let cache = Cache::new(Arc::new(config)).unwrap();
             assert_eq!(cache.size, expected_size);
             assert_eq!(cache.capacity, expected_capacity);
         }
@@ -330,7 +330,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let cache = Cache::new(Arc::new(config)).await.unwrap();
+        let cache = Cache::new(Arc::new(config)).unwrap();
 
         let test_cases = vec![
             // Test non-existent task.
@@ -377,7 +377,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut cache = Cache::new(Arc::new(config)).await.unwrap();
+        let mut cache = Cache::new(Arc::new(config)).unwrap();
 
         let test_cases = vec![
             // Empty task should not be cached.
@@ -408,7 +408,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut cache = Cache::new(Arc::new(config)).await.unwrap();
+        let mut cache = Cache::new(Arc::new(config)).unwrap();
 
         let test_cases = vec![
             // Add tasks until eviction triggers.
@@ -439,7 +439,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut cache = Cache::new(Arc::new(config)).await.unwrap();
+        let mut cache = Cache::new(Arc::new(config)).unwrap();
 
         cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
         cache.put_task("task2", ByteSize::mib(1).as_u64()).await;
@@ -484,7 +484,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut cache = Cache::new(Arc::new(config)).await.unwrap();
+        let mut cache = Cache::new(Arc::new(config)).unwrap();
 
         let test_cases = vec![
             // Check non-existent task.
@@ -543,7 +543,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut cache = Cache::new(Arc::new(config)).await.unwrap();
+        let mut cache = Cache::new(Arc::new(config)).unwrap();
 
         // Test writing to non-existent task.
         let test_data = b"test data".to_vec();
@@ -648,7 +648,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut cache = Cache::new(Arc::new(config)).await.unwrap();
+        let mut cache = Cache::new(Arc::new(config)).unwrap();
 
         let piece = Piece {
             number: 0,
@@ -838,7 +838,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut cache = Cache::new(Arc::new(config)).await.unwrap();
+        let mut cache = Cache::new(Arc::new(config)).unwrap();
         cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
 
         let content = b"test data for concurrent read".to_vec();
@@ -909,7 +909,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut cache = Cache::new(Arc::new(config)).await.unwrap();
+        let mut cache = Cache::new(Arc::new(config)).unwrap();
         cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
 
         let cache_arc = Arc::new(cache);
@@ -966,7 +966,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut cache = Cache::new(Arc::new(config)).await.unwrap();
+        let mut cache = Cache::new(Arc::new(config)).unwrap();
         cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
 
         let original_content = b"original content".to_vec();
