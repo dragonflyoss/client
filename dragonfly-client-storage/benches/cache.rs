@@ -60,7 +60,11 @@ pub fn put_task(c: &mut Criterion) {
         &ByteSize::mb(10),
         |b, size| {
             b.iter_batched(
-                || Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap(),
+                || {
+                    rt.block_on(async {
+                        Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap()
+                    })
+                },
                 |mut cache| {
                     rt.block_on(async {
                         cache.put_task("task", black_box(size.as_u64())).await;
@@ -76,7 +80,11 @@ pub fn put_task(c: &mut Criterion) {
         &ByteSize::mb(100),
         |b, size| {
             b.iter_batched(
-                || Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap(),
+                || {
+                    rt.block_on(async {
+                        Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap()
+                    })
+                },
                 |mut cache| {
                     rt.block_on(async {
                         cache.put_task("task", black_box(size.as_u64())).await;
@@ -92,10 +100,93 @@ pub fn put_task(c: &mut Criterion) {
         &ByteSize::gb(1),
         |b, size| {
             b.iter_batched(
-                || Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap(),
+                || {
+                    rt.block_on(async {
+                        Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap()
+                    })
+                },
                 |mut cache| {
                     rt.block_on(async {
                         cache.put_task("task", black_box(size.as_u64())).await;
+                    });
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
+
+    group.finish();
+}
+
+pub fn delete_task(c: &mut Criterion) {
+    let rt: Runtime = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("Delete Task");
+
+    group.bench_with_input(
+        BenchmarkId::new("Delete Task", "10MB"),
+        &ByteSize::mb(10),
+        |b, size| {
+            b.iter_batched(
+                || {
+                    let mut cache = rt.block_on(async {
+                        Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap()
+                    });
+                    rt.block_on(async {
+                        cache.put_task("task", black_box(size.as_u64())).await;
+                    });
+                    cache
+                },
+                |mut cache| {
+                    rt.block_on(async {
+                        cache.delete_task("task").await.unwrap();
+                    });
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
+
+    group.bench_with_input(
+        BenchmarkId::new("Delete Task", "100MB"),
+        &ByteSize::mb(100),
+        |b, size| {
+            b.iter_batched(
+                || {
+                    let mut cache = rt.block_on(async {
+                        Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap()
+                    });
+                    rt.block_on(async {
+                        cache.put_task("task", black_box(size.as_u64())).await;
+                    });
+                    cache
+                },
+                |mut cache| {
+                    rt.block_on(async {
+                        cache.delete_task("task").await.unwrap();
+                    });
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
+
+    group.bench_with_input(
+        BenchmarkId::new("Delete Task", "1GB"),
+        &ByteSize::gb(1),
+        |b, size| {
+            b.iter_batched(
+                || {
+                    let mut cache = rt.block_on(async {
+                        Cache::new(Arc::new(create_config(ByteSize::gb(2)))).unwrap()
+                    });
+                    rt.block_on(async {
+                        cache.put_task("task", black_box(size.as_u64())).await;
+                    });
+                    cache
+                },
+                |mut cache| {
+                    rt.block_on(async {
+                        cache.delete_task("task").await.unwrap();
                     });
                 },
                 criterion::BatchSize::SmallInput,
@@ -116,10 +207,12 @@ pub fn write_piece(c: &mut Criterion) {
         |b, data| {
             b.iter_batched(
                 || {
-                    let mut cache = Cache::new(Arc::new(create_config(
-                        ByteSize::mb(4) * PIECE_COUNT as u64 * 2u64,
-                    )))
-                    .unwrap();
+                    let mut cache = rt.block_on(async {
+                        Cache::new(Arc::new(create_config(
+                            ByteSize::mb(4) * PIECE_COUNT as u64 + 1u64,
+                        )))
+                        .unwrap()
+                    });
 
                     rt.block_on(async {
                         cache
@@ -155,10 +248,12 @@ pub fn write_piece(c: &mut Criterion) {
         |b, data| {
             b.iter_batched(
                 || {
-                    let mut cache = Cache::new(Arc::new(create_config(
-                        ByteSize::mb(10) * PIECE_COUNT as u64 * 2u64,
-                    )))
-                    .unwrap();
+                    let mut cache = rt.block_on(async {
+                        Cache::new(Arc::new(create_config(
+                            ByteSize::mb(10) * PIECE_COUNT as u64 + 1u64,
+                        )))
+                        .unwrap()
+                    });
 
                     rt.block_on(async {
                         cache
@@ -194,10 +289,12 @@ pub fn write_piece(c: &mut Criterion) {
         |b, data| {
             b.iter_batched(
                 || {
-                    let mut cache = Cache::new(Arc::new(create_config(
-                        ByteSize::mb(16) * PIECE_COUNT as u64 * 2u64,
-                    )))
-                    .unwrap();
+                    let mut cache = rt.block_on(async {
+                        Cache::new(Arc::new(create_config(
+                            ByteSize::mb(16) * PIECE_COUNT as u64 + 1u64,
+                        )))
+                        .unwrap()
+                    });
 
                     rt.block_on(async {
                         cache
@@ -240,10 +337,12 @@ pub fn read_piece(c: &mut Criterion) {
         |b, data| {
             b.iter_batched(
                 || {
-                    let mut cache = Cache::new(Arc::new(create_config(
-                        ByteSize::mb(4) * PIECE_COUNT as u64 * 2u64,
-                    )))
-                    .unwrap();
+                    let mut cache = rt.block_on(async {
+                        Cache::new(Arc::new(create_config(
+                            ByteSize::mb(4) * PIECE_COUNT as u64 + 1u64,
+                        )))
+                        .unwrap()
+                    });
 
                     rt.block_on(async {
                         cache
@@ -292,10 +391,12 @@ pub fn read_piece(c: &mut Criterion) {
         |b, data| {
             b.iter_batched(
                 || {
-                    let mut cache = Cache::new(Arc::new(create_config(
-                        ByteSize::mb(10) * PIECE_COUNT as u64 * 2u64,
-                    )))
-                    .unwrap();
+                    let mut cache = rt.block_on(async {
+                        Cache::new(Arc::new(create_config(
+                            ByteSize::mb(10) * PIECE_COUNT as u64 + 1u64,
+                        )))
+                        .unwrap()
+                    });
 
                     rt.block_on(async {
                         cache
@@ -344,10 +445,12 @@ pub fn read_piece(c: &mut Criterion) {
         |b, data| {
             b.iter_batched(
                 || {
-                    let mut cache = Cache::new(Arc::new(create_config(
-                        ByteSize::mb(16) * PIECE_COUNT as u64 * 2u64,
-                    )))
-                    .unwrap();
+                    let mut cache = rt.block_on(async {
+                        Cache::new(Arc::new(create_config(
+                            ByteSize::mb(16) * PIECE_COUNT as u64 + 1u64,
+                        )))
+                        .unwrap()
+                    });
 
                     rt.block_on(async {
                         cache
@@ -393,6 +496,6 @@ pub fn read_piece(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, put_task, write_piece, read_piece,);
+criterion_group!(benches, put_task, delete_task, write_piece, read_piece,);
 
 criterion_main!(benches);
