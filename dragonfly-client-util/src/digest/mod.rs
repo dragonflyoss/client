@@ -31,9 +31,6 @@ pub enum Algorithm {
     /// Crc32 is crc32 algorithm for generate digest.
     Crc32,
 
-    /// Blake3 is blake3 algorithm for generate digest.
-    Blake3,
-
     /// Sha256 is sha256 algorithm for generate digest.
     Sha256,
 
@@ -47,7 +44,6 @@ impl fmt::Display for Algorithm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Algorithm::Crc32 => write!(f, "crc32"),
-            Algorithm::Blake3 => write!(f, "blake3"),
             Algorithm::Sha256 => write!(f, "sha256"),
             Algorithm::Sha512 => write!(f, "sha512"),
         }
@@ -62,7 +58,6 @@ impl FromStr for Algorithm {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "crc32" => Ok(Algorithm::Crc32),
-            "blake3" => Ok(Algorithm::Blake3),
             "sha256" => Ok(Algorithm::Sha256),
             "sha512" => Ok(Algorithm::Sha512),
             _ => Err(format!("invalid digest algorithm: {}", s)),
@@ -118,7 +113,6 @@ impl FromStr for Digest {
 
         let algorithm = match parts[0] {
             "crc32" => Algorithm::Crc32,
-            "blake3" => Algorithm::Blake3,
             "sha256" => Algorithm::Sha256,
             "sha512" => Algorithm::Sha512,
             _ => return Err(format!("invalid digest algorithm: {}", parts[0])),
@@ -148,14 +142,6 @@ pub fn calculate_file_digest(algorithm: Algorithm, path: &Path) -> ClientResult<
 
             Ok(Digest::new(algorithm, hasher.finalize().to_string()))
         }
-        Algorithm::Blake3 => {
-            let mut hasher = blake3::Hasher::new();
-            std::io::copy(&mut reader, &mut hasher)?;
-            Ok(Digest::new(
-                algorithm,
-                base16ct::lower::encode_string(hasher.finalize().as_bytes()),
-            ))
-        }
         Algorithm::Sha256 => {
             let mut hasher = sha2::Sha256::new();
             std::io::copy(&mut reader, &mut hasher)?;
@@ -178,7 +164,6 @@ mod tests {
     #[test]
     fn test_algorithm_display() {
         assert_eq!(Algorithm::Crc32.to_string(), "crc32");
-        assert_eq!(Algorithm::Blake3.to_string(), "blake3");
         assert_eq!(Algorithm::Sha256.to_string(), "sha256");
         assert_eq!(Algorithm::Sha512.to_string(), "sha512");
     }
@@ -186,7 +171,6 @@ mod tests {
     #[test]
     fn test_algorithm_from_str() {
         assert_eq!("crc32".parse::<Algorithm>(), Ok(Algorithm::Crc32));
-        assert_eq!("blake3".parse::<Algorithm>(), Ok(Algorithm::Blake3));
         assert_eq!("sha256".parse::<Algorithm>(), Ok(Algorithm::Sha256));
         assert_eq!("sha512".parse::<Algorithm>(), Ok(Algorithm::Sha512));
         assert!("invalid".parse::<Algorithm>().is_err());
@@ -205,11 +189,6 @@ mod tests {
         let path = temp_file.path();
         let mut file = File::create(path).expect("failed to create file");
         file.write_all(content).expect("failed to write to file");
-
-        let expected_blake3 = "ead3df8af4aece7792496936f83b6b6d191a7f256585ce6b6028db161278017e";
-        let digest = calculate_file_digest(Algorithm::Blake3, path)
-            .expect("failed to calculate Blake3 hash");
-        assert_eq!(digest.encoded(), expected_blake3);
 
         let expected_sha256 = "6ae8a75555209fd6c44157c0aed8016e763ff435a19cf186f76863140143ff72";
         let digest = calculate_file_digest(Algorithm::Sha256, path)
