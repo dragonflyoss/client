@@ -454,17 +454,16 @@ impl Storage {
 
             (response, StorageType::Memory)
         } else {
-            (self.content.write_piece(task_id, offset, reader).await?, StorageType::Disk)
+            (
+                self.content.write_piece(task_id, offset, reader).await?,
+                StorageType::Disk,
+            )
         };
 
         let digest = Digest::new(Algorithm::Crc32, response.hash);
-        self.metadata.download_piece_finished(
-            piece_id,
-            offset,
-            length,
-            digest.to_string().as_str(),
-            None,
-        ).map(|piece|(piece, storage_type))
+        self.metadata
+            .download_piece_finished(piece_id, offset, length, digest.to_string().as_str(), None)
+            .map(|piece| (piece, storage_type))
     }
 
     /// download_piece_from_parent_finished is used for downloading piece from parent.
@@ -495,7 +494,10 @@ impl Storage {
 
             (response, StorageType::Memory)
         } else {
-            (self.content.write_piece(task_id, offset, reader).await?, StorageType::Disk)
+            (
+                self.content.write_piece(task_id, offset, reader).await?,
+                StorageType::Disk,
+            )
         };
 
         let length = response.length;
@@ -509,13 +511,15 @@ impl Storage {
             ));
         }
 
-        self.metadata.download_piece_finished(
-            piece_id,
-            offset,
-            length,
-            digest.to_string().as_str(),
-            Some(parent_id.to_string()),
-        ).map(|piece| (piece, storage_type))
+        self.metadata
+            .download_piece_finished(
+                piece_id,
+                offset,
+                length,
+                digest.to_string().as_str(),
+                Some(parent_id.to_string()),
+            )
+            .map(|piece| (piece, storage_type))
     }
 
     /// download_piece_failed updates the metadata of the piece when the piece downloads failed.
