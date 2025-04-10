@@ -37,6 +37,24 @@ pub mod storage_engine;
 /// DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.
 pub const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Storage type can be either in-memory or disk-based.
+pub enum StorageType {
+    /// Memory storage uses RAM for caching data.
+    Memory,
+    /// Disk storage uses persistent storage for caching data.
+    Disk,
+}
+
+/// StorageType implements the storage type.
+impl StorageType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            StorageType::Memory => "memory",
+            StorageType::Disk => "disk",
+        }
+    }
+}
+
 /// Storage is the storage of the task.
 pub struct Storage {
     /// config is the configuration of the dfdaemon.
@@ -421,8 +439,8 @@ impl Storage {
         length: u64,
         reader: &mut R,
         load_to_cache: bool,
-    ) -> Result<metadata::Piece> {
-        let response = if load_to_cache {
+    ) -> Result<(metadata::Piece, StorageType)> {
+        let (response, storage_type) = if load_to_cache {
             let mut buffer = Vec::with_capacity(length as usize);
             let mut tee = InspectReader::new(reader, |bytes| {
                 buffer.extend_from_slice(bytes);
@@ -434,9 +452,9 @@ impl Storage {
                 .write_piece(task_id, piece_id, bytes::Bytes::from(buffer))
                 .await?;
 
-            response
+            (response, StorageType::Memory)
         } else {
-            self.content.write_piece(task_id, offset, reader).await?
+            (self.content.write_piece(task_id, offset, reader).await?, StorageType::Disk)
         };
 
         let digest = Digest::new(Algorithm::Crc32, response.hash);
@@ -446,7 +464,7 @@ impl Storage {
             length,
             digest.to_string().as_str(),
             None,
-        )
+        ).map(|piece|(piece, storage_type))
     }
 
     /// download_piece_from_parent_finished is used for downloading piece from parent.
@@ -462,8 +480,8 @@ impl Storage {
         parent_id: &str,
         reader: &mut R,
         load_to_cache: bool,
-    ) -> Result<metadata::Piece> {
-        let response = if load_to_cache {
+    ) -> Result<(metadata::Piece, StorageType)> {
+        let (response, storage_type) = if load_to_cache {
             let mut buffer = Vec::with_capacity(length as usize);
             let mut tee = InspectReader::new(reader, |bytes| {
                 buffer.extend_from_slice(bytes);
@@ -475,9 +493,9 @@ impl Storage {
                 .write_piece(task_id, piece_id, bytes::Bytes::from(buffer))
                 .await?;
 
-            response
+            (response, StorageType::Memory)
         } else {
-            self.content.write_piece(task_id, offset, reader).await?
+            (self.content.write_piece(task_id, offset, reader).await?, StorageType::Disk)
         };
 
         let length = response.length;
@@ -497,7 +515,7 @@ impl Storage {
             length,
             digest.to_string().as_str(),
             Some(parent_id.to_string()),
-        )
+        ).map(|piece| (piece, storage_type))
     }
 
     /// download_piece_failed updates the metadata of the piece when the piece downloads failed.
@@ -514,7 +532,7 @@ impl Storage {
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<(impl AsyncRead, StorageType)> {
         // Wait for the piece to be finished.
         self.wait_for_piece_finished(piece_id).await?;
 
@@ -533,7 +551,7 @@ impl Storage {
                         Ok(reader) => {
                             // Finish uploading the task.
                             self.metadata.upload_task_finished(task_id)?;
-                            return Ok(Either::Left(reader));
+                            return Ok((Either::Left(reader), StorageType::Memory));
                         }
                         Err(err) => {
                             return Err(err);
@@ -549,7 +567,7 @@ impl Storage {
                     Ok(reader) => {
                         // Finish uploading the task.
                         self.metadata.upload_task_finished(task_id)?;
-                        Ok(Either::Right(reader))
+                        Ok((Either::Right(reader), StorageType::Disk))
                     }
                     Err(err) => {
                         // Failed uploading the task.

@@ -348,12 +348,14 @@ impl Piece {
         self.storage
             .upload_piece(piece_id, task_id, range)
             .await
-            .inspect(|_reader| {
+            .inspect(|(_reader, storage_type)| {
                 collect_upload_piece_traffic_metrics(
                     self.id_generator.task_type(task_id) as i32,
+                    Some(storage_type.as_str()),
                     length,
                 );
             })
+            .map(|(reader, _)| reader)
     }
 
     /// upload_from_local_into_async_read. It will return two readers, one is the range reader, and the other is the
@@ -382,6 +384,7 @@ impl Piece {
             .inspect(|_reader| {
                 collect_upload_piece_traffic_metrics(
                     self.id_generator.task_type(task_id) as i32,
+                    None,
                     length,
                 );
             })
@@ -413,7 +416,10 @@ impl Piece {
         }
 
         // Upload the piece content.
-        self.storage.upload_piece(piece_id, task_id, range).await
+        self.storage
+            .upload_piece(piece_id, task_id, range)
+            .await
+            .map(|(reader, _)| reader)
     }
 
     /// download_from_local_into_dual_async_read returns two readers, one is the range reader, and
@@ -455,6 +461,7 @@ impl Piece {
         collect_download_piece_traffic_metrics(
             &TrafficType::LocalPeer,
             self.id_generator.task_type(task_id) as i32,
+            None,
             length,
         );
     }
@@ -538,10 +545,11 @@ impl Piece {
             )
             .await
         {
-            Ok(piece) => {
+            Ok((piece, storage_type)) => {
                 collect_download_piece_traffic_metrics(
                     &TrafficType::RemotePeer,
                     self.id_generator.task_type(task_id) as i32,
+                    Some(storage_type.as_str()),
                     length,
                 );
 
@@ -699,10 +707,11 @@ impl Piece {
             )
             .await
         {
-            Ok(piece) => {
+            Ok((piece, storage_type)) => {
                 collect_download_piece_traffic_metrics(
                     &TrafficType::BackToSource,
                     self.id_generator.task_type(task_id) as i32,
+                    Some(storage_type.as_str()),
                     length,
                 );
 
@@ -770,6 +779,7 @@ impl Piece {
             .inspect(|_reader| {
                 collect_upload_piece_traffic_metrics(
                     self.id_generator.task_type(task_id) as i32,
+                    None,
                     length,
                 );
             })
@@ -813,6 +823,7 @@ impl Piece {
         collect_download_piece_traffic_metrics(
             &TrafficType::LocalPeer,
             self.id_generator.task_type(task_id) as i32,
+            None,
             length,
         );
     }
@@ -905,6 +916,7 @@ impl Piece {
                 collect_download_piece_traffic_metrics(
                     &TrafficType::RemotePeer,
                     self.id_generator.task_type(task_id) as i32,
+                    None,
                     length,
                 );
 
