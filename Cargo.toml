@@ -29,8 +29,9 @@ dragonfly-client-storage = { path = "dragonfly-client-storage", version = "0.2.2
 dragonfly-client-backend = { path = "dragonfly-client-backend", version = "0.2.22" }
 dragonfly-client-util = { path = "dragonfly-client-util", version = "0.2.22" }
 dragonfly-client-init = { path = "dragonfly-client-init", version = "0.2.22" }
-thiserror = "1.0"
 dragonfly-api = "=2.1.36"
+thiserror = "1.0"
+futures = "0.3.31"
 reqwest = { version = "0.12.4", features = [
     "stream",
     "native-tls",
@@ -60,7 +61,6 @@ rustls = { version = "0.22.4", features = ["tls12"] }
 rustls-pki-types = "1.11.0"
 rustls-pemfile = "2.2.0"
 sha2 = "0.10"
-blake3 = "1.8.1"
 crc32fast = "1.4.2"
 uuid = { version = "1.16", features = ["v4"] }
 hex = "0.4"
@@ -94,7 +94,6 @@ clap = { version = "4.5.35", features = ["derive"] }
 anyhow = "1.0.97"
 toml_edit = "0.22.24"
 toml = "0.8.20"
-base16ct = { version = "0.2", features = ["alloc"] }
 bytesize = { version = "1.3.3", features = ["serde"] }
 bytesize-serde = "0.2.1"
 percent-encoding = "2.3.1"

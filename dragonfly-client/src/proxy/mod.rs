@@ -34,7 +34,7 @@ use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
-use futures_util::TryStreamExt;
+use futures::TryStreamExt;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, StreamBody};
 use hyper::body::Frame;
 use hyper::client::conn::http1::Builder as ClientBuilder;
