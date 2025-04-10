@@ -34,3 +34,37 @@ pub fn default_dfcache_log_dir() -> PathBuf {
 pub fn default_dfcache_persistent_replica_count() -> u64 {
     2
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use home;
+    use std::env::consts::OS;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_default_dfcache_log_dir() {
+        let log_dir: PathBuf = default_dfcache_log_dir();
+
+        let expected: PathBuf = if OS == "linux" {
+            PathBuf::from("/var/log/dragonfly/dfcache")
+        } else if OS == "macos" {
+            let mut path: PathBuf = home::home_dir().unwrap();
+            path.push(".dragonfly/logs/dfcache");
+            path
+        } else {
+            panic!("Unsupported OS: {OS}")
+        };
+
+        assert_eq!(
+            log_dir, expected,
+            "Log directory does not match expected path for {}",
+            OS
+        );
+    }
+
+    #[test]
+    fn test_default_persistent_replica_count() {
+        assert_eq!(default_dfcache_persistent_replica_count(), 2);
+    }
+}

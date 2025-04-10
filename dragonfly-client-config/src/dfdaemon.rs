@@ -27,7 +27,7 @@ use local_ip_address::{local_ip, local_ipv6};
 use rcgen::Certificate;
 use regex::Regex;
 use rustls_pki_types::CertificateDer;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -814,7 +814,7 @@ impl Scheduler {
 }
 
 /// HostType is the type of the host.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 pub enum HostType {
     /// Normal indicates the peer is normal peer.
     #[serde(rename = "normal")]
@@ -995,7 +995,7 @@ impl Default for Storage {
 }
 
 /// Policy is the policy configuration for gc.
-#[derive(Debug, Clone, Validate, Deserialize)]
+#[derive(Debug, Clone, Validate, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Policy {
     /// task_ttl is the ttl of the task.
@@ -1535,5 +1535,580 @@ impl Config {
                 Some(Ipv4Addr::UNSPECIFIED.into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+    use tempfile::NamedTempFile;
+    use tokio::fs;
+    use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn test_default_proxy_rule_filtered_query_params_contains_all_params() {
+        let mut expected = HashSet::new();
+        expected.extend(s3_filtered_query_params());
+        expected.extend(gcs_filtered_query_params());
+        expected.extend(oss_filtered_query_params());
+        expected.extend(obs_filtered_query_params());
+        expected.extend(cos_filtered_query_params());
+        expected.extend(containerd_filtered_query_params());
+
+        let actual = default_proxy_rule_filtered_query_params();
+        let actual_set: HashSet<_> = actual.into_iter().collect();
+
+        assert_eq!(actual_set, expected);
+    }
+
+    #[test]
+    fn test_default_proxy_rule_removes_duplicates() {
+        let params: Vec<String> = default_proxy_rule_filtered_query_params();
+        let param_count = params.len();
+
+        let unique_params: HashSet<_> = params.into_iter().collect();
+        assert_eq!(unique_params.len(), param_count);
+    }
+
+    #[test]
+    fn test_contains_key_properties() {
+        let params = default_proxy_rule_filtered_query_params();
+        let param_set: HashSet<_> = params.into_iter().collect();
+
+        assert!(param_set.contains("X-Amz-Signature"));
+        assert!(param_set.contains("X-Goog-Signature"));
+        assert!(param_set.contains("OSSAccessKeyId"));
+        assert!(param_set.contains("X-Obs-Security-Token"));
+        assert!(param_set.contains("q-sign-algorithm"));
+        assert!(param_set.contains("ns"));
+    }
+
+    #[test]
+    fn test_deserialize_server() {
+        let json_data = r#"
+        {
+            "pluginDir": "/custom/plugin/dir",
+            "cacheDir": "/custom/cache/dir"
+        }"#;
+
+        let server: Server = serde_json::from_str(json_data).unwrap();
+
+        assert_eq!(server.plugin_dir, PathBuf::from("/custom/plugin/dir"));
+        assert_eq!(server.cache_dir, PathBuf::from("/custom/cache/dir"));
+    }
+
+    #[test]
+    fn test_deserialize_download() {
+        let json_data = r#"
+        {
+            "server": {
+                "socketPath": "/var/run/dragonfly/dfdaemon.sock",
+                "requestRateLimit": 4000
+            },
+            "rateLimit": "50GiB",
+            "pieceTimeout": "30s",
+            "concurrentPieceCount": 10
+        }"#;
+
+        let download: Download = serde_json::from_str(json_data).unwrap();
+
+        assert_eq!(
+            download.server.socket_path,
+            PathBuf::from("/var/run/dragonfly/dfdaemon.sock")
+        );
+        assert_eq!(download.server.request_rate_limit, 4000);
+
+        assert_eq!(download.rate_limit, ByteSize::gib(50));
+        assert_eq!(download.piece_timeout, Duration::from_secs(30));
+        assert_eq!(download.concurrent_piece_count, 10);
+    }
+
+    #[test]
+    fn test_deserialize_upload() {
+        let json_data = r#"
+        {
+            "server": {
+                "port": 4000,
+                "ip": "127.0.0.1",
+                "caCert": "/etc/ssl/certs/ca.crt",
+                "cert": "/etc/ssl/certs/server.crt",
+                "key": "/etc/ssl/private/server.pem"
+            },
+            "client": {
+                "caCert": "/etc/ssl/certs/ca.crt",
+                "cert": "/etc/ssl/certs/client.crt",
+                "key": "/etc/ssl/private/client.pem"
+            },
+            "disableShared": false,
+            "rateLimit": "10GiB"
+        }"#;
+
+        let upload: Upload = serde_json::from_str(json_data).unwrap();
+
+        assert_eq!(upload.server.port, 4000);
+        assert_eq!(
+            upload.server.ip,
+            Some("127.0.0.1".parse::<IpAddr>().unwrap())
+        );
+        assert_eq!(
+            upload.server.ca_cert,
+            Some(PathBuf::from("/etc/ssl/certs/ca.crt"))
+        );
+        assert_eq!(
+            upload.server.cert,
+            Some(PathBuf::from("/etc/ssl/certs/server.crt"))
+        );
+        assert_eq!(
+            upload.server.key,
+            Some(PathBuf::from("/etc/ssl/private/server.pem"))
+        );
+
+        assert_eq!(
+            upload.client.ca_cert,
+            Some(PathBuf::from("/etc/ssl/certs/ca.crt"))
+        );
+        assert_eq!(
+            upload.client.cert,
+            Some(PathBuf::from("/etc/ssl/certs/client.crt"))
+        );
+        assert_eq!(
+            upload.client.key,
+            Some(PathBuf::from("/etc/ssl/private/client.pem"))
+        );
+
+        assert!(!upload.disable_shared);
+        assert_eq!(upload.rate_limit, ByteSize::gib(10));
+    }
+
+    #[test]
+    fn test_upload_server_default() {
+        let server = UploadServer::default();
+
+        assert!(server.ip.is_none());
+        assert_eq!(server.port, default_upload_grpc_server_port());
+        assert!(server.ca_cert.is_none());
+        assert!(server.cert.is_none());
+        assert!(server.key.is_none());
+        assert_eq!(
+            server.request_rate_limit,
+            default_upload_request_rate_limit()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_load_server_tls_config_success() {
+        let (ca_file, cert_file, key_file) = create_temp_certs().await;
+
+        let server = UploadServer {
+            ca_cert: Some(ca_file.path().to_path_buf()),
+            cert: Some(cert_file.path().to_path_buf()),
+            key: Some(key_file.path().to_path_buf()),
+            ..Default::default()
+        };
+
+        let tls_config = server.load_server_tls_config().await.unwrap();
+        assert!(tls_config.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_load_server_tls_config_missing_certs() {
+        let server = UploadServer {
+            ca_cert: Some(PathBuf::from("/invalid/path")),
+            cert: None,
+            key: None,
+            ..Default::default()
+        };
+
+        let tls_config = server.load_server_tls_config().await.unwrap();
+        assert!(tls_config.is_none());
+    }
+
+    #[test]
+    fn test_upload_client_default() {
+        let client = UploadClient::default();
+        assert!(client.ca_cert.is_none());
+        assert!(client.cert.is_none());
+        assert!(client.key.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_load_client_tls_config_success() {
+        let (ca_file, cert_file, key_file) = create_temp_certs().await;
+
+        let client = UploadClient {
+            ca_cert: Some(ca_file.path().to_path_buf()),
+            cert: Some(cert_file.path().to_path_buf()),
+            key: Some(key_file.path().to_path_buf()),
+        };
+
+        let tls_config = client.load_client_tls_config("example.com").await.unwrap();
+        assert!(tls_config.is_some());
+
+        let cfg_string = format!("{:?}", tls_config.unwrap());
+        assert!(
+            cfg_string.contains("example.com"),
+            "Domain name not found in TLS config"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_load_tls_config_invalid_path() {
+        let server = UploadServer {
+            ca_cert: Some(PathBuf::from("/invalid/ca.crt")),
+            cert: Some(PathBuf::from("/invalid/server.crt")),
+            key: Some(PathBuf::from("/invalid/server.key")),
+            ..Default::default()
+        };
+
+        let result = server.load_server_tls_config().await;
+        assert!(result.is_err());
+    }
+
+    async fn create_temp_certs() -> (NamedTempFile, NamedTempFile, NamedTempFile) {
+        let ca = NamedTempFile::new().unwrap();
+        let cert = NamedTempFile::new().unwrap();
+        let key = NamedTempFile::new().unwrap();
+
+        fs::write(ca.path(), "-----BEGIN CERT-----\n...\n-----END CERT-----\n")
+            .await
+            .unwrap();
+        fs::write(
+            cert.path(),
+            "-----BEGIN CERT-----\n...\n-----END CERT-----\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            key.path(),
+            "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
+        )
+        .await
+        .unwrap();
+
+        (ca, cert, key)
+    }
+
+    async fn create_temp_pem_file(content: &str) -> NamedTempFile {
+        let file = NamedTempFile::new().unwrap();
+        tokio::fs::File::create(&file)
+            .await
+            .unwrap()
+            .write_all(content.as_bytes())
+            .await
+            .unwrap();
+        file
+    }
+
+    #[tokio::test]
+    async fn load_manager_tls_config_with_all_files() {
+        let ca_cert =
+            create_temp_pem_file("-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----")
+                .await;
+        let client_cert =
+            create_temp_pem_file("-----BEGIN CERTIFICATE-----\nCLIENT\n-----END CERTIFICATE-----")
+                .await;
+        let client_key =
+            create_temp_pem_file("-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----")
+                .await;
+
+        let manager = Manager {
+            addr: "localhost".to_string(),
+            ca_cert: Some(ca_cert.path().to_path_buf()),
+            cert: Some(client_cert.path().to_path_buf()),
+            key: Some(client_key.path().to_path_buf()),
+            ..Manager::default()
+        };
+
+        let result = manager.load_client_tls_config("example.com").await;
+
+        assert!(result.is_ok());
+        let tls_config = result.unwrap();
+        assert!(tls_config.is_some());
+    }
+
+    #[test]
+    fn test_default_host_type() {
+        // Test whether the Display implementation is correct.
+        assert_eq!(HostType::Normal.to_string(), "normal");
+        assert_eq!(HostType::Super.to_string(), "super");
+        assert_eq!(HostType::Strong.to_string(), "strong");
+        assert_eq!(HostType::Weak.to_string(), "weak");
+
+        // Test if the default value is HostType::Super.
+        let default_host_type: HostType = Default::default();
+        assert_eq!(default_host_type, HostType::Super);
+
+        // Deserialize from a string to a HostType.
+        let normal: HostType = serde_json::from_str("\"normal\"").unwrap();
+        let super_seed: HostType = serde_json::from_str("\"super\"").unwrap();
+        let strong_seed: HostType = serde_json::from_str("\"strong\"").unwrap();
+        let weak_seed: HostType = serde_json::from_str("\"weak\"").unwrap();
+
+        assert_eq!(normal, HostType::Normal);
+        assert_eq!(super_seed, HostType::Super);
+        assert_eq!(strong_seed, HostType::Strong);
+        assert_eq!(weak_seed, HostType::Weak);
+
+        // Serialize HostType to a string.
+        let normal_json = serde_json::to_string(&HostType::Normal).unwrap();
+        let super_json = serde_json::to_string(&HostType::Super).unwrap();
+        let strong_json = serde_json::to_string(&HostType::Strong).unwrap();
+        let weak_json = serde_json::to_string(&HostType::Weak).unwrap();
+
+        assert_eq!(normal_json, "\"normal\"");
+        assert_eq!(super_json, "\"super\"");
+        assert_eq!(strong_json, "\"strong\"");
+        assert_eq!(weak_json, "\"weak\"");
+    }
+
+    #[test]
+    fn test_default_seed_peer() {
+        let default_seed_peer = SeedPeer::default();
+        assert_eq!(default_seed_peer.enable, false);
+        assert_eq!(default_seed_peer.kind, HostType::Normal);
+        assert_eq!(default_seed_peer.cluster_id, 1);
+        assert_eq!(
+            default_seed_peer.keepalive_interval,
+            default_seed_peer_keepalive_interval()
+        );
+    }
+
+    #[test]
+    fn test_validate_seed_peer() {
+        let valid_seed_peer = SeedPeer {
+            enable: true,
+            kind: HostType::Weak,
+            cluster_id: 5,
+            keepalive_interval: Duration::from_secs(90),
+        };
+
+        assert!(valid_seed_peer.validate().is_ok());
+
+        let invalid_seed_peer = SeedPeer {
+            enable: true,
+            kind: HostType::Weak,
+            cluster_id: 0,
+            keepalive_interval: Duration::from_secs(90),
+        };
+
+        assert!(invalid_seed_peer.validate().is_err());
+    }
+
+    #[test]
+    fn test_deserialize_seed_peer() {
+        let json_data = r#"
+        {
+            "enable": true,
+            "type": "super",
+            "clusterID": 2,
+            "keepaliveInterval": "60s"
+        }"#;
+
+        let seed_peer: SeedPeer = serde_json::from_str(json_data).unwrap();
+
+        assert_eq!(seed_peer.enable, true);
+        assert_eq!(seed_peer.kind, HostType::Super);
+        assert_eq!(seed_peer.cluster_id, 2);
+        assert_eq!(seed_peer.keepalive_interval, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn test_default_dynconfig() {
+        let default_dynconfig = Dynconfig::default();
+        assert_eq!(default_dynconfig.refresh_interval, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn test_deserialize_dynconfig() {
+        let json_data = r#"
+        {
+            "refreshInterval": "5m"
+        }"#;
+
+        let dynconfig: Dynconfig = serde_json::from_str(json_data).unwrap();
+
+        assert_eq!(dynconfig.refresh_interval, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn test_default_storage() {
+        let default_server = StorageServer::default();
+        assert_eq!(default_server.protocol, "grpc".to_string());
+
+        let default_storage = Storage::default();
+        assert_eq!(default_storage.server.protocol, "grpc".to_string());
+        assert_eq!(default_storage.dir, crate::default_storage_dir());
+        assert_eq!(default_storage.keep, false);
+        assert_eq!(default_storage.write_buffer_size, 4 * 1024 * 1024);
+        assert_eq!(default_storage.read_buffer_size, 4 * 1024 * 1024);
+        assert_eq!(default_storage.cache_capacity, ByteSize::mb(128));
+    }
+
+    #[test]
+    fn test_deserialize_storage() {
+        let json_data = r#"
+        {
+            "server": {
+                "protocol": "http"
+            },
+            "dir": "/tmp/storage",
+            "keep": true,
+            "writeBufferSize": 8388608,
+            "readBufferSize": 8388608,
+            "cacheCapacity": "256MB"
+        }"#;
+
+        let storage: Storage = serde_json::from_str(json_data).unwrap();
+
+        assert_eq!(storage.server.protocol, "http".to_string());
+        assert_eq!(storage.dir, PathBuf::from("/tmp/storage"));
+        assert_eq!(storage.keep, true);
+        assert_eq!(storage.write_buffer_size, 8 * 1024 * 1024);
+        assert_eq!(storage.read_buffer_size, 8 * 1024 * 1024);
+        assert_eq!(storage.cache_capacity, ByteSize::mb(256));
+    }
+
+    #[test]
+    fn test_validate_policy() {
+        let valid_policy = Policy {
+            task_ttl: Duration::from_secs(12 * 3600),
+            dist_high_threshold_percent: 90,
+            dist_low_threshold_percent: 70,
+        };
+
+        assert!(valid_policy.validate().is_ok());
+
+        let invalid_policy = Policy {
+            task_ttl: Duration::from_secs(12 * 3600),
+            dist_high_threshold_percent: 100,
+            dist_low_threshold_percent: 70,
+        };
+
+        assert!(invalid_policy.validate().is_err());
+    }
+
+    #[test]
+    fn test_deserialize_gc() {
+        let json_data = r#"
+        {
+            "interval": "1h",
+            "policy": {
+                "taskTTL": "12h",
+                "distHighThresholdPercent": 90,
+                "distLowThresholdPercent": 70
+            }
+        }"#;
+
+        let gc: GC = serde_json::from_str(json_data).unwrap();
+
+        assert_eq!(gc.interval, Duration::from_secs(3600));
+        assert_eq!(gc.policy.task_ttl, Duration::from_secs(12 * 3600));
+        assert_eq!(gc.policy.dist_high_threshold_percent, 90);
+        assert_eq!(gc.policy.dist_low_threshold_percent, 70);
+    }
+
+    #[test]
+    fn test_deserialize_proxy() {
+        let json_data = r#"
+        {
+            "server": {
+                "port": 8080,
+                "caCert": "/path/to/ca_cert.pem",
+                "caKey": "/path/to/ca_key.pem",
+                "basicAuth": {
+                    "username": "admin",
+                    "password": "password"
+                }
+            },
+            "rules": [
+                {
+                    "regex": "^https?://example\\.com/.*$",
+                    "useTLS": true,
+                    "redirect": "https://mirror.example.com",
+                    "filteredQueryParams": ["Signature", "Expires"]
+                }
+            ],
+            "registryMirror": {
+                "addr": "https://mirror.example.com",
+                "cert": "/path/to/cert.pem"
+            },
+            "disableBackToSource": true,
+            "prefetch": true,
+            "prefetchRateLimit": "1GiB",
+            "readBufferSize": 8388608
+        }"#;
+
+        let proxy: Proxy = serde_json::from_str(json_data).unwrap();
+
+        assert_eq!(proxy.server.port, 8080);
+        assert_eq!(
+            proxy.server.ca_cert,
+            Some(PathBuf::from("/path/to/ca_cert.pem"))
+        );
+        assert_eq!(
+            proxy.server.ca_key,
+            Some(PathBuf::from("/path/to/ca_key.pem"))
+        );
+        assert_eq!(
+            proxy.server.basic_auth.as_ref().unwrap().username,
+            "admin".to_string()
+        );
+        assert_eq!(
+            proxy.server.basic_auth.as_ref().unwrap().password,
+            "password".to_string()
+        );
+
+        let rule = &proxy.rules.as_ref().unwrap()[0];
+        assert_eq!(rule.regex.as_str(), "^https?://example\\.com/.*$");
+        assert!(rule.use_tls);
+        assert_eq!(
+            rule.redirect,
+            Some("https://mirror.example.com".to_string())
+        );
+        assert_eq!(rule.filtered_query_params, vec!["Signature", "Expires"]);
+
+        assert_eq!(proxy.registry_mirror.addr, "https://mirror.example.com");
+        assert_eq!(
+            proxy.registry_mirror.cert,
+            Some(PathBuf::from("/path/to/cert.pem"))
+        );
+
+        assert!(proxy.disable_back_to_source);
+        assert!(proxy.prefetch);
+        assert_eq!(proxy.prefetch_rate_limit, ByteSize::gib(1));
+        assert_eq!(proxy.read_buffer_size, 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_deserialize_tracing() {
+        let json_data = r#"
+        {
+            "addr": "http://tracing.example.com"
+        }"#;
+
+        let tracing: Tracing = serde_json::from_str(json_data).unwrap();
+
+        assert_eq!(tracing.addr, Some("http://tracing.example.com".to_string()));
+    }
+
+    #[test]
+    fn test_deserialize_metrics() {
+        let json_data = r#"
+        {
+            "server": {
+                "port": 4002,
+                "ip": "127.0.0.1"
+            }
+        }"#;
+
+        let metrics: Metrics = serde_json::from_str(json_data).unwrap();
+
+        assert_eq!(metrics.server.port, 4002);
+        assert_eq!(
+            metrics.server.ip,
+            Some("127.0.0.1".parse::<IpAddr>().unwrap())
+        );
     }
 }
