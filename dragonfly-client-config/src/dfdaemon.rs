@@ -1890,7 +1890,7 @@ key: /etc/ssl/private/client.pem
     #[test]
     fn default_seed_peer() {
         let default_seed_peer = SeedPeer::default();
-        assert_eq!(default_seed_peer.enable, false);
+        assert!(!default_seed_peer.enable);
         assert_eq!(default_seed_peer.kind, HostType::Normal);
         assert_eq!(default_seed_peer.cluster_id, 1);
         assert_eq!(
@@ -1932,7 +1932,7 @@ key: /etc/ssl/private/client.pem
 
         let seed_peer: SeedPeer = serde_json::from_str(json_data).unwrap();
 
-        assert_eq!(seed_peer.enable, true);
+        assert!(seed_peer.enable);
         assert_eq!(seed_peer.kind, HostType::Super);
         assert_eq!(seed_peer.cluster_id, 2);
         assert_eq!(seed_peer.keepalive_interval, Duration::from_secs(60));
@@ -1964,7 +1964,7 @@ key: /etc/ssl/private/client.pem
         let default_storage = Storage::default();
         assert_eq!(default_storage.server.protocol, "grpc".to_string());
         assert_eq!(default_storage.dir, crate::default_storage_dir());
-        assert_eq!(default_storage.keep, false);
+        assert!(!default_storage.keep);
         assert_eq!(default_storage.write_buffer_size, 4 * 1024 * 1024);
         assert_eq!(default_storage.read_buffer_size, 4 * 1024 * 1024);
         assert_eq!(default_storage.cache_capacity, ByteSize::mb(128));
@@ -1988,7 +1988,7 @@ key: /etc/ssl/private/client.pem
 
         assert_eq!(storage.server.protocol, "http".to_string());
         assert_eq!(storage.dir, PathBuf::from("/tmp/storage"));
-        assert_eq!(storage.keep, true);
+        assert!(storage.keep);
         assert_eq!(storage.write_buffer_size, 8 * 1024 * 1024);
         assert_eq!(storage.read_buffer_size, 8 * 1024 * 1024);
         assert_eq!(storage.cache_capacity, ByteSize::mb(256));
