@@ -64,7 +64,7 @@ mod tests {
     }
 
     #[test]
-    fn test_default_persistent_replica_count() {
+    fn default_persistent_replica_count() {
         assert_eq!(default_dfcache_persistent_replica_count(), 2);
     }
 }

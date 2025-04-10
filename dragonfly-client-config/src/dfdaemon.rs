@@ -1545,10 +1545,9 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
     use tokio::fs;
-    use tokio::io::AsyncWriteExt;
 
     #[test]
-    fn test_default_proxy_rule_filtered_query_params_contains_all_params() {
+    fn default_proxy_rule_filtered_query_params_contains_all_params() {
         let mut expected = HashSet::new();
         expected.extend(s3_filtered_query_params());
         expected.extend(gcs_filtered_query_params());
@@ -1564,7 +1563,7 @@ mod tests {
     }
 
     #[test]
-    fn test_default_proxy_rule_removes_duplicates() {
+    fn default_proxy_rule_removes_duplicates() {
         let params: Vec<String> = default_proxy_rule_filtered_query_params();
         let param_count = params.len();
 
@@ -1573,7 +1572,7 @@ mod tests {
     }
 
     #[test]
-    fn test_contains_key_properties() {
+    fn default_proxy_rule_filtered_query_params_contains_key_properties() {
         let params = default_proxy_rule_filtered_query_params();
         let param_set: HashSet<_> = params.into_iter().collect();
 
@@ -1586,7 +1585,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_server() {
+    fn deserialize_server_correctly() {
         let json_data = r#"
         {
             "pluginDir": "/custom/plugin/dir",
@@ -1600,7 +1599,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_download() {
+    fn deserialize_download_correctly() {
         let json_data = r#"
         {
             "server": {
@@ -1626,7 +1625,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_upload() {
+    fn deserialize_upload_correctly() {
         let json_data = r#"
         {
             "server": {
@@ -1683,7 +1682,7 @@ mod tests {
     }
 
     #[test]
-    fn test_upload_server_default() {
+    fn upload_server_default() {
         let server = UploadServer::default();
 
         assert!(server.ip.is_none());
@@ -1698,7 +1697,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_server_tls_config_success() {
+    async fn upload_load_server_tls_config_success() {
         let (ca_file, cert_file, key_file) = create_temp_certs().await;
 
         let server = UploadServer {
@@ -1713,7 +1712,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_server_tls_config_missing_certs() {
+    async fn load_server_tls_config_missing_certs() {
         let server = UploadServer {
             ca_cert: Some(PathBuf::from("/invalid/path")),
             cert: None,
@@ -1726,7 +1725,7 @@ mod tests {
     }
 
     #[test]
-    fn test_upload_client_default() {
+    fn upload_client_default() {
         let client = UploadClient::default();
         assert!(client.ca_cert.is_none());
         assert!(client.cert.is_none());
@@ -1734,7 +1733,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_client_tls_config_success() {
+    async fn upload_client_load_tls_config_success() {
         let (ca_file, cert_file, key_file) = create_temp_certs().await;
 
         let client = UploadClient {
@@ -1754,7 +1753,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_tls_config_invalid_path() {
+    async fn upload_server_load_tls_config_invalid_path() {
         let server = UploadServer {
             ca_cert: Some(PathBuf::from("/invalid/ca.crt")),
             cert: Some(PathBuf::from("/invalid/server.crt")),
@@ -1790,46 +1789,71 @@ mod tests {
         (ca, cert, key)
     }
 
-    async fn create_temp_pem_file(content: &str) -> NamedTempFile {
-        let file = NamedTempFile::new().unwrap();
-        tokio::fs::File::create(&file)
-            .await
-            .unwrap()
-            .write_all(content.as_bytes())
-            .await
-            .unwrap();
-        file
-    }
-
     #[tokio::test]
-    async fn load_manager_tls_config_with_all_files() {
-        let ca_cert =
-            create_temp_pem_file("-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----")
-                .await;
-        let client_cert =
-            create_temp_pem_file("-----BEGIN CERTIFICATE-----\nCLIENT\n-----END CERTIFICATE-----")
-                .await;
-        let client_key =
-            create_temp_pem_file("-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----")
-                .await;
+    async fn manager_load_client_tls_config_success() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let ca_path = temp_dir.path().join("ca.crt");
+        let cert_path = temp_dir.path().join("client.crt");
+        let key_path = temp_dir.path().join("client.key");
+
+        fs::write(&ca_path, "CA cert content").await.unwrap();
+        fs::write(&cert_path, "Client cert content").await.unwrap();
+        fs::write(&key_path, "Client key content").await.unwrap();
 
         let manager = Manager {
-            addr: "localhost".to_string(),
-            ca_cert: Some(ca_cert.path().to_path_buf()),
-            cert: Some(client_cert.path().to_path_buf()),
-            key: Some(client_key.path().to_path_buf()),
-            ..Manager::default()
+            addr: "http://example.com".to_string(),
+            ca_cert: Some(ca_path),
+            cert: Some(cert_path),
+            key: Some(key_path),
         };
 
         let result = manager.load_client_tls_config("example.com").await;
-
         assert!(result.is_ok());
-        let tls_config = result.unwrap();
-        assert!(tls_config.is_some());
+        let config = result.unwrap();
+        assert!(config.is_some());
     }
 
     #[test]
-    fn test_default_host_type() {
+    fn deserialize_optional_fields_correctly() {
+        let yaml = r#"
+addr: http://another-service:8080
+"#;
+
+        let manager: Manager = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(manager.addr, "http://another-service:8080");
+        assert!(manager.ca_cert.is_none());
+        assert!(manager.cert.is_none());
+        assert!(manager.key.is_none());
+    }
+
+    #[test]
+    fn deserialize_manager_correctly() {
+        let yaml = r#"
+addr: http://manager-service:65003
+caCert: /etc/ssl/certs/ca.crt
+cert: /etc/ssl/certs/client.crt
+key: /etc/ssl/private/client.pem
+"#;
+        let manager: Manager = serde_yaml::from_str(yaml).expect("Failed to deserialize");
+
+        assert_eq!(manager.addr, "http://manager-service:65003");
+        assert_eq!(
+            manager.ca_cert,
+            Some(PathBuf::from("/etc/ssl/certs/ca.crt"))
+        );
+        assert_eq!(
+            manager.cert,
+            Some(PathBuf::from("/etc/ssl/certs/client.crt"))
+        );
+        assert_eq!(
+            manager.key,
+            Some(PathBuf::from("/etc/ssl/private/client.pem"))
+        );
+    }
+
+    #[test]
+    fn default_host_type() {
         // Test whether the Display implementation is correct.
         assert_eq!(HostType::Normal.to_string(), "normal");
         assert_eq!(HostType::Super.to_string(), "super");
@@ -1864,7 +1888,7 @@ mod tests {
     }
 
     #[test]
-    fn test_default_seed_peer() {
+    fn default_seed_peer() {
         let default_seed_peer = SeedPeer::default();
         assert_eq!(default_seed_peer.enable, false);
         assert_eq!(default_seed_peer.kind, HostType::Normal);
@@ -1876,7 +1900,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_seed_peer() {
+    fn validate_seed_peer() {
         let valid_seed_peer = SeedPeer {
             enable: true,
             kind: HostType::Weak,
@@ -1897,7 +1921,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_seed_peer() {
+    fn deserialize_seed_peer_correctly() {
         let json_data = r#"
         {
             "enable": true,
@@ -1915,13 +1939,13 @@ mod tests {
     }
 
     #[test]
-    fn test_default_dynconfig() {
+    fn default_dynconfig() {
         let default_dynconfig = Dynconfig::default();
         assert_eq!(default_dynconfig.refresh_interval, Duration::from_secs(300));
     }
 
     #[test]
-    fn test_deserialize_dynconfig() {
+    fn deserialize_dynconfig_correctly() {
         let json_data = r#"
         {
             "refreshInterval": "5m"
@@ -1933,7 +1957,7 @@ mod tests {
     }
 
     #[test]
-    fn test_default_storage() {
+    fn default_storage() {
         let default_server = StorageServer::default();
         assert_eq!(default_server.protocol, "grpc".to_string());
 
@@ -1947,7 +1971,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_storage() {
+    fn deserialize_storage_correctly() {
         let json_data = r#"
         {
             "server": {
@@ -1971,7 +1995,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_policy() {
+    fn validate_policy() {
         let valid_policy = Policy {
             task_ttl: Duration::from_secs(12 * 3600),
             dist_high_threshold_percent: 90,
@@ -1990,7 +2014,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_gc() {
+    fn deserialize_gc_correctly() {
         let json_data = r#"
         {
             "interval": "1h",
@@ -2010,7 +2034,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_proxy() {
+    fn deserialize_proxy_correctly() {
         let json_data = r#"
         {
             "server": {
@@ -2082,7 +2106,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_tracing() {
+    fn deserialize_tracing_correctly() {
         let json_data = r#"
         {
             "addr": "http://tracing.example.com"
@@ -2094,7 +2118,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_metrics() {
+    fn deserialize_metrics_correctly() {
         let json_data = r#"
         {
             "server": {
