@@ -265,19 +265,19 @@ mod tests {
     #[tokio::test]
     async fn test_new() {
         let test_cases = vec![
-            // Default configuration with 128MB capacity.
-            (Config::default(), 0, ByteSize::mb(128).as_u64()),
-            // Custom configuration with 100MB capacity.
+            // Default configuration with 64MiB capacity.
+            (Config::default(), 0, ByteSize::mib(64).as_u64()),
+            // Custom configuration with 100MiB capacity.
             (
                 Config {
                     storage: Storage {
-                        cache_capacity: ByteSize::mb(100),
+                        cache_capacity: ByteSize::mib(100),
                         ..Default::default()
                     },
                     ..Default::default()
                 },
                 0,
-                ByteSize::mb(100).as_u64(),
+                ByteSize::mib(100).as_u64(),
             ),
             // Zero capacity configuration.
             (
