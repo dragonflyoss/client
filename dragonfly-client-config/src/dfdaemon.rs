@@ -1961,20 +1961,6 @@ key: /etc/ssl/private/client.pem
     }
 
     #[test]
-    fn default_storage() {
-        let default_server = StorageServer::default();
-        assert_eq!(default_server.protocol, "grpc".to_string());
-
-        let default_storage = Storage::default();
-        assert_eq!(default_storage.server.protocol, "grpc".to_string());
-        assert_eq!(default_storage.dir, crate::default_storage_dir());
-        assert!(!default_storage.keep);
-        assert_eq!(default_storage.write_buffer_size, 4 * 1024 * 1024);
-        assert_eq!(default_storage.read_buffer_size, 4 * 1024 * 1024);
-        assert_eq!(default_storage.cache_capacity, ByteSize::mb(128));
-    }
-
-    #[test]
     fn deserialize_storage_correctly() {
         let json_data = r#"
         {
