@@ -201,10 +201,10 @@ fn default_storage_read_buffer_size() -> usize {
 }
 
 /// default_storage_cache_capacity is the default cache capacity for the storage server, default is
-/// 128MiB.
+/// 64MiB.
 #[inline]
 fn default_storage_cache_capacity() -> ByteSize {
-    ByteSize::mb(128)
+    ByteSize::mib(64)
 }
 
 /// default_seed_peer_cluster_id is the default cluster id of seed peer.
