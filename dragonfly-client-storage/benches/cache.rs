@@ -194,7 +194,7 @@ pub fn write_piece(c: &mut Criterion) {
                 || {
                     let mut cache = rt.block_on(async {
                         Cache::new(Arc::new(create_config(
-                            ByteSize::mb(4) * PIECE_COUNT as u64 + 1u64,
+                            ByteSize::mb(4) * PIECE_COUNT as u64,
                         )))
                     });
 
@@ -232,7 +232,7 @@ pub fn write_piece(c: &mut Criterion) {
                 || {
                     let mut cache = rt.block_on(async {
                         Cache::new(Arc::new(create_config(
-                            ByteSize::mb(10) * PIECE_COUNT as u64 + 1u64,
+                            ByteSize::mb(10) * PIECE_COUNT as u64,
                         )))
                     });
 
@@ -270,7 +270,7 @@ pub fn write_piece(c: &mut Criterion) {
                 || {
                     let mut cache = rt.block_on(async {
                         Cache::new(Arc::new(create_config(
-                            ByteSize::mb(16) * PIECE_COUNT as u64 + 1u64,
+                            ByteSize::mb(16) * PIECE_COUNT as u64,
                         )))
                     });
 
@@ -315,7 +315,7 @@ pub fn read_piece(c: &mut Criterion) {
                 || {
                     let mut cache = rt.block_on(async {
                         Cache::new(Arc::new(create_config(
-                            ByteSize::mb(4) * PIECE_COUNT as u64 + 1u64,
+                            ByteSize::mb(4) * PIECE_COUNT as u64,
                         )))
                     });
 
@@ -366,7 +366,7 @@ pub fn read_piece(c: &mut Criterion) {
                 || {
                     let mut cache = rt.block_on(async {
                         Cache::new(Arc::new(create_config(
-                            ByteSize::mb(10) * PIECE_COUNT as u64 + 1u64,
+                            ByteSize::mb(10) * PIECE_COUNT as u64,
                         )))
                     });
 
@@ -417,7 +417,7 @@ pub fn read_piece(c: &mut Criterion) {
                 || {
                     let mut cache = rt.block_on(async {
                         Cache::new(Arc::new(create_config(
-                            ByteSize::mb(16) * PIECE_COUNT as u64 + 1u64,
+                            ByteSize::mb(16) * PIECE_COUNT as u64,
                         )))
                     });
 

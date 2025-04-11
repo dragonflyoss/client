@@ -125,7 +125,6 @@ impl Storage {
         )?;
 
         self.content.create_task(id).await?;
-
         if load_to_cache {
             if let Some(content_length) = content_length {
                 let mut cache = self.cache.clone();

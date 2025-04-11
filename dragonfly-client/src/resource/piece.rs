@@ -348,7 +348,7 @@ impl Piece {
         self.storage
             .upload_piece(piece_id, task_id, range)
             .await
-            .inspect(|_reader| {
+            .inspect(|_| {
                 collect_upload_piece_traffic_metrics(
                     self.id_generator.task_type(task_id) as i32,
                     length,
@@ -379,7 +379,7 @@ impl Piece {
         self.storage
             .upload_piece_with_dual_read(piece_id, task_id, range)
             .await
-            .inspect(|_reader| {
+            .inspect(|_| {
                 collect_upload_piece_traffic_metrics(
                     self.id_generator.task_type(task_id) as i32,
                     length,
@@ -767,7 +767,7 @@ impl Piece {
         self.storage
             .upload_persistent_cache_piece(piece_id, task_id, range)
             .await
-            .inspect(|_reader| {
+            .inspect(|_| {
                 collect_upload_piece_traffic_metrics(
                     self.id_generator.task_type(task_id) as i32,
                     length,
