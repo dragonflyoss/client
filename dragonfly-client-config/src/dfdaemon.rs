@@ -1853,7 +1853,7 @@ key: /etc/ssl/private/client.pem
     }
 
     #[test]
-    fn default_host_type() {
+    fn default_host_type_correctly() {
         // Test whether the Display implementation is correct.
         assert_eq!(HostType::Normal.to_string(), "normal");
         assert_eq!(HostType::Super.to_string(), "super");
@@ -1863,8 +1863,10 @@ key: /etc/ssl/private/client.pem
         // Test if the default value is HostType::Super.
         let default_host_type: HostType = Default::default();
         assert_eq!(default_host_type, HostType::Super);
+    }
 
-        // Deserialize from a string to a HostType.
+    #[test]
+    fn serialize_host_type_correctly() {
         let normal: HostType = serde_json::from_str("\"normal\"").unwrap();
         let super_seed: HostType = serde_json::from_str("\"super\"").unwrap();
         let strong_seed: HostType = serde_json::from_str("\"strong\"").unwrap();
@@ -1874,8 +1876,10 @@ key: /etc/ssl/private/client.pem
         assert_eq!(super_seed, HostType::Super);
         assert_eq!(strong_seed, HostType::Strong);
         assert_eq!(weak_seed, HostType::Weak);
+    }
 
-        // Serialize HostType to a string.
+    #[test]
+    fn serialize_host_type() {
         let normal_json = serde_json::to_string(&HostType::Normal).unwrap();
         let super_json = serde_json::to_string(&HostType::Super).unwrap();
         let strong_json = serde_json::to_string(&HostType::Strong).unwrap();
