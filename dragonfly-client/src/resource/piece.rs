@@ -356,37 +356,6 @@ impl Piece {
             })
     }
 
-    /// upload_from_local_into_async_read. It will return two readers, one is the range reader, and the other is the
-    /// full reader of the piece.
-    #[instrument(skip_all, fields(piece_id))]
-    pub async fn upload_from_local_into_dual_async_read(
-        &self,
-        piece_id: &str,
-        task_id: &str,
-        length: u64,
-        range: Option<Range>,
-        disable_rate_limit: bool,
-    ) -> Result<(impl AsyncRead, impl AsyncRead)> {
-        // Span record the piece_id.
-        Span::current().record("piece_id", piece_id);
-
-        // Acquire the upload rate limiter.
-        if !disable_rate_limit {
-            self.upload_rate_limiter.acquire(length as usize).await;
-        }
-
-        // Upload the piece content.
-        self.storage
-            .upload_piece_with_dual_read(piece_id, task_id, range)
-            .await
-            .inspect(|_| {
-                collect_upload_piece_traffic_metrics(
-                    self.id_generator.task_type(task_id) as i32,
-                    length,
-                );
-            })
-    }
-
     /// download_from_local_into_async_read downloads a single piece from local cache.
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_local_into_async_read(
@@ -414,38 +383,6 @@ impl Piece {
 
         // Upload the piece content.
         self.storage.upload_piece(piece_id, task_id, range).await
-    }
-
-    /// download_from_local_into_dual_async_read returns two readers, one is the range reader, and
-    /// the other is the full reader of the piece.
-    #[instrument(skip_all, fields(piece_id))]
-    pub async fn download_from_local_into_dual_async_read(
-        &self,
-        piece_id: &str,
-        task_id: &str,
-        length: u64,
-        range: Option<Range>,
-        disable_rate_limit: bool,
-        is_prefetch: bool,
-    ) -> Result<(impl AsyncRead, impl AsyncRead)> {
-        // Span record the piece_id.
-        Span::current().record("piece_id", piece_id);
-
-        // Acquire the download rate limiter.
-        if !disable_rate_limit {
-            if is_prefetch {
-                // Acquire the prefetch rate limiter.
-                self.prefetch_rate_limiter.acquire(length as usize).await;
-            } else {
-                // Acquire the download rate limiter.
-                self.download_rate_limiter.acquire(length as usize).await;
-            }
-        }
-
-        // Upload the piece content.
-        self.storage
-            .upload_piece_with_dual_read(piece_id, task_id, range)
-            .await
     }
 
     /// download_from_local downloads a single piece from local cache. Fake the download piece
