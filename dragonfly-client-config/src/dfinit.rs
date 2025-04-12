@@ -173,7 +173,7 @@ pub struct CRIO {
     pub registries: Vec<CRIORegistry>,
 }
 
-/// CRIORegistry is the registry configuration for cri-o.
+/// PodmanRegistry is the registry configuration for podman.
 #[derive(Debug, Clone, Default, Validate, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PodmanRegistry {
@@ -352,6 +352,62 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn test_default_dfinit_config_path() {
+        let expected = crate::default_config_dir().join("dfinit.yaml");
+        assert_eq!(default_dfinit_config_path(), expected);
+    }
+
+    #[test]
+    fn test_default_dfinit_log_dir() {
+        let expected = crate::default_log_dir().join(NAME);
+        assert_eq!(default_dfinit_log_dir(), expected);
+    }
+
+    #[test]
+    fn test_container_runtime_default_paths() {
+        assert_eq!(
+            default_container_runtime_containerd_config_path(),
+            Path::new("/etc/containerd/config.toml")
+        );
+        assert_eq!(
+            default_container_runtime_docker_config_path(),
+            Path::new("/etc/docker/daemon.json")
+        );
+        assert_eq!(
+            default_container_runtime_crio_config_path(),
+            Path::new("/etc/containers/registries.conf")
+        );
+        assert_eq!(
+            default_container_runtime_podman_config_path(),
+            Path::new("/etc/containers/registries.conf")
+        );
+    }
+
+    #[test]
+    fn test_default_unqualified_search_registries() {
+        let crio_registries = default_container_runtime_crio_unqualified_search_registries();
+        assert_eq!(
+            crio_registries,
+            vec![
+                "registry.fedoraproject.org",
+                "registry.access.redhat.com",
+                "docker.io"
+            ]
+        );
+
+        let podman_registries = default_container_runtime_podman_unqualified_search_registries();
+        assert_eq!(
+            podman_registries,
+            vec![
+                "registry.fedoraproject.org",
+                "registry.access.redhat.com",
+                "docker.io"
+            ]
+        );
+    }
 
     #[test]
     fn serialize_container_runtime() {
@@ -463,6 +519,45 @@ containerRuntime:
                         prefix: "prefix1".to_string()
                     },
                     CRIORegistry {
+                        location: "location2".to_string(),
+                        prefix: "prefix2".to_string()
+                    },
+                ],
+                c.registries
+            );
+        } else {
+            panic!("failed to deserialize");
+        }
+    }
+
+    #[test]
+    fn deserialize_container_runtime_podman_correctly() {
+        let raw_data = r#"
+            proxy: 
+                addr: "hello"
+            containerRuntime:
+                podman:
+                    configPath: "test_path"
+                    unqualifiedSearchRegistries:
+                        - "reg1"
+                        - "reg2"
+                    registries:
+                        - prefix: "prefix1"
+                          location: "location1"
+                        - prefix: "prefix2"
+                          location: "location2"
+        "#;
+        let cfg: Config = serde_yaml::from_str(raw_data).expect("failed to deserialize");
+        if let Some(ContainerRuntimeConfig::Podman(c)) = cfg.container_runtime.config {
+            assert_eq!(PathBuf::from("test_path"), c.config_path);
+            assert_eq!(vec!["reg1", "reg2"], c.unqualified_search_registries);
+            assert_eq!(
+                vec![
+                    PodmanRegistry {
+                        location: "location1".to_string(),
+                        prefix: "prefix1".to_string()
+                    },
+                    PodmanRegistry {
                         location: "location2".to_string(),
                         prefix: "prefix2".to_string()
                     },

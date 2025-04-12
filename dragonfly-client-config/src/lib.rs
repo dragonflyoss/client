@@ -149,3 +149,20 @@ impl clap::builder::TypedValueParser for VersionValueParser {
         Ok(false)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::{builder::TypedValueParser, Command};
+    use std::ffi::OsStr;
+
+    #[test]
+    fn version_value_parser_references_non_real_values() {
+        let parser = VersionValueParser;
+        let cmd = Command::new("test_app");
+        let value = OsStr::new("false");
+        let result = parser.parse_ref(&cmd, None, value);
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+}
