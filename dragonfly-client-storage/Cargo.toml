@@ -25,7 +25,6 @@ tokio-util.workspace = true
 tonic.workspace = true
 sha2.workspace = true
 crc32fast.workspace = true
-base16ct.workspace = true
 fs2.workspace = true
 lru.workspace = true
 bytes.workspace = true

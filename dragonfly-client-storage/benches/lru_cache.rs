@@ -291,6 +291,78 @@ pub fn lru_cache_contains(c: &mut Criterion) {
     group.finish();
 }
 
+pub fn lru_cache_pop(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Lru Cache Pop");
+
+    group.bench_with_input(
+        BenchmarkId::new("Lru Cache Pop", "4MB"),
+        &ByteSize::mb(4),
+        |b, size| {
+            b.iter_batched(
+                || {
+                    let mut cache = LruCache::new(OPERATION_COUNT);
+                    for i in 0..OPERATION_COUNT {
+                        cache.put(format!("key{}", i), size.as_u64());
+                    }
+                    cache
+                },
+                |mut cache| {
+                    for i in 0..OPERATION_COUNT {
+                        black_box(cache.pop(&format!("key{}", i)));
+                    }
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
+
+    group.bench_with_input(
+        BenchmarkId::new("Lru Cache Pop", "10MB"),
+        &ByteSize::mb(10),
+        |b, size| {
+            b.iter_batched(
+                || {
+                    let mut cache = LruCache::new(OPERATION_COUNT);
+                    for i in 0..OPERATION_COUNT {
+                        cache.put(format!("key{}", i), size.as_u64());
+                    }
+                    cache
+                },
+                |mut cache| {
+                    for i in 0..OPERATION_COUNT {
+                        black_box(cache.pop(&format!("key{}", i)));
+                    }
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
+
+    group.bench_with_input(
+        BenchmarkId::new("Lru Cache Pop", "16MB"),
+        &ByteSize::mb(16),
+        |b, size| {
+            b.iter_batched(
+                || {
+                    let mut cache = LruCache::new(OPERATION_COUNT);
+                    for i in 0..OPERATION_COUNT {
+                        cache.put(format!("key{}", i), size.as_u64());
+                    }
+                    cache
+                },
+                |mut cache| {
+                    for i in 0..OPERATION_COUNT {
+                        black_box(cache.pop(&format!("key{}", i)));
+                    }
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        },
+    );
+
+    group.finish();
+}
+
 pub fn lru_cache_pop_lru(c: &mut Criterion) {
     let mut group = c.benchmark_group("Lru Cache Pop Lru");
 
@@ -369,6 +441,7 @@ criterion_group!(
     lru_cache_get,
     lru_cache_peek,
     lru_cache_contains,
+    lru_cache_pop,
     lru_cache_pop_lru,
 );
 

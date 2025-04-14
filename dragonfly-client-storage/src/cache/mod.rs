@@ -23,18 +23,15 @@ use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
+use tokio::io::{AsyncRead, BufReader};
 use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tracing::info;
 
 pub mod lru_cache;
 
 /// Task is the task content in the cache.
 #[derive(Clone, Debug)]
 struct Task {
-    /// id is the id of the task.
-    id: String,
-
     /// content_length is the length of the task content.
     content_length: u64,
 
@@ -45,9 +42,8 @@ struct Task {
 /// Task implements the task content in the cache.
 impl Task {
     /// new creates a new task.
-    fn new(id: String, content_length: u64) -> Self {
+    fn new(content_length: u64) -> Self {
         Self {
-            id,
             content_length,
             pieces: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -124,8 +120,8 @@ pub struct Cache {
 /// Cache implements the cache for storing piece content by LRU algorithm.
 impl Cache {
     /// new creates a new cache with the specified capacity.
-    pub fn new(config: Arc<Config>) -> Result<Self> {
-        Ok(Cache {
+    pub fn new(config: Arc<Config>) -> Self {
+        Cache {
             config: config.clone(),
             size: 0,
             capacity: config.storage.cache_capacity.as_u64(),
@@ -133,7 +129,7 @@ impl Cache {
             // by cache capacity(cache size) itself, and used pop_lru to evict the least recently
             // used task.
             tasks: Arc::new(RwLock::new(LruCache::new(usize::MAX))),
-        })
+        }
     }
 
     /// read_piece reads the piece from the cache.
@@ -182,34 +178,18 @@ impl Cache {
     }
 
     /// write_piece writes the piece content to the cache.
-    pub async fn write_piece<R: AsyncRead + Unpin + ?Sized>(
-        &self,
-        task_id: &str,
-        piece_id: &str,
-        reader: &mut R,
-        length: u64,
-    ) -> Result<()> {
+    pub async fn write_piece(&self, task_id: &str, piece_id: &str, content: Bytes) -> Result<()> {
         let mut tasks = self.tasks.write().await;
         let Some(task) = tasks.get(task_id) else {
             return Err(Error::TaskNotFound(task_id.to_string()));
         };
 
         if task.contains(piece_id).await {
-            debug!("piece {} already exists in cache", piece_id);
             return Ok(());
         }
 
-        let mut buffer = bytes::BytesMut::with_capacity(length as usize);
-        match reader.read_buf(&mut buffer).await {
-            Ok(_) => {
-                task.write_piece(piece_id, buffer.freeze()).await;
-                Ok(())
-            }
-            Err(err) => Err(Error::Unknown(format!(
-                "failed to read piece data for {}: {}",
-                piece_id, err
-            ))),
-        }
+        task.write_piece(piece_id, content).await;
+        Ok(())
     }
 
     /// put_task puts a new task into the cache, constrained by the capacity of the cache.
@@ -220,7 +200,7 @@ impl Cache {
         }
 
         // If the content length is larger than the cache capacity and the task cannot be cached.
-        if content_length >= self.capacity {
+        if content_length > self.capacity {
             info!(
                 "task {} is too large and cannot be cached: {}",
                 task_id, content_length
@@ -234,7 +214,6 @@ impl Cache {
             match tasks.pop_lru() {
                 Some((_, task)) => {
                     self.size -= task.content_length();
-                    debug!("evicted task in cache: {}", task.id);
                 }
                 None => {
                     break;
@@ -242,9 +221,19 @@ impl Cache {
             }
         }
 
-        let task = Task::new(task_id.to_string(), content_length);
+        let task = Task::new(content_length);
         tasks.put(task_id.to_string(), task);
         self.size += content_length;
+    }
+
+    pub async fn delete_task(&mut self, task_id: &str) -> Result<()> {
+        let mut tasks = self.tasks.write().await;
+        let Some((_, task)) = tasks.pop(task_id) else {
+            return Err(Error::TaskNotFound(task_id.to_string()));
+        };
+
+        self.size -= task.content_length();
+        Ok(())
     }
 
     /// contains_task checks whether the task exists in the cache.
@@ -271,25 +260,24 @@ mod tests {
     use bytesize::ByteSize;
     use dragonfly_api::common::v2::Range;
     use dragonfly_client_config::dfdaemon::Storage;
-    use std::io::Cursor;
     use tokio::io::AsyncReadExt;
 
     #[tokio::test]
     async fn test_new() {
         let test_cases = vec![
-            // Default configuration with 128MB capacity.
-            (Config::default(), 0, ByteSize::mb(128).as_u64()),
-            // Custom configuration with 100MB capacity.
+            // Default configuration with 64MiB capacity.
+            (Config::default(), 0, ByteSize::mib(64).as_u64()),
+            // Custom configuration with 100MiB capacity.
             (
                 Config {
                     storage: Storage {
-                        cache_capacity: ByteSize::mb(100),
+                        cache_capacity: ByteSize::mib(100),
                         ..Default::default()
                     },
                     ..Default::default()
                 },
                 0,
-                ByteSize::mb(100).as_u64(),
+                ByteSize::mib(100).as_u64(),
             ),
             // Zero capacity configuration.
             (
@@ -306,7 +294,7 @@ mod tests {
         ];
 
         for (config, expected_size, expected_capacity) in test_cases {
-            let cache = Cache::new(Arc::new(config)).unwrap();
+            let cache = Cache::new(Arc::new(config));
             assert_eq!(cache.size, expected_size);
             assert_eq!(cache.capacity, expected_capacity);
         }
@@ -321,7 +309,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let cache = Cache::new(Arc::new(config)).unwrap();
+        let cache = Cache::new(Arc::new(config));
 
         let test_cases = vec![
             // Test non-existent task.
@@ -346,7 +334,7 @@ mod tests {
                     assert_eq!(cache.contains_task(task_id).await, expected_result);
                 }
                 "add" => {
-                    let task = Task::new(task_id.to_string(), content_length);
+                    let task = Task::new(content_length);
                     cache.tasks.write().await.put(task_id.to_string(), task);
                     assert_eq!(cache.contains_task(task_id).await, expected_result);
                 }
@@ -368,13 +356,13 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut cache = Cache::new(Arc::new(config)).unwrap();
+        let mut cache = Cache::new(Arc::new(config));
 
         let test_cases = vec![
             // Empty task should not be cached.
             ("empty_task", 0, false),
             // Task equal to capacity should not be cached.
-            ("equal_capacity", ByteSize::mib(10).as_u64(), false),
+            ("equal_capacity", ByteSize::mib(10).as_u64(), true),
             // Task exceeding capacity should not be cached.
             ("exceed_capacity", ByteSize::mib(10).as_u64() + 1, false),
             // Normal sized task should be cached.
@@ -399,7 +387,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut cache = Cache::new(Arc::new(config)).unwrap();
+        let mut cache = Cache::new(Arc::new(config));
 
         let test_cases = vec![
             // Add tasks until eviction triggers.
@@ -422,6 +410,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_delete_task() {
+        let config = Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut cache = Cache::new(Arc::new(config));
+
+        cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
+        cache.put_task("task2", ByteSize::mib(1).as_u64()).await;
+        cache.put_task("task3", ByteSize::mib(1).as_u64()).await;
+
+        let test_cases = vec![
+            ("task1", true),
+            ("task2", true),
+            ("task3", true),
+            ("nonexistent", false),
+            ("", false),
+            ("large_task", false),
+        ];
+
+        for (task_id, exists) in test_cases {
+            assert_eq!(cache.contains_task(task_id).await, exists);
+
+            let result = cache.delete_task(task_id).await;
+            if exists {
+                assert!(result.is_ok());
+            } else {
+                assert!(result.is_err());
+            }
+
+            assert!(!cache.contains_task(task_id).await);
+        }
+
+        assert!(!cache.contains_task("task1").await);
+        assert!(!cache.contains_task("task2").await);
+        assert!(!cache.contains_task("task3").await);
+        assert!(!cache.contains_task("nonexistent").await);
+        assert!(!cache.contains_task("").await);
+        assert!(!cache.contains_task("large_task").await);
+    }
+
+    #[tokio::test]
     async fn test_contains_piece() {
         let config = Config {
             storage: Storage {
@@ -430,7 +463,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut cache = Cache::new(Arc::new(config)).unwrap();
+        let mut cache = Cache::new(Arc::new(config));
 
         let test_cases = vec![
             // Check non-existent task.
@@ -465,9 +498,8 @@ mod tests {
                     assert!(cache.contains_task(task_id).await);
                 }
                 "add_piece" => {
-                    let mut cursor = Cursor::new(content);
                     cache
-                        .write_piece(task_id, piece_id, &mut cursor, content.len() as u64)
+                        .write_piece(task_id, piece_id, Bytes::from(content))
                         .await
                         .unwrap();
                     assert_eq!(
@@ -489,18 +521,12 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut cache = Cache::new(Arc::new(config)).unwrap();
+        let mut cache = Cache::new(Arc::new(config));
 
         // Test writing to non-existent task.
         let test_data = b"test data".to_vec();
-        let mut cursor = Cursor::new(&test_data);
         let result = cache
-            .write_piece(
-                "non_existent",
-                "piece1",
-                &mut cursor,
-                test_data.len() as u64,
-            )
+            .write_piece("non_existent", "piece1", Bytes::from(test_data))
             .await;
         assert!(matches!(result, Err(Error::TaskNotFound(_))));
 
@@ -520,9 +546,8 @@ mod tests {
         ];
 
         for (piece_id, content) in &test_cases {
-            let mut cursor = Cursor::new(content);
             let result = cache
-                .write_piece("task1", piece_id, &mut cursor, content.len() as u64)
+                .write_piece("task1", piece_id, Bytes::copy_from_slice(content))
                 .await;
             assert!(result.is_ok());
             assert!(cache.contains_piece("task1", piece_id).await);
@@ -553,10 +578,9 @@ mod tests {
         // Test attempting to overwrite existing pieces.
         // The write should succeed (return Ok) but content should not change.
         for (piece_id, original_content) in &test_cases {
-            let new_content = format!("updated content for {}", piece_id).into_bytes();
-            let mut cursor = Cursor::new(&new_content);
+            let new_content = format!("updated content for {}", piece_id);
             let result = cache
-                .write_piece("task1", piece_id, &mut cursor, new_content.len() as u64)
+                .write_piece("task1", piece_id, Bytes::from(new_content))
                 .await;
             assert!(result.is_ok());
 
@@ -594,7 +618,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut cache = Cache::new(Arc::new(config)).unwrap();
+        let mut cache = Cache::new(Arc::new(config));
 
         let piece = Piece {
             number: 0,
@@ -753,9 +777,8 @@ mod tests {
 
         // Write all pieces.
         for (id, content, _, _) in &test_pieces {
-            let mut cursor = Cursor::new(content);
             cache
-                .write_piece("task1", id, &mut cursor, content.len() as u64)
+                .write_piece("task1", id, Bytes::copy_from_slice(content))
                 .await
                 .unwrap();
         }
@@ -784,13 +807,12 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut cache = Cache::new(Arc::new(config)).unwrap();
+        let mut cache = Cache::new(Arc::new(config));
         cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
 
         let content = b"test data for concurrent read".to_vec();
-        let mut cursor = Cursor::new(&content);
         cache
-            .write_piece("task1", "piece1", &mut cursor, content.len() as u64)
+            .write_piece("task1", "piece1", Bytes::from(content.clone()))
             .await
             .unwrap();
 
@@ -855,7 +877,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut cache = Cache::new(Arc::new(config)).unwrap();
+        let mut cache = Cache::new(Arc::new(config));
         cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
 
         let cache_arc = Arc::new(cache);
@@ -867,10 +889,9 @@ mod tests {
             let content = format!("content for piece {}", i).into_bytes();
 
             join_set.spawn(async move {
-                let mut cursor = Cursor::new(&content);
                 let piece_id = format!("piece{}", i);
                 let result = cache_clone
-                    .write_piece("task1", &piece_id, &mut cursor, content.len() as u64)
+                    .write_piece("task1", &piece_id, Bytes::from(content.clone()))
                     .await;
                 assert!(result.is_ok());
 
@@ -912,18 +933,12 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut cache = Cache::new(Arc::new(config)).unwrap();
+        let mut cache = Cache::new(Arc::new(config));
         cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
 
         let original_content = b"original content".to_vec();
-        let mut cursor = Cursor::new(&original_content);
         cache
-            .write_piece(
-                "task1",
-                "piece1",
-                &mut cursor,
-                original_content.len() as u64,
-            )
+            .write_piece("task1", "piece1", Bytes::from(original_content.clone()))
             .await
             .unwrap();
 
@@ -936,9 +951,8 @@ mod tests {
             let new_content = format!("new content from writer {}", i).into_bytes();
 
             join_set.spawn(async move {
-                let mut cursor = Cursor::new(&new_content);
                 let result = cache_clone
-                    .write_piece("task1", "piece1", &mut cursor, new_content.len() as u64)
+                    .write_piece("task1", "piece1", Bytes::from(new_content))
                     .await;
                 assert!(result.is_ok());
             });

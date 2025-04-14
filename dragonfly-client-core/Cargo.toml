@@ -22,4 +22,3 @@ hyper-util.workspace = true
 opendal.workspace = true
 url.workspace = true
 headers.workspace = true
-libloading = "0.8.6"

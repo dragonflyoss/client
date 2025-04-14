@@ -15,8 +15,6 @@ dragonfly-client-util.workspace = true
 dragonfly-api.workspace = true
 reqwest.workspace = true
 reqwest-middleware.workspace = true
-reqwest-retry = "0.7"
-reqwest-tracing = "0.5"
 tokio.workspace = true
 tokio-util.workspace = true
 rustls.workspace = true
@@ -26,7 +24,9 @@ url.workspace = true
 tracing.workspace = true
 opendal.workspace = true
 percent-encoding.workspace = true
-futures = "0.3.31"
+futures.workspace = true
+reqwest-retry = "0.7"
+reqwest-tracing = "0.5"
 libloading = "0.8.6"
 
 [dev-dependencies]
