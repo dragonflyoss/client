@@ -15,60 +15,23 @@
  */
 
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::{Error, Result};
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Error, Result,
+};
 #[cfg(target_os = "linux")]
-use ibverbs::{devices, CompletionQueue};
+use ibverbs::{devices, ibv_qp_type, ibv_wc, CompletionQueue, QueuePairEndpoint};
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tracing::error;
 
 const MAX_CQ_SIZE: usize = 16 * 1024;
-
-#[tonic::async_trait]
-pub trait Server: Send + Sync {
-    async fn run(self: Arc<Self>) -> Result<()>;
-}
-
-pub struct ServerFactory {
-    server: Arc<dyn Server + Send + Sync>,
-}
-
-/// DownloadFactory implements the DownloadFactory trait.
-impl ServerFactory {
-    /// new returns a new DownloadFactory.
-    pub fn new(protocol: &str, addr: SocketAddr, config: Arc<Config>) -> Result<Self> {
-        match protocol {
-            "rdma" => {
-                #[cfg(target_os = "linux")]
-                {
-                    Ok(Self {
-                        server: Arc::new(RDMAServer::new(
-                            addr,
-                            config.storage.server.device.clone(),
-                        )?),
-                    })
-                }
-
-                #[cfg(not(target_os = "linux"))]
-                {
-                    error!("RDMA is only supported on Linux");
-                    Err(Error::InvalidParameter)
-                }
-            }
-            _ => {
-                error!("unsupported protocol: {}", protocol);
-                Err(Error::InvalidParameter)
-            }
-        }
-    }
-
-    pub fn build(&self) -> Result<Arc<dyn Server>> {
-        Ok(self.server.clone())
-    }
-}
+const MIN_CQ_ENTRIES: i32 = 256;
+const DEFAULT_GID_INDEX: u32 = 1;
 
 #[cfg(target_os = "linux")]
 pub struct RDMAServer {
@@ -122,14 +85,48 @@ impl RDMAServer {
         available_cp_ids.push_back(cp_id);
     }
 
-    async fn handle_connection(&self, stream: TcpStream, ctx: Arc<ibverbs::Context>) -> Result<()> {
+    async fn handle_connection(
+        &self,
+        ctx: Arc<ibverbs::Context>,
+        mut stream: TcpStream,
+    ) -> Result<()> {
+        let mut len_bytes = [0u8; 4];
+        stream.read_exact(&mut len_bytes).await?;
+        let len = u32::from_be_bytes(len_bytes);
+        let mut remote_endpoint_bytes = vec![0u8; len as usize];
+        stream.read_exact(&mut remote_endpoint_bytes).await?;
+
+        let remote_endpoint =
+            bincode::deserialize(&remote_endpoint_bytes).or_err(ErrorType::ParseError)?;
+
+        let cp_id = self.acquire_cp_id().await?;
+        let cq = ctx.create_cq(MIN_CQ_ENTRIES as i32, cp_id as isize)?;
+        let pd = ctx.alloc_pd()?;
+        let qp_builder = pd
+            .create_qp(&cq, &cq, ibv_qp_type::IBV_QPT_RC)
+            .set_gid_index(DEFAULT_GID_INDEX)
+            .build()?;
+
+        let local_endpoint = qp_builder.endpoint();
+        let local_endpoint_bytes =
+            bincode::serialize(&local_endpoint).or_err(ErrorType::SerializeError)?;
+        let len = local_endpoint_bytes.len() as u32;
+        stream.write_all(&len.to_be_bytes()).await?;
+        stream.write_all(&local_endpoint_bytes).await?;
+
+        let mut qp = qp_builder.handshake(remote_endpoint)?;
+
         Ok(())
     }
+
+    async fn recv_remote_endpoint(&self, mut stream: &TcpStream) -> Result<QueuePairEndpoint> {}
+
+    async fn send_local_endpoint(stream: TcpStream) -> Result<()> {}
 }
 
 #[cfg(target_os = "linux")]
 #[tonic::async_trait]
-impl Server for RDMAServer {
+impl super::Server for RDMAServer {
     async fn run(self: Arc<Self>) -> Result<()> {
         let listener = TcpListener::bind(&self.addr).await?;
         loop {
@@ -137,7 +134,7 @@ impl Server for RDMAServer {
             let ctx = self.ctx.clone();
             let self_clone = self.clone();
             tokio::spawn(async move {
-                if let Err(err) = self_clone.handle_connection(stream, ctx).await {
+                if let Err(err) = self_clone.handle_connection(ctx, stream).await {
                     error!("failed to handle connection: {}", err);
                 }
             });
