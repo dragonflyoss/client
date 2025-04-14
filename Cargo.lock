@@ -986,7 +986,6 @@ dependencies = [
  "opentelemetry-jaeger",
  "path-absolutize",
  "percent-encoding",
- "pnet",
  "pprof",
  "prometheus",
  "prost-wkt-types",
@@ -1150,6 +1149,7 @@ name = "dragonfly-client-util"
 version = "0.2.23"
 dependencies = [
  "base64 0.22.1",
+ "bytesize",
  "crc32fast",
  "dragonfly-api",
  "dragonfly-client-core",
@@ -1160,6 +1160,7 @@ dependencies = [
  "lazy_static",
  "lru",
  "openssl",
+ "pnet",
  "rcgen",
  "reqwest",
  "rustls 0.22.4",

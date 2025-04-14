@@ -25,7 +25,7 @@ use crate::metrics::{
 };
 use crate::resource::{persistent_cache_task, task};
 use crate::shutdown;
-use bytesize::ByteSize;
+use bytesize::MB;
 use dragonfly_api::common::v2::{
     Host, Network, PersistentCacheTask, Piece, Priority, Task, TaskType,
 };
@@ -46,14 +46,14 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error as ClientError, Result as ClientResult,
 };
-use dragonfly_client_util::http::{get_range, hashmap_to_headermap, headermap_to_hashmap};
-use pnet::datalink;
-use std::cmp::min;
-use std::fs;
+use dragonfly_client_util::{
+    http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
+    net::{get_interface_info, Interface},
+};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 use sysinfo::Networks;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
@@ -99,38 +99,12 @@ impl DfdaemonUploadServer {
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
-        // Get the interface name and the interface speed of local interface.
-        let mut interface_name = None;
-        let mut interface_speed: u64 = 0;
-        if let Some(local_addr) = config.host.ip {
-            // Get the interface name of this local addr.
-            for interface in datalink::interfaces().iter() {
-                if interface.ips.iter().any(|ip| ip.contains(local_addr)) {
-                    interface_name = Some(interface.name.clone());
-                    break;
-                }
-            }
-            // Get the speed of this interface.
-            if let Some(interface) = interface_name.clone() {
-                let speed_path = format!("/sys/class/net/{}/speed", interface);
-                let content = fs::read_to_string(speed_path).unwrap_or_default();
-                if let Ok(value) = content.trim().parse::<u64>() {
-                    info!("interface {} speed is {} Mbps", &interface, value);
-                    // Convert bits/sec to bytes/sec.
-                    let speed = ByteSize::mb(value).as_u64() / 8;
-                    // The minimum of interface speed and upload rate limit.
-                    interface_speed = min(speed, config.upload.rate_limit.as_u64());
-                }
-            }
-        }
-        let interface = Interface {
-            name: interface_name.clone(),
-            speed: interface_speed,
-        };
-
         // Initialize the grpc service.
+        let interface =
+            get_interface_info(config.host.ip.unwrap(), config.upload.rate_limit).unwrap();
+
         let service = DfdaemonUploadGRPCServer::new(DfdaemonUploadServerHandler {
-            interface: Arc::from(interface),
+            interface,
             socket_path: config.download.server.socket_path.clone(),
             task,
             persistent_cache_task,
@@ -218,19 +192,10 @@ impl DfdaemonUploadServer {
     }
 }
 
-/// Interface contains basic information of the interface.
-pub struct Interface {
-    /// name is the interface name.
-    name: Option<String>,
-
-    /// speed is the interface speed (bytes/sec).
-    speed: u64,
-}
-
 /// DfdaemonUploadServerHandler is the handler of the dfdaemon upload grpc service.
 pub struct DfdaemonUploadServerHandler {
-    /// interface is the configuration of the dfdaemon.
-    interface: Arc<Interface>,
+    /// interface is the network interface.
+    interface: Interface,
 
     /// socket_path is the path of the unix domain socket.
     socket_path: PathBuf,
@@ -996,13 +961,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let interface = self.interface.clone();
 
         // Initialize stream channel.
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(1);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
-                info!("start sending host info to host {}", remote_host_id);
                 // Initialize sysinfo network.
                 let mut networks = Networks::new_with_refreshed_list();
-                let mut last_refresh_time = SystemTime::now();
 
                 // Start the host info update loop.
                 loop {
@@ -1012,56 +975,35 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                     // Refresh network information.
                     networks.refresh();
-                    let now_time = SystemTime::now();
-
-                    // Get interval between two refreshes.
-                    let interval = now_time
-                        .duration_since(last_refresh_time)
-                        .unwrap()
-                        .as_millis() as u64;
-
-                    // Update last_refresh_time to now_time.
-                    last_refresh_time = now_time;
 
                     // Init response.
-                    let mut network = Network::default();
-                    // Get interface available bandwidth.
-                    if let Some(interface_name) = interface.name.clone() {
-                        if let Some(interface_data) = networks.get(&interface_name) {
-                            if network.upload_rate
-                                > (interface_data.transmitted()
-                                    * Duration::from_secs(1).as_millis() as u64
-                                    / interval)
-                            {
-                                network.upload_rate = interface.speed
-                                    - interface_data.transmitted()
-                                        * Duration::from_secs(1).as_millis() as u64
-                                        / interval;
-                            }
-                            debug!(
-                                "refresh interface {} available bandwidth to {}",
-                                interface_name,
-                                ByteSize(network.upload_rate)
-                            );
-                            break;
-                        }
-                    }
-                    let host = Host {
-                        network: Some(network),
-                        ..Default::default()
+                    let mut host = Host::default();
+                    if let Some(network_data) = networks.get(&interface.name) {
+                        let network = Network {
+                            download_rate: network_data.received()
+                                / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs(),
+                            // Convert bandwidth to bytes per second.
+                            download_rate_limit: interface.bandwidth / 8 * MB,
+                            upload_rate: network_data.transmitted()
+                                / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs(),
+                            // Convert bandwidth to bytes per second.
+                            upload_rate_limit: interface.bandwidth / 8 * MB,
+                            ..Default::default()
+                        };
+                        host.network = Some(network.clone());
+
+                        debug!("interface: {}, network: {:?}", interface.name, network);
                     };
 
                     // Send host info.
                     match out_stream_tx.send(Ok(host.clone())).await {
-                        Ok(_) => {
-                            debug!("sync host info to remote host {}", remote_host_id.as_str());
-                        }
+                        Ok(_) => {}
                         Err(err) => {
-                            info!(
+                            error!(
                                 "connection broken from remote host {}, err: {}",
                                 remote_host_id, err
                             );
-                            drop(out_stream_tx);
+
                             break;
                         }
                     };
@@ -1069,6 +1011,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             }
             .in_current_span(),
         );
+
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
