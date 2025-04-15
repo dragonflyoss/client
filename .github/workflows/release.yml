@@ -52,12 +52,13 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Install cargo-deb
-        uses: taiki-e/cache-cargo-install-action@v2
+        uses: taiki-e/cache-cargo-install-action@44857e0ff6d186da8fe49f9ac9eedae5bbc37a93
         with:
-          tool: cargo-deb
+          # Don't upgrade cargo-deb, refer to https://github.com/kornelski/cargo-deb/issues/169.
+          tool: cargo-deb@2.10.0
 
       - name: Install cargo-generate-rpm
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@daa3c1f1f9a9d46f686d9fc2f65773d0c293688b
         with:
           tool: cargo-generate-rpm
           
