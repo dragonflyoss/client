@@ -90,6 +90,25 @@ impl RDMAServer {
         ctx: Arc<ibverbs::Context>,
         mut stream: TcpStream,
     ) -> Result<()> {
+        let cp_id = self.acquire_cp_id().await?;
+        let cq = ctx.create_cq(MIN_CQ_ENTRIES, cp_id as isize)?;
+        let pd = ctx.alloc_pd()?;
+        let qp_builder = pd
+            .create_qp(&cq, &cq, ibv_qp_type::IBV_QPT_RC)
+            .set_gid_index(DEFAULT_GID_INDEX)
+            .build()?;
+
+        let local_endpoint = qp_builder.endpoint();
+        self.send_local_endpoint(&mut stream, &local_endpoint)
+            .await?;
+
+        let remote_endpoint = self.recv_remote_endpoint(&mut stream).await?;
+        let mut qp = qp_builder.handshake(remote_endpoint)?;
+
+        Ok(())
+    }
+
+    async fn recv_remote_endpoint(&self, stream: &mut TcpStream) -> Result<QueuePairEndpoint> {
         let mut len_bytes = [0u8; 4];
         stream.read_exact(&mut len_bytes).await?;
         let len = u32::from_be_bytes(len_bytes);
@@ -98,30 +117,22 @@ impl RDMAServer {
 
         let remote_endpoint =
             bincode::deserialize(&remote_endpoint_bytes).or_err(ErrorType::ParseError)?;
+        Ok(remote_endpoint)
+    }
 
-        let cp_id = self.acquire_cp_id().await?;
-        let cq = ctx.create_cq(MIN_CQ_ENTRIES as i32, cp_id as isize)?;
-        let pd = ctx.alloc_pd()?;
-        let qp_builder = pd
-            .create_qp(&cq, &cq, ibv_qp_type::IBV_QPT_RC)
-            .set_gid_index(DEFAULT_GID_INDEX)
-            .build()?;
-
-        let local_endpoint = qp_builder.endpoint();
+    async fn send_local_endpoint(
+        &self,
+        stream: &mut TcpStream,
+        local_endpoint: &QueuePairEndpoint,
+    ) -> Result<()> {
         let local_endpoint_bytes =
             bincode::serialize(&local_endpoint).or_err(ErrorType::SerializeError)?;
         let len = local_endpoint_bytes.len() as u32;
+
         stream.write_all(&len.to_be_bytes()).await?;
         stream.write_all(&local_endpoint_bytes).await?;
-
-        let mut qp = qp_builder.handshake(remote_endpoint)?;
-
         Ok(())
     }
-
-    async fn recv_remote_endpoint(&self, mut stream: &TcpStream) -> Result<QueuePairEndpoint> {}
-
-    async fn send_local_endpoint(stream: TcpStream) -> Result<()> {}
 }
 
 #[cfg(target_os = "linux")]
