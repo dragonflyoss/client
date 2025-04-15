@@ -103,42 +103,42 @@ priority = "optional"
 section = "rust"
 assets = [
   [
-    "../target/x86_64-unknown-linux-gnu/release/dfget",
+    "target/x86_64-unknown-linux-gnu/release/dfget",
     "usr/bin/dfget",
     "755",
   ],
   [
-    "../target/x86_64-unknown-linux-gnu/release/dfdaemon",
+    "target/x86_64-unknown-linux-gnu/release/dfdaemon",
     "usr/bin/dfdaemon",
     "755",
   ],
   [
-    "../target/x86_64-unknown-linux-gnu/release/dfcache",
+    "target/x86_64-unknown-linux-gnu/release/dfcache",
     "usr/bin/dfcache",
     "755",
   ],
   [
-    "../target/x86_64-unknown-linux-gnu/release/dfstore",
+    "target/x86_64-unknown-linux-gnu/release/dfstore",
     "usr/bin/dfstore",
     "755",
   ],
   [
-    "../ci/dfdaemon.service",
+    "ci/dfdaemon.service",
     "lib/systemd/system/dfdaemon.service",
     "644",
   ],
   [
-    "../CONTRIBUTING.md",
+    "CONTRIBUTING.md",
     "usr/share/doc/client/CONTRIBUTING.md",
     "644",
   ],
   [
-    "../LICENSE",
+    "LICENSE",
     "usr/share/doc/client/LICENSE",
     "644",
   ],
   [
-    "../README.md",
+    "README.md",
     "usr/share/doc/client/README.md",
     "644",
   ],
@@ -150,42 +150,42 @@ section = "rust"
 priority = "optional"
 assets = [
   [
-    "../target/x86_64-unknown-linux-musl/release/dfget",
+    "target/x86_64-unknown-linux-musl/release/dfget",
     "usr/bin/dfget",
     "755",
   ],
   [
-    "../target/x86_64-unknown-linux-musl/release/dfdaemon",
+    "target/x86_64-unknown-linux-musl/release/dfdaemon",
     "usr/bin/dfdaemon",
     "755",
   ],
   [
-    "../target/x86_64-unknown-linux-musl/release/dfcache",
+    "target/x86_64-unknown-linux-musl/release/dfcache",
     "usr/bin/dfcache",
     "755",
   ],
   [
-    "../target/x86_64-unknown-linux-musl/release/dfstore",
+    "target/x86_64-unknown-linux-musl/release/dfstore",
     "usr/bin/dfstore",
     "755",
   ],
   [
-    "../ci/dfdaemon.service",
+    "ci/dfdaemon.service",
     "lib/systemd/system/dfdaemon.service",
     "644",
   ],
   [
-    "../CONTRIBUTING.md",
+    "CONTRIBUTING.md",
     "usr/share/doc/client/CONTRIBUTING.md",
     "644",
   ],
   [
-    "../LICENSE",
+    "LICENSE",
     "usr/share/doc/client/LICENSE",
     "644",
   ],
   [
-    "../README.md",
+    "README.md",
     "usr/share/doc/client/README.md",
     "644",
   ],
@@ -197,42 +197,42 @@ priority = "optional"
 section = "rust"
 assets = [
   [
-    "../target/aarch64-unknown-linux-gnu/release/dfget",
+    "target/aarch64-unknown-linux-gnu/release/dfget",
     "usr/bin/dfget",
     "755",
   ],
   [
-    "../target/aarch64-unknown-linux-gnu/release/dfdaemon",
+    "target/aarch64-unknown-linux-gnu/release/dfdaemon",
     "usr/bin/dfdaemon",
     "755",
   ],
   [
-    "../target/aarch64-unknown-linux-gnu/release/dfcache",
+    "target/aarch64-unknown-linux-gnu/release/dfcache",
     "usr/bin/dfcache",
     "755",
   ],
   [
-    "../target/aarch64-unknown-linux-gnu/release/dfstore",
+    "target/aarch64-unknown-linux-gnu/release/dfstore",
     "usr/bin/dfstore",
     "755",
   ],
   [
-    "../ci/dfdaemon.service",
+    "ci/dfdaemon.service",
     "lib/systemd/system/dfdaemon.service",
     "644",
   ],
   [
-    "../CONTRIBUTING.md",
+    "CONTRIBUTING.md",
     "usr/share/doc/client/CONTRIBUTING.md",
     "644",
   ],
   [
-    "../LICENSE",
+    "LICENSE",
     "usr/share/doc/client/LICENSE",
     "644",
   ],
   [
-    "../README.md",
+    "README.md",
     "usr/share/doc/client/README.md",
     "644",
   ],
@@ -244,42 +244,42 @@ priority = "optional"
 section = "rust"
 assets = [
   [
-    "../target/aarch64-unknown-linux-musl/release/dfget",
+    "target/aarch64-unknown-linux-musl/release/dfget",
     "usr/bin/dfget",
     "755",
   ],
   [
-    "../target/aarch64-unknown-linux-musl/release/dfdaemon",
+    "target/aarch64-unknown-linux-musl/release/dfdaemon",
     "usr/bin/dfdaemon",
     "755",
   ],
   [
-    "../target/aarch64-unknown-linux-musl/release/dfcache",
+    "target/aarch64-unknown-linux-musl/release/dfcache",
     "usr/bin/dfcache",
     "755",
   ],
   [
-    "../target/aarch64-unknown-linux-musl/release/dfstore",
+    "target/aarch64-unknown-linux-musl/release/dfstore",
     "usr/bin/dfstore",
     "755",
   ],
   [
-    "../ci/dfdaemon.service",
+    "ci/dfdaemon.service",
     "lib/systemd/system/dfdaemon.service",
     "644",
   ],
   [
-    "../CONTRIBUTING.md",
+    "CONTRIBUTING.md",
     "usr/share/doc/client/CONTRIBUTING.md",
     "644",
   ],
   [
-    "../LICENSE",
+    "LICENSE",
     "usr/share/doc/client/LICENSE",
     "644",
   ],
   [
-    "../README.md",
+    "README.md",
     "usr/share/doc/client/README.md",
     "644",
   ],
