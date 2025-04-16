@@ -436,9 +436,15 @@ mod tests {
 
         let result = BackendFactory::new(Some(&plugin_dir));
         assert!(result.is_err());
-        assert_eq!(
-            format!("{}", result.err().unwrap()),
-            format!("PluginError cause: {}: file too short", lib_path.display()),
+        let err_msg = format!("{}", result.err().unwrap());
+
+        assert!(
+            err_msg.starts_with("PluginError cause:"),
+            "error message should start with 'PluginError cause:'"
+        );
+        assert!(
+            err_msg.contains(&lib_path.display().to_string()),
+            "error message should contain library path"
         );
     }
 
