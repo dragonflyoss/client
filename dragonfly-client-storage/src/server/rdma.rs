@@ -31,6 +31,8 @@ use tracing::error;
 
 const MAX_CQ_SIZE: usize = 16 * 1024;
 const MIN_CQ_ENTRIES: i32 = 256;
+const MAX_SEND_WORK_QUEUE_SIZE: u32 = 16;
+const MAX_RECV_WORK_QUEUE_SIZE: u32 = 16;
 const DEFAULT_GID_INDEX: u32 = 1;
 
 #[cfg(target_os = "linux")]
@@ -96,6 +98,8 @@ impl RDMAServer {
         let qp_builder = pd
             .create_qp(&cq, &cq, ibv_qp_type::IBV_QPT_RC)
             .set_gid_index(DEFAULT_GID_INDEX)
+            .set_max_send_wr(MAX_SEND_WORK_QUEUE_SIZE)
+            .set_max_recv_wr(MAX_RECV_WORK_QUEUE_SIZE)
             .build()?;
 
         let local_endpoint = qp_builder.endpoint();
@@ -131,6 +135,7 @@ impl RDMAServer {
 
         stream.write_all(&len.to_be_bytes()).await?;
         stream.write_all(&local_endpoint_bytes).await?;
+        stream.flush().await?;
         Ok(())
     }
 }
