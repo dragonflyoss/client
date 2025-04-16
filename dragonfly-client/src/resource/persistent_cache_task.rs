@@ -105,7 +105,7 @@ impl PersistentCacheTask {
             id_generator,
             storage,
             scheduler_client,
-            piece: piece.clone(),
+            piece,
         })
     }
 
@@ -129,8 +129,9 @@ impl PersistentCacheTask {
         let ttl = Duration::try_from(request.ttl.ok_or(Error::UnexpectedResponse)?)
             .or_err(ErrorType::ParseError)?;
 
-        // Get the content length of the file.
-        let content_length = std::fs::metadata(path.as_path())
+        // Get the content length of the file asynchronously.
+        let content_length = tokio::fs::metadata(path.as_path())
+            .await
             .inspect_err(|err| {
                 error!("get file metadata error: {}", err);
             })?
@@ -150,8 +151,7 @@ impl PersistentCacheTask {
         };
 
         // Notify the scheduler that the persistent cache task is started.
-        match self
-            .scheduler_client
+        self.scheduler_client
             .upload_persistent_cache_task_started(UploadPersistentCacheTaskStartedRequest {
                 host_id: host_id.to_string(),
                 task_id: task_id.to_string(),
@@ -167,13 +167,7 @@ impl PersistentCacheTask {
                 ttl: request.ttl,
             })
             .await
-        {
-            Ok(_) => {}
-            Err(err) => {
-                error!("upload persistent cache task started: {}", err);
-                return Err(err);
-            }
-        }
+            .inspect_err(|err| error!("upload persistent cache task started: {}", err))?;
 
         // Check if the storage has enough space to store the persistent cache task.
         let has_enough_space = self.storage.has_enough_space(content_length)?;
