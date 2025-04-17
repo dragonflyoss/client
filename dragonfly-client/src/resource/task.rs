@@ -1856,3 +1856,54 @@ impl Task {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    // test_delete_task_not_found tests the Task.delete method when the task does not exist.
+    #[tokio::test]
+    async fn test_delete_task_not_found() {
+        // Create a temporary directory for testing.
+        let temp_dir = tempdir().unwrap();
+        let log_dir = temp_dir.path().join("log");
+        std::fs::create_dir_all(&log_dir).unwrap();
+
+        // Create configuration.
+        let config = Config::default();
+        let config = Arc::new(config);
+
+        // Create storage.
+        let storage = Storage::new(config.clone(), temp_dir.path(), log_dir)
+            .await
+            .unwrap();
+        let storage = Arc::new(storage);
+
+        // Test Storage.get_task and Error::TaskNotFound.
+        let task_id = "non-existent-task-id";
+
+        // Verify that non-existent tasks return None.
+        let task = storage.get_task(task_id).unwrap();
+        assert!(task.is_none(), "non-existent tasks should return None");
+
+        // Create a task and save it to storage.
+        let task_id = "test-task-id";
+        storage
+            .download_task_started(task_id, Some(1024), Some(4096), None, false)
+            .await
+            .unwrap();
+
+        // Verify that the task exists.
+        let task = storage.get_task(task_id).unwrap();
+        assert!(task.is_some(), "task should exist");
+
+        // Delete the task from storage.
+        storage.delete_task(task_id).await;
+
+        // Verify that the task has been deleted.
+        let task = storage.get_task(task_id).unwrap();
+        assert!(task.is_none(), "task should be deleted");
+    }
+}
