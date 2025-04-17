@@ -24,6 +24,7 @@ use ibverbs::{devices, ibv_qp_type, ibv_wc, CompletionQueue, QueuePairEndpoint};
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::io::AsyncRead;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
@@ -137,6 +138,22 @@ impl RDMAServer {
         stream.write_all(&local_endpoint_bytes).await?;
         stream.flush().await?;
         Ok(())
+    }
+
+    async fn send<R: AsyncRead + Unpin + ?Sized>(&self, reader: &mut R) -> Result<()> {}
+
+    async fn recv() -> Result<()> {}
+
+    fn complete(&mut self, cq: CompletionQueue, id: u64) -> Result<()> {
+        let mut completions = [ibverbs::ibv_wc::default(); 16];
+        loop {
+            let completed = cq.poll(&mut completions[..])?;
+            for wr in completed {
+                if wr.wr_id() == id {
+                    return Ok(());
+                }
+            }
+        }
     }
 }
 
