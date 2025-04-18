@@ -18,7 +18,6 @@ use chrono::{NaiveDateTime, Utc};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::{digest, http::headermap_to_hashmap};
-use rayon::prelude::*;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -527,7 +526,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
             .collect::<Result<Vec<Box<[u8]>>>>()?;
 
         tasks
-            .par_iter()
+            .iter()
             .map(|task| Task::deserialize_from(task))
             .collect()
     }
@@ -864,7 +863,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
             .collect::<Result<Vec<Box<[u8]>>>>()?;
 
         pieces
-            .par_iter()
+            .iter()
             .map(|piece| Piece::deserialize_from(piece))
             .collect()
     }
@@ -889,7 +888,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
             .collect::<Result<Vec<Box<[u8]>>>>()?;
 
         let piece_ids_refs = piece_ids
-            .par_iter()
+            .iter()
             .map(|id| {
                 let id_ref = id.as_ref();
                 info!(
