@@ -109,3 +109,100 @@ pub async fn shutdown_signal() {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::time::{sleep, Duration};
+
+    #[tokio::test]
+    async fn test_shutdown_trigger_and_recv() {
+        // Create a new shutdown instance.
+        let mut shutdown = Shutdown::new();
+
+        // Trigger the shutdown signal in a separate task.
+        let shutdown_clone = shutdown.clone();
+        tokio::spawn(async move {
+            // Small delay to ensure the receiver is waiting.
+            sleep(Duration::from_millis(10)).await;
+            shutdown_clone.trigger();
+        });
+
+        // Wait for the shutdown signal.
+        shutdown.recv().await;
+
+        // Verify that is_shutdown is set to true.
+        assert!(shutdown.is_shutdown());
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_multiple_receivers() {
+        // Create a new shutdown instance.
+        let mut shutdown1 = Shutdown::new();
+        let mut shutdown2 = shutdown1.clone();
+        let mut shutdown3 = shutdown1.clone();
+
+        // Trigger the shutdown signal.
+        shutdown1.trigger();
+
+        // All receivers should receive the signal.
+        shutdown1.recv().await;
+        shutdown2.recv().await;
+        shutdown3.recv().await;
+
+        // Verify that all instances have is_shutdown set to true.
+        assert!(shutdown1.is_shutdown());
+        assert!(shutdown2.is_shutdown());
+        assert!(shutdown3.is_shutdown());
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_clone_behavior() {
+        // Create a new shutdown instance.
+        let mut shutdown1 = Shutdown::new();
+
+        // Set is_shutdown to true.
+        shutdown1.trigger();
+        shutdown1.recv().await;
+        assert!(shutdown1.is_shutdown());
+
+        // Clone the instance.
+        let shutdown2 = shutdown1.clone();
+
+        // Verify that the clone has the same is_shutdown value.
+        assert_eq!(shutdown1.is_shutdown(), shutdown2.is_shutdown());
+
+        // Create a new instance before triggering.
+        let mut shutdown3 = Shutdown::new();
+        let mut shutdown4 = shutdown3.clone();
+
+        // Trigger after cloning.
+        shutdown3.trigger();
+
+        // Both should receive the signal.
+        shutdown3.recv().await;
+        shutdown4.recv().await;
+
+        assert!(shutdown3.is_shutdown());
+        assert!(shutdown4.is_shutdown());
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_already_triggered() {
+        // Create a new shutdown instance.
+        let mut shutdown = Shutdown::new();
+
+        // Trigger and receive.
+        shutdown.trigger();
+        shutdown.recv().await;
+        assert!(shutdown.is_shutdown());
+
+        // Call recv again, should return immediately.
+        let start = std::time::Instant::now();
+        shutdown.recv().await;
+        let elapsed = start.elapsed();
+
+        // Verify that recv returned immediately (less than 5ms).
+        assert!(elapsed < Duration::from_millis(5));
+    }
+}
