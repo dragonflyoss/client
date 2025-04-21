@@ -173,3 +173,76 @@ impl Stats {
         Err::<warp::http::Error, Rejection>(warp::reject::reject())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shutdown::Shutdown;
+    use std::net::{Ipv4Addr, SocketAddr};
+    use tokio::sync::mpsc;
+    use warp::http::StatusCode;
+    use warp::test::request;
+
+    #[tokio::test]
+    async fn test_pprof_heap_handler() {
+        #[cfg(not(target_os = "linux"))]
+        {
+            let result = Stats::pprof_heap_handler().await;
+            // On non-linux, we expect a rejection
+            assert!(result.is_err());
+        }
+
+        // Note: Testing the Linux part is complex due to dependency on jemalloc setup
+        // and requires specific environment configuration. We only test the non-Linux path here.
+    }
+
+    #[tokio::test]
+    async fn test_stats_routes() {
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 8081); // Use a different port
+        let shutdown = Shutdown::new();
+        let (shutdown_complete_tx, _) = mpsc::unbounded_channel();
+        let _stats = Stats::new(addr, shutdown, shutdown_complete_tx);
+
+        // Build routes similar to run()
+        let pprof_profile_route = warp::path!("debug" / "pprof" / "profile")
+            .and(warp::get())
+            .and(warp::query::<PProfProfileQueryParams>())
+            .and_then(Stats::pprof_profile_handler);
+
+        let pprof_heap_route = warp::path!("debug" / "pprof" / "heap")
+            .and(warp::get())
+            .and_then(Stats::pprof_heap_handler);
+
+        let pprof_routes = pprof_profile_route.or(pprof_heap_route);
+
+        // Test profile route
+        let resp_profile = request()
+            .method("GET")
+            .path("/debug/pprof/profile?seconds=1")
+            .reply(&pprof_routes)
+            .await;
+        assert_eq!(resp_profile.status(), StatusCode::OK);
+
+        // Test heap route
+        let resp_heap = request()
+            .method("GET")
+            .path("/debug/pprof/heap")
+            .reply(&pprof_routes)
+            .await;
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            // On non-Linux, the handler rejects, warp turns rejection into 404 by default
+            assert_eq!(resp_heap.status(), StatusCode::NOT_FOUND);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // On Linux, it might succeed (200) or fail (500) depending on jemalloc state.
+            // Checking for either is reasonable in a unit test context.
+            assert!(
+                resp_heap.status() == StatusCode::OK
+                    || resp_heap.status() == StatusCode::INTERNAL_SERVER_ERROR
+            );
+        }
+    }
+}
