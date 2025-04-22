@@ -27,7 +27,7 @@ use std::time::Duration;
 use tokio::io::AsyncRead;
 use tokio_util::either::Either;
 use tokio_util::io::InspectReader;
-use tracing::{debug, error, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 pub mod cache;
 pub mod content;
@@ -201,7 +201,7 @@ impl Storage {
 
         let mut cache = self.cache.clone();
         cache.delete_task(id).await.unwrap_or_else(|err| {
-            error!("delete task from cache failed: {}", err);
+            info!("delete task from cache failed: {}", err);
         });
     }
 
