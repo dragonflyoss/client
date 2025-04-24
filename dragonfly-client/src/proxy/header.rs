@@ -73,6 +73,12 @@ pub const DRAGONFLY_FORCE_HARD_LINK_HEADER: &str = "X-Dragonfly-Force-Hard-Link"
 /// to 4mib, for example: 4mib, 1gib
 pub const DRAGONFLY_PIECE_LENGTH: &str = "X-Dragonfly-Piece-Length";
 
+/// DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID is the header key of content for calculating task id.
+/// If DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID is set, use its value to calculate the task ID.
+/// Otherwise, calculate the task ID based on `url`, `piece_length`, `tag`, `application`, and `filtered_query_params`.
+pub const DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID: &str =
+    "X-Dragonfly-Content-For-Calculating-Task-ID";
+
 /// get_tag gets the tag from http header.
 #[instrument(skip_all)]
 pub fn get_tag(header: &HeaderMap) -> Option<String> {
@@ -211,6 +217,14 @@ pub fn get_piece_length(header: &HeaderMap) -> Option<ByteSize> {
         },
         None => None,
     }
+}
+
+/// get_content_for_calculating_task_id gets the content for calculating task id from http header.
+pub fn get_content_for_calculating_task_id(header: &HeaderMap) -> Option<String> {
+    header
+        .get(DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID)
+        .and_then(|content| content.to_str().ok())
+        .map(|content| content.to_string())
 }
 
 #[cfg(test)]
@@ -364,5 +378,21 @@ mod tests {
 
         headers.insert(DRAGONFLY_PIECE_LENGTH, HeaderValue::from_static("0"));
         assert_eq!(get_piece_length(&headers), Some(ByteSize::b(0)));
+    }
+
+    #[test]
+    fn test_get_content_for_calculating_task_id() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID,
+            HeaderValue::from_static("test-content"),
+        );
+        assert_eq!(
+            get_content_for_calculating_task_id(&headers),
+            Some("test-content".to_string())
+        );
+
+        let empty_headers = HeaderMap::new();
+        assert_eq!(get_registry(&empty_headers), None);
     }
 }

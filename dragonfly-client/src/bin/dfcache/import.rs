@@ -42,11 +42,10 @@ pub struct ImportCommand {
     path: PathBuf,
 
     #[arg(
-        long = "id",
-        required = false,
-        help = "Specify the id of the persistent cache task. If id is none, dfdaemon will generate the new task id based on the file content, tag and application by crc32 algorithm."
+        long = "content-for-calculating-task-id",
+        help = "Specify the content used to calculate the persistent cache task ID. If it is set, use its value to calculate the task ID, Otherwise, calculate the persistent cache task ID based on url, piece-length, tag, application, and filtered-query-params."
     )]
-    id: Option<String>,
+    content_for_calculating_task_id: Option<String>,
 
     #[arg(
         long = "persistent-replica-count",
@@ -341,7 +340,7 @@ impl ImportCommand {
 
         let persistent_cache_task = dfdaemon_download_client
             .upload_persistent_cache_task(UploadPersistentCacheTaskRequest {
-                task_id: self.id.clone(),
+                content_for_calculating_task_id: self.content_for_calculating_task_id.clone(),
                 path: absolute_path.to_string_lossy().to_string(),
                 persistent_replica_count: self.persistent_replica_count,
                 tag: self.tag.clone(),
@@ -370,15 +369,6 @@ impl ImportCommand {
                 "ttl must be between 5 minutes and 7 days, but got {}",
                 self.ttl.as_secs()
             )));
-        }
-
-        if let Some(id) = self.id.as_ref() {
-            if id.len() != 64 {
-                return Err(Error::ValidationError(format!(
-                    "id length must be 64 bytes, but got {}",
-                    id.len()
-                )));
-            }
         }
 
         if self.path.is_dir() {

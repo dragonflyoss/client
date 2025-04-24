@@ -20,7 +20,7 @@ use dragonfly_client_core::{
     Result,
 };
 use sha2::{Digest, Sha256};
-use std::io::Read;
+use std::io::{self, Read};
 use std::path::PathBuf;
 use tracing::instrument;
 use url::Url;
@@ -31,6 +31,34 @@ const SEED_PEER_SUFFIX: &str = "seed";
 
 /// PERSISTENT_CACHE_TASK_SUFFIX is the suffix of the persistent cache task.
 const PERSISTENT_CACHE_TASK_SUFFIX: &str = "persistent-cache-task";
+
+/// TaskIDParameter is the parameter of the task id.
+pub enum TaskIDParameter {
+    /// Content uses the content to generate the task id.
+    Content(String),
+    /// URLBased uses the url, piece_length, tag, application and filtered_query_params to generate
+    /// the task id.
+    URLBased {
+        url: String,
+        piece_length: Option<u64>,
+        tag: Option<String>,
+        application: Option<String>,
+        filtered_query_params: Vec<String>,
+    },
+}
+
+/// PersistentCacheTaskIDParameter is the parameter of the persistent cache task id.
+pub enum PersistentCacheTaskIDParameter {
+    /// Content uses the content to generate the persistent cache task id.
+    Content(String),
+    /// FileContentBased uses the file path, piece_length, tag and application to generate the persistent cache task id.
+    FileContentBased {
+        path: PathBuf,
+        piece_length: Option<u64>,
+        tag: Option<String>,
+        application: Option<String>,
+    },
+}
 
 /// IDGenerator is used to generate the id for the resources.
 #[derive(Debug)]
@@ -71,57 +99,63 @@ impl IDGenerator {
     /// task_id generates the task id.
     #[inline]
     #[instrument(skip_all)]
-    pub fn task_id(
-        &self,
-        url: &str,
-        piece_length: Option<u64>,
-        tag: Option<&str>,
-        application: Option<&str>,
-        filtered_query_params: Vec<String>,
-    ) -> Result<String> {
-        // Filter the query parameters.
-        let url = Url::parse(url).or_err(ErrorType::ParseError)?;
-        let query = url
-            .query_pairs()
-            .filter(|(k, _)| !filtered_query_params.contains(&k.to_string()));
+    pub fn task_id(&self, parameter: TaskIDParameter) -> Result<String> {
+        match parameter {
+            TaskIDParameter::Content(content) => {
+                Ok(hex::encode(Sha256::digest(content.as_bytes())))
+            }
+            TaskIDParameter::URLBased {
+                url,
+                piece_length,
+                tag,
+                application,
+                filtered_query_params,
+            } => {
+                // Filter the query parameters.
+                let url = Url::parse(url.as_str()).or_err(ErrorType::ParseError)?;
+                let query = url
+                    .query_pairs()
+                    .filter(|(k, _)| !filtered_query_params.contains(&k.to_string()));
 
-        let mut artifact_url = url.clone();
-        if query.clone().count() == 0 {
-            artifact_url.set_query(None);
-        } else {
-            artifact_url.query_pairs_mut().clear().extend_pairs(query);
+                let mut artifact_url = url.clone();
+                if query.clone().count() == 0 {
+                    artifact_url.set_query(None);
+                } else {
+                    artifact_url.query_pairs_mut().clear().extend_pairs(query);
+                }
+
+                let artifact_url_str = artifact_url.to_string();
+                let final_url = if artifact_url_str.ends_with('/') && artifact_url.path() == "/" {
+                    artifact_url_str.trim_end_matches('/').to_string()
+                } else {
+                    artifact_url_str
+                };
+
+                // Initialize the hasher.
+                let mut hasher = Sha256::new();
+
+                // Add the url to generate the task id.
+                hasher.update(final_url);
+
+                // Add the tag to generate the task id.
+                if let Some(tag) = tag {
+                    hasher.update(tag);
+                }
+
+                // Add the application to generate the task id.
+                if let Some(application) = application {
+                    hasher.update(application);
+                }
+
+                // Add the piece length to generate the task id.
+                if let Some(piece_length) = piece_length {
+                    hasher.update(piece_length.to_string());
+                }
+
+                // Generate the task id.
+                Ok(hex::encode(hasher.finalize()))
+            }
         }
-
-        let artifact_url_str = artifact_url.to_string();
-        let final_url = if artifact_url_str.ends_with('/') && artifact_url.path() == "/" {
-            artifact_url_str.trim_end_matches('/').to_string()
-        } else {
-            artifact_url_str
-        };
-
-        // Initialize the hasher.
-        let mut hasher = Sha256::new();
-
-        // Add the url to generate the task id.
-        hasher.update(final_url);
-
-        // Add the tag to generate the task id.
-        if let Some(tag) = tag {
-            hasher.update(tag);
-        }
-
-        // Add the application to generate the task id.
-        if let Some(application) = application {
-            hasher.update(application);
-        }
-
-        // Add the piece length to generate the task id.
-        if let Some(piece_length) = piece_length {
-            hasher.update(piece_length.to_string());
-        }
-
-        // Generate the task id.
-        Ok(hex::encode(hasher.finalize()))
     }
 
     /// persistent_cache_task_id generates the persistent cache task id.
@@ -129,42 +163,53 @@ impl IDGenerator {
     #[instrument(skip_all)]
     pub fn persistent_cache_task_id(
         &self,
-        path: &PathBuf,
-        piece_length: Option<u64>,
-        tag: Option<&str>,
-        application: Option<&str>,
+        parameter: PersistentCacheTaskIDParameter,
     ) -> Result<String> {
-        // Calculate the hash of the file.
-        let f = std::fs::File::open(path)?;
-        let mut buffer = [0; 4096];
-        let mut reader = std::io::BufReader::with_capacity(buffer.len(), f);
         let mut hasher = crc32fast::Hasher::new();
-        loop {
-            let n = reader.read(&mut buffer)?;
-            if n == 0 {
-                break;
+
+        match parameter {
+            PersistentCacheTaskIDParameter::Content(content) => {
+                hasher.update(content.as_bytes());
+                Ok(hasher.finalize().to_string())
             }
+            PersistentCacheTaskIDParameter::FileContentBased {
+                path,
+                piece_length,
+                tag,
+                application,
+            } => {
+                // Calculate the hash of the file.
+                let f = std::fs::File::open(path)?;
+                let mut buffer = [0; 4096];
+                let mut reader = io::BufReader::with_capacity(buffer.len(), f);
+                loop {
+                    match reader.read(&mut buffer) {
+                        Ok(0) => break,
+                        Ok(n) => hasher.update(&buffer[..n]),
+                        Err(ref err) if err.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(err) => return Err(err.into()),
+                    };
+                }
 
-            hasher.update(&buffer[..n]);
+                // Add the tag to generate the persistent cache task id.
+                if let Some(tag) = tag {
+                    hasher.update(tag.as_bytes());
+                }
+
+                // Add the application to generate the persistent cache task id.
+                if let Some(application) = application {
+                    hasher.update(application.as_bytes());
+                }
+
+                // Add the piece length to generate the persistent cache task id.
+                if let Some(piece_length) = piece_length {
+                    hasher.update(piece_length.to_string().as_bytes());
+                }
+
+                // Generate the task id by crc32.
+                Ok(hasher.finalize().to_string())
+            }
         }
-
-        // Add the tag to generate the persistent cache task id.
-        if let Some(tag) = tag {
-            hasher.update(tag.as_bytes());
-        }
-
-        // Add the application to generate the persistent cache task id.
-        if let Some(application) = application {
-            hasher.update(application.as_bytes());
-        }
-
-        // Add the piece length to generate the persistent cache task id.
-        if let Some(piece_length) = piece_length {
-            hasher.update(piece_length.to_string().as_bytes());
-        }
-
-        // Generate the task id by crc32.
-        Ok(hasher.finalize().to_string())
     }
 
     /// peer_id generates the peer id.
@@ -225,116 +270,140 @@ mod tests {
         let test_cases = vec![
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
-                "https://example.com",
-                Some(1024_u64),
-                Some("foo"),
-                Some("bar"),
-                vec![],
+                TaskIDParameter::URLBased {
+                    url: "https://example.com".to_string(),
+                    piece_length: Some(1024_u64),
+                    tag: Some("foo".to_string()),
+                    application: Some("bar".to_string()),
+                    filtered_query_params: vec![],
+                },
                 "99a47b38e9d3321aebebd715bea0483c1400cef2f767f84d97458f9dcedff221",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
-                "https://example.com",
-                None,
-                Some("foo"),
-                Some("bar"),
-                vec![],
+                TaskIDParameter::URLBased {
+                    url: "https://example.com".to_string(),
+                    piece_length: None,
+                    tag: Some("foo".to_string()),
+                    application: Some("bar".to_string()),
+                    filtered_query_params: vec![],
+                },
                 "160fa7f001d9d2e893130894fbb60a5fb006e1d61bff82955f2946582bc9de1d",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
-                "https://example.com",
-                None,
-                Some("foo"),
-                None,
-                vec![],
+                TaskIDParameter::URLBased {
+                    url: "https://example.com".to_string(),
+                    piece_length: None,
+                    tag: Some("foo".to_string()),
+                    application: None,
+                    filtered_query_params: vec![],
+                },
                 "2773851c628744fb7933003195db436ce397c1722920696c4274ff804d86920b",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
-                "https://example.com",
-                None,
-                None,
-                Some("bar"),
-                vec![],
+                TaskIDParameter::URLBased {
+                    url: "https://example.com".to_string(),
+                    piece_length: None,
+                    tag: None,
+                    application: Some("bar".to_string()),
+                    filtered_query_params: vec![],
+                },
                 "63dee2822037636b0109876b58e95692233840753a882afa69b9b5ee82a6c57d",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
-                "https://example.com",
-                Some(1024_u64),
-                None,
-                None,
-                vec![],
+                TaskIDParameter::URLBased {
+                    url: "https://example.com".to_string(),
+                    piece_length: Some(1024_u64),
+                    tag: None,
+                    application: None,
+                    filtered_query_params: vec![],
+                },
                 "40c21de3ad2f1470ca1a19a2ad2577803a1829851f6cf862ffa2d4577ae51d38",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
-                "https://example.com?foo=foo&bar=bar",
-                None,
-                None,
-                None,
-                vec!["foo".to_string(), "bar".to_string()],
+                TaskIDParameter::URLBased {
+                    url: "https://example.com?foo=foo&bar=bar".to_string(),
+                    piece_length: None,
+                    tag: None,
+                    application: None,
+                    filtered_query_params: vec!["foo".to_string(), "bar".to_string()],
+                },
                 "100680ad546ce6a577f42f52df33b4cfdca756859e664b8d7de329b150d09ce9",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                TaskIDParameter::Content("This is a test file".to_string()),
+                "e2d0fe1585a63ec6009c8016ff8dda8b17719a637405a4e23c0ff81339148249",
             ),
         ];
 
-        for (generator, url, piece_length, tag, application, filtered_query_params, expected_id) in
-            test_cases
-        {
-            let task_id = generator
-                .task_id(url, piece_length, tag, application, filtered_query_params)
-                .unwrap();
+        for (generator, parameter, expected_id) in test_cases {
+            let task_id = generator.task_id(parameter).unwrap();
             assert_eq!(task_id, expected_id);
         }
     }
 
     #[test]
     fn should_generate_persistent_cache_task_id() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("testfile");
+        let mut f = File::create(&file_path).unwrap();
+        f.write_all("This is a test file".as_bytes()).unwrap();
+
         let test_cases = vec![
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
-                "This is a test file",
-                Some(1024_u64),
-                Some("tag1"),
-                Some("app1"),
+                PersistentCacheTaskIDParameter::FileContentBased {
+                    path: file_path.clone(),
+                    piece_length: Some(1024_u64),
+                    tag: Some("tag1".to_string()),
+                    application: Some("app1".to_string()),
+                },
                 "223755482",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
-                "This is a test file",
-                None,
-                None,
-                Some("app1"),
+                PersistentCacheTaskIDParameter::FileContentBased {
+                    path: file_path.clone(),
+                    piece_length: None,
+                    tag: None,
+                    application: Some("app1".to_string()),
+                },
                 "1152081721",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
-                "This is a test file",
-                None,
-                Some("tag1"),
-                None,
+                PersistentCacheTaskIDParameter::FileContentBased {
+                    path: file_path.clone(),
+                    piece_length: None,
+                    tag: Some("tag1".to_string()),
+                    application: None,
+                },
                 "990623045",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
-                "This is a test file",
-                Some(1024_u64),
-                None,
-                None,
+                PersistentCacheTaskIDParameter::FileContentBased {
+                    path: file_path.clone(),
+                    piece_length: Some(1024_u64),
+                    tag: None,
+                    application: None,
+                },
                 "1293485139",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                PersistentCacheTaskIDParameter::Content("This is a test file".to_string()),
+                "107352521",
             ),
         ];
 
-        for (generator, file_content, piece_length, tag, application, expected_id) in test_cases {
-            let dir = tempdir().unwrap();
-            let file_path = dir.path().join("testfile");
-            let mut f = File::create(&file_path).unwrap();
-            f.write_all(file_content.as_bytes()).unwrap();
-
-            let task_id = generator
-                .persistent_cache_task_id(&file_path, piece_length, tag, application)
-                .unwrap();
+        for (generator, parameter, expected_id) in test_cases {
+            let task_id = generator.persistent_cache_task_id(parameter).unwrap();
             assert_eq!(task_id, expected_id);
         }
     }
