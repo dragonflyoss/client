@@ -48,6 +48,7 @@ use dragonfly_client_core::{
 };
 use dragonfly_client_util::{
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
+    id_generator::TaskIDParameter,
     net::{get_interface_info, Interface},
 };
 use std::net::SocketAddr;
@@ -235,13 +236,16 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let task_id = self
             .task
             .id_generator
-            .task_id(
-                download.url.as_str(),
-                download.piece_length,
-                download.tag.as_deref(),
-                download.application.as_deref(),
-                download.filtered_query_params.clone(),
-            )
+            .task_id(match download.content_for_calculating_task_id.clone() {
+                Some(content) => TaskIDParameter::Content(content),
+                None => TaskIDParameter::URLBased {
+                    url: download.url.clone(),
+                    piece_length: download.piece_length,
+                    tag: download.tag.clone(),
+                    application: download.application.clone(),
+                    filtered_query_params: download.filtered_query_params.clone(),
+                },
+            })
             .map_err(|e| {
                 error!("generate task id: {}", e);
                 Status::invalid_argument(e.to_string())

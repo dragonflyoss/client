@@ -109,6 +109,12 @@ struct Args {
     force_hard_link: bool,
 
     #[arg(
+        long = "content-for-calculating-task-id",
+        help = "Specify the content used to calculate the task ID. If it is set, use its value to calculate the task ID, Otherwise, calculate the task ID based on url, piece-length, tag, application, and filtered-query-params."
+    )]
+    content_for_calculating_task_id: Option<String>,
+
+    #[arg(
         short = 'O',
         long = "output",
         help = "Specify the output path of downloading file"
@@ -774,6 +780,7 @@ async fn download(
                 hdfs,
                 load_to_cache: false,
                 force_hard_link: args.force_hard_link,
+                content_for_calculating_task_id: args.content_for_calculating_task_id,
             }),
         })
         .await
