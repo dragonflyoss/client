@@ -17,7 +17,7 @@
 use dragonfly_client_core::Result as ClientResult;
 use sha2::Digest as Sha2Digest;
 use std::fmt;
-use std::io::Read;
+use std::io::{self, Read};
 use std::path::Path;
 use std::str::FromStr;
 use tracing::instrument;
@@ -126,30 +126,30 @@ impl FromStr for Digest {
 #[instrument(skip_all)]
 pub fn calculate_file_digest(algorithm: Algorithm, path: &Path) -> ClientResult<Digest> {
     let f = std::fs::File::open(path)?;
-    let mut reader = std::io::BufReader::new(f);
+    let mut reader = io::BufReader::new(f);
     match algorithm {
         Algorithm::Crc32 => {
             let mut buffer = [0; 4096];
             let mut hasher = crc32fast::Hasher::new();
             loop {
-                let n = reader.read(&mut buffer)?;
-                if n == 0 {
-                    break;
-                }
-
-                hasher.update(&buffer[..n]);
+                match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(n) => hasher.update(&buffer[..n]),
+                    Err(ref err) if err.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(err) => return Err(err.into()),
+                };
             }
 
             Ok(Digest::new(algorithm, hasher.finalize().to_string()))
         }
         Algorithm::Sha256 => {
             let mut hasher = sha2::Sha256::new();
-            std::io::copy(&mut reader, &mut hasher)?;
+            io::copy(&mut reader, &mut hasher)?;
             Ok(Digest::new(algorithm, hex::encode(hasher.finalize())))
         }
         Algorithm::Sha512 => {
             let mut hasher = sha2::Sha512::new();
-            std::io::copy(&mut reader, &mut hasher)?;
+            io::copy(&mut reader, &mut hasher)?;
             Ok(Digest::new(algorithm, hex::encode(hasher.finalize())))
         }
     }
