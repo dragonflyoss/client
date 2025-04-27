@@ -1,8 +1,8 @@
 FROM public.ecr.aws/docker/library/rust:1.82.0 AS builder
 
 RUN apt-get update && apt-get install -y \
-      openssl libclang-dev pkg-config protobuf-compiler \
-      && rm -rf /var/lib/apt/lists/*
+    openssl libclang-dev pkg-config protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/client
 
