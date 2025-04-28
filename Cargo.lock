@@ -1162,11 +1162,13 @@ dependencies = [
  "pnet",
  "rcgen",
  "reqwest",
+ "rustix 1.0.5",
  "rustls 0.22.4",
  "rustls-pemfile 2.2.0",
  "rustls-pki-types",
  "sha2",
  "tempfile",
+ "tokio",
  "tracing",
  "url",
  "uuid",
@@ -4067,9 +4069,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.0.1"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dade4812df5c384711475be5fcd8c162555352945401aed22a35bffeab61f657"
+checksum = "d97817398dd4bb2e6da002002db259209759911da105da92bec29ccb12cf58bf"
 dependencies = [
  "bitflags 2.4.2",
  "errno",
@@ -4623,7 +4625,7 @@ dependencies = [
  "fastrand",
  "getrandom 0.3.1",
  "once_cell",
- "rustix 1.0.1",
+ "rustix 1.0.5",
  "windows-sys 0.59.0",
 ]
 
