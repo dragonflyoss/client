@@ -19,10 +19,6 @@ name = "dfget"
 path = "src/bin/dfget/main.rs"
 
 [[bin]]
-name = "dfstore"
-path = "src/bin/dfstore/main.rs"
-
-[[bin]]
 name = "dfcache"
 path = "src/bin/dfcache/main.rs"
 
@@ -77,7 +73,7 @@ opentelemetry-jaeger = { version = "0.17.0", features = ["rt-tokio"] }
 pprof = { version = "0.14", features = ["flamegraph", "protobuf-codec"] }
 prometheus = { version = "0.13", features = ["process"] }
 tonic-health = "0.12.3"
-sysinfo = "0.32.1"
+sysinfo = { version = "0.32.1", default-features = false, features = ["component", "disk", "network", "system", "user"] }
 tower = { version = "0.4.13", features = ["limit", "load-shed", "buffer"] }
 indicatif = "0.17.11"
 hashring = "0.3.6"
@@ -115,11 +111,6 @@ assets = [
   [
     "../target/x86_64-unknown-linux-gnu/release/dfcache",
     "usr/bin/dfcache",
-    "755",
-  ],
-  [
-    "../target/x86_64-unknown-linux-gnu/release/dfstore",
-    "usr/bin/dfstore",
     "755",
   ],
   [
@@ -165,11 +156,6 @@ assets = [
     "755",
   ],
   [
-    "../target/x86_64-unknown-linux-musl/release/dfstore",
-    "usr/bin/dfstore",
-    "755",
-  ],
-  [
     "../ci/dfdaemon.service",
     "lib/systemd/system/dfdaemon.service",
     "644",
@@ -209,11 +195,6 @@ assets = [
   [
     "../target/aarch64-unknown-linux-gnu/release/dfcache",
     "usr/bin/dfcache",
-    "755",
-  ],
-  [
-    "../target/aarch64-unknown-linux-gnu/release/dfstore",
-    "usr/bin/dfstore",
     "755",
   ],
   [
@@ -259,11 +240,6 @@ assets = [
     "755",
   ],
   [
-    "../target/aarch64-unknown-linux-musl/release/dfstore",
-    "usr/bin/dfstore",
-    "755",
-  ],
-  [
     "../ci/dfdaemon.service",
     "lib/systemd/system/dfdaemon.service",
     "644",
@@ -290,7 +266,6 @@ assets = [
   { source = "../target/x86_64-unknown-linux-gnu/release/dfget", dest = "/usr/bin/dfget", mode = "755" },
   { source = "../target/x86_64-unknown-linux-gnu/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755" },
   { source = "../target/x86_64-unknown-linux-gnu/release/dfcache", dest = "/usr/bin/dfcache", mode = "755" },
-  { source = "../target/x86_64-unknown-linux-gnu/release/dfstore", dest = "/usr/bin/dfstore", mode = "755" },
   { source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
   { source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true },
   { source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true },
@@ -302,7 +277,6 @@ assets = [
   { source = "../target/x86_64-unknown-linux-musl/release/dfget", dest = "/usr/bin/dfget", mode = "755" },
   { source = "../target/x86_64-unknown-linux-musl/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755" },
   { source = "../target/x86_64-unknown-linux-musl/release/dfcache", dest = "/usr/bin/dfcache", mode = "755" },
-  { source = "../target/x86_64-unknown-linux-musl/release/dfstore", dest = "/usr/bin/dfstore", mode = "755" },
   { source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
   { source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true },
   { source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true },
@@ -315,7 +289,6 @@ assets = [
   { source = "../target/aarch64-unknown-linux-gnu/release/dfget", dest = "/usr/bin/dfget", mode = "755" },
   { source = "../target/aarch64-unknown-linux-gnu/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755" },
   { source = "../target/aarch64-unknown-linux-gnu/release/dfcache", dest = "/usr/bin/dfcache", mode = "755" },
-  { source = "../target/aarch64-unknown-linux-gnu/release/dfstore", dest = "/usr/bin/dfstore", mode = "755" },
   { source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
   { source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true },
   { source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true },
@@ -327,7 +300,6 @@ assets = [
   { source = "../target/aarch64-unknown-linux-musl/release/dfget", dest = "/usr/bin/dfget", mode = "755" },
   { source = "../target/aarch64-unknown-linux-musl/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755" },
   { source = "../target/aarch64-unknown-linux-musl/release/dfcache", dest = "/usr/bin/dfcache", mode = "755" },
-  { source = "../target/aarch64-unknown-linux-musl/release/dfstore", dest = "/usr/bin/dfstore", mode = "755" },
   { source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
   { source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true },
   { source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true },

@@ -127,6 +127,7 @@ impl GC {
             }
         }
 
+        info!("evict by task ttl done");
         Ok(())
     }
 
@@ -153,6 +154,8 @@ impl GC {
             if let Err(err) = self.evict_task_space(need_evict_space as u64).await {
                 info!("failed to evict task by disk usage: {}", err);
             }
+
+            info!("evict task by disk usage done");
         }
 
         Ok(())
@@ -241,6 +244,7 @@ impl GC {
             }
         }
 
+        info!("evict by persistent cache task ttl done");
         Ok(())
     }
 
@@ -270,6 +274,8 @@ impl GC {
             {
                 info!("failed to evict task by disk usage: {}", err);
             }
+
+            info!("evict persistent cache task by disk usage done");
         }
 
         Ok(())

@@ -26,7 +26,7 @@ use dragonfly_client_config::{
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::Result;
 use std::env;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use sysinfo::System;
 use tokio::sync::mpsc;
@@ -122,9 +122,6 @@ pub struct SchedulerAnnouncer {
     /// scheduler_client is the grpc client of the scheduler.
     scheduler_client: Arc<SchedulerClient>,
 
-    // system is the system information.
-    system: Arc<Mutex<System>>,
-
     /// shutdown is used to shutdown the announcer.
     shutdown: shutdown::Shutdown,
 
@@ -147,7 +144,6 @@ impl SchedulerAnnouncer {
             config,
             host_id,
             scheduler_client,
-            system: Arc::new(Mutex::new(System::new_all())),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         };
@@ -209,7 +205,7 @@ impl SchedulerAnnouncer {
         };
 
         // Refresh the system information.
-        let mut sys = self.system.lock().unwrap();
+        let mut sys = System::new_all();
         sys.refresh_all();
 
         // Get the process information.
