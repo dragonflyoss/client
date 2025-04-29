@@ -329,14 +329,14 @@ impl ImportCommand {
         let absolute_path = Path::new(&self.path).absolutize()?;
         info!("import file: {}", absolute_path.to_string_lossy());
 
-        let pb = ProgressBar::new_spinner();
-        pb.enable_steady_tick(DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL);
-        pb.set_style(
+        let progress_bar = ProgressBar::new_spinner();
+        progress_bar.enable_steady_tick(DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL);
+        progress_bar.set_style(
             ProgressStyle::with_template("{spinner:.blue} {msg}")
                 .unwrap()
                 .tick_strings(&["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]),
         );
-        pb.set_message("Importing...");
+        progress_bar.set_message("Importing...");
 
         let persistent_cache_task = dfdaemon_download_client
             .upload_persistent_cache_task(UploadPersistentCacheTaskRequest {
@@ -356,7 +356,7 @@ impl ImportCommand {
             })
             .await?;
 
-        pb.finish_with_message(format!("Done: {}", persistent_cache_task.id));
+        progress_bar.finish_with_message(format!("Done: {}", persistent_cache_task.id));
         Ok(())
     }
 
