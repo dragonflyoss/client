@@ -30,6 +30,8 @@ crc32fast.workspace = true
 lazy_static.workspace = true
 bytesize.workspace = true
 lru.workspace = true
+tokio.workspace = true
+rustix = { version = "1.0.5", features = ["fs"] }
 base64 = "0.22.1"
 pnet = "0.35.0"
 

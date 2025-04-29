@@ -23,6 +23,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
+use dragonfly_client_util::fs::fallocate;
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use path_absolutize::*;
 use std::path::{Path, PathBuf};
@@ -488,8 +489,8 @@ impl ExportCommand {
         };
 
         // Initialize progress bar.
-        let pb = ProgressBar::new(0);
-        pb.set_style(
+        let progress_bar = ProgressBar::new(0);
+        progress_bar.set_style(
             ProgressStyle::with_template(
                 "[{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})",
             )
@@ -510,7 +511,15 @@ impl ExportCommand {
                 Some(download_persistent_cache_task_response::Response::DownloadPersistentCacheTaskStartedResponse(
                     response,
                 )) => {
-                    pb.set_length(response.content_length);
+                    if let Some(f) = &f {
+                        fallocate(f, response.content_length)
+                            .await
+                            .inspect_err(|err| {
+                                error!("fallocate {:?} failed: {}", self.output, err);
+                            })?;
+                    }
+
+                    progress_bar.set_length(response.content_length);
                 }
                 Some(download_persistent_cache_task_response::Response::DownloadPieceFinishedResponse(
                     response,
@@ -534,14 +543,14 @@ impl ExportCommand {
                     };
 
                     downloaded += piece.length;
-                    let position = min(downloaded + piece.length, pb.length().unwrap_or(0));
-                    pb.set_position(position);
+                    let position = min(downloaded + piece.length, progress_bar.length().unwrap_or(0));
+                    progress_bar.set_position(position);
                 }
                 None => {}
             }
         }
 
-        pb.finish_with_message("downloaded");
+        progress_bar.finish_with_message("downloaded");
         Ok(())
     }
 

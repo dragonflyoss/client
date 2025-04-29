@@ -106,31 +106,36 @@ impl Storage {
         self.content.is_same_dev_inode_as_task(id, to).await
     }
 
+    /// prepare_download_task_started prepares the metadata of the task when the task downloads
+    /// started.
+    #[instrument(skip_all)]
+    pub async fn prepare_download_task_started(&self, id: &str) -> Result<metadata::Task> {
+        self.metadata.download_task_started(id, None, None, None)
+    }
+
     /// download_task_started updates the metadata of the task and create task content
     /// when the task downloads started.
     #[instrument(skip_all)]
     pub async fn download_task_started(
         &self,
         id: &str,
-        piece_length: Option<u64>,
-        content_length: Option<u64>,
+        piece_length: u64,
+        content_length: u64,
         response_header: Option<HeaderMap>,
         load_to_cache: bool,
     ) -> Result<metadata::Task> {
         let metadata = self.metadata.download_task_started(
             id,
-            piece_length,
-            content_length,
+            Some(piece_length),
+            Some(content_length),
             response_header,
         )?;
 
-        self.content.create_task(id).await?;
+        self.content.create_task(id, content_length).await?;
         if load_to_cache {
-            if let Some(content_length) = content_length {
-                let mut cache = self.cache.clone();
-                cache.put_task(id, content_length).await;
-                debug!("put task to cache: {}", id);
-            }
+            let mut cache = self.cache.clone();
+            cache.put_task(id, content_length).await;
+            debug!("put task to cache: {}", id);
         }
 
         Ok(metadata)
@@ -248,7 +253,9 @@ impl Storage {
             content_length,
         )?;
 
-        self.content.create_persistent_cache_task(id).await?;
+        self.content
+            .create_persistent_cache_task(id, content_length)
+            .await?;
         Ok(metadata)
     }
 
@@ -290,7 +297,9 @@ impl Storage {
             created_at,
         )?;
 
-        self.content.create_persistent_cache_task(id).await?;
+        self.content
+            .create_persistent_cache_task(id, content_length)
+            .await?;
         Ok(metadata)
     }
 

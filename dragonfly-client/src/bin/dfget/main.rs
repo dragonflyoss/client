@@ -32,7 +32,10 @@ use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{BackendError, ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_util::http::{header_vec_to_hashmap, header_vec_to_headermap};
+use dragonfly_client_util::{
+    fs::fallocate,
+    http::{header_vec_to_hashmap, header_vec_to_headermap},
+};
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
 use path_absolutize::*;
 use percent_encoding::percent_decode_str;
@@ -836,6 +839,14 @@ async fn download(
     })? {
         match message.response {
             Some(download_task_response::Response::DownloadTaskStartedResponse(response)) => {
+                if let Some(f) = &f {
+                    fallocate(f, response.content_length)
+                        .await
+                        .inspect_err(|err| {
+                            error!("fallocate {:?} failed: {}", args.output, err);
+                        })?;
+                }
+
                 progress_bar.set_length(response.content_length);
             }
             Some(download_task_response::Response::DownloadPieceFinishedResponse(response)) => {
