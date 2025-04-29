@@ -14,15 +14,23 @@
  * limitations under the License.
  */
 
-use dragonfly_client_core::{Error, Result};
-use tokio::{fs, io};
+use dragonfly_client_core::Result;
+use tokio::fs;
 
 /// fallocate allocates the space for the file and fills it with zero, only on Linux.
+#[allow(unused_variables)]
 pub async fn fallocate(f: &fs::File, length: u64) -> Result<()> {
+    // No allocation needed for zero length. Avoids potential fallocate errors.
+    if length == 0 {
+        return Ok(());
+    }
+
     #[cfg(target_os = "linux")]
     {
+        use dragonfly_client_core::Error;
         use rustix::fs::{fallocate, FallocateFlags};
         use std::os::unix::io::AsFd;
+        use tokio::io;
 
         // Set length (potential truncation).
         f.set_len(length).await?;
