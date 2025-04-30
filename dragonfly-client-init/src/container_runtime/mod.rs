@@ -50,8 +50,6 @@ impl ContainerRuntime {
     /// run runs the container runtime to initialize runtime environment for the dfdaemon.
     #[instrument(skip_all)]
     pub async fn run(&self) -> Result<()> {
-        // If containerd is enabled, override the default containerd
-        // configuration.
         match &self.engine {
             None => Ok(()),
             Some(Engine::Containerd(containerd)) => containerd.run().await,
