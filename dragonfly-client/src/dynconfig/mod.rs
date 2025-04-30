@@ -25,7 +25,7 @@ use dragonfly_client_core::{Error, Result};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tonic_health::pb::health_check_response::ServingStatus;
-use tracing::{error, info, instrument};
+use tracing::{debug, error, info, instrument};
 use url::Url;
 
 /// Data is the dynamic configuration of the dfdaemon.
@@ -98,9 +98,10 @@ impl Dynconfig {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    if let Err(err) = self.refresh().await {
-                        error!("refresh dynconfig failed: {}", err);
-                    };
+                    match self.refresh().await {
+                        Err(err) => error!("refresh dynconfig failed: {}", err),
+                        Ok(_) => debug!("refresh dynconfig success"),
+                    }
                 }
                 _ = shutdown.recv() => {
                     // Dynconfig server shutting down with signals.

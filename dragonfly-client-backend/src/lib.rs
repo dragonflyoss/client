@@ -47,7 +47,7 @@ const HTTP2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(300);
 const HTTP2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// MAX_RETRY_TIMES is the max retry times for the request.
-const MAX_RETRY_TIMES: u32 = 3;
+const MAX_RETRY_TIMES: u32 = 1;
 
 /// NAME is the name of the package.
 pub const NAME: &str = "backend";

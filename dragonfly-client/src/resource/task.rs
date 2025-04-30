@@ -128,10 +128,7 @@ impl Task {
         id: &str,
         request: Download,
     ) -> ClientResult<metadata::Task> {
-        let task = self
-            .storage
-            .download_task_started(id, None, None, None, request.load_to_cache)
-            .await?;
+        let task = self.storage.prepare_download_task_started(id).await?;
 
         // Attempt to create a hard link from the task file to the output path.
         //
@@ -250,8 +247,8 @@ impl Task {
         self.storage
             .download_task_started(
                 id,
-                Some(piece_length),
-                Some(content_length),
+                piece_length,
+                content_length,
                 response.http_header,
                 request.load_to_cache,
             )
@@ -1891,7 +1888,7 @@ mod tests {
         // Create a task and save it to storage.
         let task_id = "test-task-id";
         storage
-            .download_task_started(task_id, Some(1024), Some(4096), None, false)
+            .download_task_started(task_id, 1024, 4096, None, false)
             .await
             .unwrap();
 

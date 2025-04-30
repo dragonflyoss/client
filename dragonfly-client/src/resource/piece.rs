@@ -46,7 +46,7 @@ pub const MAX_PIECE_COUNT: u64 = 500;
 pub const MIN_PIECE_LENGTH: u64 = 4 * 1024 * 1024;
 
 /// MAX_PIECE_LENGTH is the maximum piece length.
-pub const MAX_PIECE_LENGTH: u64 = 16 * 1024 * 1024;
+pub const MAX_PIECE_LENGTH: u64 = 64 * 1024 * 1024;
 
 /// PieceLengthStrategy sets the optimization strategy of piece length.
 pub enum PieceLengthStrategy {
