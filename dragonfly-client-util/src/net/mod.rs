@@ -17,7 +17,7 @@
 use bytesize::{ByteSize, MB};
 use pnet::datalink::{self, NetworkInterface};
 use std::cmp::min;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 #[cfg(not(target_os = "linux"))]
 use tracing::warn;
@@ -81,5 +81,28 @@ pub fn get_interface_info(ip: IpAddr, rate_limit: ByteSize) -> Option<Interface>
             name: interface.name,
             bandwidth: rate_limit,
         }),
+    }
+}
+
+/// DualStack represents a dual stack with ipv4 and ipv6.
+pub struct DualStack {
+    pub ipv4: Option<Ipv4Addr>,
+    pub ipv6: Option<Ipv6Addr>,
+}
+
+impl DualStack {
+    /// new creates a new DualStack.
+    pub fn new(ipv4: Option<Ipv4Addr>, ipv6: Option<Ipv6Addr>) -> Self {
+        Self { ipv4, ipv6 }
+    }
+
+    // get_ip returns the ip address. 
+    pub fn get_ip(&self) -> Option<String> {
+        match (self.ipv4, self.ipv6) {
+            (Some(v4), Some(v6)) => Some(format!("{},{}", v4, v6)),
+            (Some(v4), None)     => Some(v4.to_string()),
+            (None, Some(v6))     => Some(v6.to_string()),
+            (None, None)         => None,
+        }
     }
 }
