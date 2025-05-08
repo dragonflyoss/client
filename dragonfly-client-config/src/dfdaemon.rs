@@ -143,7 +143,7 @@ fn default_download_rate_limit() -> ByteSize {
 /// default_download_piece_timeout is the default timeout for downloading a piece from source.
 #[inline]
 fn default_download_piece_timeout() -> Duration {
-    Duration::from_secs(15)
+    Duration::from_secs(60)
 }
 
 /// default_download_concurrent_piece_count is the default number of concurrent pieces to download.
@@ -167,7 +167,7 @@ fn default_scheduler_announce_interval() -> Duration {
 /// default_scheduler_schedule_timeout is the default timeout for scheduling.
 #[inline]
 fn default_scheduler_schedule_timeout() -> Duration {
-    Duration::from_secs(180)
+    Duration::from_secs(3 * 60 * 60)
 }
 
 /// default_dynconfig_refresh_interval is the default interval to refresh dynamic configuration from manager.
@@ -743,8 +743,35 @@ pub struct Scheduler {
     )]
     pub announce_interval: Duration,
 
-    /// schedule_timeout is the timeout for scheduling. If the scheduling timeout, dfdaemon will back-to-source
-    /// download if enable_back_to_source is true, otherwise dfdaemon will return download failed.
+    /// schedule_timeout is timeout for the scheduler to respond to a scheduling request from dfdaemon, default is 3 hours.
+    ///
+    /// If the scheduler's response time for a scheduling decision exceeds this timeout,
+    /// dfdaemon will encounter a `TokioStreamElapsed(Elapsed(()))` error.
+    ///
+    /// Behavior upon timeout:
+    ///   - If `enable_back_to_source` is `true`, dfdaemon will attempt to download directly
+    ///     from the source.
+    ///   - Otherwise (if `enable_back_to_source` is `false`), dfdaemon will report a download failure.
+    ///
+    /// **Important Considerations Regarding Timeout Triggers**:
+    /// This timeout isn't solely for the scheduler's direct response. It can also be triggered
+    /// if the overall duration of the client's interaction with the scheduler for a task
+    /// (e.g., client downloading initial pieces and reporting their status back to the scheduler)
+    /// exceeds `schedule_timeout`. During such client-side processing and reporting,
+    /// the scheduler might be awaiting these updates before sending its comprehensive
+    /// scheduling response, and this entire period is subject to the `schedule_timeout`.
+    ///
+    /// **Configuration Guidance**:
+    /// To prevent premature timeouts, `schedule_timeout` should be configured to a value
+    /// greater than the maximum expected time for the *entire scheduling interaction*.
+    /// This includes:
+    ///   1. The scheduler's own processing and response time.
+    ///   2. The time taken by the client to download any initial pieces and download all pieces finished,
+    ///      as this communication is part of the scheduling phase.
+    ///
+    /// Setting this value too low can lead to `TokioStreamElapsed` errors even if the
+    /// network and scheduler are functioning correctly but the combined interaction time
+    /// is longer than the configured timeout.
     #[serde(
         default = "default_scheduler_schedule_timeout",
         with = "humantime_serde"
