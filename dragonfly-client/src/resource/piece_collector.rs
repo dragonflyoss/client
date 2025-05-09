@@ -263,7 +263,7 @@ impl PieceCollector {
                     let is_empty = collected_pieces_guard.is_empty();
                     drop(collected_pieces_guard);
 
-                    if !is_empty {
+                    if is_empty {
                         info!("all pieces are collected, abort all tasks");
                         join_set.abort_all();
                     }
@@ -499,7 +499,7 @@ impl PersistentCachePieceCollector {
                     let is_empty = collected_pieces_guard.is_empty();
                     drop(collected_pieces_guard);
 
-                    if !is_empty {
+                    if is_empty {
                         info!("all persistent cache pieces are collected, abort all tasks");
                         join_set.abort_all();
                     }
