@@ -578,7 +578,7 @@ impl Task {
         })? {
             // Check if the schedule count is exceeded.
             schedule_count += 1;
-            if schedule_count >= self.config.scheduler.max_schedule_count {
+            if schedule_count > self.config.scheduler.max_schedule_count {
                 in_stream_tx
                     .send_timeout(
                         AnnouncePeerRequest {
