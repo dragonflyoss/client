@@ -41,7 +41,10 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error as ClientError, Result as ClientResult,
 };
-use dragonfly_client_util::http::{get_range, hashmap_to_headermap, headermap_to_hashmap};
+use dragonfly_client_util::{
+    http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
+    id_generator::{PersistentCacheTaskIDParameter, TaskIDParameter},
+};
 use hyper_util::rt::TokioIo;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -234,13 +237,16 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let task_id = self
             .task
             .id_generator
-            .task_id(
-                download.url.as_str(),
-                download.piece_length,
-                download.tag.as_deref(),
-                download.application.as_deref(),
-                download.filtered_query_params.clone(),
-            )
+            .task_id(match download.content_for_calculating_task_id.clone() {
+                Some(content) => TaskIDParameter::Content(content),
+                None => TaskIDParameter::URLBased {
+                    url: download.url.clone(),
+                    piece_length: download.piece_length,
+                    tag: download.tag.clone(),
+                    application: download.application.clone(),
+                    filtered_query_params: download.filtered_query_params.clone(),
+                },
+            })
             .map_err(|e| {
                 error!("generate task id: {}", e);
                 Status::invalid_argument(e.to_string())
@@ -950,22 +956,22 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         info!("upload persistent cache task {:?}", request);
 
         // Generate the task id.
-        let task_id = match request.task_id.as_deref() {
-            Some(task_id) => task_id.to_string(),
-            None => self
-                .task
-                .id_generator
-                .persistent_cache_task_id(
-                    &path.to_path_buf(),
-                    request.piece_length,
-                    request.tag.as_deref(),
-                    request.application.as_deref(),
-                )
-                .map_err(|err| {
-                    error!("generate persistent cache task id: {}", err);
-                    Status::invalid_argument(err.to_string())
-                })?,
-        };
+        let task_id = self
+            .task
+            .id_generator
+            .persistent_cache_task_id(match request.content_for_calculating_task_id.clone() {
+                Some(content) => PersistentCacheTaskIDParameter::Content(content),
+                None => PersistentCacheTaskIDParameter::FileContentBased {
+                    path: path.to_path_buf(),
+                    piece_length: request.piece_length,
+                    tag: request.tag.clone(),
+                    application: request.application.clone(),
+                },
+            })
+            .map_err(|err| {
+                error!("generate persistent cache task id: {}", err);
+                Status::invalid_argument(err.to_string())
+            })?;
         info!("generate persistent cache task id: {}", task_id);
 
         // Generate the host id.

@@ -19,10 +19,6 @@ name = "dfget"
 path = "src/bin/dfget/main.rs"
 
 [[bin]]
-name = "dfstore"
-path = "src/bin/dfstore/main.rs"
-
-[[bin]]
 name = "dfcache"
 path = "src/bin/dfcache/main.rs"
 
@@ -85,7 +81,7 @@ fslock = "0.2.1"
 leaky-bucket = "1.1.2"
 http-body-util = "0.1.3"
 termion = "4.0.5"
-tabled = "0.18.0"
+tabled = "0.19.0"
 path-absolutize = "3.1.1"
 dashmap = "6.1.0"
 rand = "0.9.1"
@@ -117,11 +113,6 @@ assets = [
   [
     "../target/x86_64-unknown-linux-gnu/release/dfcache",
     "usr/bin/dfcache",
-    "755",
-  ],
-  [
-    "../target/x86_64-unknown-linux-gnu/release/dfstore",
-    "usr/bin/dfstore",
     "755",
   ],
   [
@@ -167,11 +158,6 @@ assets = [
     "755",
   ],
   [
-    "../target/x86_64-unknown-linux-musl/release/dfstore",
-    "usr/bin/dfstore",
-    "755",
-  ],
-  [
     "../ci/dfdaemon.service",
     "lib/systemd/system/dfdaemon.service",
     "644",
@@ -211,11 +197,6 @@ assets = [
   [
     "../target/aarch64-unknown-linux-gnu/release/dfcache",
     "usr/bin/dfcache",
-    "755",
-  ],
-  [
-    "../target/aarch64-unknown-linux-gnu/release/dfstore",
-    "usr/bin/dfstore",
     "755",
   ],
   [
@@ -261,11 +242,6 @@ assets = [
     "755",
   ],
   [
-    "../target/aarch64-unknown-linux-musl/release/dfstore",
-    "usr/bin/dfstore",
-    "755",
-  ],
-  [
     "../ci/dfdaemon.service",
     "lib/systemd/system/dfdaemon.service",
     "644",
@@ -292,7 +268,6 @@ assets = [
   { source = "../target/x86_64-unknown-linux-gnu/release/dfget", dest = "/usr/bin/dfget", mode = "755" },
   { source = "../target/x86_64-unknown-linux-gnu/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755" },
   { source = "../target/x86_64-unknown-linux-gnu/release/dfcache", dest = "/usr/bin/dfcache", mode = "755" },
-  { source = "../target/x86_64-unknown-linux-gnu/release/dfstore", dest = "/usr/bin/dfstore", mode = "755" },
   { source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
   { source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true },
   { source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true },
@@ -304,7 +279,6 @@ assets = [
   { source = "../target/x86_64-unknown-linux-musl/release/dfget", dest = "/usr/bin/dfget", mode = "755" },
   { source = "../target/x86_64-unknown-linux-musl/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755" },
   { source = "../target/x86_64-unknown-linux-musl/release/dfcache", dest = "/usr/bin/dfcache", mode = "755" },
-  { source = "../target/x86_64-unknown-linux-musl/release/dfstore", dest = "/usr/bin/dfstore", mode = "755" },
   { source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
   { source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true },
   { source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true },
@@ -317,7 +291,6 @@ assets = [
   { source = "../target/aarch64-unknown-linux-gnu/release/dfget", dest = "/usr/bin/dfget", mode = "755" },
   { source = "../target/aarch64-unknown-linux-gnu/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755" },
   { source = "../target/aarch64-unknown-linux-gnu/release/dfcache", dest = "/usr/bin/dfcache", mode = "755" },
-  { source = "../target/aarch64-unknown-linux-gnu/release/dfstore", dest = "/usr/bin/dfstore", mode = "755" },
   { source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
   { source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true },
   { source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true },
@@ -329,7 +302,6 @@ assets = [
   { source = "../target/aarch64-unknown-linux-musl/release/dfget", dest = "/usr/bin/dfget", mode = "755" },
   { source = "../target/aarch64-unknown-linux-musl/release/dfdaemon", dest = "/usr/bin/dfdaemon", mode = "755" },
   { source = "../target/aarch64-unknown-linux-musl/release/dfcache", dest = "/usr/bin/dfcache", mode = "755" },
-  { source = "../target/aarch64-unknown-linux-musl/release/dfstore", dest = "/usr/bin/dfstore", mode = "755" },
   { source = "../ci/dfdaemon.service", dest = "/lib/systemd/system/dfdaemon.service", config = true, mode = "644" },
   { source = "../CONTRIBUTING.md", dest = "/usr/share/doc/client/CONTRIBUTING.md", mode = "644", doc = true },
   { source = "../LICENSE", dest = "/usr/share/doc/client/LICENSE.md", mode = "644", doc = true },

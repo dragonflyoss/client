@@ -34,7 +34,7 @@ COPY dragonfly-client-util/src ./dragonfly-client-util/src
 COPY dragonfly-client-init/Cargo.toml ./dragonfly-client-init/Cargo.toml
 COPY dragonfly-client-init/src ./dragonfly-client-init/src
 
-RUN cargo build --verbose --bin dfget --bin dfdaemon --bin dfstore --bin dfcache
+RUN cargo build --verbose --bin dfget --bin dfdaemon --bin dfcache
 
 RUN cargo install flamegraph --root /usr/local
 RUN cargo install bottom --locked --root /usr/local
@@ -65,7 +65,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends iperf3 fio wget
 
 COPY --from=builder /app/client/target/debug/dfget /usr/local/bin/dfget
 COPY --from=builder /app/client/target/debug/dfdaemon /usr/local/bin/dfdaemon
-COPY --from=builder /app/client/target/debug/dfstore /usr/local/bin/dfstore
 COPY --from=builder /app/client/target/debug/dfcache /usr/local/bin/dfcache
 COPY --from=builder /usr/local/bin/flamegraph /usr/local/bin/
 COPY --from=builder /usr/local/bin/btm /usr/local/bin/

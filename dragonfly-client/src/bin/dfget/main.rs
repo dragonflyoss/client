@@ -32,7 +32,10 @@ use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{BackendError, ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_util::http::{header_vec_to_hashmap, header_vec_to_headermap};
+use dragonfly_client_util::{
+    fs::fallocate,
+    http::{header_vec_to_hashmap, header_vec_to_headermap},
+};
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
 use path_absolutize::*;
 use percent_encoding::percent_decode_str;
@@ -107,6 +110,12 @@ struct Args {
         help = "Specify whether the download file must be hard linked to the output path. If hard link is failed, download will be failed. If it is false, dfdaemon will copy the file to the output path if hard link is failed."
     )]
     force_hard_link: bool,
+
+    #[arg(
+        long = "content-for-calculating-task-id",
+        help = "Specify the content used to calculate the task ID. If it is set, use its value to calculate the task ID, Otherwise, calculate the task ID based on url, piece-length, tag, application, and filtered-query-params."
+    )]
+    content_for_calculating_task_id: Option<String>,
 
     #[arg(
         short = 'O',
@@ -774,6 +783,7 @@ async fn download(
                 hdfs,
                 load_to_cache: false,
                 force_hard_link: args.force_hard_link,
+                content_for_calculating_task_id: args.content_for_calculating_task_id,
             }),
         })
         .await
@@ -829,6 +839,14 @@ async fn download(
     })? {
         match message.response {
             Some(download_task_response::Response::DownloadTaskStartedResponse(response)) => {
+                if let Some(f) = &f {
+                    fallocate(f, response.content_length)
+                        .await
+                        .inspect_err(|err| {
+                            error!("fallocate {:?} failed: {}", args.output, err);
+                        })?;
+                }
+
                 progress_bar.set_length(response.content_length);
             }
             Some(download_task_response::Response::DownloadPieceFinishedResponse(response)) => {

@@ -34,7 +34,7 @@ COPY dragonfly-client-util/src ./dragonfly-client-util/src
 COPY dragonfly-client-init/Cargo.toml ./dragonfly-client-init/Cargo.toml
 COPY dragonfly-client-init/src ./dragonfly-client-init/src
 
-RUN cargo build --release --verbose --bin dfget --bin dfdaemon --bin dfstore --bin dfcache
+RUN cargo build --release --verbose --bin dfget --bin dfdaemon --bin dfcache
 
 FROM public.ecr.aws/docker/library/alpine:3.20 AS health
 
@@ -61,7 +61,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl bash-compl
 
 COPY --from=builder /app/client/target/release/dfget /usr/local/bin/dfget
 COPY --from=builder /app/client/target/release/dfdaemon /usr/local/bin/dfdaemon
-COPY --from=builder /app/client/target/release/dfstore /usr/local/bin/dfstore
 COPY --from=builder /app/client/target/release/dfcache /usr/local/bin/dfcache
 COPY --from=pprof /go/bin/pprof /bin/pprof
 COPY --from=health /bin/grpc_health_probe /bin/grpc_health_probe

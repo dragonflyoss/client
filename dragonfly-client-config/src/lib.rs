@@ -21,7 +21,6 @@ pub mod dfcache;
 pub mod dfdaemon;
 pub mod dfget;
 pub mod dfinit;
-pub mod dfstore;
 
 /// SERVICE_NAME is the name of the service.
 pub const SERVICE_NAME: &str = "dragonfly";

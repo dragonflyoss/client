@@ -1067,6 +1067,7 @@ fn make_download_task_request(
             need_piece_content: false,
             load_to_cache: false,
             force_hard_link: header::get_force_hard_link(&header),
+            content_for_calculating_task_id: header::get_content_for_calculating_task_id(&header),
         }),
     })
 }
