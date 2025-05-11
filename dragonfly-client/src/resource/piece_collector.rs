@@ -15,6 +15,7 @@
  */
 
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
+use dashmap::DashMap;
 use dragonfly_api::common::v2::Host;
 use dragonfly_api::dfdaemon::v2::{SyncPersistentCachePiecesRequest, SyncPiecesRequest};
 use dragonfly_client_config::dfdaemon::Config;
@@ -70,6 +71,9 @@ pub struct PieceCollector {
 
     /// collected_pieces is the pieces collected from peers.
     collected_pieces: Arc<Mutex<HashMap<u32, String>>>,
+
+    /// meta_pieces records which parent has which pieces.
+    meta_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
 }
 
 /// PieceCollector is used to collect pieces from peers.
@@ -92,6 +96,8 @@ impl PieceCollector {
         }
         drop(collected_pieces_guard);
 
+        let meta_pieces = Arc::new(DashMap::with_capacity(interested_pieces.len()));
+
         Self {
             config,
             task_id: task_id.to_string(),
@@ -99,6 +105,7 @@ impl PieceCollector {
             parents,
             interested_pieces,
             collected_pieces,
+            meta_pieces,
         }
     }
 
@@ -111,6 +118,7 @@ impl PieceCollector {
         let parents = self.parents.clone();
         let interested_pieces = self.interested_pieces.clone();
         let collected_pieces = self.collected_pieces.clone();
+        let piece_to_parents = self.meta_pieces.clone();
         let collected_piece_timeout = self.config.download.piece_timeout;
         let (collected_piece_tx, collected_piece_rx) = mpsc::channel(128 * 1024);
         tokio::spawn(
@@ -122,6 +130,7 @@ impl PieceCollector {
                     parents,
                     interested_pieces,
                     collected_pieces,
+                    piece_to_parents,
                     collected_piece_tx,
                     collected_piece_timeout,
                 )
@@ -146,6 +155,7 @@ impl PieceCollector {
         parents: Vec<CollectedParent>,
         interested_pieces: Vec<metadata::Piece>,
         collected_pieces: Arc<Mutex<HashMap<u32, String>>>,
+        meta_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
         collected_piece_tx: Sender<CollectedPiece>,
         collected_piece_timeout: Duration,
     ) -> Result<()> {
@@ -160,6 +170,7 @@ impl PieceCollector {
                 parent: CollectedParent,
                 interested_pieces: Vec<metadata::Piece>,
                 collected_pieces: Arc<Mutex<HashMap<u32, String>>>,
+                meta_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
                 collected_piece_tx: Sender<CollectedPiece>,
                 collected_piece_timeout: Duration,
             ) -> Result<CollectedParent> {
@@ -173,7 +184,7 @@ impl PieceCollector {
 
                 // Create a dfdaemon client.
                 let dfdaemon_upload_client = DfdaemonUploadClient::new(
-                    config,
+                    config.clone(),
                     format!("http://{}:{}", host.ip, host.port),
                     false,
                 )
@@ -207,6 +218,18 @@ impl PieceCollector {
                     error!("sync pieces from parent {} failed: {}", parent.id, err);
                 })? {
                     let message = message?;
+
+                    if config.download.parent_selector.enable {
+                        // Record which parent has this piece
+                        match meta_pieces.entry(message.number) {
+                            dashmap::mapref::entry::Entry::Occupied(mut e) => {
+                                e.get_mut().push(parent.clone());
+                            }
+                            dashmap::mapref::entry::Entry::Vacant(e) => {
+                                e.insert(vec![parent.clone()]);
+                            }
+                        }
+                    }
 
                     // Remove the piece from collected_pieces, avoid to collect the same piece from
                     // different parents.
@@ -245,6 +268,7 @@ impl PieceCollector {
                     parent.clone(),
                     interested_pieces.clone(),
                     collected_pieces.clone(),
+                    meta_pieces.clone(),
                     collected_piece_tx.clone(),
                     collected_piece_timeout,
                 )
@@ -278,6 +302,13 @@ impl PieceCollector {
         }
 
         Ok(())
+    }
+
+    /// get_parents_for_piece returns the list of parents that have a specific piece
+    pub fn get_parents_for_piece(&self, piece_number: u32) -> Option<Vec<CollectedParent>> {
+        self.meta_pieces
+            .get(&piece_number)
+            .map(|parents| parents.clone())
     }
 }
 

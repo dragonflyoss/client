@@ -19,6 +19,7 @@ use crate::metrics::{
     collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
     collect_backend_request_started_metrics,
 };
+use crate::resource::parent_selector::ParentSelector;
 use dragonfly_api::common::v2::{
     Download, Hdfs, ObjectStorage, Peer, Piece, Task as CommonTask, TrafficType,
 };
@@ -85,6 +86,9 @@ pub struct Task {
 
     /// piece is the piece manager.
     pub piece: Arc<piece::Piece>,
+
+    /// parent_selector is the parent selector.
+    pub parent_selector: Arc<ParentSelector>,
 }
 
 /// Task implements the task manager.
@@ -97,6 +101,7 @@ impl Task {
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
+        parent_selector: Arc<ParentSelector>,
     ) -> ClientResult<Self> {
         let piece = piece::Piece::new(
             config.clone(),
@@ -113,6 +118,7 @@ impl Task {
             scheduler_client: scheduler_client.clone(),
             backend_factory: backend_factory.clone(),
             piece: piece.clone(),
+            parent_selector: parent_selector.clone(),
         })
     }
 
@@ -968,6 +974,8 @@ impl Task {
         // Get the id of the task.
         let task_id = task.id.as_str();
 
+        let parent_selector = self.parent_selector.clone();
+
         // Initialize the piece collector.
         let piece_collector = piece_collector::PieceCollector::new(
             self.config.clone(),
@@ -1005,6 +1013,19 @@ impl Task {
                 debug!("interrupt the piece collector");
                 drop(piece_collector_rx);
                 break;
+            }
+
+            let mut parent = collect_piece.parent.clone();
+            if self.config.download.parent_selector.enable {
+                if let Some(target_parents) = piece_collector.get_parents_for_piece(collect_piece.number) {
+                    match parent_selector.select_parent(target_parents) {
+                        Ok(selected_parent) => parent = selected_parent,
+                        Err(err) => error!(
+                            "select parent for piece {} failed: {}, using original parent",
+                            collect_piece.number, err
+                        ),
+                    }
+                }
             }
 
             async fn download_from_parent(
@@ -1168,7 +1189,7 @@ impl Task {
                     peer_id.to_string(),
                     collect_piece.number,
                     collect_piece.length,
-                    collect_piece.parent.clone(),
+                    parent,
                     self.piece.clone(),
                     semaphore.clone(),
                     download_progress_tx.clone(),

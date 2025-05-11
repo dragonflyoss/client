@@ -18,7 +18,6 @@ use bytes::Bytes;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
-use lru_cache::LruCache;
 use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -28,6 +27,7 @@ use tokio::sync::RwLock;
 use tracing::info;
 
 pub mod lru_cache;
+pub use lru_cache::LruCache;
 
 /// Task is the task content in the cache.
 #[derive(Clone, Debug)]
