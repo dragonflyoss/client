@@ -472,6 +472,7 @@ impl Piece {
                 parent.id.as_str(),
                 &mut reader,
                 load_to_cache,
+                self.config.storage.write_piece_timeout,
             )
             .await
         {
@@ -633,6 +634,7 @@ impl Piece {
                 length,
                 &mut response.reader,
                 load_to_cache,
+                self.config.storage.write_piece_timeout,
             )
             .await
         {

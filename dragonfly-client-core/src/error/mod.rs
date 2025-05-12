@@ -62,6 +62,10 @@ pub enum DFError {
     #[error{"piece {0} state is failed"}]
     PieceStateIsFailed(String),
 
+    /// DownloadPieceFinished is the error when the download piece finished timeout.
+    #[error{"download piece {0} finished timeout"}]
+    DownloadPieceFinished(String),
+
     /// WaitForPieceFinishedTimeout is the error when the wait for piece finished timeout.
     #[error{"wait for piece {0} finished timeout"}]
     WaitForPieceFinishedTimeout(String),
