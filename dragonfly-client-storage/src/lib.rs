@@ -25,6 +25,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
+use tokio::time::sleep;
 use tokio_util::either::Either;
 use tokio_util::io::InspectReader;
 use tracing::{debug, error, info, instrument, warn};
@@ -421,8 +422,31 @@ impl Storage {
     }
 
     /// download_piece_from_source_finished is used for downloading piece from source.
+    #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     pub async fn download_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+        reader: &mut R,
+        load_to_cache: bool,
+        timeout: Duration,
+    ) -> Result<metadata::Piece> {
+        tokio::select! {
+            piece = self.handle_downloaded_from_source_finished(piece_id, task_id, offset, length, reader, load_to_cache) => {
+                piece
+            }
+            _ = sleep(timeout) => {
+                Err(Error::DownloadPieceFinished(piece_id.to_string()))
+            }
+        }
+    }
+
+    // handle_downloaded_from_source_finished handles the downloaded piece from source.
+    #[instrument(skip_all)]
+    async fn handle_downloaded_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
         task_id: &str,
@@ -463,6 +487,31 @@ impl Storage {
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     pub async fn download_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+        expected_digest: &str,
+        parent_id: &str,
+        reader: &mut R,
+        load_to_cache: bool,
+        timeout: Duration,
+    ) -> Result<metadata::Piece> {
+        tokio::select! {
+            piece = self.handle_downloaded_piece_from_parent_finished(piece_id, task_id, offset, length, expected_digest, parent_id, reader, load_to_cache) => {
+                piece
+            }
+            _ = sleep(timeout) => {
+                Err(Error::DownloadPieceFinished(piece_id.to_string()))
+            }
+        }
+    }
+
+    // handle_downloaded_piece_from_parent_finished handles the downloaded piece from parent.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
+    async fn handle_downloaded_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
         task_id: &str,
@@ -748,12 +797,12 @@ impl Storage {
     /// wait_for_piece_finished waits for the piece to be finished.
     #[instrument(skip_all)]
     async fn wait_for_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
-        // Initialize the timeout of piece.
-        let piece_timeout = tokio::time::sleep(self.config.download.piece_timeout);
-        tokio::pin!(piece_timeout);
+        // Total timeout for downloading a piece, combining the download time and the time to write to storage.
+        let wait_timeout = tokio::time::sleep(
+            self.config.download.piece_timeout + self.config.storage.write_piece_timeout,
+        );
+        tokio::pin!(wait_timeout);
 
-        // Initialize the interval of piece.
-        let mut wait_for_piece_count = 0;
         let mut interval = tokio::time::interval(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL);
         loop {
             tokio::select! {
@@ -767,13 +816,8 @@ impl Storage {
                         debug!("wait piece finished success");
                         return Ok(piece);
                     }
-
-                    if wait_for_piece_count > 0 {
-                        debug!("wait piece finished");
-                    }
-                    wait_for_piece_count += 1;
                 }
-                _ = &mut piece_timeout => {
+                _ = &mut wait_timeout => {
                     self.metadata.wait_for_piece_finished_failed(piece_id).unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
                     return Err(Error::WaitForPieceFinishedTimeout(piece_id.to_string()));
                 }
@@ -787,12 +831,12 @@ impl Storage {
         &self,
         piece_id: &str,
     ) -> Result<metadata::Piece> {
-        // Initialize the timeout of piece.
-        let piece_timeout = tokio::time::sleep(self.config.download.piece_timeout);
-        tokio::pin!(piece_timeout);
+        // Total timeout for downloading a piece, combining the download time and the time to write to storage.
+        let wait_timeout = tokio::time::sleep(
+            self.config.download.piece_timeout + self.config.storage.write_piece_timeout,
+        );
+        tokio::pin!(wait_timeout);
 
-        // Initialize the interval of piece.
-        let mut wait_for_piece_count = 0;
         let mut interval = tokio::time::interval(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL);
         loop {
             tokio::select! {
@@ -806,13 +850,8 @@ impl Storage {
                         debug!("wait piece finished success");
                         return Ok(piece);
                     }
-
-                    if wait_for_piece_count > 0 {
-                        debug!("wait piece finished");
-                    }
-                    wait_for_piece_count += 1;
                 }
-                _ = &mut piece_timeout => {
+                _ = &mut wait_timeout => {
                     self.metadata.wait_for_piece_finished_failed(piece_id).unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
                     return Err(Error::WaitForPieceFinishedTimeout(piece_id.to_string()));
                 }

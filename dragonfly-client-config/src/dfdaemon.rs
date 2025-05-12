@@ -143,7 +143,7 @@ fn default_download_rate_limit() -> ByteSize {
 /// default_download_piece_timeout is the default timeout for downloading a piece from source.
 #[inline]
 fn default_download_piece_timeout() -> Duration {
-    Duration::from_secs(60)
+    Duration::from_secs(120)
 }
 
 /// default_download_concurrent_piece_count is the default number of concurrent pieces to download.
@@ -186,6 +186,13 @@ fn default_storage_server_protocol() -> String {
 #[inline]
 fn default_storage_keep() -> bool {
     false
+}
+
+/// default_storage_write_piece_timeout is the default timeout for writing a piece to storage(e.g., disk
+/// or cache).
+#[inline]
+fn default_storage_write_piece_timeout() -> Duration {
+    Duration::from_secs(90)
 }
 
 /// default_storage_write_buffer_size is the default buffer size for writing piece to disk, default is 4MB.
@@ -967,6 +974,14 @@ pub struct Storage {
     #[serde(default = "default_storage_keep")]
     pub keep: bool,
 
+    /// write_piece_timeout is the timeout for writing a piece to storage(e.g., disk
+    /// or cache).
+    #[serde(
+        default = "default_storage_write_piece_timeout",
+        with = "humantime_serde"
+    )]
+    pub write_piece_timeout: Duration,
+
     /// write_buffer_size is the buffer size for writing piece to disk, default is 128KB.
     #[serde(default = "default_storage_write_buffer_size")]
     pub write_buffer_size: usize,
@@ -1014,6 +1029,7 @@ impl Default for Storage {
             server: StorageServer::default(),
             dir: crate::default_storage_dir(),
             keep: default_storage_keep(),
+            write_piece_timeout: default_storage_write_piece_timeout(),
             write_buffer_size: default_storage_write_buffer_size(),
             read_buffer_size: default_storage_read_buffer_size(),
             cache_capacity: default_storage_cache_capacity(),
@@ -1996,6 +2012,7 @@ key: /etc/ssl/private/client.pem
             },
             "dir": "/tmp/storage",
             "keep": true,
+            "writePieceTimeout": "20s",
             "writeBufferSize": 8388608,
             "readBufferSize": 8388608,
             "cacheCapacity": "256MB"
@@ -2006,6 +2023,7 @@ key: /etc/ssl/private/client.pem
         assert_eq!(storage.server.protocol, "http".to_string());
         assert_eq!(storage.dir, PathBuf::from("/tmp/storage"));
         assert!(storage.keep);
+        assert_eq!(storage.write_piece_timeout, Duration::from_secs(20));
         assert_eq!(storage.write_buffer_size, 8 * 1024 * 1024);
         assert_eq!(storage.read_buffer_size, 8 * 1024 * 1024);
         assert_eq!(storage.cache_capacity, ByteSize::mb(256));
