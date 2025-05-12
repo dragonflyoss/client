@@ -422,6 +422,7 @@ impl Piece {
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
+            info!("finished piece {} from local", piece_id);
             return Ok(piece);
         }
 
@@ -525,6 +526,7 @@ impl Piece {
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
+            info!("finished piece {} from local", piece_id);
             return Ok(piece);
         }
 
@@ -789,6 +791,7 @@ impl Piece {
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
+            info!("finished persistent cache piece {} from local", piece_id);
             return Ok(piece);
         }
 
