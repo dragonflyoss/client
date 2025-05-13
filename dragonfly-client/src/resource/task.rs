@@ -130,27 +130,6 @@ impl Task {
     ) -> ClientResult<metadata::Task> {
         let task = self.storage.prepare_download_task_started(id).await?;
 
-        // Attempt to create a hard link from the task file to the output path.
-        //
-        // Behavior based on force_hard_link setting:
-        // 1. force_hard_link is true:
-        //    - Success: Continue processing
-        //    - Failure: Return error immediately
-        // 2. force_hard_link is false:
-        //    - Success: Continue processing
-        //    - Failure: Fall back to copying the file instead
-        if let Some(output_path) = &request.output_path {
-            if let Err(err) = self
-                .storage
-                .hard_link_task(id, Path::new(output_path.as_str()))
-                .await
-            {
-                if request.force_hard_link {
-                    return Err(err);
-                }
-            }
-        }
-
         if task.content_length.is_some() && task.piece_length.is_some() {
             return Ok(task);
         }
@@ -244,7 +223,8 @@ impl Task {
             )));
         }
 
-        self.storage
+        let task = self
+            .storage
             .download_task_started(
                 id,
                 piece_length,
@@ -252,7 +232,30 @@ impl Task {
                 response.http_header,
                 request.load_to_cache,
             )
-            .await
+            .await;
+
+        // Attempt to create a hard link from the task file to the output path.
+        //
+        // Behavior based on force_hard_link setting:
+        // 1. force_hard_link is true:
+        //    - Success: Continue processing
+        //    - Failure: Return error immediately
+        // 2. force_hard_link is false:
+        //    - Success: Continue processing
+        //    - Failure: Fall back to copying the file instead
+        if let Some(output_path) = &request.output_path {
+            if let Err(err) = self
+                .storage
+                .hard_link_task(id, Path::new(output_path.as_str()))
+                .await
+            {
+                if request.force_hard_link {
+                    return Err(err);
+                }
+            }
+        }
+
+        task
     }
 
     /// download_finished updates the metadata of the task when the task downloads finished.
