@@ -20,7 +20,7 @@ You can find the full documentation on the [d7y.io](https://d7y.io).
 Join the conversation and help the community.
 
 - **Slack Channel**: [#dragonfly](https://cloud-native.slack.com/messages/dragonfly/) on [CNCF Slack](https://slack.cncf.io/)
-- **Github Discussions**: [Dragonfly Discussion Forum][discussion]
+- **Github Discussions**: [Dragonfly Discussion Forum](https://github.com/dragonflyoss/dragonfly/discussions)
 - **Developer Group**: <dragonfly-developers@googlegroups.com>
 - **Maintainer Group**: <dragonfly-maintainers@googlegroups.com>
 - **Twitter**: [@dragonfly_oss](https://twitter.com/dragonfly_oss)
