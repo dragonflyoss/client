@@ -28,7 +28,7 @@ use dragonfly_client_util::id_generator::IDGenerator;
 use rand::distr::weighted::WeightedIndex;
 use rand::distr::Distribution;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 use tokio_stream::StreamExt;
 use tracing::{error, info, instrument, warn, Instrument};
 
@@ -101,6 +101,9 @@ impl ParentSelector {
             ));
         }
 
+        // Get current host_id to avoid connecting to self
+        let current_host_id = self.id_generator.host_id();
+
         info!("register {} parents", parents.len());
 
         let cache = self.hosts.clone();
@@ -112,6 +115,12 @@ impl ParentSelector {
         let bandwidth_scores = self.hosts_weights.clone();
 
         for parent in parents {
+            // Skip self to avoid self-connection
+            if parent.id == current_host_id {
+                info!("skipping self parent {}", parent.id);
+                continue;
+            }
+
             if cache.get(&parent.id).is_some() {
                 info!("parent {} is already registered", parent.id);
                 continue;
@@ -196,68 +205,75 @@ impl ParentSelector {
             Error::InvalidPeer(parent.id.clone())
         })?;
 
-        let dfdaemon_upload_client =
-            DfdaemonUploadClient::new(config, format!("http://{}:{}", host.ip, host.port), false)
-                .await
-                .inspect_err(|err| {
-                    error!(
-                        "create dfdaemon upload client from parent {} failed: {}",
-                        parent.id, err
-                    );
-                })
-                .unwrap();
+        // Create a dfdaemon client.
+        let dfdaemon_upload_client = DfdaemonUploadClient::new(
+            config.clone(),
+            format!("http://{}:{}", host.ip, host.port),
+            false,
+        )
+        .await
+        .inspect_err(|err| {
+            error!(
+                "create dfdaemon upload client from parent {} failed: {}",
+                parent.id, err
+            );
+        })?;
+
+        info!("create dfdaemon upload client for host {}:", host.ip);
 
         let response = dfdaemon_upload_client
             .sync_host(SyncHostRequest { host_id, peer_id })
             .await
             .inspect_err(|err| {
                 error!("sync host info from parent {} failed: {}", parent.id, err);
-            })
-            .unwrap();
+            })?;
 
-        let mut stream = response.into_inner();
         let hosts_info = hosts_info.clone();
+        let out_stream = response.into_inner().timeout(timeout);
+        tokio::pin!(out_stream);
 
-        let start_time = SystemTime::now();
+        info!("receive host info from parent {}", parent.id);
+        while let Some(result) = out_stream.next().await {
+            match result {
+                Ok(message_result) => {
+                    match message_result {
+                        Ok(message) => {
+                            if shutdown.is_shutdown() {
+                                break;
+                            }
 
-        while let Some(message) = stream.next().await {
-            if shutdown.is_shutdown() {
-                break;
-            }
+                            // Deal with message.
+                            // Update the parent's host info if exists.
+                            hosts_info.insert(parent.id.clone(), message.clone());
+                            info!(
+                                "sync host info from parent {} message: {:?}",
+                                parent.id, message
+                            );
 
-            if SystemTime::now()
-                .duration_since(start_time)
-                .unwrap_or_default()
-                > timeout
-            {
-                info!("sync host info from parent {} timed out", parent.id);
-                break;
-            }
+                            // Calculate and update bandwidth score after each sync
+                            if let Ok(rate) = Self::available_rate(&message) {
+                                // Convert bandwidth to weight score (u32)
+                                // Using 1 as minimum weight to ensure all parents have a chance
+                                info!("rate: {:?}", rate);
+                                let weight = (rate / 1024.0).max(1.0) as u32;
 
-            // Deal with message.
-            match message {
-                Ok(message) => {
-                    // Update the parent's host info if exists.
-                    hosts_info.insert(parent.id.clone(), message.clone());
+                                // Update the bandwidth score in cache
+                                bandwidth_scores.insert(parent.id.clone(), weight);
 
-                    // Calculate and update bandwidth score after each sync
-                    if let Ok(bandwidth) = Self::available_rate(&message) {
-                        // Convert bandwidth to weight score (u32)
-                        // Using 1 as minimum weight to ensure all parents have a chance
-                        let weight = (bandwidth / 1024.0).max(1.0) as u32;
-
-                        // Update the bandwidth score in cache
-                        bandwidth_scores.insert(parent.id.clone(), weight);
-
-                        info!(
-                            "updated bandwidth score for parent {}: {}",
-                            parent.id, weight
-                        );
+                                info!(
+                                    "updated bandwidth score for parent {}: {}",
+                                    parent.id, weight
+                                );
+                            }
+                        },
+                        Err(err) => {
+                            error!("failed to process message from parent {}: {}", parent.id, err);
+                            break;
+                        }
                     }
-                }
+                },
                 Err(err) => {
-                    // Err, return
-                    info!("sync host info from parent {} error {}", parent.id, err);
+                    error!("timeout or stream error from parent {}: {}", parent.id, err);
                     break;
                 }
             }
@@ -296,6 +312,8 @@ impl ParentSelector {
             .iter()
             .map(|parent| self.hosts_weights.get(&parent.id).map(|w| *w).unwrap_or(1))
             .collect();
+
+        info!("weights: {:?}", weights);
 
         match WeightedIndex::new(weights) {
             Ok(dist) => {
