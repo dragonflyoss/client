@@ -14,19 +14,26 @@
  * limitations under the License.
  */
 
-use opentelemetry::sdk::propagation::TraceContextPropagator;
+use dragonfly_client_config::dfdaemon::Host;
+use opentelemetry::{global, trace::TracerProvider};
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::{propagation::TraceContextPropagator, Resource};
 use rolling_file::*;
 use std::fs;
 use std::path::PathBuf;
+use std::time::Duration;
 use tracing::{info, Level};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_log::LogTracer;
+use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::{
     filter::LevelFilter,
     fmt::{time::ChronoLocal, Layer},
     prelude::*,
     EnvFilter, Registry,
 };
+
+/// SPAN_EXPORTER_TIMEOUT is the timeout for the span exporter.
+const SPAN_EXPORTER_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// init_tracing initializes the tracing system.
 #[allow(clippy::too_many_arguments)]
@@ -36,6 +43,7 @@ pub fn init_tracing(
     log_level: Level,
     log_max_files: usize,
     jaeger_addr: Option<String>,
+    host: Option<Host>,
     verbose: bool,
 ) -> Vec<WorkerGuard> {
     let mut guards = vec![];
@@ -95,23 +103,45 @@ pub fn init_tracing(
 
     // Setup jaeger layer.
     if let Some(jaeger_addr) = jaeger_addr {
-        opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
-        let tracer = opentelemetry_jaeger::new_agent_pipeline()
-            .with_service_name(name)
+        let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_tonic()
             .with_endpoint(jaeger_addr)
-            .install_batch(opentelemetry::runtime::Tokio)
-            .expect("install");
-        let jaeger_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-        let subscriber = subscriber.with(jaeger_layer);
+            .with_timeout(SPAN_EXPORTER_TIMEOUT)
+            .build()
+            .expect("failed to create OTLP exporter");
 
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("failed to set global subscriber");
+        let host = host.unwrap();
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_batch_exporter(otlp_exporter)
+            .with_resource(
+                Resource::builder()
+                    .with_service_name(name.to_owned())
+                    .with_attribute(opentelemetry::KeyValue::new(
+                        "idc",
+                        host.idc.unwrap_or_default(),
+                    ))
+                    .with_attribute(opentelemetry::KeyValue::new(
+                        "location",
+                        host.location.unwrap_or_default(),
+                    ))
+                    .with_attribute(opentelemetry::KeyValue::new("hostname", host.hostname))
+                    .with_attribute(opentelemetry::KeyValue::new(
+                        "ip",
+                        host.ip.unwrap().to_string(),
+                    ))
+                    .build(),
+            )
+            .build();
+
+        let tracer = provider.tracer(name.to_string());
+        global::set_tracer_provider(provider.clone());
+        global::set_text_map_propagator(TraceContextPropagator::new());
+
+        let jaeger_layer = OpenTelemetryLayer::new(tracer);
+        subscriber.with(jaeger_layer).init();
     } else {
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("failed to set global subscriber");
+        subscriber.init();
     }
-
-    LogTracer::init().expect("failed to init LogTracer");
 
     info!(
         "tracing initialized directory: {}, level: {}",
