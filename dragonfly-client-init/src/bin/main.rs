@@ -94,6 +94,7 @@ async fn main() -> Result<(), anyhow::Error> {
         args.log_level,
         args.log_max_files,
         None,
+        None,
         args.verbose,
     );
 
