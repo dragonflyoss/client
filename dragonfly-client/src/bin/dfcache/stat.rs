@@ -89,6 +89,7 @@ impl StatCommand {
             self.log_level,
             self.log_max_files,
             None,
+            None,
             self.verbose,
         );
 
