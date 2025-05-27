@@ -44,7 +44,7 @@ pub fn init_tracing(
     log_max_files: usize,
     jaeger_addr: Option<String>,
     host: Option<Host>,
-    log_to_stdout: bool,
+    console: bool,
 ) -> Vec<WorkerGuard> {
     let mut guards = vec![];
 
@@ -53,7 +53,7 @@ pub fn init_tracing(
     guards.push(stdout_guard);
 
     // Initialize stdout layer.
-    let stdout_filter = if log_to_stdout {
+    let stdout_filter = if console {
         LevelFilter::DEBUG
     } else {
         LevelFilter::OFF

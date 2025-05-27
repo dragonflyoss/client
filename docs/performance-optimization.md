@@ -69,7 +69,7 @@ cargo build --release --bin dfdaemon
 
 ```bash
 # prepare client.yaml by yourself.
-./target/release/dfdaemon --config client.yaml -l info --log-to-stdout
+./target/release/dfdaemon --config client.yaml -l info --console
 ```
 
 ## FlameGraph

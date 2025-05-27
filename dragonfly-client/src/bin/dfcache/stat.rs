@@ -68,7 +68,7 @@ pub struct StatCommand {
     log_max_files: usize,
 
     #[arg(long, default_value_t = false, help = "Specify whether to print log")]
-    log_to_stdout: bool,
+    console: bool,
 }
 
 /// Implement the execute for StatCommand.
@@ -86,7 +86,7 @@ impl StatCommand {
             self.log_max_files,
             None,
             None,
-            self.log_to_stdout,
+            self.console,
         );
 
         // Get dfdaemon download client.
