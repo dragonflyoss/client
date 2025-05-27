@@ -137,28 +137,28 @@ impl Task {
     ) -> ClientResult<metadata::Task> {
         let task = self.storage.prepare_download_task_started(id).await?;
 
-        // Attempt to create a hard link from the task file to the output path.
-        //
-        // Behavior based on force_hard_link setting:
-        // 1. force_hard_link is true:
-        //    - Success: Continue processing
-        //    - Failure: Return error immediately
-        // 2. force_hard_link is false:
-        //    - Success: Continue processing
-        //    - Failure: Fall back to copying the file instead
-        if let Some(output_path) = &request.output_path {
-            if let Err(err) = self
-                .storage
-                .hard_link_task(id, Path::new(output_path.as_str()))
-                .await
-            {
-                if request.force_hard_link {
-                    return Err(err);
+        if task.content_length.is_some() && task.piece_length.is_some() {
+            // Attempt to create a hard link from the task file to the output path.
+            //
+            // Behavior based on force_hard_link setting:
+            // 1. force_hard_link is true:
+            //    - Success: Continue processing
+            //    - Failure: Return error immediately
+            // 2. force_hard_link is false:
+            //    - Success: Continue processing
+            //    - Failure: Fall back to copying the file instead
+            if let Some(output_path) = &request.output_path {
+                if let Err(err) = self
+                    .storage
+                    .hard_link_task(id, Path::new(output_path.as_str()))
+                    .await
+                {
+                    if request.force_hard_link {
+                        return Err(err);
+                    }
                 }
             }
-        }
 
-        if task.content_length.is_some() && task.piece_length.is_some() {
             return Ok(task);
         }
 
@@ -251,7 +251,8 @@ impl Task {
             )));
         }
 
-        self.storage
+        let task = self
+            .storage
             .download_task_started(
                 id,
                 piece_length,
@@ -259,7 +260,30 @@ impl Task {
                 response.http_header,
                 request.load_to_cache,
             )
-            .await
+            .await;
+
+        // Attempt to create a hard link from the task file to the output path.
+        //
+        // Behavior based on force_hard_link setting:
+        // 1. force_hard_link is true:
+        //    - Success: Continue processing
+        //    - Failure: Return error immediately
+        // 2. force_hard_link is false:
+        //    - Success: Continue processing
+        //    - Failure: Fall back to copying the file instead
+        if let Some(output_path) = &request.output_path {
+            if let Err(err) = self
+                .storage
+                .hard_link_task(id, Path::new(output_path.as_str()))
+                .await
+            {
+                if request.force_hard_link {
+                    return Err(err);
+                }
+            }
+        }
+
+        task
     }
 
     /// download_finished updates the metadata of the task when the task downloads finished.
@@ -1054,11 +1078,8 @@ impl Task {
                 let parent = match parent_selector {
                     Some(parent_selector) => {
                         if let Some(parents) = piece_collector.get_parents_for_piece(number) {
-
                             match parent_selector.select_parent(parents) {
-                                Ok(selected_parent) => {
-                                    selected_parent
-                                }
+                                Ok(selected_parent) => selected_parent,
                                 Err(err) => {
                                     error!(
                                         "select parent for piece {} failed: {}, using original parent",
@@ -1071,9 +1092,7 @@ impl Task {
                             parent
                         }
                     }
-                    None => {
-                        parent
-                    }
+                    None => parent,
                 };
 
                 let piece_id = piece_manager.id(task_id.as_str(), number);
@@ -1165,13 +1184,13 @@ impl Task {
                         REQUEST_TIMEOUT,
                     )
                     .await
-                    .inspect_err(|err| {
+                    .unwrap_or_else(|err| {
                         error!(
                             "send DownloadPieceFinishedRequest for piece {} failed: {:?}",
                             piece_id, err
                         );
                         interrupt.store(true, Ordering::SeqCst);
-                    })?;
+                    });
 
                 // Send the download progress.
                 download_progress_tx
@@ -1191,13 +1210,13 @@ impl Task {
                         REQUEST_TIMEOUT,
                     )
                     .await
-                    .inspect_err(|err| {
+                    .unwrap_or_else(|err| {
                         error!(
                             "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
                             piece_id, err
                         );
                         interrupt.store(true, Ordering::SeqCst);
-                    })?;
+                    });
 
                 info!(
                     "finished piece {} from parent {:?}",
@@ -1426,9 +1445,9 @@ impl Task {
                             },
                             REQUEST_TIMEOUT,
                         )
-                        .await.inspect_err(|err| {
+                        .await.unwrap_or_else(|err| {
                             error!("send DownloadPieceBackToSourceFinishedRequest for piece {} failed: {:?}", piece_id, err);
-                        })?;
+                        });
 
                 // Send the download progress.
                 download_progress_tx
@@ -1448,12 +1467,12 @@ impl Task {
                         REQUEST_TIMEOUT,
                     )
                     .await
-                    .inspect_err(|err| {
+                    .unwrap_or_else(|err| {
                         error!(
                             "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
                             piece_id, err
                         );
-                    })?;
+                    });
 
                 info!("finished piece {} from source", piece_id);
                 Ok(metadata)
@@ -1679,12 +1698,12 @@ impl Task {
                     REQUEST_TIMEOUT,
                 )
                 .await
-                .inspect_err(|err| {
+                .unwrap_or_else(|err| {
                     error!(
                         "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
                         piece_id, err
                     );
-                })?;
+                });
 
             // Store the finished piece.
             finished_pieces.push(interested_piece.clone());
@@ -1793,12 +1812,12 @@ impl Task {
                         REQUEST_TIMEOUT,
                     )
                     .await
-                    .inspect_err(|err| {
+                    .unwrap_or_else(|err| {
                         error!(
                             "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
                             piece_id, err
                         );
-                    })?;
+                    });
 
                 info!("finished piece {} from source", piece_id);
                 Ok(metadata)

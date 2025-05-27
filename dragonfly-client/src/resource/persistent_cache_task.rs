@@ -1145,13 +1145,13 @@ impl PersistentCacheTask {
                         REQUEST_TIMEOUT,
                     )
                     .await
-                    .inspect_err(|err| {
+                    .unwrap_or_else(|err| {
                         error!(
                             "send DownloadPieceFinishedRequest for piece {} failed: {:?}",
                             piece_id, err
                         );
                         interrupt.store(true, Ordering::SeqCst);
-                    })?;
+                    });
 
                 // Send the download progress.
                 download_progress_tx
@@ -1171,13 +1171,13 @@ impl PersistentCacheTask {
                         REQUEST_TIMEOUT,
                     )
                     .await
-                    .inspect_err(|err| {
+                    .unwrap_or_else(|err| {
                         error!(
                             "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
                             piece_id, err
                         );
                         interrupt.store(true, Ordering::SeqCst);
-                    })?;
+                    });
 
                 info!(
                     "finished persistent cache piece {} from parent {:?}",
@@ -1372,12 +1372,12 @@ impl PersistentCacheTask {
                     REQUEST_TIMEOUT,
                 )
                 .await
-                .inspect_err(|err| {
+                .unwrap_or_else(|err| {
                     error!(
                         "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
                         piece_id, err
                     );
-                })?;
+                });
 
             // Store the finished piece.
             finished_pieces.push(interested_piece.clone());

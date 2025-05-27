@@ -422,6 +422,7 @@ impl Piece {
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
+            info!("finished piece {} from local", piece_id);
             return Ok(piece);
         }
 
@@ -472,6 +473,7 @@ impl Piece {
                 parent.id.as_str(),
                 &mut reader,
                 load_to_cache,
+                self.config.storage.write_piece_timeout,
             )
             .await
         {
@@ -524,6 +526,7 @@ impl Piece {
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
+            info!("finished piece {} from local", piece_id);
             return Ok(piece);
         }
 
@@ -633,6 +636,7 @@ impl Piece {
                 length,
                 &mut response.reader,
                 load_to_cache,
+                self.config.storage.write_piece_timeout,
             )
             .await
         {
@@ -787,6 +791,7 @@ impl Piece {
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
+            info!("finished persistent cache piece {} from local", piece_id);
             return Ok(piece);
         }
 

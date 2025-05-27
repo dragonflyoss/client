@@ -63,13 +63,13 @@ lru.workspace = true
 fs2.workspace = true
 lazy_static.workspace = true
 futures.workspace = true
-tracing-log = "0.2"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
 tracing-appender = "0.2.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
+tracing-opentelemetry = "0.30.0"
+opentelemetry = { version = "0.29.1", default-features = false, features = ["trace"] }
+opentelemetry-otlp = { version = "0.29.0", default-features = false, features = ["trace", "grpc-tonic"] }
+opentelemetry_sdk = { version = "0.29.0", default-features = false, features = ["trace"] }
 rolling-file = "0.2.0"
-tracing-opentelemetry = "0.18.0"
-opentelemetry = { version = "0.18.0", default-features = false, features = ["trace", "rt-tokio"] }
-opentelemetry-jaeger = { version = "0.17.0", features = ["rt-tokio"] }
 pprof = { version = "0.14", features = ["flamegraph", "protobuf-codec"] }
 prometheus = { version = "0.13", features = ["process"] }
 tonic-health = "0.12.3"

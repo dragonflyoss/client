@@ -68,10 +68,8 @@ impl ParentSync {
     pub async fn increment_ref(&self) -> u32 {
         let count = self.ref_count.fetch_add(1, Ordering::SeqCst) + 1;
 
-        if count == 1 {
-            if self.cleanup_in_progress.load(Ordering::SeqCst) {
-                self.cleanup_in_progress.store(false, Ordering::SeqCst);
-            }
+        if count == 1 && self.cleanup_in_progress.load(Ordering::SeqCst) {
+            self.cleanup_in_progress.store(false, Ordering::SeqCst);
         }
 
         count
@@ -181,7 +179,7 @@ impl ParentSelector {
         let current_connections = self.active_connections.load(Ordering::SeqCst);
         let capacity = self.config.download.parent_selector.capacity;
         let available_slots = capacity.saturating_sub(current_connections);
-        
+
         if parents.len() > available_slots {
             return Ok(());
         }
@@ -348,7 +346,10 @@ impl ParentSelector {
             }
         }
 
-        info!("parent selector connection to parent {} has been closed", parent.id);
+        info!(
+            "parent selector connection to parent {} has been closed",
+            parent.id
+        );
 
         Ok(())
     }
@@ -428,10 +429,10 @@ impl ParentSelector {
                             parent_sync.shutdown.trigger();
                             self.hosts_info.remove(parent_id);
                             self.hosts_weights.remove(parent_id);
-                            
+
                             // Decrement the active connection counter
                             self.active_connections.fetch_sub(1, Ordering::SeqCst);
-                            
+
                             info!(
                                 "cleaned up inactive parent {}, active connections: {}/{}",
                                 parent_id,
