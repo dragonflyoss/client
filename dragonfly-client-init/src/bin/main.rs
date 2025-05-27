@@ -64,12 +64,8 @@ struct Args {
     )]
     log_max_files: usize,
 
-    #[arg(
-        long = "verbose",
-        default_value_t = false,
-        help = "Specify whether to print log"
-    )]
-    verbose: bool,
+    #[arg(long, default_value_t = false, help = "Specify whether to print log")]
+    log_to_stdout: bool,
 
     #[arg(
         short = 'V',
@@ -95,7 +91,7 @@ async fn main() -> Result<(), anyhow::Error> {
         args.log_max_files,
         None,
         None,
-        args.verbose,
+        args.log_to_stdout,
     );
 
     // Load config.
