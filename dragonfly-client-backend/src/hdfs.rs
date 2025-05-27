@@ -31,6 +31,7 @@ pub const HDFS_SCHEME: &str = "hdfs";
 const DEFAULT_NAMENODE_PORT: u16 = 9870;
 
 /// Hdfs is a struct that implements the Backend trait.
+#[derive(Default)]
 pub struct Hdfs {
     /// scheme is the scheme of the HDFS.
     scheme: String,
@@ -39,7 +40,6 @@ pub struct Hdfs {
 /// Hdfs implements the Backend trait.
 impl Hdfs {
     /// new returns a new HDFS backend.
-    #[instrument(skip_all)]
     pub fn new() -> Self {
         Self {
             scheme: HDFS_SCHEME.to_string(),
@@ -47,7 +47,6 @@ impl Hdfs {
     }
 
     /// operator initializes the operator with the parsed URL and HDFS config.
-    #[instrument(skip_all)]
     pub fn operator(
         &self,
         url: Url,
@@ -84,7 +83,6 @@ impl Hdfs {
 #[tonic::async_trait]
 impl super::Backend for Hdfs {
     /// scheme returns the scheme of the HDFS backend.
-    #[instrument(skip_all)]
     fn scheme(&self) -> String {
         self.scheme.clone()
     }

@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-use super::interceptor::TracingInterceptor;
 use crate::metrics::{
     collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
     collect_download_task_failure_metrics, collect_download_task_finished_metrics,
@@ -51,6 +50,7 @@ use dragonfly_client_util::{
     id_generator::TaskIDParameter,
     net::{get_interface_info, Interface},
 };
+use opentelemetry::Context;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -68,7 +68,10 @@ use tonic::{
 };
 use tower::ServiceBuilder;
 use tracing::{debug, error, info, instrument, Instrument, Span};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
+
+use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 
 /// DfdaemonUploadServer is the grpc server of the upload.
 pub struct DfdaemonUploadServer {
@@ -78,8 +81,11 @@ pub struct DfdaemonUploadServer {
     /// addr is the address of the grpc server.
     addr: SocketAddr,
 
-    /// service is the grpc service of the dfdaemon upload.
-    service: DfdaemonUploadGRPCServer<DfdaemonUploadServerHandler>,
+    /// task is the task manager.
+    task: Arc<task::Task>,
+
+    /// persistent_cache_task is the persistent cache task manager.
+    persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 
     /// shutdown is used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
@@ -91,7 +97,6 @@ pub struct DfdaemonUploadServer {
 /// DfdaemonUploadServer implements the grpc server of the upload.
 impl DfdaemonUploadServer {
     /// new creates a new DfdaemonUploadServer.
-    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         addr: SocketAddr,
@@ -100,31 +105,33 @@ impl DfdaemonUploadServer {
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
-        // Initialize the grpc service.
-        let interface =
-            get_interface_info(config.host.ip.unwrap(), config.upload.rate_limit).unwrap();
-
-        let service = DfdaemonUploadGRPCServer::new(DfdaemonUploadServerHandler {
-            interface,
-            socket_path: config.download.server.socket_path.clone(),
-            task,
-            persistent_cache_task,
-        })
-        .max_decoding_message_size(usize::MAX)
-        .max_encoding_message_size(usize::MAX);
-
         Self {
             config,
             addr,
-            service,
+            task,
+            persistent_cache_task,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
     }
 
     /// run starts the upload server.
-    #[instrument(skip_all)]
     pub async fn run(&mut self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
+        // Initialize the grpc service.
+        let interface =
+            get_interface_info(self.config.host.ip.unwrap(), self.config.upload.rate_limit)
+                .unwrap();
+
+        let service = DfdaemonUploadGRPCServer::with_interceptor(
+            DfdaemonUploadServerHandler {
+                interface,
+                socket_path: self.config.download.server.socket_path.clone(),
+                task: self.task.clone(),
+                persistent_cache_task: self.persistent_cache_task.clone(),
+            },
+            ExtractTracingInterceptor,
+        );
+
         // Register the reflection service.
         let reflection = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
@@ -143,7 +150,7 @@ impl DfdaemonUploadServer {
 
         // TODO(Gaius): RateLimitLayer is not implemented Clone, so we can't use it here.
         // Only use the LoadShed layer and the ConcurrencyLimit layer.
-        let layer = ServiceBuilder::new()
+        let rate_limit_layer = ServiceBuilder::new()
             .concurrency_limit(self.config.upload.server.request_rate_limit as usize)
             .load_shed()
             .into_inner();
@@ -163,10 +170,10 @@ impl DfdaemonUploadServer {
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
-            .layer(layer)
+            .layer(rate_limit_layer)
             .add_service(reflection.clone())
             .add_service(health_service)
-            .add_service(self.service.clone())
+            .add_service(service)
             .serve_with_shutdown(self.addr, async move {
                 // When the grpc server is started, notify the barrier. If the shutdown signal is received
                 // before barrier is waited successfully, the server will shutdown immediately.
@@ -220,6 +227,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         request: Request<DownloadTaskRequest>,
     ) -> Result<Response<Self::DownloadTaskStream>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Record the start time.
         let start_time = Instant::now();
 
@@ -617,6 +629,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     /// stat_task stats the task.
     #[instrument(skip_all, fields(host_id, task_id))]
     async fn stat_task(&self, request: Request<StatTaskRequest>) -> Result<Response<Task>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Clone the request.
         let request = request.into_inner();
 
@@ -656,6 +673,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         request: Request<DeleteTaskRequest>,
     ) -> Result<Response<()>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Clone the request.
         let request = request.into_inner();
 
@@ -697,6 +719,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         request: Request<SyncPiecesRequest>,
     ) -> Result<Response<Self::SyncPiecesStream>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Clone the request.
         let request = request.into_inner();
 
@@ -835,6 +862,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         request: Request<DownloadPieceRequest>,
     ) -> Result<Response<DownloadPieceResponse>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Clone the request.
         let request = request.into_inner();
 
@@ -853,7 +885,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Generate the piece id.
         let piece_id = self.task.piece.id(task_id.as_str(), piece_number);
 
-        // Span record the host id, task id and piece number.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("remote_host_id", remote_host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
@@ -940,6 +971,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         request: Request<SyncHostRequest>,
     ) -> Result<Response<Self::SyncHostStream>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // DEFAULT_HOST_INFO_REFRESH_INTERVAL is the default interval for refreshing the host info.
         const DEFAULT_HOST_INFO_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -1029,6 +1065,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         request: Request<DownloadPersistentCacheTaskRequest>,
     ) -> Result<Response<Self::DownloadPersistentCacheTaskStream>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Record the start time.
         let start_time = Instant::now();
 
@@ -1249,6 +1290,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         request: Request<UpdatePersistentCacheTaskRequest>,
     ) -> Result<Response<()>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Clone the request.
         let request = request.into_inner();
 
@@ -1287,6 +1333,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         request: Request<StatPersistentCacheTaskRequest>,
     ) -> Result<Response<PersistentCacheTask>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Clone the request.
         let request = request.into_inner();
 
@@ -1325,6 +1376,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         request: Request<DeletePersistentCacheTaskRequest>,
     ) -> Result<Response<()>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Clone the request.
         let request = request.into_inner();
 
@@ -1355,6 +1411,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         request: Request<SyncPersistentCachePiecesRequest>,
     ) -> Result<Response<Self::SyncPersistentCachePiecesStream>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Clone the request.
         let request = request.into_inner();
 
@@ -1487,6 +1548,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         request: Request<DownloadPersistentCachePieceRequest>,
     ) -> Result<Response<DownloadPersistentCachePieceResponse>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Clone the request.
         let request = request.into_inner();
 
@@ -1602,13 +1668,12 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 #[derive(Clone)]
 pub struct DfdaemonUploadClient {
     /// client is the grpc client of the dfdaemon upload.
-    pub client: DfdaemonUploadGRPCClient<InterceptedService<Channel, TracingInterceptor>>,
+    pub client: DfdaemonUploadGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>,
 }
 
 /// DfdaemonUploadClient implements the dfdaemon upload grpc client.
 impl DfdaemonUploadClient {
     /// new creates a new DfdaemonUploadClient.
-    #[instrument(skip_all)]
     pub async fn new(
         config: Arc<Config>,
         addr: String,
@@ -1667,7 +1732,7 @@ impl DfdaemonUploadClient {
                 .or_err(ErrorType::ConnectError)?,
         };
 
-        let client = DfdaemonUploadGRPCClient::with_interceptor(channel, TracingInterceptor)
+        let client = DfdaemonUploadGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
@@ -1844,7 +1909,6 @@ impl DfdaemonUploadClient {
     }
 
     /// make_request creates a new request with timeout.
-    #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);

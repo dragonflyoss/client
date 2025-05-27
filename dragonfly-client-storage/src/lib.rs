@@ -56,7 +56,6 @@ pub struct Storage {
 /// Storage implements the storage.
 impl Storage {
     /// new returns a new storage.
-    #[instrument(skip_all)]
     pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf) -> Result<Self> {
         let metadata = metadata::Metadata::new(config.clone(), dir, &log_dir)?;
         let content = content::Content::new(config.clone(), dir).await?;
@@ -71,19 +70,16 @@ impl Storage {
     }
 
     /// total_space returns the total space of the disk.
-    #[instrument(skip_all)]
     pub fn total_space(&self) -> Result<u64> {
         self.content.total_space()
     }
 
     /// available_space returns the available space of the disk.
-    #[instrument(skip_all)]
     pub fn available_space(&self) -> Result<u64> {
         self.content.available_space()
     }
 
     /// has_enough_space checks if the storage has enough space to store the content.
-    #[instrument(skip_all)]
     pub fn has_enough_space(&self, content_length: u64) -> Result<bool> {
         self.content.has_enough_space(content_length)
     }
@@ -102,14 +98,12 @@ impl Storage {
 
     /// is_same_dev_inode_as_task checks if the task content is on the same device inode as the
     /// destination.
-    #[instrument(skip_all)]
     pub async fn is_same_dev_inode_as_task(&self, id: &str, to: &Path) -> Result<bool> {
         self.content.is_same_dev_inode_as_task(id, to).await
     }
 
     /// prepare_download_task_started prepares the metadata of the task when the task downloads
     /// started.
-    #[instrument(skip_all)]
     pub async fn prepare_download_task_started(&self, id: &str) -> Result<metadata::Task> {
         self.metadata.download_task_started(id, None, None, None)
     }
@@ -227,7 +221,6 @@ impl Storage {
 
     /// is_same_dev_inode_as_persistent_cache_task checks if the persistent cache task content is on the same device inode as the
     /// destination.
-    #[instrument(skip_all)]
     pub async fn is_same_dev_inode_as_persistent_cache_task(
         &self,
         id: &str,
@@ -633,7 +626,6 @@ impl Storage {
     }
 
     /// get_piece returns the piece metadata.
-    #[instrument(skip_all)]
     pub fn get_piece(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
         self.metadata.get_piece(piece_id)
     }
@@ -645,13 +637,13 @@ impl Storage {
     }
 
     /// get_pieces returns the piece metadatas.
+    #[instrument(skip_all)]
     pub fn get_pieces(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
         self.metadata.get_pieces(task_id)
     }
 
     /// piece_id returns the piece id.
     #[inline]
-    #[instrument(skip_all)]
     pub fn piece_id(&self, task_id: &str, number: u32) -> String {
         self.metadata.piece_id(task_id, number)
     }
@@ -789,7 +781,6 @@ impl Storage {
 
     /// persistent_cache_piece_id returns the persistent cache piece id.
     #[inline]
-    #[instrument(skip_all)]
     pub fn persistent_cache_piece_id(&self, task_id: &str, number: u32) -> String {
         self.metadata.piece_id(task_id, number)
     }

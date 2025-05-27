@@ -87,7 +87,6 @@ pub struct Piece {
 /// Piece implements the piece manager.
 impl Piece {
     /// new returns a new Piece.
-    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
@@ -136,7 +135,6 @@ impl Piece {
 
     /// id generates a new piece id.
     #[inline]
-    #[instrument(skip_all)]
     pub fn id(&self, task_id: &str, number: u32) -> String {
         self.storage.piece_id(task_id, number)
     }
@@ -662,7 +660,6 @@ impl Piece {
 
     /// persistent_cache_id generates a new persistent cache piece id.
     #[inline]
-    #[instrument(skip_all)]
     pub fn persistent_cache_id(&self, task_id: &str, number: u32) -> String {
         self.storage.persistent_cache_piece_id(task_id, number)
     }

@@ -27,7 +27,7 @@ use std::str::FromStr;
 use std::{collections::HashMap, pin::Pin, time::Duration};
 use std::{fmt::Debug, fs};
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tracing::{error, info, instrument, warn};
+use tracing::{error, info, warn};
 use url::Url;
 
 pub mod hdfs;
@@ -227,7 +227,6 @@ pub struct BackendFactory {
 /// https://github.com/dragonflyoss/client/tree/main/dragonfly-client-backend/examples/plugin/.
 impl BackendFactory {
     /// new returns a new BackendFactory.
-    #[instrument(skip_all)]
     pub fn new(plugin_dir: Option<&Path>) -> Result<Self> {
         let mut backend_factory = Self::default();
         backend_factory.load_builtin_backends()?;
@@ -243,13 +242,11 @@ impl BackendFactory {
     }
 
     /// supported_download_directory returns whether the scheme supports directory download.
-    #[instrument(skip_all)]
     pub fn supported_download_directory(scheme: &str) -> bool {
         object_storage::Scheme::from_str(scheme).is_ok() || scheme == hdfs::HDFS_SCHEME
     }
 
     /// build returns the backend by the scheme of the url.
-    #[instrument(skip_all)]
     pub fn build(&self, url: &str) -> Result<&(dyn Backend + Send + Sync)> {
         let url = Url::parse(url).or_err(ErrorType::ParseError)?;
         let scheme = url.scheme();
@@ -260,7 +257,6 @@ impl BackendFactory {
     }
 
     /// load_builtin_backends loads the builtin backends.
-    #[instrument(skip_all)]
     fn load_builtin_backends(&mut self) -> Result<()> {
         self.backends.insert(
             "http".to_string(),
@@ -330,7 +326,6 @@ impl BackendFactory {
     }
 
     /// load_plugin_backends loads the plugin backends.
-    #[instrument(skip_all)]
     fn load_plugin_backends(&mut self, plugin_dir: &Path) -> Result<()> {
         let backend_plugin_dir = plugin_dir.join(NAME);
         if !backend_plugin_dir.exists() {

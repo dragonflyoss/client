@@ -91,6 +91,7 @@ async fn main() -> Result<(), anyhow::Error> {
         args.log_max_files,
         None,
         None,
+        false,
         args.log_to_stdout,
     );
 

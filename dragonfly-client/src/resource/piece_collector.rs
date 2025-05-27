@@ -75,7 +75,6 @@ pub struct PieceCollector {
 /// PieceCollector is used to collect pieces from peers.
 impl PieceCollector {
     /// new creates a new PieceCollector.
-    #[instrument(skip_all)]
     pub async fn new(
         config: Arc<Config>,
         host_id: &str,
@@ -305,7 +304,6 @@ pub struct PersistentCachePieceCollector {
 /// PersistentCachePieceCollector is used to collect persistent cache pieces from peers.
 impl PersistentCachePieceCollector {
     /// new creates a new PieceCollector.
-    #[instrument(skip_all)]
     pub async fn new(
         config: Arc<Config>,
         host_id: &str,

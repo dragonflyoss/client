@@ -36,7 +36,6 @@ pub struct Health {
 /// Health implements the health server.
 impl Health {
     /// new creates a new Health.
-    #[instrument(skip_all)]
     pub fn new(
         addr: SocketAddr,
         shutdown: shutdown::Shutdown,
@@ -50,7 +49,6 @@ impl Health {
     }
 
     /// run starts the health server.
-    #[instrument(skip_all)]
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -71,7 +69,6 @@ impl Health {
             _ = shutdown.recv() => {
                 // Health server shutting down with signals.
                 info!("health server shutting down");
-                return
             }
         }
     }

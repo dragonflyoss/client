@@ -67,7 +67,6 @@ pub struct WritePersistentCacheTaskResponse {
 /// Content implements the content storage.
 impl Content {
     /// new returns a new content.
-    #[instrument(skip_all)]
     pub async fn new(config: Arc<Config>, dir: &Path) -> Result<Content> {
         let dir = dir.join(DEFAULT_CONTENT_DIR);
 
@@ -85,21 +84,18 @@ impl Content {
     }
 
     /// available_space returns the available space of the disk.
-    #[instrument(skip_all)]
     pub fn available_space(&self) -> Result<u64> {
         let stat = fs2::statvfs(&self.dir)?;
         Ok(stat.available_space())
     }
 
     /// total_space returns the total space of the disk.
-    #[instrument(skip_all)]
     pub fn total_space(&self) -> Result<u64> {
         let stat = fs2::statvfs(&self.dir)?;
         Ok(stat.total_space())
     }
 
     /// has_enough_space checks if the storage has enough space to store the content.
-    #[instrument(skip_all)]
     pub fn has_enough_space(&self, content_length: u64) -> Result<bool> {
         let available_space = self.available_space()?;
         if available_space < content_length {
@@ -115,7 +111,6 @@ impl Content {
     }
 
     /// is_same_dev_inode checks if the source and target are the same device and inode.
-    #[instrument(skip_all)]
     async fn is_same_dev_inode<P: AsRef<Path>, Q: AsRef<Path>>(
         &self,
         source: P,
@@ -141,7 +136,6 @@ impl Content {
     }
 
     /// is_same_dev_inode_as_task checks if the task and target are the same device and inode.
-    #[instrument(skip_all)]
     pub async fn is_same_dev_inode_as_task(&self, task_id: &str, to: &Path) -> Result<bool> {
         let task_path = self.get_task_path(task_id);
         self.is_same_dev_inode(&task_path, to).await
@@ -152,6 +146,7 @@ impl Content {
     /// Behavior of `create_task`:
     /// 1. If the task already exists, return the task path.
     /// 2. If the task does not exist, create the task directory and file.
+    #[instrument(skip_all)]
     pub async fn create_task(&self, task_id: &str, length: u64) -> Result<PathBuf> {
         let task_path = self.get_task_path(task_id);
         if task_path.exists() {
@@ -244,7 +239,6 @@ impl Content {
     }
 
     /// delete_task deletes the task content.
-    #[instrument(skip_all)]
     pub async fn delete_task(&self, task_id: &str) -> Result<()> {
         info!("delete task content: {}", task_id);
         let task_path = self.get_task_path(task_id);
@@ -378,7 +372,6 @@ impl Content {
     }
 
     /// get_task_path returns the task path by task id.
-    #[instrument(skip_all)]
     fn get_task_path(&self, task_id: &str) -> PathBuf {
         // The task needs split by the first 3 characters of task id(sha256) to
         // avoid too many files in one directory.
@@ -388,7 +381,6 @@ impl Content {
 
     /// is_same_dev_inode_as_persistent_cache_task checks if the persistent cache task and target
     /// are the same device and inode.
-    #[instrument(skip_all)]
     pub async fn is_same_dev_inode_as_persistent_cache_task(
         &self,
         task_id: &str,
@@ -403,6 +395,7 @@ impl Content {
     /// Behavior of `create_persistent_cache_task`:
     /// 1. If the persistent cache task already exists, return the persistent cache task path.
     /// 2. If the persistent cache task does not exist, create the persistent cache task directory and file.
+    #[instrument(skip_all)]
     pub async fn create_persistent_cache_task(
         &self,
         task_id: &str,
@@ -593,7 +586,6 @@ impl Content {
     }
 
     /// delete_task deletes the persistent cache task content.
-    #[instrument(skip_all)]
     pub async fn delete_persistent_cache_task(&self, task_id: &str) -> Result<()> {
         info!("delete persistent cache task content: {}", task_id);
         let persistent_cache_task_path = self.get_persistent_cache_task_path(task_id);
@@ -606,7 +598,6 @@ impl Content {
     }
 
     /// get_persistent_cache_task_path returns the persistent cache task path by task id.
-    #[instrument(skip_all)]
     fn get_persistent_cache_task_path(&self, task_id: &str) -> PathBuf {
         // The persistent cache task needs split by the first 3 characters of task id(sha256) to
         // avoid too many files in one directory.
