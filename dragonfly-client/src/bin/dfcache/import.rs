@@ -121,12 +121,8 @@ pub struct ImportCommand {
     )]
     log_max_files: usize,
 
-    #[arg(
-        long = "verbose",
-        default_value_t = false,
-        help = "Specify whether to print log"
-    )]
-    verbose: bool,
+    #[arg(long, default_value_t = false, help = "Specify whether to print log")]
+    log_to_stdout: bool,
 }
 
 /// Implement the execute for ImportCommand.
@@ -144,7 +140,7 @@ impl ImportCommand {
             self.log_max_files,
             None,
             None,
-            self.verbose,
+            self.log_to_stdout,
         );
 
         // Validate the command line arguments.

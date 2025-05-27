@@ -34,7 +34,7 @@ COPY dragonfly-client-util/src ./dragonfly-client-util/src
 COPY dragonfly-client-init/Cargo.toml ./dragonfly-client-init/Cargo.toml
 COPY dragonfly-client-init/src ./dragonfly-client-init/src
 
-RUN cargo build --release --verbose --bin dfget --bin dfdaemon --bin dfcache
+RUN cargo build --release --log-to-stdout --bin dfget --bin dfdaemon --bin dfcache
 
 FROM public.ecr.aws/docker/library/alpine:3.20 AS health
 
