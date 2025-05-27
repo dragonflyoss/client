@@ -742,6 +742,13 @@ impl Task {
                         }
                     };
 
+                    if self.config.download.parent_selector.enable {
+                        info!("unregister all parents");
+                        self.parent_selector
+                            .unregister_all_parents(response.candidate_parents.clone())
+                            .await?;
+                    }
+
                     // Merge the finished pieces.
                     finished_pieces = self.piece.merge_finished_pieces(
                         finished_pieces.clone(),
@@ -972,8 +979,6 @@ impl Task {
         // Get the id of the task.
         let task_id = task.id.as_str();
 
-        let parent_selector = self.parent_selector.clone();
-
         // Convert Peer to CollectedParent
         let collected_parents: Vec<CollectedParent> = parents
             .clone()
@@ -1001,7 +1006,7 @@ impl Task {
             self.parent_selector.run(&collected_parents).await?;
             parent_selector = Some(self.parent_selector.clone());
         }
-        
+
         // Initialize the interrupt. If download from parent failed with scheduler or download
         // progress, interrupt the collector and return the finished pieces.
         let interrupt = Arc::new(AtomicBool::new(false));
@@ -1023,7 +1028,6 @@ impl Task {
                 drop(piece_collector_rx);
                 break;
             }
-
 
             async fn download_from_parent(
                 task_id: String,
@@ -1049,15 +1053,12 @@ impl Task {
 
                 let parent = match parent_selector {
                     Some(parent_selector) => {
-                        info!("get parents for piece {}", number);
                         if let Some(parents) = piece_collector.get_parents_for_piece(number) {
-                            info!("parents count: {}, {:?}", parents.len(), parents);
 
                             match parent_selector.select_parent(parents) {
                                 Ok(selected_parent) => {
-                                    info!("selected parent for piece {} is {}", number, selected_parent.id);
                                     selected_parent
-                                },
+                                }
                                 Err(err) => {
                                     error!(
                                         "select parent for piece {} failed: {}, using original parent",
@@ -1069,9 +1070,8 @@ impl Task {
                         } else {
                             parent
                         }
-                    },
+                    }
                     None => {
-                        info!("no parent selector, using original parent");
                         parent
                     }
                 };
