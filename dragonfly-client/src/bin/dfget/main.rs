@@ -279,7 +279,7 @@ struct Args {
     log_max_files: usize,
 
     #[arg(long, default_value_t = false, help = "Specify whether to print log")]
-    log_to_stdout: bool,
+    console: bool,
 
     #[arg(
         short = 'V',
@@ -305,7 +305,7 @@ async fn main() -> anyhow::Result<()> {
         args.log_max_files,
         None,
         None,
-        args.log_to_stdout,
+        args.console,
     );
 
     // Validate command line arguments.
