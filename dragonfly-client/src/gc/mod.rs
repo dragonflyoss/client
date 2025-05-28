@@ -53,7 +53,6 @@ pub struct GC {
 
 impl GC {
     /// new creates a new GC.
-    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         host_id: String,
@@ -73,7 +72,6 @@ impl GC {
     }
 
     /// run runs the garbage collector.
-    #[instrument(skip_all)]
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();

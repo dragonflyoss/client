@@ -177,7 +177,6 @@ pub struct ObjectStorage {
 /// ObjectStorage implements the ObjectStorage trait.
 impl ObjectStorage {
     /// Returns ObjectStorage that implements the Backend trait.
-    #[instrument(skip_all)]
     pub fn new(scheme: Scheme) -> ClientResult<ObjectStorage> {
         // Initialize the reqwest client.
         let client = reqwest::Client::builder()
@@ -196,7 +195,6 @@ impl ObjectStorage {
     }
 
     /// operator initializes the operator with the parsed URL and object storage.
-    #[instrument(skip_all)]
     pub fn operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
@@ -223,7 +221,6 @@ impl ObjectStorage {
     }
 
     /// s3_operator initializes the S3 operator with the parsed URL and object storage.
-    #[instrument(skip_all)]
     pub fn s3_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
@@ -276,7 +273,6 @@ impl ObjectStorage {
     }
 
     /// gcs_operator initializes the GCS operator with the parsed URL and object storage.
-    #[instrument(skip_all)]
     pub fn gcs_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
@@ -311,7 +307,6 @@ impl ObjectStorage {
     }
 
     /// abs_operator initializes the ABS operator with the parsed URL and object storage.
-    #[instrument(skip_all)]
     pub fn abs_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
@@ -354,7 +349,6 @@ impl ObjectStorage {
     }
 
     /// oss_operator initializes the OSS operator with the parsed URL and object storage.
-    #[instrument(skip_all)]
     pub fn oss_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
@@ -398,7 +392,6 @@ impl ObjectStorage {
     }
 
     /// obs_operator initializes the OBS operator with the parsed URL and object storage.
-    #[instrument(skip_all)]
     pub fn obs_operator(
         &self,
         parsed_url: &super::object_storage::ParsedURL,
@@ -487,7 +480,6 @@ impl ObjectStorage {
 #[tonic::async_trait]
 impl crate::Backend for ObjectStorage {
     /// scheme returns the scheme of the object storage.
-    #[instrument(skip_all)]
     fn scheme(&self) -> String {
         self.scheme.to_string()
     }

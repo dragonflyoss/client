@@ -43,7 +43,6 @@ pub struct HTTP {
 /// HTTP implements the http interface.
 impl HTTP {
     /// new returns a new HTTP.
-    #[instrument(skip_all)]
     pub fn new(scheme: &str) -> Result<HTTP> {
         // Default TLS client config with no validation.
         let client_config_builder = rustls::ClientConfig::builder()
@@ -75,7 +74,6 @@ impl HTTP {
     }
 
     /// client returns a new reqwest client.
-    #[instrument(skip_all)]
     fn client(
         &self,
         client_cert: Option<Vec<CertificateDer<'static>>>,
@@ -117,7 +115,6 @@ impl HTTP {
 #[tonic::async_trait]
 impl super::Backend for HTTP {
     /// scheme returns the scheme of the HTTP backend.
-    #[instrument(skip_all)]
     fn scheme(&self) -> String {
         self.scheme.clone()
     }

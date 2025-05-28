@@ -21,27 +21,27 @@ use dragonfly_client_core::{
 use hyper_util::rt::TokioIo;
 use std::path::PathBuf;
 use tokio::net::UnixStream;
+use tonic::service::interceptor::InterceptedService;
+use tonic::transport::ClientTlsConfig;
 use tonic::transport::{Channel, Endpoint, Uri};
-use tonic::{service::interceptor::InterceptedService, transport::ClientTlsConfig};
 use tonic_health::pb::{
     health_client::HealthClient as HealthGRPCClient, HealthCheckRequest, HealthCheckResponse,
 };
 use tower::service_fn;
 use tracing::{error, instrument};
 
-use super::interceptor::TracingInterceptor;
+use super::interceptor::InjectTracingInterceptor;
 
 /// HealthClient is a wrapper of HealthGRPCClient.
 #[derive(Clone)]
 pub struct HealthClient {
     /// client is the grpc client of the certificate.
-    client: HealthGRPCClient<InterceptedService<Channel, TracingInterceptor>>,
+    client: HealthGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>,
 }
 
 /// HealthClient implements the grpc client of the health.
 impl HealthClient {
     /// new creates a new HealthClient.
-    #[instrument(skip_all)]
     pub async fn new(addr: &str, client_tls_config: Option<ClientTlsConfig>) -> Result<Self> {
         let channel = match client_tls_config {
             Some(client_tls_config) => Channel::from_shared(addr.to_string())
@@ -73,14 +73,13 @@ impl HealthClient {
                 .or_err(ErrorType::ConnectError)?,
         };
 
-        let client = HealthGRPCClient::with_interceptor(channel, TracingInterceptor)
+        let client = HealthGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
     }
 
     /// new_unix creates a new HealthClient with unix domain socket.
-    #[instrument(skip_all)]
     pub async fn new_unix(socket_path: PathBuf) -> Result<Self> {
         // Ignore the uri because it is not used.
         let channel = Endpoint::try_from("http://[::]:50051")
@@ -98,7 +97,8 @@ impl HealthClient {
                 error!("connect failed: {}", err);
             })
             .or_err(ErrorType::ConnectError)?;
-        let client = HealthGRPCClient::with_interceptor(channel, TracingInterceptor)
+
+        let client = HealthGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
@@ -137,7 +137,6 @@ impl HealthClient {
     }
 
     /// make_request creates a new request with timeout.
-    #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);

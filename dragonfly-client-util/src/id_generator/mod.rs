@@ -22,7 +22,6 @@ use dragonfly_client_core::{
 use sha2::{Digest, Sha256};
 use std::io::{self, Read};
 use std::path::PathBuf;
-use tracing::instrument;
 use url::Url;
 use uuid::Uuid;
 
@@ -76,7 +75,6 @@ pub struct IDGenerator {
 /// IDGenerator implements the IDGenerator.
 impl IDGenerator {
     /// new creates a new IDGenerator.
-    #[instrument(skip_all)]
     pub fn new(ip: String, hostname: String, is_seed_peer: bool) -> Self {
         IDGenerator {
             ip,
@@ -87,7 +85,6 @@ impl IDGenerator {
 
     /// host_id generates the host id.
     #[inline]
-    #[instrument(skip_all)]
     pub fn host_id(&self) -> String {
         if self.is_seed_peer {
             return format!("{}-{}-{}", self.ip, self.hostname, "seed");
@@ -98,7 +95,6 @@ impl IDGenerator {
 
     /// task_id generates the task id.
     #[inline]
-    #[instrument(skip_all)]
     pub fn task_id(&self, parameter: TaskIDParameter) -> Result<String> {
         match parameter {
             TaskIDParameter::Content(content) => {
@@ -162,7 +158,6 @@ impl IDGenerator {
 
     /// persistent_cache_task_id generates the persistent cache task id.
     #[inline]
-    #[instrument(skip_all)]
     pub fn persistent_cache_task_id(
         &self,
         parameter: PersistentCacheTaskIDParameter,
@@ -218,7 +213,6 @@ impl IDGenerator {
 
     /// peer_id generates the peer id.
     #[inline]
-    #[instrument(skip_all)]
     pub fn peer_id(&self) -> String {
         if self.is_seed_peer {
             return format!(
@@ -234,7 +228,6 @@ impl IDGenerator {
     }
 
     /// task_type generates the task type by the task id.
-    #[instrument(skip_all)]
     pub fn task_type(&self, id: &str) -> TaskType {
         if id.ends_with(PERSISTENT_CACHE_TASK_SUFFIX) {
             return TaskType::PersistentCache;

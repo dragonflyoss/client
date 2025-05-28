@@ -271,7 +271,6 @@ lazy_static! {
 }
 
 /// register_custom_metrics registers all custom metrics.
-#[instrument(skip_all)]
 fn register_custom_metrics() {
     REGISTRY
         .register(Box::new(VERSION_GAUGE.clone()))
@@ -387,7 +386,6 @@ fn register_custom_metrics() {
 }
 
 /// reset_custom_metrics resets all custom metrics.
-#[instrument(skip_all)]
 fn reset_custom_metrics() {
     VERSION_GAUGE.reset();
     DOWNLOAD_TASK_COUNT.reset();
@@ -856,7 +854,6 @@ pub struct Metrics {
 /// Metrics implements the metrics server.
 impl Metrics {
     /// new creates a new Metrics.
-    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         shutdown: shutdown::Shutdown,
@@ -877,7 +874,6 @@ impl Metrics {
     }
 
     /// run starts the metrics server.
-    #[instrument(skip_all)]
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -929,7 +925,6 @@ impl Metrics {
             _ = shutdown.recv() => {
                 // Metrics server shutting down with signals.
                 info!("metrics server shutting down");
-                return
             }
         }
     }

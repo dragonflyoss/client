@@ -15,7 +15,7 @@
  */
 
 use dragonfly_client_config::dfdaemon::Host;
-use opentelemetry::{global, trace::TracerProvider};
+use opentelemetry::{global, trace::TracerProvider, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{propagation::TraceContextPropagator, Resource};
 use rolling_file::*;
@@ -44,6 +44,7 @@ pub fn init_tracing(
     log_max_files: usize,
     jaeger_addr: Option<String>,
     host: Option<Host>,
+    is_seed_peer: bool,
     console: bool,
 ) -> Vec<WorkerGuard> {
     let mut guards = vec![];
@@ -102,7 +103,13 @@ pub fn init_tracing(
         .with(stdout_logging_layer);
 
     // Setup jaeger layer.
-    if let Some(jaeger_addr) = jaeger_addr {
+    if let Some(mut jaeger_addr) = jaeger_addr {
+        jaeger_addr = if jaeger_addr.starts_with("http://") {
+            jaeger_addr
+        } else {
+            format!("http://{}", jaeger_addr)
+        };
+
         let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
             .with_tonic()
             .with_endpoint(jaeger_addr)
@@ -115,20 +122,33 @@ pub fn init_tracing(
             .with_batch_exporter(otlp_exporter)
             .with_resource(
                 Resource::builder()
-                    .with_service_name(name.to_owned())
+                    .with_service_name(format!("{}-{}", name, host.ip.unwrap()))
+                    .with_schema_url(
+                        [
+                            KeyValue::new(
+                                opentelemetry_semantic_conventions::attribute::SERVICE_NAMESPACE,
+                                "dragonfly",
+                            ),
+                            KeyValue::new(
+                                opentelemetry_semantic_conventions::attribute::HOST_NAME,
+                                host.hostname,
+                            ),
+                            KeyValue::new(
+                                opentelemetry_semantic_conventions::attribute::HOST_IP,
+                                host.ip.unwrap().to_string(),
+                            ),
+                        ],
+                        opentelemetry_semantic_conventions::SCHEMA_URL,
+                    )
                     .with_attribute(opentelemetry::KeyValue::new(
-                        "idc",
+                        "host.idc",
                         host.idc.unwrap_or_default(),
                     ))
                     .with_attribute(opentelemetry::KeyValue::new(
-                        "location",
+                        "host.location",
                         host.location.unwrap_or_default(),
                     ))
-                    .with_attribute(opentelemetry::KeyValue::new("hostname", host.hostname))
-                    .with_attribute(opentelemetry::KeyValue::new(
-                        "ip",
-                        host.ip.unwrap().to_string(),
-                    ))
+                    .with_attribute(opentelemetry::KeyValue::new("host.seed_peer", is_seed_peer))
                     .build(),
             )
             .build();

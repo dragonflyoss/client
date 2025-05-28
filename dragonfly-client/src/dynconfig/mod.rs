@@ -65,7 +65,6 @@ pub struct Dynconfig {
 /// Dynconfig is the implementation of Dynconfig.
 impl Dynconfig {
     /// new creates a new Dynconfig.
-    #[instrument(skip_all)]
     pub async fn new(
         config: Arc<Config>,
         manager_client: Arc<ManagerClient>,
@@ -88,7 +87,6 @@ impl Dynconfig {
     }
 
     /// run starts the dynconfig server.
-    #[instrument(skip_all)]
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();

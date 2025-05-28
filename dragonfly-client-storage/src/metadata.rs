@@ -840,7 +840,6 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// get_piece gets the piece metadata.
-    #[instrument(skip_all)]
     pub fn get_piece(&self, piece_id: &str) -> Result<Option<Piece>> {
         self.db.get(piece_id.as_bytes())
     }
@@ -852,6 +851,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// get_pieces gets the piece metadatas.
+    #[instrument(skip_all)]
     pub fn get_pieces(&self, task_id: &str) -> Result<Vec<Piece>> {
         let pieces = self
             .db
@@ -906,7 +906,6 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
     /// piece_id returns the piece id.
     #[inline]
-    #[instrument(skip_all)]
     pub fn piece_id(&self, task_id: &str, number: u32) -> String {
         format!("{}-{}", task_id, number)
     }

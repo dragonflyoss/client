@@ -17,7 +17,7 @@
 use bytesize::ByteSize;
 use dragonfly_api::common::v2::Priority;
 use reqwest::header::HeaderMap;
-use tracing::{error, instrument};
+use tracing::error;
 
 /// DRAGONFLY_TAG_HEADER is the header key of tag in http request.
 pub const DRAGONFLY_TAG_HEADER: &str = "X-Dragonfly-Tag";
@@ -80,7 +80,6 @@ pub const DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID: &str =
     "X-Dragonfly-Content-For-Calculating-Task-ID";
 
 /// get_tag gets the tag from http header.
-#[instrument(skip_all)]
 pub fn get_tag(header: &HeaderMap) -> Option<String> {
     header
         .get(DRAGONFLY_TAG_HEADER)
@@ -89,7 +88,6 @@ pub fn get_tag(header: &HeaderMap) -> Option<String> {
 }
 
 /// get_application gets the application from http header.
-#[instrument(skip_all)]
 pub fn get_application(header: &HeaderMap) -> Option<String> {
     header
         .get(DRAGONFLY_APPLICATION_HEADER)
@@ -98,7 +96,6 @@ pub fn get_application(header: &HeaderMap) -> Option<String> {
 }
 
 /// get_priority gets the priority from http header.
-#[instrument(skip_all)]
 pub fn get_priority(header: &HeaderMap) -> i32 {
     let default_priority = Priority::Level6 as i32;
     match header.get(DRAGONFLY_PRIORITY_HEADER) {
@@ -120,7 +117,6 @@ pub fn get_priority(header: &HeaderMap) -> i32 {
 }
 
 /// get_registry gets the custom address of container registry from http header.
-#[instrument(skip_all)]
 pub fn get_registry(header: &HeaderMap) -> Option<String> {
     header
         .get(DRAGONFLY_REGISTRY_HEADER)
@@ -129,7 +125,6 @@ pub fn get_registry(header: &HeaderMap) -> Option<String> {
 }
 
 /// get_filters gets the filters from http header.
-#[instrument(skip_all)]
 pub fn get_filtered_query_params(
     header: &HeaderMap,
     default_filtered_query_params: Vec<String>,
@@ -147,7 +142,6 @@ pub fn get_filtered_query_params(
 }
 
 /// get_use_p2p gets the use p2p from http header.
-#[instrument(skip_all)]
 pub fn get_use_p2p(header: &HeaderMap) -> bool {
     match header.get(DRAGONFLY_USE_P2P_HEADER) {
         Some(value) => match value.to_str() {
@@ -162,7 +156,6 @@ pub fn get_use_p2p(header: &HeaderMap) -> bool {
 }
 
 /// get_prefetch gets the prefetch from http header.
-#[instrument(skip_all)]
 pub fn get_prefetch(header: &HeaderMap) -> Option<bool> {
     match header.get(DRAGONFLY_PREFETCH_HEADER) {
         Some(value) => match value.to_str() {
@@ -185,7 +178,6 @@ pub fn get_output_path(header: &HeaderMap) -> Option<String> {
 }
 
 /// get_force_hard_link gets the force hard link from http header.
-#[instrument(skip_all)]
 pub fn get_force_hard_link(header: &HeaderMap) -> bool {
     match header.get(DRAGONFLY_FORCE_HARD_LINK_HEADER) {
         Some(value) => match value.to_str() {

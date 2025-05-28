@@ -99,7 +99,6 @@ pub struct Proxy {
 /// Proxy implements the proxy server.
 impl Proxy {
     /// new creates a new Proxy.
-    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         task: Arc<Task>,
@@ -144,7 +143,6 @@ impl Proxy {
     }
 
     /// run starts the proxy server.
-    #[instrument(skip_all)]
     pub async fn run(&self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         let mut shutdown = self.shutdown.clone();
         let read_buffer_size = self.config.proxy.read_buffer_size;
@@ -981,7 +979,6 @@ async fn proxy_via_https(
 }
 
 /// make_registry_mirror_request makes a registry mirror request by the request.
-#[instrument(skip_all)]
 fn make_registry_mirror_request(
     config: Arc<Config>,
     mut request: Request<hyper::body::Incoming>,
@@ -1015,7 +1012,6 @@ fn make_registry_mirror_request(
 }
 
 /// make_download_task_request makes a download task request by the request.
-#[instrument(skip_all)]
 fn make_download_task_request(
     config: Arc<Config>,
     rule: &Rule,
@@ -1074,7 +1070,6 @@ fn make_download_task_request(
 
 /// need_prefetch returns whether the prefetch is needed by the configuration and the request
 /// header.
-#[instrument(skip_all)]
 fn need_prefetch(config: Arc<Config>, header: &http::HeaderMap) -> bool {
     // If the header not contains the range header, the request does not need prefetch.
     if !header.contains_key(reqwest::header::RANGE) {
@@ -1088,11 +1083,10 @@ fn need_prefetch(config: Arc<Config>, header: &http::HeaderMap) -> bool {
     }
 
     // Return the prefetch value from the configuration.
-    return config.proxy.prefetch;
+    config.proxy.prefetch
 }
 
 /// make_download_url makes a download url by the given uri.
-#[instrument(skip_all)]
 fn make_download_url(
     uri: &hyper::Uri,
     use_tls: bool,
@@ -1117,7 +1111,6 @@ fn make_download_url(
 }
 
 /// make_response_headers makes the response headers.
-#[instrument(skip_all)]
 fn make_response_headers(
     mut download_task_started_response: DownloadTaskStartedResponse,
 ) -> ClientResult<hyper::header::HeaderMap> {
@@ -1144,13 +1137,11 @@ fn make_response_headers(
 
 /// find_matching_rule returns whether the dfdaemon should be used to download the task.
 /// If the dfdaemon should be used, return the matched rule.
-#[instrument(skip_all)]
 fn find_matching_rule(rules: Option<&[Rule]>, url: &str) -> Option<Rule> {
     rules?.iter().find(|rule| rule.regex.is_match(url)).cloned()
 }
 
 /// make_error_response makes an error response with the given status and message.
-#[instrument(skip_all)]
 fn make_error_response(status: http::StatusCode, header: Option<http::HeaderMap>) -> Response {
     let mut response = Response::new(empty());
     *response.status_mut() = status;
@@ -1164,7 +1155,6 @@ fn make_error_response(status: http::StatusCode, header: Option<http::HeaderMap>
 }
 
 /// empty returns an empty body.
-#[instrument(skip_all)]
 fn empty() -> BoxBody<Bytes, ClientError> {
     Empty::<Bytes>::new()
         .map_err(|never| match never {})

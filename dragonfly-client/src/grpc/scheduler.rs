@@ -40,7 +40,7 @@ use tonic::transport::Channel;
 use tracing::{error, info, instrument, Instrument};
 use url::Url;
 
-use super::interceptor::TracingInterceptor;
+use super::interceptor::InjectTracingInterceptor;
 
 /// VNode is the virtual node of the hashring.
 #[derive(Debug, Copy, Clone, Hash, PartialEq)]
@@ -79,7 +79,6 @@ pub struct SchedulerClient {
 /// SchedulerClient implements the grpc client of the scheduler.
 impl SchedulerClient {
     /// new creates a new SchedulerClient.
-    #[instrument(skip_all)]
     pub async fn new(config: Arc<Config>, dynconfig: Arc<Dynconfig>) -> Result<Self> {
         let client = Self {
             config,
@@ -192,9 +191,10 @@ impl SchedulerClient {
                     })
                     .or_err(ErrorType::ConnectError)?;
 
-                let mut client = SchedulerGRPCClient::with_interceptor(channel, TracingInterceptor)
-                    .max_decoding_message_size(usize::MAX)
-                    .max_encoding_message_size(usize::MAX);
+                let mut client =
+                    SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
+                        .max_decoding_message_size(usize::MAX)
+                        .max_encoding_message_size(usize::MAX);
                 client.announce_host(request).await?;
                 Ok(())
             }
@@ -245,9 +245,10 @@ impl SchedulerClient {
                     })
                     .or_err(ErrorType::ConnectError)?;
 
-                let mut client = SchedulerGRPCClient::with_interceptor(channel, TracingInterceptor)
-                    .max_decoding_message_size(usize::MAX)
-                    .max_encoding_message_size(usize::MAX);
+                let mut client =
+                    SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
+                        .max_decoding_message_size(usize::MAX)
+                        .max_encoding_message_size(usize::MAX);
                 client.announce_host(request).await?;
                 Ok(())
             }
@@ -303,9 +304,10 @@ impl SchedulerClient {
                     })
                     .or_err(ErrorType::ConnectError)?;
 
-                let mut client = SchedulerGRPCClient::with_interceptor(channel, TracingInterceptor)
-                    .max_decoding_message_size(usize::MAX)
-                    .max_encoding_message_size(usize::MAX);
+                let mut client =
+                    SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
+                        .max_decoding_message_size(usize::MAX)
+                        .max_encoding_message_size(usize::MAX);
                 client.delete_host(request).await?;
                 Ok(())
             }
@@ -457,7 +459,7 @@ impl SchedulerClient {
         &self,
         task_id: &str,
         peer_id: Option<&str>,
-    ) -> Result<SchedulerGRPCClient<InterceptedService<Channel, TracingInterceptor>>> {
+    ) -> Result<SchedulerGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>> {
         // Update scheduler addresses of the client.
         self.update_available_scheduler_addrs().await?;
 
@@ -516,7 +518,7 @@ impl SchedulerClient {
         };
 
         Ok(
-            SchedulerGRPCClient::with_interceptor(channel, TracingInterceptor)
+            SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
                 .max_decoding_message_size(usize::MAX)
                 .max_encoding_message_size(usize::MAX),
         )
@@ -619,7 +621,6 @@ impl SchedulerClient {
     }
 
     /// make_request creates a new request with timeout.
-    #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
