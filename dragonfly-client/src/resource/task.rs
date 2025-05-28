@@ -90,7 +90,6 @@ pub struct Task {
 /// Task implements the task manager.
 impl Task {
     /// new returns a new Task.
-    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
@@ -117,6 +116,7 @@ impl Task {
     }
 
     /// get gets the metadata of the task.
+    #[instrument(skip_all)]
     pub fn get(&self, id: &str) -> ClientResult<Option<metadata::Task>> {
         self.storage.get_task(id)
     }
@@ -304,7 +304,6 @@ impl Task {
     }
 
     /// is_same_dev_inode checks if the task is on the same device inode as the given path.
-    #[instrument(skip_all)]
     pub async fn is_same_dev_inode(&self, id: &str, to: &Path) -> ClientResult<bool> {
         self.storage.is_same_dev_inode_as_task(id, to).await
     }

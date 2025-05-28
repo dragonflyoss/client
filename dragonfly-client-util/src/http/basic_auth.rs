@@ -20,7 +20,6 @@ use dragonfly_client_core::{
     Error, Result,
 };
 use http::header::{self, HeaderMap};
-use tracing::instrument;
 
 /// Credentials is the credentials for the basic auth.
 pub struct Credentials {
@@ -34,7 +33,6 @@ pub struct Credentials {
 /// Credentials is the basic auth.
 impl Credentials {
     /// new returns a new Credentials.
-    #[instrument(skip_all)]
     pub fn new(username: &str, password: &str) -> Credentials {
         Self {
             username: username.to_string(),

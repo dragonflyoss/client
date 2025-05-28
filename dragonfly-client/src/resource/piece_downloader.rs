@@ -66,7 +66,6 @@ pub struct DownloaderFactory {
 /// DownloadFactory implements the DownloadFactory trait.
 impl DownloaderFactory {
     /// new returns a new DownloadFactory.
-    #[instrument(skip_all)]
     pub fn new(protocol: &str, config: Arc<Config>) -> Result<Self> {
         let downloader = match protocol {
             "grpc" => Arc::new(GRPCDownloader::new(
@@ -84,7 +83,6 @@ impl DownloaderFactory {
     }
 
     /// build returns the downloader.
-    #[instrument(skip_all)]
     pub fn build(&self) -> Arc<dyn Downloader> {
         self.downloader.clone()
     }
@@ -151,7 +149,6 @@ pub struct GRPCDownloader {
 /// GRPCDownloader implements the downloader with the gRPC protocol.
 impl GRPCDownloader {
     /// new returns a new GRPCDownloader.
-    #[instrument(skip_all)]
     pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
         Self {
             config,

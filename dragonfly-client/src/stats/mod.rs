@@ -67,7 +67,6 @@ pub struct Stats {
 /// Stats implements the stats server.
 impl Stats {
     /// new creates a new Stats.
-    #[instrument(skip_all)]
     pub fn new(
         addr: SocketAddr,
         shutdown: shutdown::Shutdown,
@@ -81,7 +80,6 @@ impl Stats {
     }
 
     /// run starts the stats server.
-    #[instrument(skip_all)]
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -110,7 +108,6 @@ impl Stats {
             _ = shutdown.recv() => {
                 // Stats server shutting down with signals.
                 info!("stats server shutting down");
-                return
             }
         }
     }
