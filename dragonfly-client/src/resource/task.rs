@@ -19,6 +19,8 @@ use crate::metrics::{
     collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
     collect_backend_request_started_metrics,
 };
+use crate::resource::parent_selector::ParentSelector;
+use crate::resource::piece_collector::CollectedParent;
 use dragonfly_api::common::v2::{
     Download, Hdfs, ObjectStorage, Peer, Piece, Task as CommonTask, TrafficType,
 };
@@ -85,6 +87,9 @@ pub struct Task {
 
     /// piece is the piece manager.
     pub piece: Arc<piece::Piece>,
+
+    /// parent_selector is the parent selector.
+    pub parent_selector: Arc<ParentSelector>,
 }
 
 /// Task implements the task manager.
@@ -96,6 +101,7 @@ impl Task {
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
+        parent_selector: Arc<ParentSelector>,
     ) -> ClientResult<Self> {
         let piece = piece::Piece::new(
             config.clone(),
@@ -112,6 +118,7 @@ impl Task {
             scheduler_client: scheduler_client.clone(),
             backend_factory: backend_factory.clone(),
             piece: piece.clone(),
+            parent_selector: parent_selector.clone(),
         })
     }
 
@@ -758,6 +765,13 @@ impl Task {
                         }
                     };
 
+                    if self.config.download.parent_selector.enable {
+                        info!("unregister all parents");
+                        self.parent_selector
+                            .unregister_all_parents(response.candidate_parents.clone())
+                            .await?;
+                    }
+
                     // Merge the finished pieces.
                     finished_pieces = self.piece.merge_finished_pieces(
                         finished_pieces.clone(),
@@ -988,22 +1002,33 @@ impl Task {
         // Get the id of the task.
         let task_id = task.id.as_str();
 
+        // Convert Peer to CollectedParent
+        let collected_parents: Vec<CollectedParent> = parents
+            .clone()
+            .into_iter()
+            .map(|peer| CollectedParent {
+                id: peer.id,
+                host: peer.host,
+            })
+            .collect();
+
         // Initialize the piece collector.
         let piece_collector = piece_collector::PieceCollector::new(
             self.config.clone(),
             host_id,
             task_id,
             interested_pieces.clone(),
-            parents
-                .into_iter()
-                .map(|peer| piece_collector::CollectedParent {
-                    id: peer.id,
-                    host: peer.host,
-                })
-                .collect(),
+            collected_parents.clone(),
         )
         .await;
         let mut piece_collector_rx = piece_collector.run().await;
+        let piece_collector = Arc::new(piece_collector);
+
+        let mut parent_selector = None;
+        if self.config.download.parent_selector.enable {
+            self.parent_selector.run(&collected_parents).await?;
+            parent_selector = Some(self.parent_selector.clone());
+        }
 
         // Initialize the interrupt. If download from parent failed with scheduler or download
         // progress, interrupt the collector and return the finished pieces.
@@ -1043,9 +1068,31 @@ impl Task {
                 is_prefetch: bool,
                 need_piece_content: bool,
                 load_to_cache: bool,
+                parent_selector: Option<Arc<ParentSelector>>,
+                piece_collector: Arc<piece_collector::PieceCollector>,
             ) -> ClientResult<metadata::Piece> {
                 // Limit the concurrent piece count.
                 let _permit = semaphore.acquire().await.unwrap();
+
+                let parent = match parent_selector {
+                    Some(parent_selector) => {
+                        if let Some(parents) = piece_collector.get_parents_for_piece(number) {
+                            match parent_selector.select_parent(parents) {
+                                Ok(selected_parent) => selected_parent,
+                                Err(err) => {
+                                    error!(
+                                        "select parent for piece {} failed: {}, using original parent",
+                                        number, err
+                                    );
+                                    parent
+                                }
+                            }
+                        } else {
+                            parent
+                        }
+                    }
+                    None => parent,
+                };
 
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!(
@@ -1198,6 +1245,8 @@ impl Task {
                     is_prefetch,
                     need_piece_content,
                     load_to_cache,
+                    parent_selector.clone(),
+                    piece_collector.clone(),
                 )
                 .in_current_span(),
             );
