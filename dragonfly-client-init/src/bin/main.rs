@@ -65,7 +65,7 @@ struct Args {
     log_max_files: usize,
 
     #[arg(long, default_value_t = false, help = "Specify whether to print log")]
-    log_to_stdout: bool,
+    console: bool,
 
     #[arg(
         short = 'V',
@@ -92,7 +92,7 @@ async fn main() -> Result<(), anyhow::Error> {
         None,
         None,
         false,
-        args.log_to_stdout,
+        args.console,
     );
 
     // Load config.
