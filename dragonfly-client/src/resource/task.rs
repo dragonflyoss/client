@@ -1027,8 +1027,18 @@ impl Task {
 
         let mut parent_selector = None;
         if self.config.download.parent_selector.enable {
-            self.parent_selector.run(&collected_parents).await?;
-            parent_selector = Some(self.parent_selector.clone());
+            match self
+                .parent_selector
+                .register_parents(&collected_parents)
+                .await
+            {
+                Ok(_) => {
+                    parent_selector = Some(self.parent_selector.clone());
+                }
+                Err(err) => {
+                    error!("register parents failed: {:?}", err);
+                }
+            }
         }
 
         // Initialize the interrupt. If download from parent failed with scheduler or download

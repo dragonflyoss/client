@@ -16,7 +16,7 @@
 
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::resource::piece_collector::CollectedParent;
-use crate::shutdown::Shutdown;
+use crate::shutdown::{self, Shutdown};
 use dashmap::DashMap;
 use dragonfly_api::common::v2::{Host, Peer};
 use dragonfly_api::dfdaemon::v2::SyncHostRequest;
@@ -26,286 +26,320 @@ use dragonfly_client_core::Result;
 use dragonfly_client_util::id_generator::IDGenerator;
 use rand::distr::weighted::WeightedIndex;
 use rand::distr::Distribution;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::sleep;
+use tokio::sync::{mpsc, Barrier, Mutex};
+use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, instrument, warn, Instrument};
 
-/// ParentSync manages the synchronization of host information from a parent.
+/// DEFAULT_PARENT_CONNECTION_CLEANUP_DELAY is the default delay before closing parent connections.
+const DEFAULT_PARENT_CONNECTION_CLEANUP_DELAY: Duration = Duration::from_secs(5);
+
+/// HostInfo combines host information and its bandwidth weight.
+#[derive(Clone, Debug)]
+struct HostInfo {
+    /// host contains the host information.
+    host: Host,
+    /// weight represents the cached bandwidth weight for this host.
+    weight: u32,
+}
+
+impl HostInfo {
+    /// new creates a new HostInfo with the given host and weight.
+    pub fn new(host: Host, weight: u32) -> Self {
+        Self { host, weight }
+    }
+}
+
+/// ParentConnection manages a single parent connection with reference counting.
 #[derive(Clone)]
-struct ParentSync {
-    /// parent_id is the id of the parent this controller syncs with.
+struct ParentConnection {
+    /// parent_id is the id of the parent.
     parent_id: String,
 
-    /// shutdown used to stop the synchronization.
+    /// client is the dfdaemon upload client for this parent.
+    client: DfdaemonUploadClient,
+
+    /// active_connection tracks how many download tasks are using this connection.
+    active_connection: Arc<AtomicUsize>,
+
+    /// shutdown is used to signal the monitoring task to stop.
     shutdown: Shutdown,
 
-    /// ref_count tracks the number of tasks using this parent.
-    ref_count: Arc<AtomicU32>,
-
-    /// cleanup_timeout is the timeout before releasing the connection when ref_count reaches 0.
-    cleanup_timeout: Duration,
-
-    /// cleanup_in_progress marks if this parent is already being cleaned up.
-    cleanup_in_progress: Arc<AtomicBool>,
+    /// cleanup_scheduled indicates if a delayed cleanup is scheduled.
+    cleanup_scheduled: Arc<AtomicBool>,
 }
 
-impl ParentSync {
-    /// new creates a new ParentSync.
-    pub fn new(parent_id: String, cleanup_timeout: Duration) -> Self {
+impl ParentConnection {
+    /// new creates a new ParentConnection.
+    pub fn new(parent_id: String, client: DfdaemonUploadClient) -> Self {
         Self {
             parent_id,
+            client,
+            active_connection: Arc::new(AtomicUsize::new(0)),
             shutdown: Shutdown::new(),
-            ref_count: Arc::new(AtomicU32::new(0)),
-            cleanup_timeout,
-            cleanup_in_progress: Arc::new(AtomicBool::new(false)),
+            cleanup_scheduled: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// increment_ref increments the reference count for this parent.
-    pub async fn increment_ref(&self) -> u32 {
-        let count = self.ref_count.fetch_add(1, Ordering::SeqCst) + 1;
-
-        if count == 1 && self.cleanup_in_progress.load(Ordering::SeqCst) {
-            self.cleanup_in_progress.store(false, Ordering::SeqCst);
-        }
-
-        count
+    /// acquire increments the reference count and cancels any scheduled cleanup.
+    pub fn acquire(&self) -> ConnectionGuard {
+        self.active_connection.fetch_add(1, Ordering::SeqCst);
+        self.cleanup_scheduled.store(false, Ordering::SeqCst);
+        debug!(
+            "acquired connection to parent {}, ref_count: {}",
+            self.parent_id,
+            self.active_connection.load(Ordering::SeqCst)
+        );
+        ConnectionGuard::new(self.active_connection.clone(), self.parent_id.clone())
     }
 
-    /// decrement_ref decrements the reference count and schedules cleanup if needed.
-    pub async fn decrement_ref(&self) -> u32 {
-        let count = self.ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
-
-        if count == 0 {
-            if self
-                .cleanup_in_progress
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
-                .is_ok()
-            {
-                let shutdown = self.shutdown.clone();
-                let cleanup_timeout = self.cleanup_timeout;
-                let ref_count = self.ref_count.clone();
-                let cleanup_in_progress = self.cleanup_in_progress.clone();
-
-                tokio::spawn(async move {
-                    sleep(cleanup_timeout).await;
-
-                    if ref_count.load(Ordering::SeqCst) == 0 {
-                        shutdown.trigger();
-                    } else {
-                        cleanup_in_progress.store(false, Ordering::SeqCst);
-                    }
-                });
-            } else {
-                debug!(
-                    "parent {} cleanup already scheduled by another thread",
-                    self.parent_id
-                );
-            }
+    /// schedule_cleanup schedules cleanup when reference count reaches zero.
+    pub fn schedule_cleanup(&self) -> bool {
+        if self.active_connection.load(Ordering::SeqCst) == 0 {
+            self.cleanup_scheduled.store(true, Ordering::SeqCst);
+            true
+        } else {
+            false
         }
+    }
 
-        count
+    /// should_cleanup returns true if this connection should be cleaned up.
+    pub fn should_cleanup(&self) -> bool {
+        self.active_connection.load(Ordering::SeqCst) == 0
+            && self.cleanup_scheduled.load(Ordering::SeqCst)
+    }
+
+    /// shutdown triggers shutdown of the monitoring task.
+    pub fn shutdown(&self) {
+        self.shutdown.trigger();
     }
 }
 
-/// ParentSelector represents a parent selector.
-#[allow(dead_code)]
+/// ConnectionGuard automatically manages reference counting for parent connections.
+pub struct ConnectionGuard {
+    reference_count: Arc<AtomicUsize>,
+    parent_id: String,
+}
+
+impl ConnectionGuard {
+    fn new(reference_count: Arc<AtomicUsize>, parent_id: String) -> Self {
+        Self {
+            reference_count,
+            parent_id,
+        }
+    }
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        let old_count = self.reference_count.fetch_sub(1, Ordering::SeqCst);
+        debug!(
+            "released connection to parent {}, ref_count: {}",
+            self.parent_id,
+            old_count - 1
+        );
+    }
+}
+
+/// ParentSelector manages parent connections and selects optimal parents.
 pub struct ParentSelector {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// active_connections tracks the current number of active connections.
-    active_connections: Arc<AtomicUsize>,
-
     /// sync_interval represents the time interval between two refreshing probability operations.
     sync_interval: Duration,
-
-    /// hosts stores parent sync controllers.
-    hosts: Arc<DashMap<String, ParentSync>>,
 
     /// id_generator is a IDGenerator.
     id_generator: Arc<IDGenerator>,
 
-    /// hosts_info is the latest host info of different parents.
-    hosts_info: Arc<DashMap<String, Host>>,
+    /// hosts_info stores the latest host information and bandwidth weights for different parents.
+    hosts_info: Arc<DashMap<String, HostInfo>>,
 
-    /// hosts_weights stores the cached bandwidth weight for each parent.
-    hosts_weights: Arc<DashMap<String, u32>>,
+    /// connections stores parent connections with reference counting.
+    connections: Arc<DashMap<String, ParentConnection>>,
+
+    /// join_set manages all parent monitoring tasks.
+    join_set: Arc<Mutex<JoinSet<Result<()>>>>,
+
+    /// shutdown is used to shutdown the parent selector.
+    shutdown: shutdown::Shutdown,
+
+    /// _shutdown_complete is used to notify the parent selector is shutdown.
+    _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-/// TaskParentSelector implements the task parent selector.
-#[allow(dead_code)]
+/// ParentSelector implements the parent selector.
 impl ParentSelector {
     /// new returns a ParentSelector.
     #[instrument(skip_all)]
-    pub fn new(config: Arc<Config>, id_generator: Arc<IDGenerator>) -> Result<ParentSelector> {
+    pub fn new(
+        config: Arc<Config>,
+        id_generator: Arc<IDGenerator>,
+        shutdown: shutdown::Shutdown,
+        shutdown_complete_tx: mpsc::UnboundedSender<()>,
+    ) -> Result<ParentSelector> {
         let config = config.clone();
-        let active_connections = Arc::new(AtomicUsize::new(0));
         let sync_interval = config.download.parent_selector.sync_interval;
-        let hosts = Arc::new(DashMap::new());
-        let id_generator = id_generator.clone();
         let hosts_info = Arc::new(DashMap::new());
-        let hosts_weights = Arc::new(DashMap::new());
+        let id_generator = id_generator.clone();
+        let join_set = Arc::new(Mutex::new(JoinSet::new()));
 
-        Ok(ParentSelector {
+        let selector = ParentSelector {
             config,
-            active_connections,
             sync_interval,
-            hosts,
             id_generator,
             hosts_info,
-            hosts_weights,
-        })
+            connections: Arc::new(DashMap::new()),
+            join_set,
+            shutdown,
+            _shutdown_complete: shutdown_complete_tx,
+        };
+
+        Ok(selector)
     }
 
-    /// run registers the given parents and starts monitoring their bandwidth.
+    /// run starts the main ParentSelector loop that manages task lifecycle.
     #[instrument(skip_all)]
-    pub async fn run(&self, parents: &[CollectedParent]) -> Result<()> {
+    pub async fn run(&self, grpc_server_started_barrier: Arc<Barrier>) -> Result<()> {
         if !self.config.download.parent_selector.enable {
-            info!("parent registration is disabled in config");
+            info!("parent selector is disabled");
             return Ok(());
         }
 
-        if parents.is_empty() {
-            return Err(Error::Unknown(
-                "no parents provided for registration".to_string(),
-            ));
+        let mut shutdown = self.shutdown.clone();
+
+        // When the grpc server is started, notify the barrier. If the shutdown signal is received
+        // before barrier is waited successfully, the server will shutdown immediately.
+        tokio::select! {
+            // Wait for starting the parent selector
+            _ = grpc_server_started_barrier.wait() => {
+                info!("parent selector is ready to start");
+            }
+            _ = shutdown.recv() => {
+                // Parent selector shutting down with signals.
+                info!("parent selector shutting down");
+                return Ok(());
+            }
         }
 
-        // Check if the number of parents exceeds available capacity
-        let current_connections = self.active_connections.load(Ordering::SeqCst);
-        let capacity = self.config.download.parent_selector.capacity;
-        let available_slots = capacity.saturating_sub(current_connections);
+        let cleanup_interval = DEFAULT_PARENT_CONNECTION_CLEANUP_DELAY;
+        let mut cleanup_timer = tokio::time::interval(cleanup_interval);
 
-        if parents.len() > available_slots {
-            return Ok(());
+        loop {
+            tokio::select! {
+                // Handle completed tasks from joinset
+                result = async {
+                    let mut join_set = self.join_set.lock().await;
+                    join_set.join_next().await
+                } => {
+                    match result {
+                        Some(Ok(Ok(()))) => {
+                            debug!("parent monitoring task completed successfully");
+                        }
+                        Some(Ok(Err(err))) => {
+                            error!("parent monitoring task failed: {}", err);
+                        }
+                        Some(Err(err)) => {
+                            error!("parent monitoring task join error: {}", err);
+                        }
+                        None => {
+                            // No tasks in joinset, continue monitoring
+                        }
+                    }
+                }
+
+                // Periodic cleanup of unused connections
+                _ = cleanup_timer.tick() => {
+                    self.cleanup_idle_connections().await;
+                }
+            }
+        }
+    }
+
+    /// cleanup_idle_connections removes and aborts tasks for idle connections.
+    async fn cleanup_idle_connections(&self) {
+        // Collect connections that should be cleaned up
+        let to_cleanup: Vec<String> = self
+            .connections
+            .iter()
+            .filter_map(|entry| {
+                if entry.value().should_cleanup() {
+                    Some(entry.key().clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Remove and shutdown connections
+        for parent_id in to_cleanup {
+            // First get the connection to trigger shutdown
+            if let Some(connection) = self.connections.get(&parent_id) {
+                connection.shutdown();
+            }
+            // Then remove it from the map
+            self.connections.remove(&parent_id);
+            info!("cleaned up unused connection to parent {}", parent_id);
         }
 
-        let hosts_info = self.hosts_info.clone();
-        let hosts_weights = self.hosts_weights.clone();
+        // Clean up completed tasks in joinset
+        let active_task_count = {
+            let mut join_set = self.join_set.lock().await;
 
-        for parent in parents {
-            // Check capacity limit before adding new connections
-            if self.is_full() {
-                continue;
+            // Poll for completed tasks without waiting
+            while let Some(result) = join_set.try_join_next() {
+                match result {
+                    Ok(Ok(())) => {
+                        debug!("cleaned up completed monitoring task");
+                    }
+                    Ok(Err(err)) => {
+                        error!("cleaned up failed monitoring task: {}", err);
+                    }
+                    Err(err) => {
+                        error!("task join error during cleanup: {}", err);
+                    }
+                }
             }
 
-            let parent_sync = {
-                if self.hosts.get(&parent.id).is_some() {
-                    if let Err(err) = self.register_parent(&parent.id).await {
-                        warn!(
-                            "failed to register task for existing parent {}: {}",
-                            parent.id, err
-                        );
-                    }
-                    continue;
-                }
+            join_set.len()
+        };
 
-                if self.is_full() {
-                    continue;
-                }
-
-                // Create new parent sync
-                let parent_sync = ParentSync::new(parent.id.clone(), self.sync_interval);
-
-                // Insert the new parent and increment counter atomically
-                self.hosts.insert(parent.id.clone(), parent_sync.clone());
-                self.active_connections.fetch_add(1, Ordering::SeqCst);
-
-                // Register this parent to initialize its reference count
-                if let Err(err) = self.register_parent(&parent.id).await {
-                    warn!("failed to register task for parent {}: {}", parent.id, err);
-                } else {
-                    info!("registered and initialized parent {}", parent.id);
-                }
-
-                parent_sync
-            };
-
-            let config = self.config.clone();
-            let host_id = self.id_generator.host_id();
-            let peer_id = self.id_generator.peer_id();
-            let parent = parent.clone();
-            let shutdown = parent_sync.shutdown.clone();
-            let hosts_info = hosts_info.clone();
-            let hosts_weights = hosts_weights.clone();
-            let timeout = self.sync_interval;
-
-            tokio::spawn(
-                async move {
-                    Self::sync_host(
-                        config,
-                        host_id,
-                        peer_id,
-                        parent.clone(),
-                        hosts_info,
-                        hosts_weights,
-                        shutdown,
-                        timeout,
-                    )
-                    .await
-                    .unwrap_or_else(|err| {
-                        error!("failed to monitor parent {}: {}", parent.id, err);
-                    });
-                }
-                .in_current_span(),
-            );
+        if active_task_count > 0 {
+            debug!("active monitoring tasks: {}", active_task_count);
         }
-
-        info!(
-            "successfully registered parents, active connections: {}/{}",
-            self.active_connections.load(Ordering::SeqCst),
-            self.config.download.parent_selector.capacity
-        );
-        Ok(())
     }
 
     /// sync_host is a sub thread to sync host info from the parent.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn sync_host(
-        config: Arc<Config>,
         host_id: String,
         peer_id: String,
         parent: CollectedParent,
-        hosts_info: Arc<DashMap<String, Host>>,
-        hosts_weights: Arc<DashMap<String, u32>>,
-        mut shutdown: Shutdown,
+        hosts_info: Arc<DashMap<String, HostInfo>>,
         timeout: Duration,
+        client: DfdaemonUploadClient,
+        mut shutdown: Shutdown,
     ) -> Result<()> {
-        let host = parent.host.clone().ok_or_else(|| {
+        let _ = parent.host.clone().ok_or_else(|| {
             error!("peer {:?} host is empty", parent);
             Error::InvalidPeer(parent.id.clone())
         })?;
 
-        // Create a dfdaemon client.
-        let dfdaemon_upload_client = DfdaemonUploadClient::new(
-            config.clone(),
-            format!("http://{}:{}", host.ip, host.port),
-            false,
-        )
-        .await
-        .inspect_err(|err| {
-            error!(
-                "create dfdaemon upload client from parent {} failed: {}",
-                parent.id, err
-            );
-        })?;
-
-        let response = dfdaemon_upload_client
+        let response = client
             .sync_host(SyncHostRequest { host_id, peer_id })
             .await
             .inspect_err(|err| {
                 error!("sync host info from parent {} failed: {}", parent.id, err);
             })?;
 
-        let hosts_info = hosts_info.clone();
         let out_stream = response.into_inner().timeout(timeout);
         tokio::pin!(out_stream);
 
+        // Process the stream until it ends naturally, times out, or shutdown is triggered.
         loop {
             tokio::select! {
                 result = out_stream.next() => {
@@ -313,14 +347,17 @@ impl ParentSelector {
                         Some(Ok(message_result)) => {
                             match message_result {
                                 Ok(message) => {
-                                    // Update the parent's host info if exists.
-                                    hosts_info.insert(parent.id.clone(), message.clone());
+                                    info!("received host info from parent {}", parent.id);
 
-                                    if let Ok(rate) = Self::available_rate(&message) {
-                                        let weight = (rate / 1024.0).max(1.0) as u32;
+                                    // Calculate weight from host information
+                                    let weight = if let Ok(rate) = Self::available_rate(&message) {
+                                        (rate / 1024.0).max(1.0) as u32
+                                    } else {
+                                        1
+                                    };
 
-                                        hosts_weights.insert(parent.id.clone(), weight);
-                                    }
+                                    // Update the parent's host info with calculated weight.
+                                    hosts_info.insert(parent.id.clone(), HostInfo::new(message, weight));
                                 }
                                 Err(err) => {
                                     error!(
@@ -341,6 +378,7 @@ impl ParentSelector {
                     }
                 }
                 _ = shutdown.recv() => {
+                    info!("shutdown signal received for parent {}", parent.id);
                     break;
                 }
             }
@@ -350,7 +388,6 @@ impl ParentSelector {
             "parent selector connection to parent {} has been closed",
             parent.id
         );
-
         Ok(())
     }
 
@@ -382,80 +419,65 @@ impl ParentSelector {
 
         let weights: Vec<u32> = parents
             .iter()
-            .map(|parent| self.hosts_weights.get(&parent.id).map(|w| *w).unwrap_or(1))
+            .map(|parent| {
+                self.hosts_info
+                    .get(&parent.id)
+                    .map(|h| h.weight)
+                    .unwrap_or(1)
+            })
             .collect();
 
         match WeightedIndex::new(weights) {
             Ok(dist) => {
                 let mut rng = rand::rng();
                 let index = dist.sample(&mut rng);
+                let selected_parent = &parents[index];
+
+                if let Some(host_info) = self.hosts_info.get(&selected_parent.id) {
+                    info!(
+                        "selected parent {} with weight {}， host: {}:{}",
+                        selected_parent.id,
+                        host_info.weight,
+                        host_info.host.ip,
+                        host_info.host.port
+                    );
+                } else {
+                    info!("selected parent {}", selected_parent.id);
+                }
 
                 Ok(parents[index].clone())
             }
             Err(_) => {
                 // Fallback to last parent.
                 parents
-                    .last()
+                    .first()
                     .cloned()
                     .ok_or_else(|| Error::Unknown("no parents available".to_string()))
             }
         }
     }
 
-    /// register_parent increments the reference count for the given parent.
-    pub async fn register_parent(&self, parent_id: &str) -> Result<()> {
-        if let Some(parent_sync) = self.hosts.get(parent_id) {
-            parent_sync.increment_ref().await;
-            Ok(())
-        } else {
-            Err(Error::Unknown(format!("parent {} not found", parent_id)))
-        }
-    }
-
-    /// unregister_parent decrements the reference count for the given parent.
+    /// unregister_parent removes the parent's host info and schedules connection cleanup if no longer in use.
     pub async fn unregister_parent(&self, parent_id: &str) -> Result<()> {
-        if let Some(parent_sync) = self.hosts.get(parent_id) {
-            let count = parent_sync.decrement_ref().await;
+        self.hosts_info.remove(parent_id);
 
-            if count == 0 {
-                if parent_sync
-                    .cleanup_in_progress
-                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    // Double-check the ref_count after acquiring the cleanup flag
-                    if parent_sync.ref_count.load(Ordering::SeqCst) == 0 {
-                        if let Some((_, parent_sync)) = self.hosts.remove(parent_id) {
-                            parent_sync.shutdown.trigger();
-                            self.hosts_info.remove(parent_id);
-                            self.hosts_weights.remove(parent_id);
-
-                            // Decrement the active connection counter
-                            self.active_connections.fetch_sub(1, Ordering::SeqCst);
-
-                            info!(
-                                "cleaned up inactive parent {}, active connections: {}/{}",
-                                parent_id,
-                                self.active_connections.load(Ordering::SeqCst),
-                                self.config.download.parent_selector.capacity
-                            );
-                        }
-                    } else {
-                        parent_sync
-                            .cleanup_in_progress
-                            .store(false, Ordering::SeqCst);
-                    }
-                } else {
-                    debug!("parent {} cleanup already in progress", parent_id);
-                }
+        if let Some(connection) = self.connections.get(parent_id) {
+            if connection.schedule_cleanup() {
+                info!("scheduled cleanup for parent {}", parent_id);
+            } else {
+                info!(
+                    "removed parent {} host info (connection still in use)",
+                    parent_id
+                );
             }
-
-            Ok(())
         } else {
-            Err(Error::Unknown(format!("parent {} not found", parent_id)))
+            info!("removed parent {} host info", parent_id);
         }
+
+        Ok(())
     }
 
+    /// unregister_all_parents removes all parents' host info and schedules cleanup.
     pub async fn unregister_all_parents(&self, parents: Vec<Peer>) -> Result<()> {
         for parent in parents {
             self.unregister_parent(&parent.id).await?;
@@ -463,18 +485,123 @@ impl ParentSelector {
         Ok(())
     }
 
-    /// get_connection_count returns the current number of active connections.
-    pub fn get_connection_count(&self) -> usize {
-        self.active_connections.load(Ordering::SeqCst)
+    /// get_connection returns a connection guard for the given parent, creating the connection if needed.
+    pub async fn get_connection(
+        &self,
+        parent: &CollectedParent,
+    ) -> Result<(ConnectionGuard, DfdaemonUploadClient)> {
+        // Try to get existing connection
+        if let Some(connection) = self.connections.get(&parent.id) {
+            let guard = connection.acquire();
+            let client = connection.client.clone();
+            return Ok((guard, client));
+        }
+
+        // Create new connection
+        let host = parent
+            .host
+            .as_ref()
+            .ok_or_else(|| Error::InvalidPeer(parent.id.clone()))?;
+
+        info!("creating new connection to parent {}", parent.id);
+        let client = DfdaemonUploadClient::new(
+            self.config.clone(),
+            format!("http://{}:{}", host.ip, host.port),
+            false,
+        )
+        .await?;
+
+        let connection = ParentConnection::new(parent.id.clone(), client.clone());
+        let guard = connection.acquire();
+
+        // Insert the connection using entry API
+        match self.connections.entry(parent.id.clone()) {
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                entry.insert(connection);
+                Ok((guard, client))
+            }
+            dashmap::mapref::entry::Entry::Occupied(entry) => {
+                // Another task created the connection, use the existing one
+                debug!("using existing connection to parent {}", parent.id);
+                let existing_connection = entry.get();
+                let guard = existing_connection.acquire();
+                let client = existing_connection.client.clone();
+                Ok((guard, client))
+            }
+        }
     }
 
-    /// get_capacity returns the maximum capacity of connections.
-    pub fn get_capacity(&self) -> usize {
-        self.config.download.parent_selector.capacity
+    /// register_parent starts monitoring a parent.
+    pub async fn register_parent(&self, parent: &CollectedParent) -> Result<ConnectionGuard> {
+        // Skip if parent already has host info and monitoring task
+        if self.hosts_info.get(&parent.id).is_some() {
+            let (guard, _) = self.get_connection(parent).await?;
+            return Ok(guard);
+        }
+
+        // Get or create connection
+        let (guard, client) = self.get_connection(parent).await?;
+
+        // Start monitoring task for this parent
+        let parent = parent.clone();
+        let hosts_info = self.hosts_info.clone();
+        let timeout = self.sync_interval;
+        let host_id = self.id_generator.host_id();
+        let peer_id = self.id_generator.peer_id();
+        let shutdown = self
+            .connections
+            .get(&parent.id)
+            .map(|conn| conn.shutdown.clone())
+            .unwrap_or_default();
+
+        let mut join_set = self.join_set.lock().await;
+        join_set.spawn(
+            async move {
+                debug!("started sync host info for parent {}", parent.id);
+
+                let result = Self::sync_host(
+                    host_id,
+                    peer_id,
+                    parent.clone(),
+                    hosts_info,
+                    timeout,
+                    client,
+                    shutdown,
+                )
+                .await;
+
+                if let Err(ref err) = result {
+                    error!("sync host info for parent {} failed: {}", parent.id, err);
+                }
+
+                debug!("sync host info for parent {} ended", parent.id);
+                result
+            }
+            .in_current_span(),
+        );
+
+        Ok(guard)
     }
 
-    /// is_full returns true if the selector is at maximum capacity.
-    pub fn is_full(&self) -> bool {
-        self.active_connections.load(Ordering::SeqCst) >= self.get_capacity()
+    /// register_parents registers multiple parents.
+    pub async fn register_parents(&self, parents: &[CollectedParent]) -> Result<()> {
+        if parents.is_empty() {
+            return Ok(());
+        }
+
+        if parents
+            .iter()
+            .filter(|p| !self.hosts_info.contains_key(&p.id))
+            .count()
+            + self.connections.len()
+            > self.config.download.parent_selector.capacity
+        {
+            return Err(Error::Unknown("parent selector is full".to_string()));
+        }
+
+        for parent in parents {
+            self.register_parent(parent).await?;
+        }
+        Ok(())
     }
 }
