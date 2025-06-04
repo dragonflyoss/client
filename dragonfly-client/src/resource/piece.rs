@@ -140,7 +140,6 @@ impl Piece {
     }
 
     /// get gets a piece from the local storage.
-    #[instrument(skip_all)]
     pub fn get(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
         self.storage.get_piece(piece_id)
     }
