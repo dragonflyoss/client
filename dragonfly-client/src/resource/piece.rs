@@ -335,6 +335,7 @@ impl Piece {
     ) -> Result<impl AsyncRead> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
 
         // Acquire the upload rate limiter.
         if !disable_rate_limit {
@@ -366,6 +367,7 @@ impl Piece {
     ) -> Result<impl AsyncRead> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
 
         // Acquire the download rate limiter.
         if !disable_rate_limit {
@@ -409,6 +411,7 @@ impl Piece {
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
 
         // Record the start of downloading piece.
         let piece = self
@@ -513,6 +516,7 @@ impl Piece {
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
 
         // Record the start of downloading piece.
         let piece = self
@@ -696,6 +700,7 @@ impl Piece {
     ) -> Result<impl AsyncRead> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
 
         // Acquire the upload rate limiter.
         self.upload_rate_limiter.acquire(length as usize).await;
@@ -725,6 +730,7 @@ impl Piece {
     ) -> Result<impl AsyncRead> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
 
         // Acquire the download rate limiter.
         if !disable_rate_limit {
@@ -769,6 +775,7 @@ impl Piece {
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
 
         if is_prefetch {
             // Acquire the prefetch rate limiter.
