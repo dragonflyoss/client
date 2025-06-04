@@ -71,7 +71,7 @@ opentelemetry-otlp = { version = "0.29.0", default-features = false, features = 
 opentelemetry_sdk = { version = "0.29.0", default-features = false, features = ["trace"] }
 opentelemetry-semantic-conventions = { version = "0.29.0", features = ["semconv_experimental"] }
 rolling-file = "0.2.0"
-pprof = { version = "0.14", features = ["flamegraph", "protobuf-codec"] }
+pprof = { version = "0.15", features = ["flamegraph", "protobuf-codec"] }
 prometheus = { version = "0.13", features = ["process"] }
 tonic-health = "0.12.3"
 sysinfo = { version = "0.32.1", default-features = false, features = ["component", "disk", "network", "system", "user"] }
