@@ -1,4 +1,4 @@
-FROM public.ecr.aws/docker/library/rust:1.82.0 AS builder
+FROM public.ecr.aws/docker/library/rust:1.85.0 AS builder
 
 WORKDIR /app/client
 
