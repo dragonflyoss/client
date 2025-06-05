@@ -766,13 +766,6 @@ impl Task {
                         }
                     };
 
-                    if self.config.download.parent_selector.enable {
-                        info!("unregister all parents");
-                        self.parent_selector
-                            .unregister_all_parents(response.candidate_parents.clone())
-                            .await?;
-                    }
-
                     // Merge the finished pieces.
                     finished_pieces = self.piece.merge_finished_pieces(
                         finished_pieces.clone(),
@@ -1324,6 +1317,15 @@ impl Task {
                     continue;
                 }
             }
+        }
+
+        if let Some(parent_selector) = parent_selector {
+            parent_selector
+                .unregister_parents(parents)
+                .await
+                .unwrap_or_else(|err| {
+                    error!("unregister parents failed: {:?}", err);
+                });
         }
 
         let finished_pieces = finished_pieces.lock().unwrap().clone();

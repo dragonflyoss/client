@@ -986,12 +986,12 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         let network = Network {
                             download_rate: (network_data.received() as f64
                                 / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs_f64())
-                                as u64,
+                            .round() as u64,
                             // Convert bandwidth to bytes per second.
                             download_rate_limit: interface.bandwidth / 8 * MB,
                             upload_rate: (network_data.transmitted() as f64
                                 / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs_f64())
-                                as u64,
+                            .round() as u64,
                             // Convert bandwidth to bytes per second.
                             upload_rate_limit: interface.bandwidth / 8 * MB,
                             ..Default::default()

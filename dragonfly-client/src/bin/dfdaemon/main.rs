@@ -212,15 +212,10 @@ async fn main() -> Result<(), anyhow::Error> {
     let backend_factory = Arc::new(backend_factory);
 
     // Initialize parent selector.
-    let parent_selector = ParentSelector::new(
-        config.clone(),
-        id_generator.clone(),
-        shutdown.clone(),
-        shutdown_complete_tx.clone(),
-    )
-    .inspect_err(|err| {
-        error!("initialize parent selector failed: {}", err);
-    })?;
+    let parent_selector =
+        ParentSelector::new(config.clone(), id_generator.clone()).inspect_err(|err| {
+            error!("initialize parent selector failed: {}", err);
+        })?;
     let parent_selector = Arc::new(parent_selector);
 
     // Initialize task manager.
@@ -385,15 +380,6 @@ async fn main() -> Result<(), anyhow::Error> {
             })
         } => {
             info!("proxy server exited");
-        },
-
-        _ = {
-            let barrier = grpc_server_started_barrier.clone();
-            tokio::spawn(async move {
-                parent_selector.run(barrier).await.unwrap_or_else(|err| error!("parent selector failed: {}", err));
-            })
-        } => {
-            info!("parent selector exited");
         },
 
         _ = shutdown::shutdown_signal() => {},
