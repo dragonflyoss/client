@@ -15,7 +15,7 @@
  */
 
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use dragonfly_api::common::v2::Host;
 use dragonfly_api::dfdaemon::v2::{SyncPersistentCachePiecesRequest, SyncPiecesRequest};
 use dragonfly_client_config::dfdaemon::Config;
@@ -232,10 +232,7 @@ impl PieceCollector {
                     tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS).await;
                     let parents = match collected_pieces.remove(&message.number) {
                         Some((_, parents)) => parents,
-                        None => {
-                            error!("collected_pieces does not contain piece {}", message.number);
-                            continue;
-                        }
+                        None => continue,
                     };
 
                     let parent = match parents.get(fastrand::usize(..parents.len())) {
@@ -495,10 +492,7 @@ impl PersistentCachePieceCollector {
                     tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS).await;
                     let parents = match collected_pieces.remove(&message.number) {
                         Some((_, parents)) => parents,
-                        None => {
-                            error!("collected_pieces does not contain piece {}", message.number);
-                            continue;
-                        }
+                        None => continue,
                     };
 
                     let parent = match parents.get(fastrand::usize(..parents.len())) {
