@@ -246,11 +246,24 @@ impl PieceCollector {
                         tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS).await;
                     };
 
-                    let parents = collected_pieces
-                        .get(&message.number)
-                        .map(|v| v.clone())
-                        .unwrap();
-                    let parent = parents.get(fastrand::usize(..parents.len())).unwrap();
+                    let parents = match collected_pieces.get(&message.number) {
+                        Some(v) => v.clone(),
+                        None => {
+                            error!("collected_pieces does not contain piece {}", message.number);
+                            continue;
+                        }
+                    };
+
+                    let parent = match parents.get(fastrand::usize(..parents.len())) {
+                        Some(parent) => parent,
+                        None => {
+                            error!(
+                                "collected_pieces does not contain parent for piece {}",
+                                message.number
+                            );
+                            continue;
+                        }
+                    };
 
                     info!(
                         "picked up piece {}-{} metadata from parent {}",
@@ -514,11 +527,24 @@ impl PersistentCachePieceCollector {
                         tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS).await;
                     };
 
-                    let parents = collected_pieces
-                        .get(&message.number)
-                        .map(|v| v.clone())
-                        .unwrap();
-                    let parent = parents.get(fastrand::usize(..parents.len())).unwrap();
+                    let parents = match collected_pieces.get(&message.number) {
+                        Some(v) => v.clone(),
+                        None => {
+                            error!("collected_pieces does not contain piece {}", message.number);
+                            continue;
+                        }
+                    };
+
+                    let parent = match parents.get(fastrand::usize(..parents.len())) {
+                        Some(parent) => parent,
+                        None => {
+                            error!(
+                                "collected_pieces does not contain parent for piece {}",
+                                message.number
+                            );
+                            continue;
+                        }
+                    };
 
                     info!(
                         "picked up piece {}-{} metadata from parent {}",
