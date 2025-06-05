@@ -69,9 +69,6 @@ pub struct PieceCollector {
     /// interested_pieces is the pieces interested by the collector.
     interested_pieces: Vec<metadata::Piece>,
 
-    /// need_collect_pieces is the pieces need to be collected.
-    need_collect_pieces: Arc<DashSet<u32>>,
-
     /// collected_pieces is a map to store the collected pieces from different parents.
     collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
 }
@@ -86,19 +83,17 @@ impl PieceCollector {
         interested_pieces: Vec<metadata::Piece>,
         parents: Vec<CollectedParent>,
     ) -> Self {
-        let need_collect_pieces = Arc::new(DashSet::with_capacity(interested_pieces.len()));
+        let collected_pieces = Arc::new(DashMap::with_capacity(interested_pieces.len()));
         for interested_piece in &interested_pieces {
-            need_collect_pieces.insert(interested_piece.number);
+            collected_pieces.insert(interested_piece.number, Vec::new());
         }
 
-        let collected_pieces = Arc::new(DashMap::with_capacity(interested_pieces.len()));
         Self {
             config,
             task_id: task_id.to_string(),
             host_id: host_id.to_string(),
             parents,
             interested_pieces,
-            need_collect_pieces,
             collected_pieces,
         }
     }
@@ -111,7 +106,6 @@ impl PieceCollector {
         let task_id = self.task_id.clone();
         let parents = self.parents.clone();
         let interested_pieces = self.interested_pieces.clone();
-        let need_collect_pieces = self.need_collect_pieces.clone();
         let collected_pieces = self.collected_pieces.clone();
         let collected_piece_timeout = self.config.download.piece_timeout;
         let (collected_piece_tx, collected_piece_rx) = mpsc::channel(128 * 1024);
@@ -123,7 +117,6 @@ impl PieceCollector {
                     &task_id,
                     parents,
                     interested_pieces,
-                    need_collect_pieces,
                     collected_pieces,
                     collected_piece_tx,
                     collected_piece_timeout,
@@ -166,7 +159,6 @@ impl PieceCollector {
         task_id: &str,
         parents: Vec<CollectedParent>,
         interested_pieces: Vec<metadata::Piece>,
-        need_collect_pieces: Arc<DashSet<u32>>,
         collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
         collected_piece_tx: Sender<CollectedPiece>,
         collected_piece_timeout: Duration,
@@ -181,7 +173,6 @@ impl PieceCollector {
                 task_id: String,
                 parent: CollectedParent,
                 interested_pieces: Vec<metadata::Piece>,
-                need_collect_pieces: Arc<DashSet<u32>>,
                 collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
                 collected_piece_tx: Sender<CollectedPiece>,
                 collected_piece_timeout: Duration,
@@ -230,24 +221,17 @@ impl PieceCollector {
                     error!("sync pieces from parent {} failed: {}", parent.id, err);
                 })? {
                     let message = message?;
-
-                    collected_pieces
-                        .entry(message.number)
-                        .or_default()
-                        .push(parent.clone());
-
-                    // Remove the piece from collected_pieces, avoid to collect the same piece from
-                    // different parents.
-                    if need_collect_pieces.remove(&message.number).is_none() {
-                        continue;
+                    if let Some(mut parents) = collected_pieces.get_mut(&message.number) {
+                        parents.push(parent.clone());
                     } else {
-                        // Wait for collecting the piece from different parents when the first
-                        // piece is collected.
-                        tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS).await;
-                    };
+                        continue;
+                    }
 
-                    let parents = match collected_pieces.get(&message.number) {
-                        Some(v) => v.clone(),
+                    // Wait for collecting the piece from different parents when the first
+                    // piece is collected.
+                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS).await;
+                    let parents = match collected_pieces.remove(&message.number) {
+                        Some((_, parents)) => parents,
                         None => {
                             error!("collected_pieces does not contain piece {}", message.number);
                             continue;
@@ -292,7 +276,6 @@ impl PieceCollector {
                     task_id.to_string(),
                     parent.clone(),
                     interested_pieces.clone(),
-                    need_collect_pieces.clone(),
                     collected_pieces.clone(),
                     collected_piece_tx.clone(),
                     collected_piece_timeout,
@@ -308,7 +291,7 @@ impl PieceCollector {
                     info!("peer {} sync pieces finished", peer.id);
 
                     // If all pieces are collected, abort all tasks.
-                    if need_collect_pieces.is_empty() {
+                    if collected_pieces.is_empty() {
                         info!("all pieces are collected, abort all tasks");
                         join_set.abort_all();
                     }
@@ -345,9 +328,6 @@ pub struct PersistentCachePieceCollector {
 
     /// collected_pieces is a map to store the collected pieces from different parents.
     collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
-
-    /// need_collect_pieces is the pieces need to be collected.
-    need_collect_pieces: Arc<DashSet<u32>>,
 }
 
 /// PersistentCachePieceCollector is used to collect persistent cache pieces from peers.
@@ -360,12 +340,10 @@ impl PersistentCachePieceCollector {
         interested_pieces: Vec<metadata::Piece>,
         parents: Vec<CollectedParent>,
     ) -> Self {
-        let need_collect_pieces = Arc::new(DashSet::with_capacity(interested_pieces.len()));
-        for interested_piece in &interested_pieces {
-            need_collect_pieces.insert(interested_piece.number);
-        }
-
         let collected_pieces = Arc::new(DashMap::with_capacity(interested_pieces.len()));
+        for interested_piece in &interested_pieces {
+            collected_pieces.insert(interested_piece.number, Vec::new());
+        }
 
         Self {
             config,
@@ -374,7 +352,6 @@ impl PersistentCachePieceCollector {
             parents,
             interested_pieces,
             collected_pieces,
-            need_collect_pieces,
         }
     }
 
@@ -386,7 +363,6 @@ impl PersistentCachePieceCollector {
         let task_id = self.task_id.clone();
         let parents = self.parents.clone();
         let interested_pieces = self.interested_pieces.clone();
-        let need_collect_pieces = self.need_collect_pieces.clone();
         let collected_pieces = self.collected_pieces.clone();
         let collected_piece_timeout = self.config.download.piece_timeout;
         let (collected_piece_tx, collected_piece_rx) = mpsc::channel(10 * 1024);
@@ -398,7 +374,6 @@ impl PersistentCachePieceCollector {
                     &task_id,
                     parents,
                     interested_pieces,
-                    need_collect_pieces,
                     collected_pieces,
                     collected_piece_tx,
                     collected_piece_timeout,
@@ -441,7 +416,6 @@ impl PersistentCachePieceCollector {
         task_id: &str,
         parents: Vec<CollectedParent>,
         interested_pieces: Vec<metadata::Piece>,
-        need_collect_pieces: Arc<DashSet<u32>>,
         collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
         collected_piece_tx: Sender<CollectedPiece>,
         collected_piece_timeout: Duration,
@@ -456,7 +430,6 @@ impl PersistentCachePieceCollector {
                 task_id: String,
                 parent: CollectedParent,
                 interested_pieces: Vec<metadata::Piece>,
-                need_collect_pieces: Arc<DashSet<u32>>,
                 collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
                 collected_piece_tx: Sender<CollectedPiece>,
                 collected_piece_timeout: Duration,
@@ -511,24 +484,17 @@ impl PersistentCachePieceCollector {
                     );
                 })? {
                     let message = message?;
-
-                    collected_pieces
-                        .entry(message.number)
-                        .or_default()
-                        .push(parent.clone());
-
-                    // Remove the piece from collected_pieces, avoid to collect the same piece from
-                    // different parents.
-                    if need_collect_pieces.remove(&message.number).is_none() {
-                        continue;
+                    if let Some(mut parents) = collected_pieces.get_mut(&message.number) {
+                        parents.push(parent.clone());
                     } else {
-                        // Wait for collecting the piece from different parents when the first
-                        // piece is collected.
-                        tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS).await;
-                    };
+                        continue;
+                    }
 
-                    let parents = match collected_pieces.get(&message.number) {
-                        Some(v) => v.clone(),
+                    // Wait for collecting the piece from different parents when the first
+                    // piece is collected.
+                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS).await;
+                    let parents = match collected_pieces.remove(&message.number) {
+                        Some((_, parents)) => parents,
                         None => {
                             error!("collected_pieces does not contain piece {}", message.number);
                             continue;
@@ -573,7 +539,6 @@ impl PersistentCachePieceCollector {
                     task_id.to_string(),
                     parent.clone(),
                     interested_pieces.clone(),
-                    need_collect_pieces.clone(),
                     collected_pieces.clone(),
                     collected_piece_tx.clone(),
                     collected_piece_timeout,
@@ -589,7 +554,7 @@ impl PersistentCachePieceCollector {
                     info!("peer {} sync persistent cache pieces finished", peer.id);
 
                     // If all pieces are collected, abort all tasks.
-                    if need_collect_pieces.is_empty() {
+                    if collected_pieces.is_empty() {
                         info!("all persistent cache pieces are collected, abort all tasks");
                         join_set.abort_all();
                     }
