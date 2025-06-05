@@ -133,11 +133,6 @@ impl DfdaemonDownloadServer {
         // Initialize health reporter.
         let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
 
-        // Set the serving status of the download grpc server.
-        health_reporter
-            .set_serving::<DfdaemonDownloadGRPCServer<DfdaemonDownloadServerHandler>>()
-            .await;
-
         // Start download grpc server with unix domain socket.
         fs::create_dir_all(self.socket_path.parent().unwrap()).await?;
         fs::remove_file(self.socket_path.clone())
@@ -175,6 +170,12 @@ impl DfdaemonDownloadServer {
                     // Notify the download grpc server is started.
                     _ = grpc_server_started_barrier.wait() => {
                         info!("download server is ready to start");
+
+                        health_reporter
+                            .set_serving::<DfdaemonDownloadGRPCServer<DfdaemonDownloadServerHandler>>()
+                            .await;
+
+                        info!("download server's health status set to serving");
                     }
                     // Wait for shutdown signal.
                     _ = shutdown.recv() => {

@@ -15,19 +15,20 @@
  */
 
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
+use dashmap::DashMap;
 use dragonfly_api::common::v2::Host;
 use dragonfly_api::dfdaemon::v2::{SyncPersistentCachePiecesRequest, SyncPiecesRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_storage::metadata;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 use tracing::{error, info, instrument, Instrument};
+
+const DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS: Duration = Duration::from_millis(5);
 
 /// CollectedParent is the parent peer collected from the parent.
 #[derive(Clone, Debug)]
@@ -68,8 +69,8 @@ pub struct PieceCollector {
     /// interested_pieces is the pieces interested by the collector.
     interested_pieces: Vec<metadata::Piece>,
 
-    /// collected_pieces is the pieces collected from peers.
-    collected_pieces: Arc<Mutex<HashMap<u32, String>>>,
+    /// collected_pieces is a map to store the collected pieces from different parents.
+    collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
 }
 
 /// PieceCollector is used to collect pieces from peers.
@@ -82,14 +83,10 @@ impl PieceCollector {
         interested_pieces: Vec<metadata::Piece>,
         parents: Vec<CollectedParent>,
     ) -> Self {
-        let collected_pieces =
-            Arc::new(Mutex::new(HashMap::with_capacity(interested_pieces.len())));
-
-        let mut collected_pieces_guard = collected_pieces.lock().await;
+        let collected_pieces = Arc::new(DashMap::with_capacity(interested_pieces.len()));
         for interested_piece in &interested_pieces {
-            collected_pieces_guard.insert(interested_piece.number, String::new());
+            collected_pieces.insert(interested_piece.number, Vec::new());
         }
-        drop(collected_pieces_guard);
 
         Self {
             config,
@@ -135,7 +132,25 @@ impl PieceCollector {
         collected_piece_rx
     }
 
-    /// collect_from_parents collects pieces from parents.
+    /// collect_from_parents collects pieces from multiple parents with load balancing strategy.
+    ///
+    /// The collection process works in two phases:
+    /// 1. **Synchronization Phase**: Waits for a configured duration (DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS)
+    ///    to collect the same piece information from different parents. This allows the collector
+    ///    to gather multiple sources for each piece.
+    ///
+    /// 2. **Selection Phase**: After the wait period, randomly selects one parent from the available
+    ///    candidates for each piece and forwards it to the piece downloader.
+    ///
+    /// **Load Balancing Strategy**:
+    /// The random parent selection is designed to distribute download load across multiple parents
+    /// during concurrent piece downloads. This approach ensures:
+    /// - Optimal utilization of bandwidth from multiple parent nodes
+    /// - Prevention of overwhelming any single parent with too many requests
+    /// - Better overall download performance through parallel connections
+    ///
+    /// This strategy is particularly effective when downloading multiple pieces simultaneously,
+    /// as it naturally spreads the workload across the available parent pool.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn collect_from_parents(
@@ -144,7 +159,7 @@ impl PieceCollector {
         task_id: &str,
         parents: Vec<CollectedParent>,
         interested_pieces: Vec<metadata::Piece>,
-        collected_pieces: Arc<Mutex<HashMap<u32, String>>>,
+        collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
         collected_piece_tx: Sender<CollectedPiece>,
         collected_piece_timeout: Duration,
     ) -> Result<()> {
@@ -158,7 +173,7 @@ impl PieceCollector {
                 task_id: String,
                 parent: CollectedParent,
                 interested_pieces: Vec<metadata::Piece>,
-                collected_pieces: Arc<Mutex<HashMap<u32, String>>>,
+                collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
                 collected_piece_tx: Sender<CollectedPiece>,
                 collected_piece_timeout: Duration,
             ) -> Result<CollectedParent> {
@@ -206,18 +221,33 @@ impl PieceCollector {
                     error!("sync pieces from parent {} failed: {}", parent.id, err);
                 })? {
                     let message = message?;
-
-                    // Remove the piece from collected_pieces, avoid to collect the same piece from
-                    // different parents.
-                    {
-                        let mut collected_pieces_guard = collected_pieces.lock().await;
-                        if collected_pieces_guard.remove(&message.number).is_none() {
-                            continue;
-                        }
+                    if let Some(mut parents) = collected_pieces.get_mut(&message.number) {
+                        parents.push(parent.clone());
+                    } else {
+                        continue;
                     }
 
+                    // Wait for collecting the piece from different parents when the first
+                    // piece is collected.
+                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS).await;
+                    let parents = match collected_pieces.remove(&message.number) {
+                        Some((_, parents)) => parents,
+                        None => continue,
+                    };
+
+                    let parent = match parents.get(fastrand::usize(..parents.len())) {
+                        Some(parent) => parent,
+                        None => {
+                            error!(
+                                "collected_pieces does not contain parent for piece {}",
+                                message.number
+                            );
+                            continue;
+                        }
+                    };
+
                     info!(
-                        "received piece {}-{} metadata from parent {}",
+                        "picked up piece {}-{} metadata from parent {}",
                         task_id, message.number, parent.id
                     );
 
@@ -258,11 +288,7 @@ impl PieceCollector {
                     info!("peer {} sync pieces finished", peer.id);
 
                     // If all pieces are collected, abort all tasks.
-                    let collected_pieces_guard = collected_pieces.lock().await;
-                    let is_empty = collected_pieces_guard.is_empty();
-                    drop(collected_pieces_guard);
-
-                    if is_empty {
+                    if collected_pieces.is_empty() {
                         info!("all pieces are collected, abort all tasks");
                         join_set.abort_all();
                     }
@@ -297,8 +323,8 @@ pub struct PersistentCachePieceCollector {
     /// interested_pieces is the pieces interested by the collector.
     interested_pieces: Vec<metadata::Piece>,
 
-    /// collected_pieces is the pieces collected from peers.
-    collected_pieces: Arc<Mutex<HashMap<u32, String>>>,
+    /// collected_pieces is a map to store the collected pieces from different parents.
+    collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
 }
 
 /// PersistentCachePieceCollector is used to collect persistent cache pieces from peers.
@@ -311,14 +337,10 @@ impl PersistentCachePieceCollector {
         interested_pieces: Vec<metadata::Piece>,
         parents: Vec<CollectedParent>,
     ) -> Self {
-        let collected_pieces =
-            Arc::new(Mutex::new(HashMap::with_capacity(interested_pieces.len())));
-
-        let mut collected_pieces_guard = collected_pieces.lock().await;
+        let collected_pieces = Arc::new(DashMap::with_capacity(interested_pieces.len()));
         for interested_piece in &interested_pieces {
-            collected_pieces_guard.insert(interested_piece.number, String::new());
+            collected_pieces.insert(interested_piece.number, Vec::new());
         }
-        drop(collected_pieces_guard);
 
         Self {
             config,
@@ -364,7 +386,25 @@ impl PersistentCachePieceCollector {
         collected_piece_rx
     }
 
-    /// collect_from_parents collects pieces from parents.
+    /// collect_from_parents collects pieces from multiple parents with load balancing strategy.
+    ///
+    /// The collection process works in two phases:
+    /// 1. **Synchronization Phase**: Waits for a configured duration (DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS)
+    ///    to collect the same piece information from different parents. This allows the collector
+    ///    to gather multiple sources for each piece.
+    ///
+    /// 2. **Selection Phase**: After the wait period, randomly selects one parent from the available
+    ///    candidates for each piece and forwards it to the piece downloader.
+    ///
+    /// **Load Balancing Strategy**:
+    /// The random parent selection is designed to distribute download load across multiple parents
+    /// during concurrent piece downloads. This approach ensures:
+    /// - Optimal utilization of bandwidth from multiple parent nodes
+    /// - Prevention of overwhelming any single parent with too many requests
+    /// - Better overall download performance through parallel connections
+    ///
+    /// This strategy is particularly effective when downloading multiple pieces simultaneously,
+    /// as it naturally spreads the workload across the available parent pool.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn collect_from_parents(
@@ -373,7 +413,7 @@ impl PersistentCachePieceCollector {
         task_id: &str,
         parents: Vec<CollectedParent>,
         interested_pieces: Vec<metadata::Piece>,
-        collected_pieces: Arc<Mutex<HashMap<u32, String>>>,
+        collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
         collected_piece_tx: Sender<CollectedPiece>,
         collected_piece_timeout: Duration,
     ) -> Result<()> {
@@ -387,7 +427,7 @@ impl PersistentCachePieceCollector {
                 task_id: String,
                 parent: CollectedParent,
                 interested_pieces: Vec<metadata::Piece>,
-                collected_pieces: Arc<Mutex<HashMap<u32, String>>>,
+                collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
                 collected_piece_tx: Sender<CollectedPiece>,
                 collected_piece_timeout: Duration,
             ) -> Result<CollectedParent> {
@@ -441,18 +481,33 @@ impl PersistentCachePieceCollector {
                     );
                 })? {
                     let message = message?;
-
-                    // Remove the piece from collected_pieces, avoid to collect the same piece from
-                    // different parents.
-                    {
-                        let mut collected_pieces_guard = collected_pieces.lock().await;
-                        if collected_pieces_guard.remove(&message.number).is_none() {
-                            continue;
-                        }
+                    if let Some(mut parents) = collected_pieces.get_mut(&message.number) {
+                        parents.push(parent.clone());
+                    } else {
+                        continue;
                     }
 
+                    // Wait for collecting the piece from different parents when the first
+                    // piece is collected.
+                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS).await;
+                    let parents = match collected_pieces.remove(&message.number) {
+                        Some((_, parents)) => parents,
+                        None => continue,
+                    };
+
+                    let parent = match parents.get(fastrand::usize(..parents.len())) {
+                        Some(parent) => parent,
+                        None => {
+                            error!(
+                                "collected_pieces does not contain parent for piece {}",
+                                message.number
+                            );
+                            continue;
+                        }
+                    };
+
                     info!(
-                        "received persistent cache piece {}-{} metadata from parent {}",
+                        "picked up piece {}-{} metadata from parent {}",
                         task_id, message.number, parent.id
                     );
 
@@ -493,11 +548,7 @@ impl PersistentCachePieceCollector {
                     info!("peer {} sync persistent cache pieces finished", peer.id);
 
                     // If all pieces are collected, abort all tasks.
-                    let collected_pieces_guard = collected_pieces.lock().await;
-                    let is_empty = collected_pieces_guard.is_empty();
-                    drop(collected_pieces_guard);
-
-                    if is_empty {
+                    if collected_pieces.is_empty() {
                         info!("all persistent cache pieces are collected, abort all tasks");
                         join_set.abort_all();
                     }

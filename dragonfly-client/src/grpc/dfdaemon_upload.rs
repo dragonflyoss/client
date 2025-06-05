@@ -143,11 +143,6 @@ impl DfdaemonUploadServer {
         // Initialize health reporter.
         let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
 
-        // Set the serving status of the upload grpc server.
-        health_reporter
-            .set_serving::<DfdaemonUploadGRPCServer<DfdaemonUploadServerHandler>>()
-            .await;
-
         // TODO(Gaius): RateLimitLayer is not implemented Clone, so we can't use it here.
         // Only use the LoadShed layer and the ConcurrencyLimit layer.
         let rate_limit_layer = ServiceBuilder::new()
@@ -180,7 +175,13 @@ impl DfdaemonUploadServer {
                 tokio::select! {
                     // Notify the upload grpc server is started.
                     _ = grpc_server_started_barrier.wait() => {
-                        info!("upload server is ready");
+                        info!("upload server is ready to start");
+
+                        health_reporter
+                            .set_serving::<DfdaemonUploadGRPCServer<DfdaemonUploadServerHandler>>()
+                            .await;
+
+                        info!("upload server's health status set to serving");
                     }
                     // Wait for shutdown signal.
                     _ = shutdown.recv() => {
