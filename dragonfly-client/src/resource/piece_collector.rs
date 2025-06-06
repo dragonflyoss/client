@@ -329,7 +329,9 @@ impl PieceCollector {
 
     /// get_candidate_parents returns the list of parents that have a specific piece
     pub fn get_candidate_parents(&self, piece_number: u32) -> Option<Vec<CollectedParent>> {
-        self.candidate_parents.get(&piece_number).map(|parents| parents.clone())
+        self.candidate_parents
+            .get(&piece_number)
+            .map(|parents| parents.clone())
     }
 }
 
