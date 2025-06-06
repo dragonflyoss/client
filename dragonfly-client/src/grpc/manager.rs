@@ -27,22 +27,21 @@ use dragonfly_client_core::{
 use std::sync::Arc;
 use tonic::{service::interceptor::InterceptedService, transport::Channel};
 use tonic_health::pb::health_check_response::ServingStatus;
-use tracing::{error, instrument, warn};
+use tracing::{error, instrument};
 use url::Url;
 
-use super::interceptor::TracingInterceptor;
+use super::interceptor::InjectTracingInterceptor;
 
 /// ManagerClient is a wrapper of ManagerGRPCClient.
 #[derive(Clone)]
 pub struct ManagerClient {
     /// client is the grpc client of the manager.
-    pub client: ManagerGRPCClient<InterceptedService<Channel, TracingInterceptor>>,
+    pub client: ManagerGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>,
 }
 
 /// ManagerClient implements the grpc client of the manager.
 impl ManagerClient {
     /// new creates a new ManagerClient.
-    #[instrument(skip_all)]
     pub async fn new(config: Arc<Config>, addr: String) -> Result<Self> {
         let domain_name = Url::parse(addr.as_str())?
             .host_str()
@@ -99,7 +98,7 @@ impl ManagerClient {
                 .or_err(ErrorType::ConnectError)?,
         };
 
-        let client = ManagerGRPCClient::with_interceptor(channel, TracingInterceptor)
+        let client = ManagerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
@@ -133,7 +132,6 @@ impl ManagerClient {
     }
 
     /// make_request creates a new request with timeout.
-    #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);

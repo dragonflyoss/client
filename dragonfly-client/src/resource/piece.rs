@@ -87,7 +87,6 @@ pub struct Piece {
 /// Piece implements the piece manager.
 impl Piece {
     /// new returns a new Piece.
-    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
@@ -136,13 +135,11 @@ impl Piece {
 
     /// id generates a new piece id.
     #[inline]
-    #[instrument(skip_all)]
     pub fn id(&self, task_id: &str, number: u32) -> String {
         self.storage.piece_id(task_id, number)
     }
 
     /// get gets a piece from the local storage.
-    #[instrument(skip_all)]
     pub fn get(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
         self.storage.get_piece(piece_id)
     }
@@ -338,6 +335,7 @@ impl Piece {
     ) -> Result<impl AsyncRead> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
 
         // Acquire the upload rate limiter.
         if !disable_rate_limit {
@@ -369,6 +367,7 @@ impl Piece {
     ) -> Result<impl AsyncRead> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
 
         // Acquire the download rate limiter.
         if !disable_rate_limit {
@@ -412,6 +411,7 @@ impl Piece {
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
 
         // Record the start of downloading piece.
         let piece = self
@@ -516,6 +516,7 @@ impl Piece {
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
 
         // Record the start of downloading piece.
         let piece = self
@@ -662,7 +663,6 @@ impl Piece {
 
     /// persistent_cache_id generates a new persistent cache piece id.
     #[inline]
-    #[instrument(skip_all)]
     pub fn persistent_cache_id(&self, task_id: &str, number: u32) -> String {
         self.storage.persistent_cache_piece_id(task_id, number)
     }
@@ -700,6 +700,7 @@ impl Piece {
     ) -> Result<impl AsyncRead> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
 
         // Acquire the upload rate limiter.
         self.upload_rate_limiter.acquire(length as usize).await;
@@ -729,6 +730,7 @@ impl Piece {
     ) -> Result<impl AsyncRead> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
 
         // Acquire the download rate limiter.
         if !disable_rate_limit {
@@ -773,6 +775,7 @@ impl Piece {
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
 
         if is_prefetch {
             // Acquire the prefetch rate limiter.

@@ -84,7 +84,6 @@ pub struct PersistentCacheTask {
 /// PersistentCacheTask is the implementation of PersistentCacheTask.
 impl PersistentCacheTask {
     /// new creates a new PersistentCacheTask.
-    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
@@ -503,7 +502,6 @@ impl PersistentCacheTask {
     }
 
     /// is_same_dev_inode checks if the persistent cache task is on the same device inode as the given path.
-    #[instrument(skip_all)]
     pub async fn is_same_dev_inode(&self, id: &str, to: &Path) -> ClientResult<bool> {
         self.storage
             .is_same_dev_inode_as_persistent_cache_task(id, to)

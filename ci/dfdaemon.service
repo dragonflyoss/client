@@ -5,7 +5,7 @@ After=network-online.target
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/dfdaemon --config /etc/dragonfly/dfdaemon.yaml --verbose
+ExecStart=/usr/bin/dfdaemon --config /etc/dragonfly/dfdaemon.yaml --console
 
 Type=simple
 Environment=HOME=/root

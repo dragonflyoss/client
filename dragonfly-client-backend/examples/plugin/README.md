@@ -14,7 +14,7 @@ cargo build --all && mv target/debug/libhdfs.so {plugin_dir}/backend/libhdfs.so
 ## Run Client with Plugin
 
 ```shell
-$ cargo run --bin dfdaemon -- --config {config_dir}/config.yaml -l info --verbose
+$ cargo run --bin dfdaemon -- --config {config_dir}/config.yaml -l info --console
 INFO  load [http]  builtin backend
 INFO  load [https] builtin backend
 INFO  load [hdfs]  plugin backend

@@ -115,12 +115,8 @@ pub struct ExportCommand {
     )]
     log_max_files: usize,
 
-    #[arg(
-        long = "verbose",
-        default_value_t = false,
-        help = "Specify whether to print log"
-    )]
-    verbose: bool,
+    #[arg(long, default_value_t = false, help = "Specify whether to print log")]
+    console: bool,
 }
 
 /// Implement the execute for ExportCommand.
@@ -138,7 +134,8 @@ impl ExportCommand {
             self.log_max_files,
             None,
             None,
-            self.verbose,
+            false,
+            self.console,
         );
 
         // Validate the command line arguments.

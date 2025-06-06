@@ -46,6 +46,7 @@ use dragonfly_client_util::{
     id_generator::{PersistentCacheTaskIDParameter, TaskIDParameter},
 };
 use hyper_util::rt::TokioIo;
+use opentelemetry::Context;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -63,8 +64,9 @@ use tonic::{
 };
 use tower::{service_fn, ServiceBuilder};
 use tracing::{error, info, instrument, Instrument, Span};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use super::interceptor::TracingInterceptor;
+use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 
 /// DfdaemonDownloadServer is the grpc unix server of the download.
 pub struct DfdaemonDownloadServer {
@@ -74,8 +76,11 @@ pub struct DfdaemonDownloadServer {
     /// socket_path is the path of the unix domain socket.
     socket_path: PathBuf,
 
-    /// service is the grpc service of the dfdaemon.
-    service: DfdaemonDownloadGRPCServer<DfdaemonDownloadServerHandler>,
+    /// task is the task manager.
+    task: Arc<task::Task>,
+
+    /// persistent_cache_task is the persistent cache task manager.
+    persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 
     /// shutdown is used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
@@ -87,7 +92,6 @@ pub struct DfdaemonDownloadServer {
 /// DfdaemonDownloadServer implements the grpc server of the download.
 impl DfdaemonDownloadServer {
     /// new creates a new DfdaemonServer.
-    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         socket_path: PathBuf,
@@ -96,27 +100,28 @@ impl DfdaemonDownloadServer {
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
-        // Initialize the grpc service.
-        let service = DfdaemonDownloadGRPCServer::new(DfdaemonDownloadServerHandler {
-            socket_path: socket_path.clone(),
-            task,
-            persistent_cache_task,
-        })
-        .max_decoding_message_size(usize::MAX)
-        .max_encoding_message_size(usize::MAX);
-
         Self {
             config,
             socket_path,
-            service,
+            task,
+            persistent_cache_task,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
     }
 
     /// run starts the download server with unix domain socket.
-    #[instrument(skip_all)]
     pub async fn run(&mut self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
+        // Initialize the grpc service.
+        let service = DfdaemonDownloadGRPCServer::with_interceptor(
+            DfdaemonDownloadServerHandler {
+                socket_path: self.socket_path.clone(),
+                task: self.task.clone(),
+                persistent_cache_task: self.persistent_cache_task.clone(),
+            },
+            ExtractTracingInterceptor,
+        );
+
         // Register the reflection service.
         let reflection = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
@@ -127,11 +132,6 @@ impl DfdaemonDownloadServer {
 
         // Initialize health reporter.
         let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
-
-        // Set the serving status of the download grpc server.
-        health_reporter
-            .set_serving::<DfdaemonDownloadGRPCServer<DfdaemonDownloadServerHandler>>()
-            .await;
 
         // Start download grpc server with unix domain socket.
         fs::create_dir_all(self.socket_path.parent().unwrap()).await?;
@@ -148,7 +148,7 @@ impl DfdaemonDownloadServer {
 
         // TODO(Gaius): RateLimitLayer is not implemented Clone, so we can't use it here.
         // Only use the LoadShed layer and the ConcurrencyLimit layer.
-        let layer = ServiceBuilder::new()
+        let rate_limit_layer = ServiceBuilder::new()
             .concurrency_limit(self.config.download.server.request_rate_limit as usize)
             .load_shed()
             .into_inner();
@@ -159,10 +159,10 @@ impl DfdaemonDownloadServer {
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
-            .layer(layer)
+            .layer(rate_limit_layer)
             .add_service(reflection.clone())
             .add_service(health_service)
-            .add_service(self.service.clone())
+            .add_service(service)
             .serve_with_incoming_shutdown(uds_stream, async move {
                 // When the grpc server is started, notify the barrier. If the shutdown signal is received
                 // before barrier is waited successfully, the server will shutdown immediately.
@@ -170,6 +170,12 @@ impl DfdaemonDownloadServer {
                     // Notify the download grpc server is started.
                     _ = grpc_server_started_barrier.wait() => {
                         info!("download server is ready to start");
+
+                        health_reporter
+                            .set_serving::<DfdaemonDownloadGRPCServer<DfdaemonDownloadServerHandler>>()
+                            .await;
+
+                        info!("download server's health status set to serving");
                     }
                     // Wait for shutdown signal.
                     _ = shutdown.recv() => {
@@ -221,6 +227,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         &self,
         request: Request<DownloadTaskRequest>,
     ) -> Result<Response<Self::DownloadTaskStream>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Record the start time.
         let start_time = Instant::now();
 
@@ -618,6 +629,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         &self,
         request: Request<DfdaemonStatTaskRequest>,
     ) -> Result<Response<Task>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Clone the request.
         let request = request.into_inner();
 
@@ -657,6 +673,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         &self,
         request: Request<DeleteTaskRequest>,
     ) -> Result<Response<()>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Clone the request.
         let request = request.into_inner();
 
@@ -691,7 +712,12 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
     /// delete_host calls the scheduler to delete the host.
     #[instrument(skip_all, fields(host_id))]
-    async fn delete_host(&self, _: Request<()>) -> Result<Response<()>, Status> {
+    async fn delete_host(&self, request: Request<()>) -> Result<Response<()>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Generate the host id.
         let host_id = self.task.id_generator.host_id();
 
@@ -727,6 +753,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         &self,
         request: Request<DownloadPersistentCacheTaskRequest>,
     ) -> Result<Response<Self::DownloadPersistentCacheTaskStream>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Record the start time.
         let start_time = Instant::now();
 
@@ -947,6 +978,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         &self,
         request: Request<UploadPersistentCacheTaskRequest>,
     ) -> Result<Response<PersistentCacheTask>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Record the start time.
         let start_time = Instant::now();
 
@@ -1039,6 +1075,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         &self,
         request: Request<StatPersistentCacheTaskRequest>,
     ) -> Result<Response<PersistentCacheTask>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
         // Clone the request.
         let request = request.into_inner();
 
@@ -1076,13 +1117,12 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 #[derive(Clone)]
 pub struct DfdaemonDownloadClient {
     /// client is the grpc client of the dfdaemon.
-    pub client: DfdaemonDownloadGRPCClient<InterceptedService<Channel, TracingInterceptor>>,
+    pub client: DfdaemonDownloadGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>,
 }
 
 /// DfdaemonDownloadClient implements the grpc client of the dfdaemon download.
 impl DfdaemonDownloadClient {
     /// new_unix creates a new DfdaemonDownloadClient with unix domain socket.
-    #[instrument(skip_all)]
     pub async fn new_unix(socket_path: PathBuf) -> ClientResult<Self> {
         // Ignore the uri because it is not used.
         let channel = Endpoint::try_from("http://[::]:50051")
@@ -1107,9 +1147,10 @@ impl DfdaemonDownloadClient {
             })
             .or_err(ErrorType::ConnectError)?;
 
-        let client = DfdaemonDownloadGRPCClient::with_interceptor(channel, TracingInterceptor)
-            .max_decoding_message_size(usize::MAX)
-            .max_encoding_message_size(usize::MAX);
+        let client =
+            DfdaemonDownloadGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
     }
 
@@ -1228,7 +1269,6 @@ impl DfdaemonDownloadClient {
     }
 
     /// make_request creates a new request with timeout.
-    #[instrument(skip_all)]
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);

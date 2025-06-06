@@ -50,7 +50,6 @@ pub struct ManagerAnnouncer {
 /// ManagerAnnouncer implements the manager announcer of the dfdaemon.
 impl ManagerAnnouncer {
     /// new creates a new manager announcer.
-    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         manager_client: Arc<ManagerClient>,
@@ -66,7 +65,6 @@ impl ManagerAnnouncer {
     }
 
     /// run announces the dfdaemon information to the manager.
-    #[instrument(skip_all)]
     pub async fn run(&self) -> Result<()> {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -132,7 +130,6 @@ pub struct SchedulerAnnouncer {
 /// SchedulerAnnouncer implements the scheduler announcer of the dfdaemon.
 impl SchedulerAnnouncer {
     /// new creates a new scheduler announcer.
-    #[instrument(skip_all)]
     pub async fn new(
         config: Arc<Config>,
         host_id: String,
@@ -157,7 +154,6 @@ impl SchedulerAnnouncer {
     }
 
     /// run announces the dfdaemon information to the scheduler.
-    #[instrument(skip_all)]
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();

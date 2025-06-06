@@ -93,12 +93,8 @@ struct Args {
     )]
     log_max_files: usize,
 
-    #[arg(
-        long = "verbose",
-        default_value_t = true,
-        help = "Specify whether to print log"
-    )]
-    verbose: bool,
+    #[arg(long, default_value_t = true, help = "Specify whether to print log")]
+    console: bool,
 
     #[arg(
         short = 'V',
@@ -153,7 +149,8 @@ async fn main() -> Result<(), anyhow::Error> {
         args.log_max_files,
         config.tracing.addr.to_owned(),
         Some(config.host.clone()),
-        args.verbose,
+        config.seed_peer.enable,
+        args.console,
     );
 
     // Initialize storage.
