@@ -71,6 +71,9 @@ pub struct PieceCollector {
 
     /// collected_pieces is a map to store the collected pieces from different parents.
     collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
+
+    /// candidate_parents is the candidates of the parents for parent selection.
+    candidate_parents: Arc<DashMap<u32, Vec<CollectedParent>>>,
 }
 
 /// PieceCollector is used to collect pieces from peers.
@@ -87,6 +90,7 @@ impl PieceCollector {
         for interested_piece in &interested_pieces {
             collected_pieces.insert(interested_piece.number, Vec::new());
         }
+        let candidate_parents = Arc::new(DashMap::with_capacity(interested_pieces.len()));
 
         Self {
             config,
@@ -95,6 +99,7 @@ impl PieceCollector {
             parents,
             interested_pieces,
             collected_pieces,
+            candidate_parents,
         }
     }
 
@@ -105,6 +110,7 @@ impl PieceCollector {
         let host_id = self.host_id.clone();
         let task_id = self.task_id.clone();
         let parents = self.parents.clone();
+        let candidate_parents = self.candidate_parents.clone();
         let interested_pieces = self.interested_pieces.clone();
         let collected_pieces = self.collected_pieces.clone();
         let collected_piece_timeout = self.config.download.piece_timeout;
@@ -116,6 +122,7 @@ impl PieceCollector {
                     &host_id,
                     &task_id,
                     parents,
+                    candidate_parents,
                     interested_pieces,
                     collected_pieces,
                     collected_piece_tx,
@@ -158,6 +165,7 @@ impl PieceCollector {
         host_id: &str,
         task_id: &str,
         parents: Vec<CollectedParent>,
+        candidate_parents: Arc<DashMap<u32, Vec<CollectedParent>>>,
         interested_pieces: Vec<metadata::Piece>,
         collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
         collected_piece_tx: Sender<CollectedPiece>,
@@ -172,6 +180,7 @@ impl PieceCollector {
                 host_id: String,
                 task_id: String,
                 parent: CollectedParent,
+                candidate_parents: Arc<DashMap<u32, Vec<CollectedParent>>>,
                 interested_pieces: Vec<metadata::Piece>,
                 collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
                 collected_piece_tx: Sender<CollectedPiece>,
@@ -187,7 +196,7 @@ impl PieceCollector {
 
                 // Create a dfdaemon client.
                 let dfdaemon_upload_client = DfdaemonUploadClient::new(
-                    config,
+                    config.clone(),
                     format!("http://{}:{}", host.ip, host.port),
                     false,
                 )
@@ -221,6 +230,18 @@ impl PieceCollector {
                     error!("sync pieces from parent {} failed: {}", parent.id, err);
                 })? {
                     let message = message?;
+
+                    if config.download.parent_selector.enable {
+                        match candidate_parents.entry(message.number) {
+                            dashmap::mapref::entry::Entry::Occupied(mut e) => {
+                                e.get_mut().push(parent.clone());
+                            }
+                            dashmap::mapref::entry::Entry::Vacant(e) => {
+                                e.insert(vec![parent.clone()]);
+                            }
+                        }
+                    }
+
                     if let Some(mut parents) = collected_pieces.get_mut(&message.number) {
                         parents.push(parent.clone());
                     } else {
@@ -272,6 +293,7 @@ impl PieceCollector {
                     host_id.to_string(),
                     task_id.to_string(),
                     parent.clone(),
+                    candidate_parents.clone(),
                     interested_pieces.clone(),
                     collected_pieces.clone(),
                     collected_piece_tx.clone(),
@@ -303,6 +325,13 @@ impl PieceCollector {
         }
 
         Ok(())
+    }
+
+    /// get_candidate_parents returns the list of parents that have a specific piece
+    pub fn get_candidate_parents(&self, piece_number: u32) -> Option<Vec<CollectedParent>> {
+        self.candidate_parents
+            .get(&piece_number)
+            .map(|parents| parents.clone())
     }
 }
 
