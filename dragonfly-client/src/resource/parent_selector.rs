@@ -225,6 +225,7 @@ impl ParentSelector {
                 let mut rng = rand::rng();
                 let index = dist.sample(&mut rng);
                 let selected_parent = &parents[index];
+                debug!("selected parent {}", selected_parent.id);
 
                 Ok(selected_parent.clone())
             }
@@ -312,6 +313,8 @@ impl ParentSelector {
         let mut join_set = JoinSet::new();
 
         for parent in parents {
+            debug!("registering parent {}", parent.id);
+
             // Get or create connection for the sync host
             let (guard, client) = self.get_connection(parent).await?;
 
@@ -352,7 +355,7 @@ impl ParentSelector {
                     // Check if connection should be cleaned up.
                     if let Some(connection) = connections.get(&parent.id) {
                         if connection.active_connections.load(Ordering::SeqCst) == 0 {
-                            info!("cleaning up unused connection to parent {}", parent.id);
+                            debug!("cleaning up unused connection to parent {}", parent.id);
                             connections.remove(&parent.id);
                         }
                     }
