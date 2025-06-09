@@ -23,7 +23,6 @@ use dragonfly_api::dfdaemon::v2::SyncHostRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Error;
 use dragonfly_client_core::Result;
-use dragonfly_client_util::id_generator::IDGenerator;
 use rand::distr::weighted::WeightedIndex;
 use rand::distr::Distribution;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -33,32 +32,32 @@ use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, instrument, warn, Instrument};
 
-/// ParentConnection manages a single parent connection.
+/// Connection manages a single parent connection.
 #[derive(Clone)]
-struct ParentConnection {
+struct Connection {
     /// client is the dfdaemon upload client for this parent.
     client: DfdaemonUploadClient,
 
-    /// active_connections tracks how many download tasks are using this connection.
-    active_connections: Arc<AtomicUsize>,
+    /// active_requests tracks how many download tasks are using this connection.
+    active_requests: Arc<AtomicUsize>,
 
     /// shutdown is used to signal the sync host to stop.
     shutdown: Shutdown,
 }
 
-impl ParentConnection {
-    /// new creates a new ParentConnection.
+impl Connection {
+    /// new creates a new Connection.
     pub fn new(client: DfdaemonUploadClient) -> Self {
         Self {
             client,
-            active_connections: Arc::new(AtomicUsize::new(0)),
+            active_requests: Arc::new(AtomicUsize::new(0)),
             shutdown: Shutdown::new(),
         }
     }
 
-    /// acquire increments the reference count.
-    pub fn acquire(&self) -> ConnectionGuard {
-        ConnectionGuard::new(self.active_connections.clone())
+    /// connection_guard increments the reference count.
+    pub fn connection_guard(&self) -> ConnectionGuard {
+        ConnectionGuard::new(self.active_requests.clone())
     }
 
     /// shutdown triggers shutdown of the sync host.
@@ -69,19 +68,21 @@ impl ParentConnection {
 
 /// ConnectionGuard automatically manages reference counting for parent connections.
 pub struct ConnectionGuard {
-    active_connections: Arc<AtomicUsize>,
+    active_requests: Arc<AtomicUsize>,
 }
 
 impl ConnectionGuard {
     fn new(active_connections: Arc<AtomicUsize>) -> Self {
         active_connections.fetch_add(1, Ordering::SeqCst);
-        Self { active_connections }
+        Self {
+            active_requests: active_connections,
+        }
     }
 }
 
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
-        self.active_connections.fetch_sub(1, Ordering::SeqCst);
+        self.active_requests.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -96,37 +97,38 @@ pub struct ParentSelector {
     /// sync_interval represents the time interval between two refreshing probability operations.
     sync_interval: Duration,
 
-    /// id_generator is a IDGenerator.
-    id_generator: Arc<IDGenerator>,
+    /// host_id is the id of the host.
+    host_id: String,
+
+    /// peer_id is the id of the peer.
+    peer_id: String,
 
     /// wetghts stores the latest host information and bandwidth weights for different parents.
     wetghts: Arc<DashMap<String, u32>>,
 
     /// connections stores parent connections with reference counting.
-    connections: Arc<DashMap<String, ParentConnection>>,
+    connections: Arc<DashMap<String, Connection>>,
 }
 
 /// ParentSelector implements the parent selector.
 impl ParentSelector {
     /// new returns a ParentSelector.
     #[instrument(skip_all)]
-    pub fn new(config: Arc<Config>, id_generator: Arc<IDGenerator>) -> Result<ParentSelector> {
+    pub fn new(config: Arc<Config>, host_id: String, peer_id: String) -> ParentSelector {
         let config = config.clone();
         let capacity = config.download.parent_selector.capacity;
         let sync_interval = config.download.parent_selector.sync_interval;
         let wetghts = Arc::new(DashMap::new());
-        let id_generator = id_generator.clone();
 
-        let selector = ParentSelector {
+        Self {
             config,
             capacity,
             sync_interval,
-            id_generator,
+            host_id,
+            peer_id,
             wetghts,
             connections: Arc::new(DashMap::new()),
-        };
-
-        Ok(selector)
+        }
     }
 
     /// sync_host is a sub thread to sync host info from the parent.
@@ -141,11 +143,6 @@ impl ParentSelector {
         client: DfdaemonUploadClient,
         mut shutdown: Shutdown,
     ) -> Result<()> {
-        let _ = parent.host.clone().ok_or_else(|| {
-            error!("peer {:?} host is empty", parent);
-            Error::InvalidPeer(parent.id.clone())
-        })?;
-
         let response = client
             .sync_host(SyncHostRequest { host_id, peer_id })
             .await
@@ -167,11 +164,7 @@ impl ParentSelector {
                             info!("parent selector: received host info from parent {}", parent.id);
 
                             // Calculate weight from host information.
-                            let weight = if let Ok(rate) = Self::available_rate(&message) {
-                                (rate / 1024.0).max(1.0) as u32
-                            } else {
-                                1
-                            };
+                            let weight = Self::get_idle_upload_rate(&message) as u32;
 
                             // Update the parent's host info with calculated weight.
                             weights.insert(parent.id.clone(), weight);
@@ -189,30 +182,30 @@ impl ParentSelector {
         Ok(())
     }
 
-    /// available_rate returns the available upload rate of a host.
-    fn available_rate(host: &Host) -> Result<f64> {
+    /// get_idle_upload_rate returns the available upload rate of a host.
+    fn get_idle_upload_rate(host: &Host) -> f64 {
         let network = match &host.network {
             Some(network) => network,
-            None => return Ok(0f64),
+            None => return 0f64,
         };
 
         if network.upload_rate_limit > 0 {
-            let available_rate = if network.upload_rate < network.upload_rate_limit {
+            let idle_upload_rate = if network.upload_rate < network.upload_rate_limit {
                 network.upload_rate_limit - network.upload_rate
             } else {
                 0
             };
 
-            return Ok(available_rate as f64);
+            return idle_upload_rate as f64;
         }
 
-        Ok(network.upload_rate as f64)
+        network.upload_rate as f64
     }
 
     /// select_parent selects the best parent for the task based on bandwidth.
-    pub fn select_parent(&self, parents: Vec<CollectedParent>) -> Result<CollectedParent> {
+    pub fn select_parent(&self, parents: Vec<CollectedParent>) -> Option<CollectedParent> {
         if parents.is_empty() {
-            return Err(Error::Unknown("empty parents".to_string()));
+            return None;
         }
 
         let weights: Vec<u32> = parents
@@ -227,12 +220,9 @@ impl ParentSelector {
                 let selected_parent = &parents[index];
                 debug!("selected parent {}", selected_parent.id);
 
-                Ok(selected_parent.clone())
+                Some(selected_parent.clone())
             }
-            Err(_) => parents
-                .first()
-                .cloned()
-                .ok_or_else(|| Error::Unknown("no parents available".to_string())),
+            Err(_) => parents.get(fastrand::usize(..parents.len())).cloned(),
         }
     }
 
@@ -255,7 +245,7 @@ impl ParentSelector {
     ) -> Result<(ConnectionGuard, DfdaemonUploadClient)> {
         // Try to get existing connection
         if let Some(connection) = self.connections.get(&parent.id) {
-            let guard = connection.acquire();
+            let guard = connection.connection_guard();
             let client = connection.client.clone();
             return Ok((guard, client));
         }
@@ -273,8 +263,8 @@ impl ParentSelector {
         )
         .await?;
 
-        let connection = ParentConnection::new(client.clone());
-        let guard = connection.acquire();
+        let connection = Connection::new(client.clone());
+        let guard = connection.connection_guard();
 
         match self.connections.entry(parent.id.clone()) {
             dashmap::mapref::entry::Entry::Vacant(entry) => {
@@ -284,7 +274,7 @@ impl ParentSelector {
             dashmap::mapref::entry::Entry::Occupied(entry) => {
                 debug!("using existing connection to parent {}", parent.id);
                 let existing_connection = entry.get();
-                let guard = existing_connection.acquire();
+                let guard = existing_connection.connection_guard();
                 let client = existing_connection.client.clone();
                 Ok((guard, client))
             }
@@ -323,8 +313,8 @@ impl ParentSelector {
             let weights = self.wetghts.clone();
             let connections = self.connections.clone();
             let timeout = self.sync_interval;
-            let host_id = self.id_generator.host_id();
-            let peer_id = self.id_generator.peer_id();
+            let host_id = self.host_id.clone();
+            let peer_id = self.peer_id.clone();
             let shutdown = self
                 .connections
                 .get(&parent.id)
@@ -354,7 +344,7 @@ impl ParentSelector {
 
                     // Check if connection should be cleaned up.
                     if let Some(connection) = connections.get(&parent.id) {
-                        if connection.active_connections.load(Ordering::SeqCst) == 0 {
+                        if connection.active_requests.load(Ordering::SeqCst) == 0 {
                             debug!("cleaning up unused connection to parent {}", parent.id);
                             connections.remove(&parent.id);
                         }
@@ -391,7 +381,6 @@ impl ParentSelector {
 mod tests {
     use super::*;
     use dragonfly_api::common::v2::{Host, Network};
-    use dragonfly_client_util::id_generator::IDGenerator;
     use tokio::time::Duration;
 
     #[tokio::test]
@@ -426,13 +415,8 @@ mod tests {
             config.download.parent_selector.sync_interval = sync_interval;
             config.download.parent_selector.enable = true;
             let config = Arc::new(config);
-            let id_generator = Arc::new(IDGenerator::new(
-                "127.0.0.1".to_string(),
-                "test-host".to_string(),
-                false,
-            ));
-
-            let selector = ParentSelector::new(config, id_generator).unwrap();
+            let selector =
+                ParentSelector::new(config, "host-id".to_string(), "peer-id".to_string());
 
             assert_eq!(selector.capacity, expected_capacity);
             assert_eq!(selector.sync_interval, expected_sync_interval);
@@ -491,7 +475,7 @@ mod tests {
         ];
 
         for (_, host, expected_rate) in test_cases {
-            let rate = ParentSelector::available_rate(&host).unwrap();
+            let rate = ParentSelector::get_idle_upload_rate(&host);
             assert_eq!(rate, expected_rate);
         }
     }
@@ -503,12 +487,7 @@ mod tests {
         config.download.parent_selector.sync_interval = Duration::from_millis(100);
         config.download.parent_selector.enable = true;
         let config = Arc::new(config);
-        let id_generator = Arc::new(IDGenerator::new(
-            "127.0.0.1".to_string(),
-            "test-host".to_string(),
-            false,
-        ));
-        let selector = ParentSelector::new(config, id_generator).unwrap();
+        let selector = ParentSelector::new(config, "host-id".to_string(), "peer-id".to_string());
 
         let test_cases = vec![
             ("empty list", vec![], vec![], false, vec![]),
@@ -581,7 +560,7 @@ mod tests {
             ),
         ];
 
-        for (name, parents, weights, should_succeed, expected_ids) in test_cases {
+        for (_, parents, weights, should_succeed, expected_ids) in test_cases {
             // Set up weights for this test case
             selector.wetghts.clear();
             for (id, weight) in &weights {
@@ -591,14 +570,11 @@ mod tests {
             let result = selector.select_parent(parents);
 
             if should_succeed {
-                assert!(result.is_ok());
+                assert!(result.is_some());
                 let selected = result.unwrap();
                 assert!(expected_ids.contains(&selected.id));
             } else {
-                assert!(result.is_err());
-                if name == "empty list" {
-                    assert!(result.unwrap_err().to_string().contains("empty parents"));
-                }
+                assert!(result.is_none());
             }
         }
     }

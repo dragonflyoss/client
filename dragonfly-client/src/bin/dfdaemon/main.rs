@@ -209,10 +209,11 @@ async fn main() -> Result<(), anyhow::Error> {
     let backend_factory = Arc::new(backend_factory);
 
     // Initialize parent selector.
-    let parent_selector =
-        ParentSelector::new(config.clone(), id_generator.clone()).inspect_err(|err| {
-            error!("initialize parent selector failed: {}", err);
-        })?;
+    let parent_selector = ParentSelector::new(
+        config.clone(),
+        id_generator.host_id(),
+        id_generator.peer_id(),
+    );
     let parent_selector = Arc::new(parent_selector);
 
     // Initialize task manager.

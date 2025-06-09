@@ -1081,14 +1081,8 @@ impl Task {
                     Some(parent_selector) => {
                         if let Some(parents) = piece_collector.get_candidate_parents(number) {
                             match parent_selector.select_parent(parents) {
-                                Ok(selected_parent) => selected_parent,
-                                Err(err) => {
-                                    error!(
-                                        "select parent for piece {} failed: {}, using original parent",
-                                        number, err
-                                    );
-                                    parent
-                                }
+                                Some(selected_parent) => selected_parent,
+                                None => parent,
                             }
                         } else {
                             parent
