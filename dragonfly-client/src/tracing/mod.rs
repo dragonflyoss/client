@@ -16,12 +16,14 @@
 
 use dragonfly_client_config::dfdaemon::Host;
 use opentelemetry::{global, trace::TracerProvider, KeyValue};
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::{WithExportConfig, WithTonicConfig};
 use opentelemetry_sdk::{propagation::TraceContextPropagator, Resource};
 use rolling_file::*;
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
+use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
 use tracing::{info, Level};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_opentelemetry::OpenTelemetryLayer;
@@ -43,6 +45,7 @@ pub fn init_tracing(
     log_level: Level,
     log_max_files: usize,
     jaeger_addr: Option<String>,
+    jaeger_headers: Option<reqwest::header::HeaderMap>,
     host: Option<Host>,
     is_seed_peer: bool,
     console: bool,
@@ -110,10 +113,22 @@ pub fn init_tracing(
             format!("http://{}", jaeger_addr)
         };
 
+        let mut metadata = MetadataMap::new();
+        if let Some(headers) = jaeger_headers {
+            for (key, value) in headers.iter() {
+                metadata.insert(
+                    MetadataKey::from_str(key.as_str()).expect("failed to create metadata key"),
+                    MetadataValue::from_str(value.to_str().unwrap())
+                        .expect("failed to create metadata value"),
+                );
+            }
+        }
+
         let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
             .with_tonic()
             .with_endpoint(jaeger_addr)
             .with_timeout(SPAN_EXPORTER_TIMEOUT)
+            .with_metadata(metadata)
             .build()
             .expect("failed to create OTLP exporter");
 

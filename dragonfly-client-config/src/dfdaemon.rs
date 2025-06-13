@@ -1430,6 +1430,10 @@ pub struct Stats {
 pub struct Tracing {
     /// addr is the address to report tracing log.
     pub addr: Option<String>,
+
+    /// headers is the headers to report tracing log.
+    #[serde(with = "http_serde::header_map")]
+    pub headers: reqwest::header::HeaderMap,
 }
 
 /// Config is the configuration for dfdaemon.

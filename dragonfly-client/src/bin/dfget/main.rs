@@ -305,6 +305,7 @@ async fn main() -> anyhow::Result<()> {
         args.log_max_files,
         None,
         None,
+        None,
         false,
         args.console,
     );
