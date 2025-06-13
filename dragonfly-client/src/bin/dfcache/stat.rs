@@ -86,6 +86,7 @@ impl StatCommand {
             self.log_max_files,
             None,
             None,
+            None,
             false,
             self.console,
         );

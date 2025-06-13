@@ -1066,11 +1066,13 @@ dependencies = [
  "dragonfly-client-util",
  "home",
  "hostname",
+ "http-serde",
  "humantime",
  "humantime-serde",
  "local-ip-address",
  "rcgen",
  "regex",
+ "reqwest",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -1727,6 +1729,16 @@ name = "http-range-header"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9171a2ea8a68358193d15dd5d70c1c10a2afc3e7e4c5bc92bc9f025cebd7359c"
+
+[[package]]
+name = "http-serde"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f056c8559e3757392c8d091e796416e4649d8e49e88b8d76df6c002f05027fd"
+dependencies = [
+ "http 1.3.1",
+ "serde",
+]
 
 [[package]]
 name = "httparse"
