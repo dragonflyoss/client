@@ -238,6 +238,12 @@ fn default_gc_policy_task_ttl() -> Duration {
     Duration::from_secs(21_600)
 }
 
+/// default_gc_policy_dist_threshold is the default threshold of the disk usage to do gc.
+#[inline]
+fn default_gc_policy_dist_threshold() -> ByteSize {
+    ByteSize::default()
+}
+
 /// default_gc_policy_dist_high_threshold_percent is the default high threshold percent of the disk usage.
 #[inline]
 fn default_gc_policy_dist_high_threshold_percent() -> u8 {
@@ -1049,6 +1055,19 @@ pub struct Policy {
     )]
     pub task_ttl: Duration,
 
+    /// dist_threshold optionally defines a specific disk capacity to be used as the base for
+    /// calculating GC trigger points with `dist_high_threshold_percent` and `dist_low_threshold_percent`.
+    ///
+    /// - If a value is provided (e.g., "500GB"), the percentage-based thresholds (`dist_high_threshold_percent`,
+    ///   `dist_low_threshold_percent`) are applied relative to this specified capacity.
+    /// - If not provided or set to 0 (the default behavior), these percentage-based thresholds are applied
+    ///   relative to the total actual disk space.
+    ///
+    /// This allows dfdaemon to effectively manage a logical portion of the disk for its cache,
+    /// rather than always considering the entire disk volume.
+    #[serde(with = "bytesize_serde", default = "default_gc_policy_dist_threshold")]
+    pub dist_threshold: ByteSize,
+
     /// dist_high_threshold_percent is the high threshold percent of the disk usage.
     /// If the disk usage is greater than the threshold, dfdaemon will do gc.
     #[serde(default = "default_gc_policy_dist_high_threshold_percent")]
@@ -1066,6 +1085,7 @@ pub struct Policy {
 impl Default for Policy {
     fn default() -> Self {
         Policy {
+            dist_threshold: default_gc_policy_dist_threshold(),
             task_ttl: default_gc_policy_task_ttl(),
             dist_high_threshold_percent: default_gc_policy_dist_high_threshold_percent(),
             dist_low_threshold_percent: default_gc_policy_dist_low_threshold_percent(),
@@ -2037,18 +2057,18 @@ key: /etc/ssl/private/client.pem
     fn validate_policy() {
         let valid_policy = Policy {
             task_ttl: Duration::from_secs(12 * 3600),
+            dist_threshold: ByteSize::mb(100),
             dist_high_threshold_percent: 90,
             dist_low_threshold_percent: 70,
         };
-
         assert!(valid_policy.validate().is_ok());
 
         let invalid_policy = Policy {
             task_ttl: Duration::from_secs(12 * 3600),
+            dist_threshold: ByteSize::mb(100),
             dist_high_threshold_percent: 100,
             dist_low_threshold_percent: 70,
         };
-
         assert!(invalid_policy.validate().is_err());
     }
 
