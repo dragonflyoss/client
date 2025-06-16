@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use bytesize::ByteSize;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
@@ -27,6 +28,7 @@ use tokio::io::{
 };
 use tokio_util::io::InspectReader;
 use tracing::{error, info, instrument, warn};
+use walkdir::WalkDir;
 
 /// DEFAULT_CONTENT_DIR is the default directory for store content.
 pub const DEFAULT_CONTENT_DIR: &str = "content";
@@ -85,12 +87,39 @@ impl Content {
 
     /// available_space returns the available space of the disk.
     pub fn available_space(&self) -> Result<u64> {
+        let dist_threshold = self.config.gc.policy.dist_threshold;
+        if dist_threshold != ByteSize::default() {
+            let usage_space = WalkDir::new(&self.dir)
+                .into_iter()
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| entry.metadata().ok())
+                .filter(|metadata| metadata.is_file())
+                .fold(0, |acc, m| acc + m.len());
+
+            if usage_space >= dist_threshold.as_u64() {
+                warn!(
+                    "usage space {} is greater than dist threshold {}, no need to calculate available space",
+                    usage_space, dist_threshold
+                );
+
+                return Ok(0);
+            }
+
+            return Ok(dist_threshold.as_u64() - usage_space);
+        }
+
         let stat = fs2::statvfs(&self.dir)?;
         Ok(stat.available_space())
     }
 
     /// total_space returns the total space of the disk.
     pub fn total_space(&self) -> Result<u64> {
+        // If the dist_threshold is set, return it directly.
+        let dist_threshold = self.config.gc.policy.dist_threshold;
+        if dist_threshold != ByteSize::default() {
+            return Ok(dist_threshold.as_u64());
+        }
+
         let stat = fs2::statvfs(&self.dir)?;
         Ok(stat.total_space())
     }
@@ -625,11 +654,11 @@ pub fn calculate_piece_range(offset: u64, length: u64, range: Option<Range>) -> 
 mod tests {
     use super::*;
     use std::io::Cursor;
-    use tempdir::TempDir;
+    use tempfile::tempdir;
 
     #[tokio::test]
     async fn test_create_task() {
-        let temp_dir = TempDir::new("content").unwrap();
+        let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
         let content = Content::new(config, temp_dir.path()).await.unwrap();
 
@@ -644,7 +673,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_hard_link_task() {
-        let temp_dir = TempDir::new("content").unwrap();
+        let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
         let content = Content::new(config, temp_dir.path()).await.unwrap();
 
@@ -662,7 +691,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_copy_task() {
-        let temp_dir = TempDir::new("content").unwrap();
+        let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
         let content = Content::new(config, temp_dir.path()).await.unwrap();
 
@@ -678,7 +707,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_task() {
-        let temp_dir = TempDir::new("content").unwrap();
+        let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
         let content = Content::new(config, temp_dir.path()).await.unwrap();
 
@@ -692,7 +721,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_piece() {
-        let temp_dir = TempDir::new("content").unwrap();
+        let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
         let content = Content::new(config, temp_dir.path()).await.unwrap();
 
@@ -727,7 +756,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_piece() {
-        let temp_dir = TempDir::new("content").unwrap();
+        let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
         let content = Content::new(config, temp_dir.path()).await.unwrap();
 
@@ -743,7 +772,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_persistent_task() {
-        let temp_dir = TempDir::new("content").unwrap();
+        let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
         let content = Content::new(config, temp_dir.path()).await.unwrap();
 
@@ -764,7 +793,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_hard_link_persistent_cache_task() {
-        let temp_dir = TempDir::new("content").unwrap();
+        let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
         let content = Content::new(config, temp_dir.path()).await.unwrap();
 
@@ -791,7 +820,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_copy_persistent_cache_task() {
-        let temp_dir = TempDir::new("content").unwrap();
+        let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
         let content = Content::new(config, temp_dir.path()).await.unwrap();
 
@@ -813,7 +842,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_persistent_cache_task() {
-        let temp_dir = TempDir::new("content").unwrap();
+        let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
         let content = Content::new(config, temp_dir.path()).await.unwrap();
 
@@ -830,7 +859,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_persistent_cache_piece() {
-        let temp_dir = TempDir::new("content").unwrap();
+        let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
         let content = Content::new(config, temp_dir.path()).await.unwrap();
 
@@ -874,7 +903,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_persistent_cache_piece() {
-        let temp_dir = TempDir::new("content").unwrap();
+        let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
         let content = Content::new(config, temp_dir.path()).await.unwrap();
 
@@ -897,14 +926,36 @@ mod tests {
     #[tokio::test]
     async fn test_has_enough_space() {
         let config = Arc::new(Config::default());
-        let dir = PathBuf::from("/tmp/dragonfly_test");
-        let content = Content::new(config, &dir).await.unwrap();
+        let temp_dir = tempdir().unwrap();
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
 
         let has_space = content.has_enough_space(1).unwrap();
         assert!(has_space);
 
         let has_space = content.has_enough_space(u64::MAX).unwrap();
         assert!(!has_space);
+
+        let mut config = Config::default();
+        config.gc.policy.dist_threshold = ByteSize::mib(10);
+        let config = Arc::new(config);
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let file_path = Path::new(temp_dir.path())
+            .join(DEFAULT_CONTENT_DIR)
+            .join(DEFAULT_TASK_DIR)
+            .join("1mib");
+        let mut file = File::create(&file_path).await.unwrap();
+        let buffer = vec![0u8; ByteSize::mib(1).as_u64() as usize];
+        file.write_all(&buffer).await.unwrap();
+        file.flush().await.unwrap();
+
+        let has_space = content
+            .has_enough_space(ByteSize::mib(9).as_u64() + 1)
+            .unwrap();
+        assert!(!has_space);
+
+        let has_space = content.has_enough_space(ByteSize::mib(9).as_u64()).unwrap();
+        assert!(has_space);
     }
 
     #[tokio::test]
