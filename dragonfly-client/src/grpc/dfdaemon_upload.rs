@@ -223,7 +223,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
     /// download_task downloads the task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id))]
+    #[instrument(skip_all, fields(host_id, task_id, peer_id, url, content_length))]
     async fn download_task(
         &self,
         request: Request<DownloadTaskRequest>,
@@ -274,6 +274,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
+        Span::current().record("url", download.url.clone());
         info!("download task in upload server");
 
         // Download task started.
@@ -353,6 +354,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             content_length,
             task.piece_length().unwrap_or_default()
         );
+
+        Span::current().record("content_length", content_length);
 
         // Download's range priority is higher than the request header's range.
         // If download protocol is http, use the range of the request header.
@@ -858,7 +861,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 
     /// download_piece provides the piece content for parent.
-    #[instrument(skip_all, fields(host_id, remote_host_id, task_id, piece_id))]
+    #[instrument(
+        skip_all,
+        fields(host_id, remote_host_id, task_id, piece_id, piece_length)
+    )]
     async fn download_piece(
         &self,
         request: Request<DownloadPieceRequest>,
@@ -905,6 +911,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 error!("upload piece metadata not found");
                 Status::not_found("piece metadata not found")
             })?;
+
+        Span::current().record("piece_length", piece.length);
 
         // Collect upload piece started metrics.
         collect_upload_piece_started_metrics();
@@ -1061,7 +1069,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         ReceiverStream<Result<DownloadPersistentCacheTaskResponse, Status>>;
 
     /// download_persistent_cache_task downloads the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id))]
+    #[instrument(skip_all, fields(host_id, task_id, peer_id, content_length))]
     async fn download_persistent_cache_task(
         &self,
         request: Request<DownloadPersistentCacheTaskRequest>,
@@ -1147,11 +1155,14 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 task
             }
         };
+
         info!(
             "content length {}, piece length {}",
             task.content_length(),
             task.piece_length()
         );
+
+        Span::current().record("content_length", task.content_length());
 
         // Initialize stream channel.
         let request_clone = request.clone();
