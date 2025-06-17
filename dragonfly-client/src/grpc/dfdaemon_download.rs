@@ -222,7 +222,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
     /// download_task tells the dfdaemon to download the task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id))]
+    #[instrument(skip_all, fields(host_id, task_id, peer_id, url, content_length))]
     async fn download_task(
         &self,
         request: Request<DownloadTaskRequest>,
@@ -273,6 +273,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
+        Span::current().record("url", download.url.clone());
         info!("download task in download server");
 
         // Download task started.
@@ -346,11 +347,14 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             error!("missing content length in the response");
             return Err(Status::internal("missing content length in the response"));
         };
+
         info!(
             "content length {}, piece length {}",
             content_length,
             task.piece_length().unwrap_or_default()
         );
+
+        Span::current().record("content_length", content_length);
 
         // Download's range priority is higher than the request header's range.
         // If download protocol is http, use the range of the request header.
@@ -748,7 +752,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         ReceiverStream<Result<DownloadPersistentCacheTaskResponse, Status>>;
 
     /// download_persistent_cache_task downloads the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id))]
+    #[instrument(skip_all, fields(host_id, task_id, peer_id, content_length))]
     async fn download_persistent_cache_task(
         &self,
         request: Request<DownloadPersistentCacheTaskRequest>,
@@ -834,11 +838,14 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 task
             }
         };
+
         info!(
             "content length {}, piece length {}",
             task.content_length(),
             task.piece_length()
         );
+
+        Span::current().record("content_length", task.content_length());
 
         // Initialize stream channel.
         let request_clone = request.clone();
