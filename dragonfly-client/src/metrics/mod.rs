@@ -817,16 +817,17 @@ pub fn collect_disk_metrics(path: &Path, system: &Arc<Mutex<System>>) {
         .set(usage_space as i64);
 
     // Collect disk bandwidth metrics.
+    let pid = sysinfo::get_current_pid().unwrap();
     let mut sys = system.lock().unwrap();
     sys.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[sysinfo::get_current_pid().unwrap()]),
+        ProcessesToUpdate::Some(&[pid]),
         true,
         ProcessRefreshKind::new()
             .with_disk_usage()
             .with_exe(UpdateKind::Always),
     );
 
-    let process = sys.process(sysinfo::get_current_pid().unwrap()).unwrap();
+    let process = sys.process(pid).unwrap();
     DISK_WRITTEN_BYTES
         .with_label_values(&[])
         .set(process.disk_usage().written_bytes as i64);
