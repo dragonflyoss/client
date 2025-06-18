@@ -819,7 +819,7 @@ pub fn collect_disk_metrics(path: &Path, system: &Arc<Mutex<System>>) {
     // Collect disk bandwidth metrics.
     let mut sys = system.lock().unwrap();
     sys.refresh_processes_specifics(
-        ProcessesToUpdate::All,
+        ProcessesToUpdate::Some(&[sysinfo::get_current_pid().unwrap()]),
         true,
         ProcessRefreshKind::new()
             .with_disk_usage()
