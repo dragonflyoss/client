@@ -401,6 +401,9 @@ pub struct Host {
 
     /// ip is the advertise ip of the host.
     pub ip: Option<IpAddr>,
+
+    /// enable_dual_stack indicates whether enable dual stack.
+    pub enable_dual_stack: bool,
 }
 
 /// Host implements Default.
@@ -411,6 +414,7 @@ impl Default for Host {
             location: None,
             hostname: default_host_hostname(),
             ip: None,
+            enable_dual_stack: false,
         }
     }
 }
@@ -1142,6 +1146,9 @@ pub struct ProxyServer {
     /// ip is the listen ip of the proxy server.
     pub ip: Option<IpAddr>,
 
+    /// enable_dual_stack indicates whether enable dual stack.
+    pub enable_dual_stack: bool,
+
     /// port is the port to the proxy server.
     #[serde(default = "default_proxy_server_port")]
     pub port: u16,
@@ -1352,6 +1359,9 @@ pub struct Security {
 pub struct Network {
     /// enable_ipv6 indicates whether enable ipv6.
     pub enable_ipv6: bool,
+
+    /// enable_dual_stack indicates whether enable dual stack.
+    pub enable_dual_stack: bool,
 }
 
 /// HealthServer is the health server configuration for dfdaemon.
@@ -1412,6 +1422,9 @@ impl Default for MetricsServer {
 pub struct Metrics {
     /// server is the metrics server configuration for dfdaemon.
     pub server: MetricsServer,
+
+    /// enable_dual_stack indicates whether enable dual stack.
+    pub enable_dual_stack: bool,
 }
 
 /// StatsServer is the stats server configuration for dfdaemon.
@@ -1442,6 +1455,9 @@ impl Default for StatsServer {
 pub struct Stats {
     /// server is the stats server configuration for dfdaemon.
     pub server: StatsServer,
+
+    /// enable_dual_stack indicates whether enable dual stack.
+    pub enable_dual_stack: bool,
 }
 
 /// Tracing is the tracing configuration for dfdaemon.
