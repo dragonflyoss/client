@@ -23,7 +23,7 @@ use dragonfly_client::grpc::{
     manager::ManagerClient, scheduler::SchedulerClient,
 };
 use dragonfly_client::health::Health;
-// use dragonfly_client::metrics::Metrics;
+use dragonfly_client::metrics::Metrics;
 use dragonfly_client::proxy::Proxy;
 use dragonfly_client::resource::{persistent_cache_task::PersistentCacheTask, task::Task};
 use dragonfly_client::shutdown;
@@ -235,11 +235,11 @@ async fn main() -> Result<(), anyhow::Error> {
     );
 
     // Initialize metrics server.
-    // let metrics = Metrics::new(
-    // config.clone(),
-    // shutdown.clone(),
-    // shutdown_complete_tx.clone(),
-    // );
+    let metrics = Metrics::new(
+        config.clone(),
+        shutdown.clone(),
+        shutdown_complete_tx.clone(),
+    );
 
     // Initialize stats server.
     let stats = Stats::new(
@@ -323,9 +323,9 @@ async fn main() -> Result<(), anyhow::Error> {
             info!("health server exited");
         },
 
-        // _ = tokio::spawn(async move { metrics.run().await }) => {
-            // info!("metrics server exited");
-        // },
+        _ = tokio::spawn(async move { metrics.run().await }) => {
+            info!("metrics server exited");
+        },
 
         _ = tokio::spawn(async move { stats.run().await }) => {
             info!("stats server exited");

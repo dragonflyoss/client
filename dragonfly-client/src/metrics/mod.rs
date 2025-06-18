@@ -26,9 +26,8 @@ use prometheus::{
 };
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
-use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System, UpdateKind};
 use tokio::sync::mpsc;
 use tracing::{error, info, instrument, warn};
 use warp::{Filter, Rejection, Reply};
@@ -254,20 +253,6 @@ lazy_static! {
             Opts::new("disk_usage_space_total", "Gauge of the disk usage space in bytes").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
             &[]
         ).expect("metric can be created");
-
-    /// DISK_WRITTEN_BYTES is used to count of the disk written bytes.
-    pub static ref DISK_WRITTEN_BYTES: IntGaugeVec =
-        IntGaugeVec::new(
-            Opts::new("disk_written_bytes", "Gauge of the disk written bytes.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
-
-    /// DISK_READ_BYTES is used to count of the disk read bytes.
-    pub static ref DISK_READ_BYTES: IntGaugeVec =
-        IntGaugeVec::new(
-            Opts::new("disk_read_bytes", "Gauge of the disk read bytes.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
 }
 
 /// register_custom_metrics registers all custom metrics.
@@ -375,14 +360,6 @@ fn register_custom_metrics() {
     REGISTRY
         .register(Box::new(DISK_USAGE_SPACE.clone()))
         .expect("metric can be registered");
-
-    REGISTRY
-        .register(Box::new(DISK_WRITTEN_BYTES.clone()))
-        .expect("metric can be registered");
-
-    REGISTRY
-        .register(Box::new(DISK_READ_BYTES.clone()))
-        .expect("metric can be registered");
 }
 
 /// reset_custom_metrics resets all custom metrics.
@@ -413,8 +390,6 @@ fn reset_custom_metrics() {
     DELETE_HOST_FAILURE_COUNT.reset();
     DISK_SPACE.reset();
     DISK_USAGE_SPACE.reset();
-    DISK_WRITTEN_BYTES.reset();
-    DISK_READ_BYTES.reset();
 }
 
 /// TaskSize represents the size of the task.
@@ -798,7 +773,7 @@ pub fn collect_delete_host_failure_metrics() {
 }
 
 /// collect_disk_metrics collects the disk metrics.
-pub fn collect_disk_metrics(path: &Path, system: &Arc<Mutex<System>>) {
+pub fn collect_disk_metrics(path: &Path) {
     // Collect disk space metrics.
     let stats = match fs2::statvfs(path) {
         Ok(stats) => stats,
@@ -815,25 +790,6 @@ pub fn collect_disk_metrics(path: &Path, system: &Arc<Mutex<System>>) {
     DISK_USAGE_SPACE
         .with_label_values(&[])
         .set(usage_space as i64);
-
-    // Collect disk bandwidth metrics.
-    let pid = sysinfo::get_current_pid().unwrap();
-    let mut sys = system.lock().unwrap();
-    sys.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[pid]),
-        true,
-        ProcessRefreshKind::new()
-            .with_disk_usage()
-            .with_exe(UpdateKind::Always),
-    );
-
-    let process = sys.process(pid).unwrap();
-    DISK_WRITTEN_BYTES
-        .with_label_values(&[])
-        .set(process.disk_usage().written_bytes as i64);
-    DISK_READ_BYTES
-        .with_label_values(&[])
-        .set(process.disk_usage().read_bytes as i64);
 }
 
 /// Metrics is the metrics server.
@@ -841,9 +797,6 @@ pub fn collect_disk_metrics(path: &Path, system: &Arc<Mutex<System>>) {
 pub struct Metrics {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
-
-    // system is the system information, only used for collecting disk metrics.
-    system: Arc<Mutex<System>>,
 
     /// shutdown is used to shutdown the metrics server.
     shutdown: shutdown::Shutdown,
@@ -862,13 +815,6 @@ impl Metrics {
     ) -> Self {
         Self {
             config,
-            system: Arc::new(Mutex::new(System::new_with_specifics(
-                RefreshKind::new().with_processes(
-                    ProcessRefreshKind::new()
-                        .with_disk_usage()
-                        .with_exe(UpdateKind::Always),
-                ),
-            ))),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -895,7 +841,6 @@ impl Metrics {
 
         // Clone the config.
         let config = self.config.clone();
-        let system = self.system.clone();
 
         // Create the metrics server address.
         let addr = SocketAddr::new(
@@ -907,7 +852,7 @@ impl Metrics {
         let get_metrics_route = warp::path!("metrics")
             .and(warp::get())
             .and(warp::path::end())
-            .and_then(move || Self::get_metrics_handler(config.clone(), system.clone()));
+            .and_then(move || Self::get_metrics_handler(config.clone()));
 
         // Delete the metrics route.
         let delete_metrics_route = warp::path!("metrics")
@@ -932,12 +877,9 @@ impl Metrics {
 
     /// get_metrics_handler handles the metrics request of getting.
     #[instrument(skip_all)]
-    async fn get_metrics_handler(
-        config: Arc<Config>,
-        system: Arc<Mutex<System>>,
-    ) -> Result<impl Reply, Rejection> {
+    async fn get_metrics_handler(config: Arc<Config>) -> Result<impl Reply, Rejection> {
         // Collect the disk space metrics.
-        collect_disk_metrics(config.storage.dir.as_path(), &system);
+        collect_disk_metrics(config.storage.dir.as_path());
 
         // Encode custom metrics.
         let encoder = TextEncoder::new();
