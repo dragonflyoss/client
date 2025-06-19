@@ -1448,8 +1448,13 @@ pub struct Stats {
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Tracing {
-    /// addr is the address to report tracing log.
-    pub addr: Option<String>,
+    /// Protocol specifies the communication protocol for the tracing server.
+    /// Supported values: "http", "https", "grpc" (default: None).
+    /// This determines how tracing logs are transmitted to the server.
+    pub protocol: Option<String>,
+
+    /// endpoint is the endpoint to report tracing log, example: "localhost:4317".
+    pub endpoint: Option<String>,
 
     /// headers is the headers to report tracing log.
     #[serde(with = "http_serde::header_map")]
@@ -2168,12 +2173,13 @@ key: /etc/ssl/private/client.pem
     fn deserialize_tracing_correctly() {
         let json_data = r#"
         {
-            "addr": "http://tracing.example.com"
+            "protocol": "http",
+            "endpoint": "tracing.example.com"
         }"#;
 
         let tracing: Tracing = serde_json::from_str(json_data).unwrap();
-
-        assert_eq!(tracing.addr, Some("http://tracing.example.com".to_string()));
+        assert_eq!(tracing.protocol, Some("http".to_string()));
+        assert_eq!(tracing.endpoint, Some("tracing.example.com".to_string()));
     }
 
     #[test]
