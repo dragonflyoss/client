@@ -92,6 +92,7 @@ async fn main() -> Result<(), anyhow::Error> {
         None,
         None,
         None,
+        None,
         false,
         args.console,
     );

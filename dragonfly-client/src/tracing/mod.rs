@@ -44,8 +44,9 @@ pub fn init_tracing(
     log_dir: PathBuf,
     log_level: Level,
     log_max_files: usize,
-    jaeger_addr: Option<String>,
-    jaeger_headers: Option<reqwest::header::HeaderMap>,
+    otel_protocol: Option<String>,
+    otel_endpoint: Option<String>,
+    otel_headers: Option<reqwest::header::HeaderMap>,
     host: Option<Host>,
     is_seed_peer: bool,
     console: bool,
@@ -105,32 +106,47 @@ pub fn init_tracing(
         .with(file_logging_layer)
         .with(stdout_logging_layer);
 
-    // Setup jaeger layer.
-    if let Some(mut jaeger_addr) = jaeger_addr {
-        jaeger_addr = if jaeger_addr.starts_with("http://") {
-            jaeger_addr
-        } else {
-            format!("http://{}", jaeger_addr)
-        };
+    // If OTLP protocol and endpoint are provided, set up OpenTelemetry tracing.
+    if let (Some(protocol), Some(endpoint)) = (otel_protocol, otel_endpoint) {
+        let otlp_exporter = match protocol.as_str() {
+            "grpc" => {
+                let mut metadata = MetadataMap::new();
+                if let Some(headers) = otel_headers {
+                    for (key, value) in headers.iter() {
+                        metadata.insert(
+                            MetadataKey::from_str(key.as_str())
+                                .expect("failed to create metadata key"),
+                            MetadataValue::from_str(value.to_str().unwrap())
+                                .expect("failed to create metadata value"),
+                        );
+                    }
+                }
 
-        let mut metadata = MetadataMap::new();
-        if let Some(headers) = jaeger_headers {
-            for (key, value) in headers.iter() {
-                metadata.insert(
-                    MetadataKey::from_str(key.as_str()).expect("failed to create metadata key"),
-                    MetadataValue::from_str(value.to_str().unwrap())
-                        .expect("failed to create metadata value"),
-                );
+                let addr = format!("http://{}", endpoint);
+                opentelemetry_otlp::SpanExporter::builder()
+                    .with_tonic()
+                    .with_endpoint(addr)
+                    .with_timeout(SPAN_EXPORTER_TIMEOUT)
+                    .with_metadata(metadata)
+                    .build()
+                    .expect("failed to create OTLP exporter")
             }
-        }
-
-        let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
-            .with_tonic()
-            .with_endpoint(jaeger_addr)
-            .with_timeout(SPAN_EXPORTER_TIMEOUT)
-            .with_metadata(metadata)
-            .build()
-            .expect("failed to create OTLP exporter");
+            "http" | "https" => {
+                let endpoint_url = url::Url::parse(&format!("{}://{}", protocol, endpoint))
+                    .expect("failed to parse OTLP endpoint URL")
+                    .join("v1/traces")
+                    .expect("failed to construct OTLP endpoint URL");
+                opentelemetry_otlp::SpanExporter::builder()
+                    .with_http()
+                    .with_endpoint(endpoint_url.as_str())
+                    .with_timeout(SPAN_EXPORTER_TIMEOUT)
+                    .build()
+                    .expect("failed to create OTLP exporter")
+            }
+            _ => {
+                panic!("unsupported OTLP protocol: {}", protocol);
+            }
+        };
 
         let host = host.unwrap();
         let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
