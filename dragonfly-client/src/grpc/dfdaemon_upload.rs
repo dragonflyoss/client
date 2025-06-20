@@ -73,6 +73,10 @@ use url::Url;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 
+// DEFAULT_WAIT_FOR_FIRST_PIECE_DOWNLOAD_STARTED is the default wait time for the first piece
+// download to start.
+const DEFAULT_WAIT_FOR_FIRST_PIECE_DOWNLOAD_STARTED: Duration = Duration::from_millis(500);
+
 /// DfdaemonUploadServer is the grpc server of the upload.
 pub struct DfdaemonUploadServer {
     /// config is the configuration of the dfdaemon.
@@ -756,6 +760,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
+                // Flag to indicate whether this is the first sync.
+                let mut is_first_sync = true;
+
                 loop {
                     let mut has_started_piece = false;
                     let mut finished_piece_numbers = Vec::new();
@@ -840,12 +847,25 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         return;
                     }
 
-                    // If there is no started piece, return.
+                    // Exit if no piece has started downloading.
                     if !has_started_piece {
-                        info!("there is no started piece");
+                        // For the first sync, if the task has started downloading, wait for the
+                        // first piece to begin downloading. This prevents the child from receiving
+                        // an empty piece, which would cause disconnection from the parent and
+                        // rescheduling. Waiting ensures the child avoids unnecessary rescheduling
+                        // and maximizes the chance to download pieces from the parent.
+                        if is_first_sync {
+                            tokio::time::sleep(DEFAULT_WAIT_FOR_FIRST_PIECE_DOWNLOAD_STARTED).await;
+                            continue;
+                        }
+
+                        info!("there is no started persistent cache piece");
                         drop(out_stream_tx);
                         return;
                     }
+
+                    // Mark initial sync as completed.
+                    is_first_sync = false;
 
                     // Wait for the piece to be finished.
                     tokio::time::sleep(
@@ -1456,6 +1476,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
+                // Flag to indicate whether this is the first sync.
+                let mut is_first_sync = true;
+
                 loop {
                     let mut has_started_piece = false;
                     let mut finished_piece_numbers = Vec::new();
@@ -1534,12 +1557,25 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         return;
                     }
 
-                    // If there is no started piece, return.
+                    // Exit if no piece has started downloading.
                     if !has_started_piece {
+                        // For the first sync, if the task has started downloading, wait for the
+                        // first piece to begin downloading. This prevents the child from receiving
+                        // an empty piece, which would cause disconnection from the parent and
+                        // rescheduling. Waiting ensures the child avoids unnecessary rescheduling
+                        // and maximizes the chance to download pieces from the parent.
+                        if is_first_sync {
+                            tokio::time::sleep(DEFAULT_WAIT_FOR_FIRST_PIECE_DOWNLOAD_STARTED).await;
+                            continue;
+                        }
+
                         info!("there is no started persistent cache piece");
                         drop(out_stream_tx);
                         return;
                     }
+
+                    // Mark initial sync as completed.
+                    is_first_sync = false;
 
                     // Wait for the piece to be finished.
                     tokio::time::sleep(
