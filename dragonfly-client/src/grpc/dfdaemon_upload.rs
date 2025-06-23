@@ -73,10 +73,6 @@ use url::Url;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 
-// DEFAULT_WAIT_FOR_FIRST_PIECE_DOWNLOAD_STARTED is the default wait time for the first piece
-// download to start.
-const DEFAULT_WAIT_FOR_FIRST_PIECE_DOWNLOAD_STARTED: Duration = Duration::from_millis(500);
-
 /// DfdaemonUploadServer is the grpc server of the upload.
 pub struct DfdaemonUploadServer {
     /// config is the configuration of the dfdaemon.
@@ -721,7 +717,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     /// SyncPiecesStream is the stream of the sync pieces response.
     type SyncPiecesStream = ReceiverStream<Result<SyncPiecesResponse, Status>>;
 
-    /// sync_pieces provides the piece metadata for parent.
+    /// sync_pieces provides the piece metadata for parent. If the per-piece collection timeout is exceeded,
+    /// the stream will be closed.
     #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
     async fn sync_pieces(
         &self,
@@ -760,11 +757,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
-                // Flag to indicate whether this is the first sync.
-                let mut is_first_sync = true;
-
                 loop {
-                    let mut has_started_piece = false;
                     let mut finished_piece_numbers = Vec::new();
                     for interested_piece_number in interested_piece_numbers.iter() {
                         let piece = match task_manager.piece.get(
@@ -829,11 +822,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             finished_piece_numbers.push(piece.number);
                             continue;
                         }
-
-                        // Check whether the piece is started.
-                        if piece.is_started() {
-                            has_started_piece = true;
-                        }
                     }
 
                     // Remove the finished piece numbers from the interested piece numbers.
@@ -846,26 +834,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         drop(out_stream_tx);
                         return;
                     }
-
-                    // Exit if no piece has started downloading.
-                    if !has_started_piece {
-                        // For the first sync, if the task has started downloading, wait for the
-                        // first piece to begin downloading. This prevents the child from receiving
-                        // an empty piece, which would cause disconnection from the parent and
-                        // rescheduling. Waiting ensures the child avoids unnecessary rescheduling
-                        // and maximizes the chance to download pieces from the parent.
-                        if is_first_sync {
-                            tokio::time::sleep(DEFAULT_WAIT_FOR_FIRST_PIECE_DOWNLOAD_STARTED).await;
-                            continue;
-                        }
-
-                        info!("there is no started persistent cache piece");
-                        drop(out_stream_tx);
-                        return;
-                    }
-
-                    // Mark initial sync as completed.
-                    is_first_sync = false;
 
                     // Wait for the piece to be finished.
                     tokio::time::sleep(
@@ -959,7 +927,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             })?;
 
         // Read the content of the piece.
-        let mut content = vec![0; piece.length as usize];
+        let mut content = Vec::with_capacity(piece.length as usize);
         reader.read_exact(&mut content).await.map_err(|err| {
             // Collect upload piece failure metrics.
             collect_upload_piece_failure_metrics();
@@ -1476,11 +1444,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
-                // Flag to indicate whether this is the first sync.
-                let mut is_first_sync = true;
-
                 loop {
-                    let mut has_started_piece = false;
                     let mut finished_piece_numbers = Vec::new();
                     for interested_piece_number in interested_piece_numbers.iter() {
                         let piece = match task_manager.piece.get(
@@ -1539,11 +1503,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             finished_piece_numbers.push(piece.number);
                             continue;
                         }
-
-                        // Check whether the piece is started.
-                        if piece.is_started() {
-                            has_started_piece = true;
-                        }
                     }
 
                     // Remove the finished piece numbers from the interested piece numbers.
@@ -1556,26 +1515,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         drop(out_stream_tx);
                         return;
                     }
-
-                    // Exit if no piece has started downloading.
-                    if !has_started_piece {
-                        // For the first sync, if the task has started downloading, wait for the
-                        // first piece to begin downloading. This prevents the child from receiving
-                        // an empty piece, which would cause disconnection from the parent and
-                        // rescheduling. Waiting ensures the child avoids unnecessary rescheduling
-                        // and maximizes the chance to download pieces from the parent.
-                        if is_first_sync {
-                            tokio::time::sleep(DEFAULT_WAIT_FOR_FIRST_PIECE_DOWNLOAD_STARTED).await;
-                            continue;
-                        }
-
-                        info!("there is no started persistent cache piece");
-                        drop(out_stream_tx);
-                        return;
-                    }
-
-                    // Mark initial sync as completed.
-                    is_first_sync = false;
 
                     // Wait for the piece to be finished.
                     tokio::time::sleep(
@@ -1670,7 +1609,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             })?;
 
         // Read the content of the piece.
-        let mut content = vec![0; piece.length as usize];
+        let mut content = Vec::with_capacity(piece.length as usize);
         reader.read_exact(&mut content).await.map_err(|err| {
             // Collect upload piece failure metrics.
             collect_upload_piece_failure_metrics();
@@ -1908,6 +1847,7 @@ impl DfdaemonUploadClient {
     }
 
     /// sync_persistent_cache_pieces provides the persistent cache piece metadata for parent.
+    /// If the per-piece collection timeout is exceeded, the stream will be closed.
     #[instrument(skip_all)]
     pub async fn sync_persistent_cache_pieces(
         &self,
