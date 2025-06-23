@@ -73,10 +73,6 @@ use url::Url;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 
-// DEFAULT_WAIT_FOR_FIRST_PIECE_DOWNLOAD_STARTED is the default wait time for the first piece
-// download to start.
-const DEFAULT_WAIT_FOR_FIRST_PIECE_DOWNLOAD_STARTED: Duration = Duration::from_millis(500);
-
 /// DfdaemonUploadServer is the grpc server of the upload.
 pub struct DfdaemonUploadServer {
     /// config is the configuration of the dfdaemon.
@@ -931,7 +927,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             })?;
 
         // Read the content of the piece.
-        let mut content = vec![0; piece.length as usize];
+        let mut content = Vec::with_capacity(piece.length as usize);
         reader.read_exact(&mut content).await.map_err(|err| {
             // Collect upload piece failure metrics.
             collect_upload_piece_failure_metrics();
@@ -1613,7 +1609,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             })?;
 
         // Read the content of the piece.
-        let mut content = vec![0; piece.length as usize];
+        let mut content = Vec::with_capacity(piece.length as usize);
         reader.read_exact(&mut content).await.map_err(|err| {
             // Collect upload piece failure metrics.
             collect_upload_piece_failure_metrics();
