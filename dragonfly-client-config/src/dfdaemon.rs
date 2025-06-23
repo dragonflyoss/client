@@ -146,6 +146,12 @@ fn default_download_piece_timeout() -> Duration {
     Duration::from_secs(120)
 }
 
+/// default_collected_download_piece_timeout is the default timeout for collecting one piece from the parent in the stream.
+#[inline]
+fn default_collected_download_piece_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
 /// default_download_concurrent_piece_count is the default number of concurrent pieces to download.
 #[inline]
 fn default_download_concurrent_piece_count() -> u32 {
@@ -480,6 +486,14 @@ pub struct Download {
     #[serde(default = "default_download_piece_timeout", with = "humantime_serde")]
     pub piece_timeout: Duration,
 
+    /// collected_piece_timeout is the timeout for collecting one piece from the parent in the
+    /// stream.
+    #[serde(
+        default = "default_collected_download_piece_timeout",
+        with = "humantime_serde"
+    )]
+    pub collected_piece_timeout: Duration,
+
     /// concurrent_piece_count is the number of concurrent pieces to download.
     #[serde(default = "default_download_concurrent_piece_count")]
     #[validate(range(min = 1))]
@@ -494,6 +508,7 @@ impl Default for Download {
             parent_selector: ParentSelector::default(),
             rate_limit: default_download_rate_limit(),
             piece_timeout: default_download_piece_timeout(),
+            collected_piece_timeout: default_collected_download_piece_timeout(),
             concurrent_piece_count: default_download_concurrent_piece_count(),
         }
     }

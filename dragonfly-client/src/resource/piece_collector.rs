@@ -107,7 +107,7 @@ impl PieceCollector {
         let parents = self.parents.clone();
         let interested_pieces = self.interested_pieces.clone();
         let collected_pieces = self.collected_pieces.clone();
-        let collected_piece_timeout = self.config.download.piece_timeout;
+        let collected_piece_timeout = self.config.download.collected_piece_timeout;
         let (collected_piece_tx, collected_piece_rx) = mpsc::channel(128 * 1024);
         tokio::spawn(
             async move {
