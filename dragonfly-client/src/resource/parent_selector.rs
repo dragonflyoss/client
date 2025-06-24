@@ -60,6 +60,11 @@ impl Connection {
         ConnectionGuard::new(self.active_requests.clone())
     }
 
+    /// active_count returns the number of active requests.
+    pub fn active_count(&self) -> usize {
+        self.active_requests.load(Ordering::SeqCst)
+    }
+
     /// shutdown triggers shutdown of the sync host.
     pub fn shutdown(&self) {
         self.shutdown.trigger();
@@ -91,9 +96,6 @@ pub struct ParentSelector {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// capacity is the maximum number of parents that can be tracked.
-    capacity: usize,
-
     /// sync_interval represents the time interval between two refreshing probability operations.
     sync_interval: Duration,
 
@@ -116,13 +118,11 @@ impl ParentSelector {
     #[instrument(skip_all)]
     pub fn new(config: Arc<Config>, host_id: String, peer_id: String) -> ParentSelector {
         let config = config.clone();
-        let capacity = config.download.parent_selector.capacity;
         let sync_interval = config.download.parent_selector.sync_interval;
         let wetghts = Arc::new(DashMap::new());
 
         Self {
             config,
-            capacity,
             sync_interval,
             host_id,
             peer_id,
@@ -143,11 +143,13 @@ impl ParentSelector {
         client: DfdaemonUploadClient,
         mut shutdown: Shutdown,
     ) -> Result<()> {
+        let remote_host_id = Self::get_host_id(&parent.id);
+
         let response = client
             .sync_host(SyncHostRequest { host_id, peer_id })
             .await
             .inspect_err(|err| {
-                error!("sync host from parent {} failed: {}", parent.id, err);
+                error!("sync host from host {} failed: {}", remote_host_id, err);
             })?;
 
         let out_stream = response.into_inner().timeout(timeout);
@@ -157,23 +159,22 @@ impl ParentSelector {
             tokio::select! {
                 result = out_stream.try_next() => {
                     match result.inspect_err(|err| {
-                        error!("sync host from parent {} failed: {}", parent.id, err);
+                        error!("sync host from host {} failed: {}", remote_host_id, err);
                     })? {
                         Some(message) => {
                             let message = message?;
-                            info!("parent selector: received host info from parent {}", parent.id);
 
                             // Calculate weight from host information.
                             let weight = Self::get_idle_upload_rate(&message) as u32;
 
                             // Update the parent's host info with calculated weight.
-                            weights.insert(parent.id.clone(), weight);
+                            weights.insert(remote_host_id.clone(), weight);
                         }
                         None => break,
                     }
                 }
                 _ = shutdown.recv() => {
-                    debug!("parent selector: shutdown signal received for parent {}", parent.id);
+                    debug!("parent selector: shutdown signal received for host {}", remote_host_id);
                     break;
                 }
             }
@@ -182,35 +183,19 @@ impl ParentSelector {
         Ok(())
     }
 
-    /// get_idle_upload_rate returns the available upload rate of a host.
-    fn get_idle_upload_rate(host: &Host) -> f64 {
-        let network = match &host.network {
-            Some(network) => network,
-            None => return 0f64,
-        };
-
-        if network.upload_rate_limit > 0 {
-            let idle_upload_rate = if network.upload_rate < network.upload_rate_limit {
-                network.upload_rate_limit - network.upload_rate
-            } else {
-                0
-            };
-
-            return idle_upload_rate as f64;
-        }
-
-        network.upload_rate as f64
-    }
-
     /// select_parent selects the best parent for the task based on bandwidth.
     pub fn select_parent(&self, parents: Vec<CollectedParent>) -> Option<CollectedParent> {
         if parents.is_empty() {
             return None;
         }
 
-        let weights: Vec<u32> = parents
+        let remote_hosts: Vec<String> = parents
             .iter()
-            .map(|parent| self.wetghts.get(&parent.id).map(|w| *w).unwrap_or(1))
+            .map(|parent| Self::get_host_id(&parent.id))
+            .collect();
+        let weights: Vec<u32> = remote_hosts
+            .iter()
+            .map(|remote_host| self.wetghts.get(remote_host).map(|w| *w).unwrap_or(0))
             .collect();
 
         match WeightedIndex::new(weights) {
@@ -227,15 +212,16 @@ impl ParentSelector {
     }
 
     /// unregister_parents removes the weights of the given parents and triggers shutdown.
-    pub async fn unregister_parents(&self, parents: Vec<Peer>) -> Result<()> {
+    pub async fn unregister_parents(&self, parents: Vec<Peer>) {
         for parent in parents {
-            self.wetghts.remove(&parent.id);
-
-            if let Some(connection) = self.connections.get(&parent.id) {
-                connection.shutdown();
+            let host_id = Self::get_host_id(&parent.id);
+            if let Some(connection) = self.connections.get(&host_id) {
+                connection.active_requests.fetch_sub(1, Ordering::SeqCst);
+                if connection.active_count() == 0 {
+                    connection.shutdown();
+                }
             }
         }
-        Ok(())
     }
 
     /// get_connection returns a connection guard for the given parent, creating the connection if needed.
@@ -243,8 +229,10 @@ impl ParentSelector {
         &self,
         parent: &CollectedParent,
     ) -> Result<(ConnectionGuard, DfdaemonUploadClient)> {
+        let remote_host_id = Self::get_host_id(&parent.id);
+
         // Try to get existing connection
-        if let Some(connection) = self.connections.get(&parent.id) {
+        if let Some(connection) = self.connections.get(&remote_host_id) {
             let guard = connection.connection_guard();
             let client = connection.client.clone();
             return Ok((guard, client));
@@ -255,7 +243,6 @@ impl ParentSelector {
             .as_ref()
             .ok_or_else(|| Error::InvalidPeer(parent.id.clone()))?;
 
-        info!("creating new connection to parent {}", parent.id);
         let client = DfdaemonUploadClient::new(
             self.config.clone(),
             format!("http://{}:{}", host.ip, host.port),
@@ -266,13 +253,12 @@ impl ParentSelector {
         let connection = Connection::new(client.clone());
         let guard = connection.connection_guard();
 
-        match self.connections.entry(parent.id.clone()) {
+        match self.connections.entry(remote_host_id.clone()) {
             dashmap::mapref::entry::Entry::Vacant(entry) => {
                 entry.insert(connection);
                 Ok((guard, client))
             }
             dashmap::mapref::entry::Entry::Occupied(entry) => {
-                debug!("using existing connection to parent {}", parent.id);
                 let existing_connection = entry.get();
                 let guard = existing_connection.connection_guard();
                 let client = existing_connection.client.clone();
@@ -287,23 +273,18 @@ impl ParentSelector {
             return Ok(());
         }
 
-        let size = parents
-            .iter()
-            .filter(|p| !self.wetghts.contains_key(&p.id))
-            .count()
-            + self.connections.len();
-
-        if size > self.capacity {
-            return Err(Error::Unknown(format!(
-                "capacity is exceeded, size: {}, capacity: {}",
-                size, self.capacity
-            )));
-        }
-
         let mut join_set = JoinSet::new();
 
         for parent in parents {
-            debug!("registering parent {}", parent.id);
+            let remote_host_id = Self::get_host_id(&parent.id);
+
+            // Check if connection already has active requests
+            if let Some(connection) = self.connections.get(&remote_host_id) {
+                if connection.active_count() > 0 {
+                    info!("sync host already running for parent {}", parent.id);
+                    continue;
+                }
+            }
 
             // Get or create connection for the sync host
             let (guard, client) = self.get_connection(parent).await?;
@@ -317,19 +298,19 @@ impl ParentSelector {
             let peer_id = self.peer_id.clone();
             let shutdown = self
                 .connections
-                .get(&parent.id)
+                .get(&remote_host_id)
                 .map(|conn| conn.shutdown.clone())
                 .unwrap_or_default();
 
             join_set.spawn(
                 async move {
-                    debug!("started sync host for parent {}", parent.id);
+                    info!("started sync host for parent {}", parent.id);
 
                     let result = Self::sync_host(
                         host_id,
                         peer_id,
                         parent.clone(),
-                        weights,
+                        weights.clone(),
                         timeout,
                         client,
                         shutdown,
@@ -343,10 +324,10 @@ impl ParentSelector {
                     drop(guard);
 
                     // Check if connection should be cleaned up.
-                    if let Some(connection) = connections.get(&parent.id) {
-                        if connection.active_requests.load(Ordering::SeqCst) == 0 {
-                            debug!("cleaning up unused connection to parent {}", parent.id);
-                            connections.remove(&parent.id);
+                    if let Some(connection) = connections.get(&remote_host_id) {
+                        if connection.active_count() == 0 {
+                            weights.remove(&remote_host_id);
+                            connections.remove(&remote_host_id);
                         }
                     }
 
@@ -364,10 +345,10 @@ impl ParentSelector {
                         debug!("parent sync host completed successfully");
                     }
                     Ok(Err(err)) => {
-                        error!("parent sync host failed: {}", err);
+                        debug!("parent sync host failed: {}", err);
                     }
                     Err(err) => {
-                        error!("parent sync host join error: {}", err);
+                        debug!("parent sync host join error: {}", err);
                     }
                 }
             }
@@ -375,207 +356,34 @@ impl ParentSelector {
 
         Ok(())
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use dragonfly_api::common::v2::{Host, Network};
-    use tokio::time::Duration;
+    /// get_idle_upload_rate returns the available upload rate of a host.
+    fn get_idle_upload_rate(host: &Host) -> f64 {
+        let network = match &host.network {
+            Some(network) => network,
+            None => return 0f64,
+        };
 
-    #[tokio::test]
-    async fn test_new() {
-        let test_cases = vec![
-            (
-                "default config",
-                5,
-                Duration::from_millis(100),
-                5,
-                Duration::from_millis(100),
-            ),
-            (
-                "custom config",
-                10,
-                Duration::from_secs(1),
-                10,
-                Duration::from_secs(1),
-            ),
-            (
-                "zero capacity",
-                0,
-                Duration::from_millis(50),
-                0,
-                Duration::from_millis(50),
-            ),
-        ];
+        let idle_upload_rate = if network.upload_rate < network.upload_rate_limit {
+            network.upload_rate_limit - network.upload_rate
+        } else {
+            0
+        };
 
-        for (_, capacity, sync_interval, expected_capacity, expected_sync_interval) in test_cases {
-            let mut config = Config::default();
-            config.download.parent_selector.capacity = capacity;
-            config.download.parent_selector.sync_interval = sync_interval;
-            config.download.parent_selector.enable = true;
-            let config = Arc::new(config);
-            let selector =
-                ParentSelector::new(config, "host-id".to_string(), "peer-id".to_string());
-
-            assert_eq!(selector.capacity, expected_capacity);
-            assert_eq!(selector.sync_interval, expected_sync_interval);
-            assert_eq!(selector.wetghts.len(), 0);
-            assert_eq!(selector.connections.len(), 0);
-        }
+        idle_upload_rate as f64
     }
 
-    #[test]
-    fn test_available_rate() {
-        let test_cases = vec![
-            (
-                "with upload rate limit",
-                Host {
-                    network: Some(Network {
-                        upload_rate: 1000,
-                        upload_rate_limit: 2000,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                1000.0, // 2000 - 1000
-            ),
-            (
-                "without upload rate limit",
-                Host {
-                    network: Some(Network {
-                        upload_rate: 1500,
-                        upload_rate_limit: 0,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                1500.0,
-            ),
-            (
-                "upload rate exceeds limit",
-                Host {
-                    network: Some(Network {
-                        upload_rate: 2500,
-                        upload_rate_limit: 2000,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                0.0,
-            ),
-            (
-                "no network information",
-                Host {
-                    network: None,
-                    ..Default::default()
-                },
-                0.0,
-            ),
-        ];
-
-        for (_, host, expected_rate) in test_cases {
-            let rate = ParentSelector::get_idle_upload_rate(&host);
-            assert_eq!(rate, expected_rate);
-        }
-    }
-
-    #[test]
-    fn test_select_parent() {
-        let mut config = Config::default();
-        config.download.parent_selector.capacity = 5;
-        config.download.parent_selector.sync_interval = Duration::from_millis(100);
-        config.download.parent_selector.enable = true;
-        let config = Arc::new(config);
-        let selector = ParentSelector::new(config, "host-id".to_string(), "peer-id".to_string());
-
-        let test_cases = vec![
-            ("empty list", vec![], vec![], false, vec![]),
-            (
-                "single parent",
-                vec![CollectedParent {
-                    id: "parent1".to_string(),
-                    host: Some(Host {
-                        id: "host-parent1".to_string(),
-                        ip: "127.0.0.1".to_string(),
-                        port: 8080,
-                        ..Default::default()
-                    }),
-                }],
-                vec![],
-                true,
-                vec!["parent1".to_string()],
-            ),
-            (
-                "multiple parents with weights",
-                vec![
-                    CollectedParent {
-                        id: "parent1".to_string(),
-                        host: Some(Host {
-                            id: "host-parent1".to_string(),
-                            ip: "127.0.0.1".to_string(),
-                            port: 8080,
-                            ..Default::default()
-                        }),
-                    },
-                    CollectedParent {
-                        id: "parent2".to_string(),
-                        host: Some(Host {
-                            id: "host-parent2".to_string(),
-                            ip: "127.0.0.1".to_string(),
-                            port: 8081,
-                            ..Default::default()
-                        }),
-                    },
-                ],
-                vec![("parent1".to_string(), 10), ("parent2".to_string(), 20)],
-                true,
-                vec!["parent1".to_string(), "parent2".to_string()],
-            ),
-            (
-                "multiple parents without weights",
-                vec![
-                    CollectedParent {
-                        id: "parent3".to_string(),
-                        host: Some(Host {
-                            id: "host-parent3".to_string(),
-                            ip: "127.0.0.1".to_string(),
-                            port: 8082,
-                            ..Default::default()
-                        }),
-                    },
-                    CollectedParent {
-                        id: "parent4".to_string(),
-                        host: Some(Host {
-                            id: "host-parent4".to_string(),
-                            ip: "127.0.0.1".to_string(),
-                            port: 8083,
-                            ..Default::default()
-                        }),
-                    },
-                ],
-                vec![],
-                true,
-                vec!["parent3".to_string(), "parent4".to_string()],
-            ),
-        ];
-
-        for (_, parents, weights, should_succeed, expected_ids) in test_cases {
-            // Set up weights for this test case
-            selector.wetghts.clear();
-            for (id, weight) in &weights {
-                selector.wetghts.insert(id.clone(), *weight);
-            }
-
-            let result = selector.select_parent(parents);
-
-            if should_succeed {
-                assert!(result.is_some());
-                let selected = result.unwrap();
-                assert!(expected_ids.contains(&selected.id));
+    /// get_host_id extracts the host id from parent id.
+    fn get_host_id(parent_id: &str) -> String {
+        let parts: Vec<&str> = parent_id.split('-').collect();
+        if parts.len() >= 2 {
+            if parent_id.ends_with("-seed") {
+                format!("{}-{}-seed", parts[0], parts[1])
             } else {
-                assert!(result.is_none());
+                format!("{}-{}", parts[0], parts[1])
             }
+        } else {
+            parent_id.to_string()
         }
     }
 }

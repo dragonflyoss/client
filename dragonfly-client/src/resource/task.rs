@@ -1313,12 +1313,7 @@ impl Task {
         }
 
         if let Some(parent_selector) = parent_selector {
-            parent_selector
-                .unregister_parents(parents)
-                .await
-                .unwrap_or_else(|err| {
-                    error!("unregister parents failed: {:?}", err);
-                });
+            parent_selector.unregister_parents(parents).await;
         }
 
         let finished_pieces = finished_pieces.lock().unwrap().clone();
