@@ -307,6 +307,7 @@ async fn main() -> anyhow::Result<()> {
         None,
         None,
         None,
+        None,
         false,
         args.console,
     );

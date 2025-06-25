@@ -164,6 +164,12 @@ fn default_download_max_schedule_count() -> u32 {
     5
 }
 
+/// default_tracing_path is the default tracing path for dfdaemon.
+#[inline]
+fn default_tracing_path() -> Option<PathBuf> {
+    Some(PathBuf::from("/v1/traces"))
+}
+
 /// default_scheduler_announce_interval is the default interval to announce peer to the scheduler.
 #[inline]
 fn default_scheduler_announce_interval() -> Duration {
@@ -1460,7 +1466,7 @@ pub struct Stats {
 }
 
 /// Tracing is the tracing configuration for dfdaemon.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Tracing {
     /// Protocol specifies the communication protocol for the tracing server.
@@ -1471,9 +1477,26 @@ pub struct Tracing {
     /// endpoint is the endpoint to report tracing log, example: "localhost:4317".
     pub endpoint: Option<String>,
 
+    /// path is the path to report tracing log, example: "/v1/traces" if the protocol is "http" or
+    /// "https".
+    #[serde(default = "default_tracing_path")]
+    pub path: Option<PathBuf>,
+
     /// headers is the headers to report tracing log.
     #[serde(with = "http_serde::header_map")]
     pub headers: reqwest::header::HeaderMap,
+}
+
+/// Tracing implements Default.
+impl Default for Tracing {
+    fn default() -> Self {
+        Self {
+            protocol: None,
+            endpoint: None,
+            path: default_tracing_path(),
+            headers: reqwest::header::HeaderMap::new(),
+        }
+    }
 }
 
 /// Config is the configuration for dfdaemon.
@@ -2189,12 +2212,18 @@ key: /etc/ssl/private/client.pem
         let json_data = r#"
         {
             "protocol": "http",
-            "endpoint": "tracing.example.com"
+            "endpoint": "tracing.example.com",
+            "path": "/v1/traces",
+            "headers": {
+                "X-Custom-Header": "value"
+            }
         }"#;
 
         let tracing: Tracing = serde_json::from_str(json_data).unwrap();
         assert_eq!(tracing.protocol, Some("http".to_string()));
         assert_eq!(tracing.endpoint, Some("tracing.example.com".to_string()));
+        assert_eq!(tracing.path, Some(PathBuf::from("/v1/traces")));
+        assert!(tracing.headers.contains_key("X-Custom-Header"));
     }
 
     #[test]
