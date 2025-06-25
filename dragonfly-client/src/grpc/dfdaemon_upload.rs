@@ -927,7 +927,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             })?;
 
         // Read the content of the piece.
-        let mut content = Vec::with_capacity(piece.length as usize);
+        let mut content = vec![0; piece.length as usize];
         reader.read_exact(&mut content).await.map_err(|err| {
             // Collect upload piece failure metrics.
             collect_upload_piece_failure_metrics();
@@ -935,6 +935,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             error!("upload piece content failed: {}", err);
             Status::internal(err.to_string())
         })?;
+        drop(reader);
 
         // Collect upload piece finished metrics.
         collect_upload_piece_finished_metrics();
@@ -1609,7 +1610,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             })?;
 
         // Read the content of the piece.
-        let mut content = Vec::with_capacity(piece.length as usize);
+        let mut content = vec![0; piece.length as usize];
         reader.read_exact(&mut content).await.map_err(|err| {
             // Collect upload piece failure metrics.
             collect_upload_piece_failure_metrics();
@@ -1617,6 +1618,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             error!("upload persistent cache piece content failed: {}", err);
             Status::internal(err.to_string())
         })?;
+        drop(reader);
 
         // Collect upload piece finished metrics.
         collect_upload_piece_finished_metrics();
