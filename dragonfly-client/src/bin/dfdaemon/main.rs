@@ -147,6 +147,7 @@ async fn main() -> Result<(), anyhow::Error> {
         args.log_max_files,
         config.tracing.protocol.clone(),
         config.tracing.endpoint.clone(),
+        config.tracing.path.clone(),
         Some(config.tracing.headers.clone()),
         Some(config.host.clone()),
         config.seed_peer.enable,

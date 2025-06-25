@@ -88,6 +88,7 @@ impl StatCommand {
             None,
             None,
             None,
+            None,
             false,
             self.console,
         );
