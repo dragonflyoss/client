@@ -46,6 +46,7 @@ pub fn init_tracing(
     log_max_files: usize,
     otel_protocol: Option<String>,
     otel_endpoint: Option<String>,
+    otel_path: Option<PathBuf>,
     otel_headers: Option<reqwest::header::HeaderMap>,
     host: Option<Host>,
     is_seed_peer: bool,
@@ -122,23 +123,31 @@ pub fn init_tracing(
                     }
                 }
 
-                let addr = format!("http://{}", endpoint);
+                let endpoint_url = url::Url::parse(&format!("http://{}", endpoint))
+                    .expect("failed to parse OTLP endpoint URL");
+
                 opentelemetry_otlp::SpanExporter::builder()
                     .with_tonic()
-                    .with_endpoint(addr)
+                    .with_endpoint(endpoint_url)
                     .with_timeout(SPAN_EXPORTER_TIMEOUT)
                     .with_metadata(metadata)
                     .build()
                     .expect("failed to create OTLP exporter")
             }
             "http" | "https" => {
-                let endpoint_url = url::Url::parse(&format!("{}://{}", protocol, endpoint))
-                    .expect("failed to parse OTLP endpoint URL")
-                    .join("v1/traces")
-                    .expect("failed to construct OTLP endpoint URL");
+                let mut endpoint_url = url::Url::parse(&format!("http://{}", endpoint))
+                    .expect("failed to parse OTLP endpoint URL");
+
+                if let Some(path) = otel_path {
+                    endpoint_url = endpoint_url
+                        .join(path.to_str().unwrap())
+                        .expect("failed to join OTLP endpoint path");
+                }
+
                 opentelemetry_otlp::SpanExporter::builder()
                     .with_http()
                     .with_endpoint(endpoint_url.as_str())
+                    .with_protocol(opentelemetry_otlp::Protocol::HttpJson)
                     .with_timeout(SPAN_EXPORTER_TIMEOUT)
                     .build()
                     .expect("failed to create OTLP exporter")
