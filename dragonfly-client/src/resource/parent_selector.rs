@@ -286,10 +286,10 @@ impl ParentSelector {
                 }
             }
 
-            // Get or create connection for the sync host
+            // Get or create connection for the sync host.
             let (guard, client) = self.get_connection(parent).await?;
 
-            // Start sync host for this parent
+            // Start sync host for this parent.
             let parent = parent.clone();
             let weights = self.wetghts.clone();
             let connections = self.connections.clone();
@@ -337,7 +337,7 @@ impl ParentSelector {
             );
         }
 
-        // Spawn a task to manage this JoinSet
+        // Spawn a task to manage this JoinSet.
         tokio::spawn(async move {
             while let Some(result) = join_set.join_next().await {
                 match result {
