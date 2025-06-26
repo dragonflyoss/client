@@ -281,7 +281,7 @@ impl ParentSelector {
             // Check if connection already has active requests
             if let Some(connection) = self.connections.get(&remote_host_id) {
                 if connection.active_count() > 0 {
-                    info!("sync host already running for parent {}", parent.id);
+                    debug!("sync host already running for parent {}", parent.id);
                     continue;
                 }
             }
