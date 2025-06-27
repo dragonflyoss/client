@@ -42,6 +42,7 @@ use dragonfly_client_core::{
     Error as ClientError, Result as ClientResult,
 };
 use dragonfly_client_util::{
+    digest::{verify_file_digest, Digest},
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
     id_generator::{PersistentCacheTaskIDParameter, TaskIDParameter},
 };
@@ -488,22 +489,48 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                                     )),
                                                 )
                                                 .await;
+                                                return;
                                             }
                                             Err(err) => {
                                                 error!("check output path: {}", err);
                                                 handle_error(&out_stream_tx, err).await;
+                                                return;
                                             }
                                         }
-
-                                        return;
-                                    }
-
-                                    if let Err(err) = task_manager_clone
+                                    } else if let Err(err) = task_manager_clone
                                         .copy_task(task_clone.id.as_str(), output_path)
                                         .await
                                     {
                                         error!("copy task: {}", err);
                                         handle_error(&out_stream_tx, err).await;
+                                        return;
+                                    }
+                                }
+
+                                // Verify the file digest if it is provided.
+                                if let Some(raw_digest) = &download_clone.digest {
+                                    let digest = match raw_digest.parse::<Digest>() {
+                                        Ok(digest) => digest,
+                                        Err(err) => {
+                                            error!("parse digest: {}", err);
+                                            handle_error(
+                                                &out_stream_tx,
+                                                Status::invalid_argument(format!(
+                                                    "invalid digest({}): {}",
+                                                    raw_digest, err
+                                                )),
+                                            )
+                                            .await;
+                                            return;
+                                        }
+                                    };
+
+                                    if let Err(err) =
+                                        verify_file_digest(digest, Path::new(output_path.as_str()))
+                                    {
+                                        error!("verify file digest: {}", err);
+                                        handle_error(&out_stream_tx, err).await;
+                                        return;
                                     }
                                 }
                             }
@@ -928,22 +955,48 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                                 )),
                                             )
                                             .await;
+                                            return;
                                         }
                                         Err(err) => {
                                             error!("check output path: {}", err);
                                             handle_error(&out_stream_tx, err).await;
+                                            return;
                                         }
                                     }
-
-                                    return;
-                                }
-
-                                if let Err(err) = task_manager_clone
+                                } else if let Err(err) = task_manager_clone
                                     .copy_task(task_clone.id.as_str(), output_path)
                                     .await
                                 {
                                     error!("copy task: {}", err);
                                     handle_error(&out_stream_tx, err).await;
+                                    return;
+                                }
+                            }
+
+                            // Verify the file digest if it is provided.
+                            if let Some(raw_digest) = &request_clone.digest {
+                                let digest = match raw_digest.parse::<Digest>() {
+                                    Ok(digest) => digest,
+                                    Err(err) => {
+                                        error!("parse digest: {}", err);
+                                        handle_error(
+                                            &out_stream_tx,
+                                            Status::invalid_argument(format!(
+                                                "invalid digest({}): {}",
+                                                raw_digest, err
+                                            )),
+                                        )
+                                        .await;
+                                        return;
+                                    }
+                                };
+
+                                if let Err(err) =
+                                    verify_file_digest(digest, Path::new(output_path.as_str()))
+                                {
+                                    error!("verify file digest: {}", err);
+                                    handle_error(&out_stream_tx, err).await;
+                                    return;
                                 }
                             }
                         }
