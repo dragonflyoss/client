@@ -135,7 +135,7 @@ pub fn init_tracing(
                     .expect("failed to create OTLP exporter")
             }
             "http" | "https" => {
-                let mut endpoint_url = url::Url::parse(&format!("http://{}", endpoint))
+                let mut endpoint_url = url::Url::parse(&format!("{}://{}", protocol, endpoint))
                     .expect("failed to parse OTLP endpoint URL");
 
                 if let Some(path) = otel_path {
