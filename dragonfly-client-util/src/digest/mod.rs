@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use dragonfly_client_core::Result as ClientResult;
+use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use sha2::Digest as Sha2Digest;
 use std::fmt;
 use std::io::{self, Read};
@@ -112,9 +112,36 @@ impl FromStr for Digest {
         }
 
         let algorithm = match parts[0] {
-            "crc32" => Algorithm::Crc32,
-            "sha256" => Algorithm::Sha256,
-            "sha512" => Algorithm::Sha512,
+            "crc32" => {
+                if parts[1].len() != 10 {
+                    return Err(format!(
+                        "invalid crc32 digest length: {}, expected 10",
+                        parts[1].len()
+                    ));
+                }
+
+                Algorithm::Crc32
+            }
+            "sha256" => {
+                if parts[1].len() != 64 {
+                    return Err(format!(
+                        "invalid sha256 digest length: {}, expected 64",
+                        parts[1].len()
+                    ));
+                }
+
+                Algorithm::Sha256
+            }
+            "sha512" => {
+                if parts[1].len() != 128 {
+                    return Err(format!(
+                        "invalid sha512 digest length: {}, expected 128",
+                        parts[1].len()
+                    ));
+                }
+
+                Algorithm::Sha512
+            }
             _ => return Err(format!("invalid digest algorithm: {}", parts[0])),
         };
 
@@ -153,6 +180,25 @@ pub fn calculate_file_digest(algorithm: Algorithm, path: &Path) -> ClientResult<
             Ok(Digest::new(algorithm, hex::encode(hasher.finalize())))
         }
     }
+}
+
+/// verify_file_digest verifies the digest of a file against an expected digest.
+pub fn verify_file_digest(expected_digest: Digest, file_path: &Path) -> ClientResult<()> {
+    let digest = match calculate_file_digest(expected_digest.algorithm(), file_path) {
+        Ok(digest) => digest,
+        Err(err) => {
+            return Err(err);
+        }
+    };
+
+    if digest.to_string() != expected_digest.to_string() {
+        return Err(ClientError::DigestMismatch(
+            expected_digest.to_string(),
+            digest.to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -204,5 +250,29 @@ mod tests {
         let digest =
             calculate_file_digest(Algorithm::Crc32, path).expect("failed to calculate Crc32 hash");
         assert_eq!(digest.encoded(), expected_crc32);
+    }
+
+    #[test]
+    fn test_verify_file_digest() {
+        let content = b"test content";
+        let temp_file = tempfile::NamedTempFile::new().expect("failed to create temp file");
+        let path = temp_file.path();
+        let mut file = File::create(path).expect("failed to create file");
+        file.write_all(content).expect("failed to write to file");
+
+        let expected_sha256_digest = Digest::new(
+            Algorithm::Sha256,
+            "6ae8a75555209fd6c44157c0aed8016e763ff435a19cf186f76863140143ff72".to_string(),
+        );
+        assert!(verify_file_digest(expected_sha256_digest, path).is_ok());
+
+        let expected_sha512_digest = Digest::new(
+            Algorithm::Sha512,
+            "0cbf4caef38047bba9a24e621a961484e5d2a92176a859e7eb27df343dd34eb98d538a6c5f4da1ce302ec250b821cc001e46cc97a704988297185a4df7e99602".to_string(),
+        );
+        assert!(verify_file_digest(expected_sha512_digest, path).is_ok());
+
+        let expected_crc32_digest = Digest::new(Algorithm::Crc32, "1475635037".to_string());
+        assert!(verify_file_digest(expected_crc32_digest, path).is_ok());
     }
 }

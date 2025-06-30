@@ -141,12 +141,11 @@ struct Args {
     timeout: Duration,
 
     #[arg(
-        short = 'd',
         long = "digest",
-        default_value = "",
-        help = "Verify the integrity of the downloaded file using the specified digest, e.g. md5:86d3f3a95c324c9479bd8986968f4327"
+        required = false,
+        help = "Verify the integrity of the downloaded file using the specified digest, support sha256, sha512, crc32. If the digest is not specified, the downloaded file will not be verified. Format: <algorithm>:<digest>, e.g. sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef, crc32:12345678"
     )]
-    digest: String,
+    digest: Option<String>,
 
     #[arg(
         short = 'p',
@@ -759,7 +758,7 @@ async fn download(
         .download_task(DownloadTaskRequest {
             download: Some(Download {
                 url: args.url.to_string(),
-                digest: Some(args.digest),
+                digest: args.digest,
                 // NOTE: Dfget does not support range download.
                 range: None,
                 r#type: TaskType::Standard as i32,

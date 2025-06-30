@@ -86,6 +86,13 @@ pub struct ExportCommand {
     timeout: Duration,
 
     #[arg(
+        long = "digest",
+        required = false,
+        help = "Verify the integrity of the downloaded file using the specified digest, support sha256, sha512, crc32. If the digest is not specified, the downloaded file will not be verified. Format: <algorithm>:<digest>, e.g. sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef, crc32:12345678"
+    )]
+    digest: Option<String>,
+
+    #[arg(
         short = 'e',
         long = "endpoint",
         default_value_os_t = dfdaemon::default_download_unix_socket_path(),
@@ -457,6 +464,7 @@ impl ExportCommand {
                 ),
                 need_piece_content,
                 force_hard_link: self.force_hard_link,
+                digest: self.digest.clone(),
             })
             .await
             .inspect_err(|err| {
