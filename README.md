@@ -30,7 +30,3 @@ Join the conversation and help the community.
 
 You should check out our
 [CONTRIBUTING](./CONTRIBUTING.md) and develop the project together.
-
-## License
-
-[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fdragonflyoss%2Fclient.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fdragonflyoss%2Fclient?ref=badge_large)
