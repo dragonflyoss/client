@@ -1588,6 +1588,11 @@ impl Task {
                 }
             };
 
+            if !piece.is_finished() {
+                debug!("piece {} is not finished, skip it", piece_id);
+                continue;
+            }
+
             // Fake the download from the local.
             self.piece.download_from_local(task_id, piece.length);
             info!("finished piece {} from local", piece_id,);

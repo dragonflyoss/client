@@ -359,6 +359,7 @@ impl Content {
         &self,
         task_id: &str,
         offset: u64,
+        expected_length: u64,
         reader: &mut R,
     ) -> Result<WritePieceResponse> {
         // Open the file and seek to the offset.
@@ -392,6 +393,13 @@ impl Content {
         writer.flush().await.inspect_err(|err| {
             error!("flush {:?} failed: {}", task_path, err);
         })?;
+
+        if length != expected_length {
+            return Err(Error::Unknown(format!(
+                "expected length {} but got {}",
+                expected_length, length
+            )));
+        }
 
         // Calculate the hash of the piece.
         Ok(WritePieceResponse {
@@ -573,6 +581,7 @@ impl Content {
         &self,
         task_id: &str,
         offset: u64,
+        expected_length: u64,
         reader: &mut R,
     ) -> Result<WritePieceResponse> {
         // Open the file and seek to the offset.
@@ -606,6 +615,13 @@ impl Content {
         writer.flush().await.inspect_err(|err| {
             error!("flush {:?} failed: {}", task_path, err);
         })?;
+
+        if length != expected_length {
+            return Err(Error::Unknown(format!(
+                "expected length {} but got {}",
+                expected_length, length
+            )));
+        }
 
         // Calculate the hash of the piece.
         Ok(WritePieceResponse {
@@ -730,7 +746,10 @@ mod tests {
 
         let data = b"hello, world!";
         let mut reader = Cursor::new(data);
-        content.write_piece(task_id, 0, &mut reader).await.unwrap();
+        content
+            .write_piece(task_id, 0, 13, &mut reader)
+            .await
+            .unwrap();
 
         let mut reader = content.read_piece(task_id, 0, 13, None).await.unwrap();
         let mut buffer = Vec::new();
@@ -765,7 +784,10 @@ mod tests {
 
         let data = b"test";
         let mut reader = Cursor::new(data);
-        let response = content.write_piece(task_id, 0, &mut reader).await.unwrap();
+        let response = content
+            .write_piece(task_id, 0, 4, &mut reader)
+            .await
+            .unwrap();
         assert_eq!(response.length, 4);
         assert!(!response.hash.is_empty());
     }
@@ -872,7 +894,7 @@ mod tests {
         let data = b"hello, world!";
         let mut reader = Cursor::new(data);
         content
-            .write_persistent_cache_piece(task_id, 0, &mut reader)
+            .write_persistent_cache_piece(task_id, 0, 13, &mut reader)
             .await
             .unwrap();
 
@@ -916,7 +938,7 @@ mod tests {
         let data = b"test";
         let mut reader = Cursor::new(data);
         let response = content
-            .write_persistent_cache_piece(task_id, 0, &mut reader)
+            .write_persistent_cache_piece(task_id, 0, 4, &mut reader)
             .await
             .unwrap();
         assert_eq!(response.length, 4);
