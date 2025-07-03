@@ -241,9 +241,9 @@ impl BackendFactory {
         Ok(backend_factory)
     }
 
-    /// supported_download_directory returns whether the scheme supports directory download.
-    pub fn supported_download_directory(scheme: &str) -> bool {
-        object_storage::Scheme::from_str(scheme).is_ok() || scheme == hdfs::HDFS_SCHEME
+    /// unsupported_download_directory returns whether the scheme does not support directory download.
+    pub fn unsupported_download_directory(scheme: &str) -> bool {
+        scheme == http::HTTP_SCHEME || scheme == http::HTTPS_SCHEME
     }
 
     /// build returns the backend by the scheme of the url.
