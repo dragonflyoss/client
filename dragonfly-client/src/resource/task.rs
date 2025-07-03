@@ -239,7 +239,7 @@ impl Task {
         // store the task.
         if !task.is_finished() && !self.storage.has_enough_space(content_length)? {
             return Err(Error::NoSpace(format!(
-                "not enough space to store the persistent cache task: content_length={}",
+                "not enough space to store the task: content_length={}",
                 content_length
             )));
         }
