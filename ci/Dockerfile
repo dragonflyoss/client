@@ -34,8 +34,8 @@ COPY dragonfly-client-util/src ./dragonfly-client-util/src
 COPY dragonfly-client-init/Cargo.toml ./dragonfly-client-init/Cargo.toml
 COPY dragonfly-client-init/src ./dragonfly-client-init/src
 
-ARG TARGETARCH
-RUN case "${TARGETARCH}" in \
+ARG TARGETPLATFORM
+RUN case "${TARGETPLATFORM}" in \
   "linux/arm64") export JEMALLOC_SYS_WITH_LG_PAGE=16;; \
   esac && \
   cargo build --release --verbose --bin dfget --bin dfdaemon --bin dfcache
