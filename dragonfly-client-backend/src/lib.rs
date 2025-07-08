@@ -23,7 +23,6 @@ use libloading::Library;
 use reqwest::header::HeaderMap;
 use rustls_pki_types::CertificateDer;
 use std::path::Path;
-use std::str::FromStr;
 use std::{collections::HashMap, pin::Pin, time::Duration};
 use std::{fmt::Debug, fs};
 use tokio::io::{AsyncRead, AsyncReadExt};
