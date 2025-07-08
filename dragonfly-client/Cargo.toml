@@ -76,7 +76,7 @@ prometheus = { version = "0.13", features = ["process"] }
 tonic-health = "0.12.3"
 sysinfo = { version = "0.32.1", default-features = false, features = ["component", "disk", "network", "system", "user"] }
 tower = { version = "0.4.13", features = ["limit", "load-shed", "buffer"] }
-indicatif = "0.17.11"
+indicatif = "0.18.0"
 hashring = "0.3.6"
 fslock = "0.2.1"
 leaky-bucket = "1.1.2"
