@@ -608,7 +608,7 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
     // then download all files in the directory. Otherwise, download the single file.
     let scheme = args.url.scheme();
     if args.url.path().ends_with('/') {
-        if !BackendFactory::supported_download_directory(scheme) {
+        if BackendFactory::unsupported_download_directory(scheme) {
             return Err(Error::Unsupported(format!("{} download directory", scheme)));
         };
 
