@@ -18,10 +18,10 @@ use crate::metrics::{
     collect_delete_host_failure_metrics, collect_delete_host_started_metrics,
     collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
     collect_download_task_failure_metrics, collect_download_task_finished_metrics,
-    collect_download_task_started_metrics, collect_stat_task_failure_metrics,
+    collect_download_task_started_metrics, collect_list_task_entries_failure_metrics,
+    collect_list_task_entries_started_metrics, collect_stat_task_failure_metrics,
     collect_stat_task_started_metrics, collect_upload_task_failure_metrics,
     collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
-    collect_list_task_entries_started_metrics, collect_list_task_entries_failure_metrics,
 };
 use crate::resource::{persistent_cache_task, task};
 use crate::shutdown;
@@ -32,9 +32,9 @@ use dragonfly_api::dfdaemon::v2::{
         DfdaemonDownload, DfdaemonDownloadServer as DfdaemonDownloadGRPCServer,
     },
     DeleteTaskRequest, DownloadPersistentCacheTaskRequest, DownloadPersistentCacheTaskResponse,
-    DownloadTaskRequest, DownloadTaskResponse, StatPersistentCacheTaskRequest,
-    StatTaskRequest as DfdaemonStatTaskRequest, UploadPersistentCacheTaskRequest,
-    ListTaskEntriesRequest, ListTaskEntriesResponse,
+    DownloadTaskRequest, DownloadTaskResponse, ListTaskEntriesRequest, ListTaskEntriesResponse,
+    StatPersistentCacheTaskRequest, StatTaskRequest as DfdaemonStatTaskRequest,
+    UploadPersistentCacheTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::DeleteHostRequest as SchedulerDeleteHostRequest;
@@ -702,7 +702,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
     /// list_tasks lists the tasks.
     #[instrument(skip_all, fields(host_id))]
-    async fn list_task_entries(&self, request: Request<ListTaskEntriesRequest>) -> Result<Response<ListTaskEntriesResponse>, Status> {
+    async fn list_task_entries(
+        &self,
+        request: Request<ListTaskEntriesRequest>,
+    ) -> Result<Response<ListTaskEntriesResponse>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
             Span::current().set_parent(parent_ctx.clone());
@@ -726,7 +729,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         })?;
 
         Ok(Response::new(tasks))
-    }   
+    }
 
     /// delete_task calls the dfdaemon to delete the task.
     #[instrument(skip_all, fields(host_id, task_id))]
@@ -1280,7 +1283,10 @@ impl DfdaemonDownloadClient {
 
     /// list_task_entries lists the task entries.
     #[instrument(skip_all)]
-    pub async fn list_task_entries(&self, request: ListTaskEntriesRequest) -> ClientResult<ListTaskEntriesResponse> {
+    pub async fn list_task_entries(
+        &self,
+        request: ListTaskEntriesRequest,
+    ) -> ClientResult<ListTaskEntriesResponse> {
         let request = Self::make_request(request);
         info!("list task entries request: {:?}", request);
         let response = self.client.clone().list_task_entries(request).await?;

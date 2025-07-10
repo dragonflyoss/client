@@ -22,6 +22,7 @@ use crate::metrics::{
 use dragonfly_api::common::v2::{
     Download, Hdfs, ObjectStorage, Peer, Piece, Task as CommonTask, TrafficType,
 };
+use dragonfly_api::dfdaemon::v2::{Entry, ListTaskEntriesRequest, ListTaskEntriesResponse};
 use dragonfly_api::dfdaemon::{
     self,
     v2::{download_task_response, DownloadTaskResponse},
@@ -36,8 +37,6 @@ use dragonfly_api::scheduler::v2::{
     DownloadPieceFailedRequest, DownloadPieceFinishedRequest, RegisterPeerRequest,
     ReschedulePeerRequest, StatTaskRequest,
 };
-use dragonfly_api::dfdaemon::v2::{ListTaskEntriesRequest, ListTaskEntriesResponse, Entry};
-use tonic::transport::CertificateDer;
 use dragonfly_client_backend::{BackendFactory, HeadRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
@@ -63,6 +62,7 @@ use tokio::sync::{
 };
 use tokio::task::JoinSet;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tonic::transport::CertificateDer;
 use tonic::{Request, Status};
 use tracing::{debug, error, info, instrument, warn, Instrument};
 
@@ -283,14 +283,18 @@ impl Task {
 
     /// list_task_entries lists the task entries.
     #[instrument(skip_all)]
-    pub async fn list_task_entries(&self, request: ListTaskEntriesRequest) -> ClientResult<ListTaskEntriesResponse> {
+    pub async fn list_task_entries(
+        &self,
+        request: ListTaskEntriesRequest,
+    ) -> ClientResult<ListTaskEntriesResponse> {
         let backend = self.backend_factory.build(request.url.as_str())?;
-        
+
         let client_cert = if request.certificate_chain.is_empty() {
             None
         } else {
             Some(
-                request.certificate_chain
+                request
+                    .certificate_chain
                     .iter()
                     .filter_map(|cert| {
                         if cert.is_empty() {
@@ -299,25 +303,32 @@ impl Task {
                             Some(CertificateDer::from(cert.clone()))
                         }
                     })
-                    .collect()
+                    .collect(),
             )
         };
 
-        let response = backend.head(HeadRequest {
-            task_id: request.task_id.clone(),
-            url: request.url.clone(),
-            http_header: Some(hashmap_to_headermap(&request.request_header).or_err(ErrorType::ParseError)?.into()),
-            timeout: request
-                .timeout
-                .as_ref()
-                .and_then(|d| d.clone().try_into().ok())
-                .unwrap_or_default(),
-            client_cert,
-            object_storage: request.object_storage.clone(),
-            hdfs: request.hdfs.clone(),
-        }).await?;
+        let response = backend
+            .head(HeadRequest {
+                task_id: request.task_id.clone(),
+                url: request.url.clone(),
+                http_header: Some(
+                    hashmap_to_headermap(&request.request_header)
+                        .or_err(ErrorType::ParseError)?
+                        .into(),
+                ),
+                timeout: request
+                    .timeout
+                    .as_ref()
+                    .and_then(|d| d.clone().try_into().ok())
+                    .unwrap_or_default(),
+                client_cert,
+                object_storage: request.object_storage.clone(),
+                hdfs: request.hdfs.clone(),
+            })
+            .await?;
 
-        let entries = response.entries
+        let entries = response
+            .entries
             .into_iter()
             .filter_map(|dir_entry| {
                 let content_length = if dir_entry.content_length > u64::MAX as usize {
@@ -325,7 +336,7 @@ impl Task {
                 } else {
                     dir_entry.content_length as u64
                 };
-                
+
                 Some(Entry {
                     url: dir_entry.url,
                     content_length,
