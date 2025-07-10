@@ -21,6 +21,7 @@ use crate::metrics::{
     collect_download_task_started_metrics, collect_stat_task_failure_metrics,
     collect_stat_task_started_metrics, collect_upload_task_failure_metrics,
     collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
+    collect_list_task_entries_started_metrics, collect_list_task_entries_failure_metrics,
 };
 use crate::resource::{persistent_cache_task, task};
 use crate::shutdown;
@@ -33,6 +34,7 @@ use dragonfly_api::dfdaemon::v2::{
     DeleteTaskRequest, DownloadPersistentCacheTaskRequest, DownloadPersistentCacheTaskResponse,
     DownloadTaskRequest, DownloadTaskResponse, StatPersistentCacheTaskRequest,
     StatTaskRequest as DfdaemonStatTaskRequest, UploadPersistentCacheTaskRequest,
+    ListTaskEntriesRequest, ListTaskEntriesResponse,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::DeleteHostRequest as SchedulerDeleteHostRequest;
@@ -698,6 +700,34 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(task))
     }
 
+    /// list_tasks lists the tasks.
+    #[instrument(skip_all, fields(host_id))]
+    async fn list_task_entries(&self, request: Request<ListTaskEntriesRequest>) -> Result<Response<ListTaskEntriesResponse>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        info!("list tasks in download server");
+
+        // Collect the list tasks started metrics.
+        collect_list_task_entries_started_metrics(TaskType::Standard as i32);
+
+        // List the tasks from the scheduler.
+        let tasks = self.task.list_task_entries(request).await.map_err(|err| {
+            // Collect the list tasks failure metrics.
+            collect_list_task_entries_failure_metrics(TaskType::Standard as i32);
+
+            error!("list tasks: {}", err);
+            Status::internal(err.to_string())
+        })?;
+
+        Ok(Response::new(tasks))
+    }   
+
     /// delete_task calls the dfdaemon to delete the task.
     #[instrument(skip_all, fields(host_id, task_id))]
     async fn delete_task(
@@ -1245,6 +1275,15 @@ impl DfdaemonDownloadClient {
     pub async fn stat_task(&self, request: DfdaemonStatTaskRequest) -> ClientResult<Task> {
         let request = Self::make_request(request);
         let response = self.client.clone().stat_task(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// list_task_entries lists the task entries.
+    #[instrument(skip_all)]
+    pub async fn list_task_entries(&self, request: ListTaskEntriesRequest) -> ClientResult<ListTaskEntriesResponse> {
+        let request = Self::make_request(request);
+        info!("list task entries request: {:?}", request);
+        let response = self.client.clone().list_task_entries(request).await?;
         Ok(response.into_inner())
     }
 
