@@ -312,14 +312,12 @@ impl Task {
                 task_id: request.task_id.clone(),
                 url: request.url.clone(),
                 http_header: Some(
-                    hashmap_to_headermap(&request.request_header)
-                        .or_err(ErrorType::ParseError)?
-                        .into(),
+                    hashmap_to_headermap(&request.request_header).or_err(ErrorType::ParseError)?,
                 ),
                 timeout: request
                     .timeout
                     .as_ref()
-                    .and_then(|d| d.clone().try_into().ok())
+                    .and_then(|d| (*d).try_into().ok())
                     .unwrap_or_default(),
                 client_cert,
                 object_storage: request.object_storage.clone(),
@@ -330,19 +328,18 @@ impl Task {
         let entries = response
             .entries
             .into_iter()
-            .filter_map(|dir_entry| {
+            .map(|dir_entry| {
                 let content_length = if dir_entry.content_length > u64::MAX as usize {
                     u64::MAX
                 } else {
                     dir_entry.content_length as u64
                 };
 
-                Some(Entry {
+                Entry {
                     url: dir_entry.url,
                     content_length,
                     is_dir: dir_entry.is_dir,
-                    ..Default::default()
-                })
+                }
             })
             .collect();
 

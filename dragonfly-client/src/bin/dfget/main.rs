@@ -895,8 +895,8 @@ async fn get_entries(
             request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
             timeout: Some(prost_wkt_types::Duration::try_from(args.timeout).unwrap()),
             certificate_chain: Vec::new(),
-            object_storage: object_storage,
-            hdfs: hdfs,
+            object_storage,
+            hdfs,
         })
         .await
         .inspect_err(|err| {
