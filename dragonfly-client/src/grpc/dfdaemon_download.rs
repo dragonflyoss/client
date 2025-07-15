@@ -34,8 +34,9 @@ use dragonfly_api::dfdaemon::v2::{
     DeleteTaskRequest, DownloadPersistentCacheTaskRequest, DownloadPersistentCacheTaskResponse,
     DownloadTaskRequest, DownloadTaskResponse, ListTaskEntriesRequest, ListTaskEntriesResponse,
     StatPersistentCacheTaskRequest, StatTaskRequest as DfdaemonStatTaskRequest,
-    UploadPersistentCacheTaskRequest,
+    UploadPersistentCacheTaskRequest, Entry,
 };
+use dragonfly_client_backend::HeadRequest;
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::DeleteHostRequest as SchedulerDeleteHostRequest;
 use dragonfly_client_config::dfdaemon::Config;
@@ -68,6 +69,7 @@ use tonic::{
 use tower::{service_fn, ServiceBuilder};
 use tracing::{error, info, instrument, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use tonic::transport::CertificateDer;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 
@@ -216,6 +218,80 @@ pub struct DfdaemonDownloadServerHandler {
 
     /// persistent_cache_task is the persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
+}
+
+impl DfdaemonDownloadServerHandler {
+        /// list_task_entries lists the task entries.
+        #[instrument(skip_all)]
+        async fn list_task_entries_with_backend(
+            &self,
+            request: ListTaskEntriesRequest,
+        ) -> ClientResult<ListTaskEntriesResponse> {
+            let backend = self.task.backend_factory.build(request.url.as_str())?;
+    
+            let client_cert = if request.certificate_chain.is_empty() {
+                None
+            } else {
+                Some(
+                    request
+                        .certificate_chain
+                        .iter()
+                        .filter_map(|cert| {
+                            if cert.is_empty() {
+                                None
+                            } else {
+                                Some(CertificateDer::from(cert.clone()))
+                            }
+                        })
+                        .collect(),
+                )
+            };
+    
+            let response = backend
+                .head(HeadRequest {
+                    task_id: request.task_id.clone(),
+                    url: request.url.clone(),
+                    http_header: Some(
+                        hashmap_to_headermap(&request.request_header).or_err(ErrorType::ParseError)?,
+                    ),
+                    timeout: request
+                        .timeout
+                        .as_ref()
+                        .and_then(|d| (*d).try_into().ok())
+                        .unwrap_or_default(),
+                    client_cert,
+                    object_storage: request.object_storage.clone(),
+                    hdfs: request.hdfs.clone(),
+                })
+                .await?;
+    
+            let entries = response
+                .entries
+                .into_iter()
+                .map(|dir_entry| {
+                    let content_length = if dir_entry.content_length > u64::MAX as usize {
+                        u64::MAX
+                    } else {
+                        dir_entry.content_length as u64
+                    };
+    
+                    Entry {
+                        url: dir_entry.url,
+                        content_length,
+                        is_dir: dir_entry.is_dir,
+                    }
+                })
+                .collect();
+    
+            Ok(ListTaskEntriesResponse {
+                success: response.success,
+                content_length: response.content_length.unwrap_or_default(),
+                response_header: headermap_to_hashmap(&response.http_header.unwrap_or_default()),
+                status_code: Some(response.http_status_code.unwrap_or_default().as_u16() as i32),
+                entries,
+                error_message: response.error_message,
+            })
+        }
 }
 
 /// DfdaemonDownloadServerHandler implements the dfdaemon download grpc service.
@@ -720,7 +796,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         collect_list_task_entries_started_metrics(TaskType::Standard as i32);
 
         // List the tasks from the scheduler.
-        let tasks = self.task.list_task_entries(request).await.map_err(|err| {
+        let tasks = self.list_task_entries_with_backend(request).await.map_err(|err| {
             // Collect the list tasks failure metrics.
             collect_list_task_entries_failure_metrics(TaskType::Standard as i32);
 
