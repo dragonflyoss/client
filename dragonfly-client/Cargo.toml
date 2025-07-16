@@ -65,6 +65,7 @@ lazy_static.workspace = true
 futures.workspace = true
 tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
+tracing-panic = "0.1.2"
 tracing-opentelemetry = "0.30.0"
 opentelemetry = { version = "0.29.1", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.29.0", default-features = false, features = ["trace", "grpc-tonic", "http-proto", "reqwest-blocking-client"] }
