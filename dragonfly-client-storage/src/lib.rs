@@ -119,13 +119,6 @@ impl Storage {
         response_header: Option<HeaderMap>,
         load_to_cache: bool,
     ) -> Result<metadata::Task> {
-        let metadata = self.metadata.download_task_started(
-            id,
-            Some(piece_length),
-            Some(content_length),
-            response_header,
-        )?;
-
         self.content.create_task(id, content_length).await?;
         if load_to_cache {
             let mut cache = self.cache.clone();
@@ -133,7 +126,12 @@ impl Storage {
             debug!("put task to cache: {}", id);
         }
 
-        Ok(metadata)
+        self.metadata.download_task_started(
+            id,
+            Some(piece_length),
+            Some(content_length),
+            response_header,
+        )
     }
 
     /// download_task_finished updates the metadata of the task when the task downloads finished.
