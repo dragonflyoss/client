@@ -203,6 +203,7 @@ pub fn init_tracing(
         subscriber.init();
     }
 
+    std::panic::set_hook(Box::new(tracing_panic::panic_hook));
     info!(
         "tracing initialized directory: {}, level: {}",
         log_dir.as_path().display(),
