@@ -123,13 +123,6 @@ impl Storage {
         response_header: Option<HeaderMap>,
         load_to_cache: bool,
     ) -> Result<metadata::Task> {
-        let metadata = self.metadata.download_task_started(
-            id,
-            Some(piece_length),
-            Some(content_length),
-            response_header,
-        )?;
-
         self.content.create_task(id, content_length).await?;
         if load_to_cache {
             let mut cache = self.cache.clone();
@@ -137,7 +130,12 @@ impl Storage {
             debug!("put task to cache: {}", id);
         }
 
-        Ok(metadata)
+        self.metadata.download_task_started(
+            id,
+            Some(piece_length),
+            Some(content_length),
+            response_header,
+        )
     }
 
     /// download_task_finished updates the metadata of the task when the task downloads finished.
@@ -389,7 +387,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_persistent_cache_piece(task_id, offset, reader)
+            .write_persistent_cache_piece(task_id, offset, length, reader)
             .await?;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
 
@@ -458,7 +456,10 @@ impl Storage {
                 buffer.extend_from_slice(bytes);
             });
 
-            let response = self.content.write_piece(task_id, offset, &mut tee).await?;
+            let response = self
+                .content
+                .write_piece(task_id, offset, length, &mut tee)
+                .await?;
 
             self.cache
                 .write_piece(task_id, piece_id, bytes::Bytes::from(buffer))
@@ -467,7 +468,9 @@ impl Storage {
 
             response
         } else {
-            self.content.write_piece(task_id, offset, reader).await?
+            self.content
+                .write_piece(task_id, offset, length, reader)
+                .await?
         };
 
         let digest = Digest::new(Algorithm::Crc32, response.hash);
@@ -525,7 +528,10 @@ impl Storage {
                 buffer.extend_from_slice(bytes);
             });
 
-            let response = self.content.write_piece(task_id, offset, &mut tee).await?;
+            let response = self
+                .content
+                .write_piece(task_id, offset, length, &mut tee)
+                .await?;
 
             self.cache
                 .write_piece(task_id, piece_id, bytes::Bytes::from(buffer))
@@ -534,7 +540,9 @@ impl Storage {
 
             response
         } else {
-            self.content.write_piece(task_id, offset, reader).await?
+            self.content
+                .write_piece(task_id, offset, length, reader)
+                .await?
         };
 
         let length = response.length;
@@ -672,6 +680,7 @@ impl Storage {
     }
 
     /// download_persistent_cache_piece_from_parent_finished is used for downloading persistent cache piece from parent.
+    #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     pub async fn download_persistent_cache_piece_from_parent_finished<
         R: AsyncRead + Unpin + ?Sized,
@@ -680,13 +689,14 @@ impl Storage {
         piece_id: &str,
         task_id: &str,
         offset: u64,
+        length: u64,
         expected_digest: &str,
         parent_id: &str,
         reader: &mut R,
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_persistent_cache_piece(task_id, offset, reader)
+            .write_persistent_cache_piece(task_id, offset, length, reader)
             .await?;
 
         let length = response.length;

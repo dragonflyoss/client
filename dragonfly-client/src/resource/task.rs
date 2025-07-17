@@ -239,7 +239,7 @@ impl Task {
         // store the task.
         if !task.is_finished() && !self.storage.has_enough_space(content_length)? {
             return Err(Error::NoSpace(format!(
-                "not enough space to store the persistent cache task: content_length={}",
+                "not enough space to store the task: content_length={}",
                 content_length
             )));
         }
@@ -1587,6 +1587,11 @@ impl Task {
                     continue;
                 }
             };
+
+            if !piece.is_finished() {
+                debug!("piece {} is not finished, skip it", piece_id);
+                continue;
+            }
 
             // Fake the download from the local.
             self.piece.download_from_local(task_id, piece.length);

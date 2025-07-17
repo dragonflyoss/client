@@ -840,6 +840,7 @@ impl Piece {
                 piece_id,
                 task_id,
                 offset,
+                length,
                 digest.as_str(),
                 parent.id.as_str(),
                 &mut reader,
