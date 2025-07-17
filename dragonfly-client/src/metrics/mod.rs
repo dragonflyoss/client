@@ -212,7 +212,21 @@ lazy_static! {
             &["type"]
         ).expect("metric can be created");
 
-    /// DELETE_TASK_COUNT is used to count the number of delete tasks.
+    /// LIST_TASK_ENTRIES_COUNT is used to count the number of list task entries.
+    pub static ref LIST_TASK_ENTRIES_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("list_task_entries_total", "Counter of the number of the list task entries.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type"]
+        ).expect("metric can be created");
+
+    /// LIST_TASK_ENTRIES_FAILURE_COUNT is used to count the failed number of list task entries.
+    pub static ref LIST_TASK_ENTRIES_FAILURE_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("list_task_entries_failure_total", "Counter of the number of failed of the list task entries.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type"]
+        ).expect("metric can be created");
+
+        /// DELETE_TASK_COUNT is used to count the number of delete tasks.
     pub static ref DELETE_TASK_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("delete_task_total", "Counter of the number of the delete task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
@@ -338,6 +352,14 @@ fn register_custom_metrics() {
         .expect("metric can be registered");
 
     REGISTRY
+        .register(Box::new(LIST_TASK_ENTRIES_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(LIST_TASK_ENTRIES_FAILURE_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
         .register(Box::new(DELETE_TASK_COUNT.clone()))
         .expect("metric can be registered");
 
@@ -384,6 +406,8 @@ fn reset_custom_metrics() {
     UPDATE_TASK_FAILURE_COUNT.reset();
     STAT_TASK_COUNT.reset();
     STAT_TASK_FAILURE_COUNT.reset();
+    LIST_TASK_ENTRIES_COUNT.reset();
+    LIST_TASK_ENTRIES_FAILURE_COUNT.reset();
     DELETE_TASK_COUNT.reset();
     DELETE_TASK_FAILURE_COUNT.reset();
     DELETE_HOST_COUNT.reset();
@@ -744,6 +768,20 @@ pub fn collect_stat_task_started_metrics(typ: i32) {
 /// collect_stat_task_failure_metrics collects the stat task failure metrics.
 pub fn collect_stat_task_failure_metrics(typ: i32) {
     STAT_TASK_FAILURE_COUNT
+        .with_label_values(&[typ.to_string().as_str()])
+        .inc();
+}
+
+/// collect_list_task_entries_started_metrics collects the list task entries started metrics.
+pub fn collect_list_task_entries_started_metrics(typ: i32) {
+    LIST_TASK_ENTRIES_COUNT
+        .with_label_values(&[typ.to_string().as_str()])
+        .inc();
+}
+
+/// collect_list_task_entries_failure_metrics collects the list task entries failure metrics.
+pub fn collect_list_task_entries_failure_metrics(typ: i32) {
+    LIST_TASK_ENTRIES_FAILURE_COUNT
         .with_label_values(&[typ.to_string().as_str()])
         .inc();
 }
