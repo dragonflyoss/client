@@ -603,9 +603,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.40"
+version = "4.5.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40b6887a1d8685cebccf115538db5c0efe625ccac9696ad45c409d96566e910f"
+checksum = "be92d32e80243a54711e5d7ce823c35c41c9d929dc4ab58e1276f625841aadf9"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -613,9 +613,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.40"
+version = "4.5.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0c66c08ce9f0c698cbce5c0279d0bb6ac936d8674174fe48f736533b964f59e"
+checksum = "707eab41e9622f9139419d573eca0900137718000c517d47da73045f54331c3d"
 dependencies = [
  "anstream",
  "anstyle",
@@ -625,9 +625,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.5.40"
+version = "4.5.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2c7947ae4cc3d851207c1adb5b5e260ff0cca11446b1d6d1423788e442257ce"
+checksum = "ef4f52386a59ca4c860f7393bcf8abd8dfd91ecccc0f774635ff68e92eeef491"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -731,9 +731,9 @@ dependencies = [
 
 [[package]]
 name = "crc32fast"
-version = "1.4.2"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a97769d94ddab943e4510d138150169a2758b5ef3eb191a9ee688de3e23ef7b3"
+checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
 dependencies = [
  "cfg-if",
 ]
@@ -939,9 +939,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.1.40"
+version = "2.1.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36c49e3e1d805c3efa1834af4c0d549589e2e83acb0a1065b261619de23990aa"
+checksum = "9776abc6461282d9c62e3b10fb499ad35b79163070672ca6d277b51819bb5712"
 dependencies = [
  "prost 0.13.5",
  "prost-types 0.14.1",
@@ -954,7 +954,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1017,6 +1017,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-opentelemetry",
+ "tracing-panic",
  "tracing-subscriber",
  "url",
  "uuid",
@@ -1026,7 +1027,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-core",
@@ -1057,7 +1058,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "bytesize",
  "bytesize-serde",
@@ -1087,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "headers 0.4.1",
  "hyper 1.6.0",
@@ -1105,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1123,7 +1124,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "bincode",
  "bytes",
@@ -1152,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "base64 0.22.1",
  "bytesize",
@@ -1561,7 +1562,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "dragonfly-client-backend",
  "dragonfly-client-core",
@@ -1864,9 +1865,9 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc2fdfdbff08affe55bb779f33b053aa1fe5dd5b54c257343c17edfa55711bdb"
+checksum = "7f66d5bd4c6f02bf0542fad85d626775bab9258cf795a4256dcaf3161114d1df"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -2281,7 +2282,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-targets 0.52.6",
+ "windows-targets 0.53.2",
 ]
 
 [[package]]
@@ -5185,6 +5186,16 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "web-time",
+]
+
+[[package]]
+name = "tracing-panic"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7bf1298a179837099f9309243af3b554e840f7f67f65e9f55294913299bd4cc5"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

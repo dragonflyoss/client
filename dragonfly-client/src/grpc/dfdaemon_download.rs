@@ -18,7 +18,8 @@ use crate::metrics::{
     collect_delete_host_failure_metrics, collect_delete_host_started_metrics,
     collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
     collect_download_task_failure_metrics, collect_download_task_finished_metrics,
-    collect_download_task_started_metrics, collect_stat_task_failure_metrics,
+    collect_download_task_started_metrics, collect_list_task_entries_failure_metrics,
+    collect_list_task_entries_started_metrics, collect_stat_task_failure_metrics,
     collect_stat_task_started_metrics, collect_upload_task_failure_metrics,
     collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
 };
@@ -31,11 +32,13 @@ use dragonfly_api::dfdaemon::v2::{
         DfdaemonDownload, DfdaemonDownloadServer as DfdaemonDownloadGRPCServer,
     },
     DeleteTaskRequest, DownloadPersistentCacheTaskRequest, DownloadPersistentCacheTaskResponse,
-    DownloadTaskRequest, DownloadTaskResponse, StatPersistentCacheTaskRequest,
+    DownloadTaskRequest, DownloadTaskResponse, Entry, ListTaskEntriesRequest,
+    ListTaskEntriesResponse, StatPersistentCacheTaskRequest,
     StatTaskRequest as DfdaemonStatTaskRequest, UploadPersistentCacheTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::DeleteHostRequest as SchedulerDeleteHostRequest;
+use dragonfly_client_backend::HeadRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -116,6 +119,7 @@ impl DfdaemonDownloadServer {
         // Initialize the grpc service.
         let service = DfdaemonDownloadGRPCServer::with_interceptor(
             DfdaemonDownloadServerHandler {
+                config: self.config.clone(),
                 socket_path: self.socket_path.clone(),
                 task: self.task.clone(),
                 persistent_cache_task: self.persistent_cache_task.clone(),
@@ -206,6 +210,9 @@ impl DfdaemonDownloadServer {
 
 /// DfdaemonDownloadServerHandler is the handler of the dfdaemon download grpc service.
 pub struct DfdaemonDownloadServerHandler {
+    /// config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
     /// socket_path is the path of the unix domain socket.
     socket_path: PathBuf,
 
@@ -696,6 +703,93 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             })?;
 
         Ok(Response::new(task))
+    }
+
+    /// list_tasks lists the tasks.
+    #[instrument(skip_all, fields(task_id, url))]
+    async fn list_task_entries(
+        &self,
+        request: Request<ListTaskEntriesRequest>,
+    ) -> Result<Response<ListTaskEntriesResponse>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Span record the task id and url.
+        Span::current().record("task_id", request.task_id.as_str());
+        Span::current().record("url", request.url.as_str());
+        info!("list tasks in download server");
+
+        // Collect the list tasks started metrics.
+        collect_list_task_entries_started_metrics(TaskType::Standard as i32);
+
+        // Build the backend.
+        let backend = self
+            .task
+            .backend_factory
+            .build(request.url.as_str())
+            .map_err(|err| {
+                // Collect the list tasks failure metrics.
+                collect_list_task_entries_failure_metrics(TaskType::Standard as i32);
+
+                error!("build backend: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        let timeout = match request.timeout {
+            Some(timeout) => Duration::try_from(timeout).map_err(|err| {
+                // Collect the list tasks failure metrics.
+                collect_list_task_entries_failure_metrics(TaskType::Standard as i32);
+
+                error!("parse timeout: {}", err);
+                Status::invalid_argument(err.to_string())
+            })?,
+            None => self.config.download.piece_timeout,
+        };
+
+        // Head the task entries.
+        let response = backend
+            .head(HeadRequest {
+                task_id: request.task_id.clone(),
+                url: request.url.clone(),
+                http_header: Some(hashmap_to_headermap(&request.request_header).map_err(
+                    |err| {
+                        error!("parse request header: {}", err);
+                        Status::internal(err.to_string())
+                    },
+                )?),
+                timeout,
+                client_cert: None,
+                object_storage: request.object_storage.clone(),
+                hdfs: request.hdfs.clone(),
+            })
+            .await
+            .map_err(|err| {
+                // Collect the list tasks failure metrics.
+                collect_list_task_entries_failure_metrics(TaskType::Standard as i32);
+
+                error!("list task entries: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        Ok(Response::new(ListTaskEntriesResponse {
+            content_length: response.content_length.unwrap_or_default(),
+            response_header: headermap_to_hashmap(&response.http_header.unwrap_or_default()),
+            status_code: response.http_status_code.map(|code| code.as_u16().into()),
+            entries: response
+                .entries
+                .into_iter()
+                .map(|dir_entry| Entry {
+                    url: dir_entry.url,
+                    content_length: dir_entry.content_length as u64,
+                    is_dir: dir_entry.is_dir,
+                })
+                .collect(),
+        }))
     }
 
     /// delete_task calls the dfdaemon to delete the task.
@@ -1245,6 +1339,18 @@ impl DfdaemonDownloadClient {
     pub async fn stat_task(&self, request: DfdaemonStatTaskRequest) -> ClientResult<Task> {
         let request = Self::make_request(request);
         let response = self.client.clone().stat_task(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// list_task_entries lists the task entries.
+    #[instrument(skip_all)]
+    pub async fn list_task_entries(
+        &self,
+        request: ListTaskEntriesRequest,
+    ) -> ClientResult<ListTaskEntriesResponse> {
+        let request = Self::make_request(request);
+        info!("list task entries request: {:?}", request);
+        let response = self.client.clone().list_task_entries(request).await?;
         Ok(response.into_inner())
     }
 
