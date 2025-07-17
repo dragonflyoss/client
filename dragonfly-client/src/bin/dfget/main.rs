@@ -28,10 +28,9 @@ use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::{hdfs, object_storage, BackendFactory, DirEntry};
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
-use dragonfly_client_core::error::{BackendError, ErrorType, OrErr};
+use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::{fs::fallocate, http::header_vec_to_hashmap};
-use http::{HeaderMap, HeaderName, HeaderValue};
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
 use path_absolutize::*;
 use percent_encoding::percent_decode_str;
@@ -893,7 +892,9 @@ async fn get_entries(
             task_id: Uuid::new_v4().to_string(),
             url: args.url.to_string(),
             request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
-            timeout: Some(prost_wkt_types::Duration::try_from(args.timeout).unwrap()),
+            timeout: Some(
+                prost_wkt_types::Duration::try_from(args.timeout).or_err(ErrorType::ParseError)?,
+            ),
             certificate_chain: Vec::new(),
             object_storage,
             hdfs,
@@ -902,30 +903,6 @@ async fn get_entries(
         .inspect_err(|err| {
             error!("list task entries failed: {}", err);
         })?;
-
-    // Return error when response is failed.
-    if !response.success {
-        return Err(Error::BackendError(Box::new(BackendError {
-            message: response.error_message.unwrap_or_default(),
-            status_code:
-                http::StatusCode::from_u16(response.status_code.unwrap_or_default() as u16).ok(),
-            header: Some(
-                response
-                    .response_header
-                    .into_iter()
-                    .filter_map(|(k, v)| {
-                        // Try to convert both key and value, skip if invalid
-                        match (HeaderName::try_from(k), HeaderValue::try_from(v)) {
-                            (Ok(header_name), Ok(header_value)) => {
-                                Some((header_name, header_value))
-                            }
-                            _ => None,
-                        }
-                    })
-                    .collect::<HeaderMap<HeaderValue>>(),
-            ),
-        })));
-    }
 
     Ok(response
         .entries
