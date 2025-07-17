@@ -17,32 +17,27 @@
 use bytesize::ByteSize;
 use clap::Parser;
 use dragonfly_api::common::v2::{Download, Hdfs, ObjectStorage, TaskType};
-use dragonfly_api::dfdaemon::v2::{download_task_response, DownloadTaskRequest};
+use dragonfly_api::dfdaemon::v2::{
+    download_task_response, DownloadTaskRequest, ListTaskEntriesRequest,
+};
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
-use dragonfly_client::metrics::{
-    collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
-    collect_backend_request_started_metrics,
-};
 use dragonfly_client::resource::piece::MIN_PIECE_LENGTH;
 use dragonfly_client::tracing::init_tracing;
-use dragonfly_client_backend::{hdfs, object_storage, BackendFactory, DirEntry, HeadRequest};
+use dragonfly_client_backend::{hdfs, object_storage, BackendFactory, DirEntry};
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
-use dragonfly_client_core::error::{BackendError, ErrorType, OrErr};
+use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_util::{
-    fs::fallocate,
-    http::{header_vec_to_hashmap, header_vec_to_headermap},
-};
+use dragonfly_client_util::{fs::fallocate, http::header_vec_to_hashmap};
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
 use path_absolutize::*;
 use percent_encoding::percent_decode_str;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{cmp::min, fmt::Write};
 use termion::{color, style};
 use tokio::fs::{self, OpenOptions};
@@ -636,7 +631,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
     });
 
     // Get all entries in the directory. If the directory is empty, then return directly.
-    let entries = get_entries(args.clone(), object_storage, hdfs).await?;
+    let entries = get_entries(args.clone(), object_storage, hdfs, download_client.clone()).await?;
     if entries.is_empty() {
         warn!("directory {} is empty", args.url);
         return Ok(());
@@ -888,61 +883,36 @@ async fn get_entries(
     args: Args,
     object_storage: Option<ObjectStorage>,
     hdfs: Option<Hdfs>,
+    download_client: DfdaemonDownloadClient,
 ) -> Result<Vec<DirEntry>> {
-    // Initialize backend factory and build backend.
-    let backend_factory = BackendFactory::new(None)?;
-    let backend = backend_factory.build(args.url.as_str())?;
-
-    // Collect backend request started metrics.
-    collect_backend_request_started_metrics(backend.scheme().as_str(), http::Method::HEAD.as_str());
-
-    // Record the start time.
-    let start_time = Instant::now();
-    let response = backend
-        .head(HeadRequest {
-            // NOTE: Mock a task id for head request.
+    info!("list task entries: {:?}", args.url);
+    // List task entries.
+    let response = download_client
+        .list_task_entries(ListTaskEntriesRequest {
             task_id: Uuid::new_v4().to_string(),
             url: args.url.to_string(),
-            http_header: Some(header_vec_to_headermap(
-                args.header.clone().unwrap_or_default(),
-            )?),
-            timeout: args.timeout,
-            client_cert: None,
+            request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
+            timeout: Some(
+                prost_wkt_types::Duration::try_from(args.timeout).or_err(ErrorType::ParseError)?,
+            ),
+            certificate_chain: Vec::new(),
             object_storage,
             hdfs,
         })
         .await
-        .inspect_err(|_err| {
-            // Collect backend request failure metrics.
-            collect_backend_request_failure_metrics(
-                backend.scheme().as_str(),
-                http::Method::HEAD.as_str(),
-            );
+        .inspect_err(|err| {
+            error!("list task entries failed: {}", err);
         })?;
 
-    // Return error when response is failed.
-    if !response.success {
-        // Collect backend request failure metrics.
-        collect_backend_request_failure_metrics(
-            backend.scheme().as_str(),
-            http::Method::HEAD.as_str(),
-        );
-
-        return Err(Error::BackendError(Box::new(BackendError {
-            message: response.error_message.unwrap_or_default(),
-            status_code: Some(response.http_status_code.unwrap_or_default()),
-            header: Some(response.http_header.unwrap_or_default()),
-        })));
-    }
-
-    // Collect backend request finished metrics.
-    collect_backend_request_finished_metrics(
-        backend.scheme().as_str(),
-        http::Method::HEAD.as_str(),
-        start_time.elapsed(),
-    );
-
-    Ok(response.entries)
+    Ok(response
+        .entries
+        .into_iter()
+        .map(|entry| DirEntry {
+            url: entry.url,
+            content_length: entry.content_length as usize,
+            is_dir: entry.is_dir,
+        })
+        .collect())
 }
 
 /// make_output_by_entry makes the output path by the entry information.
