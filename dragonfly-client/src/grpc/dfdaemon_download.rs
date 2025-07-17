@@ -119,6 +119,7 @@ impl DfdaemonDownloadServer {
         // Initialize the grpc service.
         let service = DfdaemonDownloadGRPCServer::with_interceptor(
             DfdaemonDownloadServerHandler {
+                config: self.config.clone(),
                 socket_path: self.socket_path.clone(),
                 task: self.task.clone(),
                 persistent_cache_task: self.persistent_cache_task.clone(),
@@ -209,6 +210,9 @@ impl DfdaemonDownloadServer {
 
 /// DfdaemonDownloadServerHandler is the handler of the dfdaemon download grpc service.
 pub struct DfdaemonDownloadServerHandler {
+    /// config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
     /// socket_path is the path of the unix domain socket.
     socket_path: PathBuf,
 
@@ -702,7 +706,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 
     /// list_tasks lists the tasks.
-    #[instrument(skip_all, fields(host_id))]
+    #[instrument(skip_all, fields(task_id, url))]
     async fn list_task_entries(
         &self,
         request: Request<ListTaskEntriesRequest>,
@@ -715,6 +719,9 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Clone the request.
         let request = request.into_inner();
 
+        // Span record the task id and url.
+        Span::current().record("task_id", request.task_id.as_str());
+        Span::current().record("url", request.url.as_str());
         info!("list tasks in download server");
 
         // Collect the list tasks started metrics.
@@ -733,6 +740,17 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 Status::internal(err.to_string())
             })?;
 
+        let timeout = match request.timeout {
+            Some(timeout) => Duration::try_from(timeout).map_err(|err| {
+                // Collect the list tasks failure metrics.
+                collect_list_task_entries_failure_metrics(TaskType::Standard as i32);
+
+                error!("parse timeout: {}", err);
+                Status::invalid_argument(err.to_string())
+            })?,
+            None => self.config.download.piece_timeout,
+        };
+
         // Head the task entries.
         let response = backend
             .head(HeadRequest {
@@ -744,11 +762,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         Status::internal(err.to_string())
                     },
                 )?),
-                timeout: request
-                    .timeout
-                    .as_ref()
-                    .and_then(|d| (*d).try_into().ok())
-                    .unwrap_or_default(),
+                timeout,
                 client_cert: None,
                 object_storage: request.object_storage.clone(),
                 hdfs: request.hdfs.clone(),
@@ -762,21 +776,19 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 Status::internal(err.to_string())
             })?;
 
-        let entries = response
-            .entries
-            .into_iter()
-            .map(|dir_entry| Entry {
-                url: dir_entry.url,
-                content_length: dir_entry.content_length as u64,
-                is_dir: dir_entry.is_dir,
-            })
-            .collect();
-
         Ok(Response::new(ListTaskEntriesResponse {
             content_length: response.content_length.unwrap_or_default(),
             response_header: headermap_to_hashmap(&response.http_header.unwrap_or_default()),
-            status_code: Some(response.http_status_code.unwrap_or_default().as_u16() as i32),
-            entries,
+            status_code: response.http_status_code.map(|code| code.as_u16().into()),
+            entries: response
+                .entries
+                .into_iter()
+                .map(|dir_entry| Entry {
+                    url: dir_entry.url,
+                    content_length: dir_entry.content_length as u64,
+                    is_dir: dir_entry.is_dir,
+                })
+                .collect(),
         }))
     }
 
