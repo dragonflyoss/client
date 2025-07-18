@@ -330,7 +330,7 @@ impl BackendFactory {
         if !backend_plugin_dir.exists() {
             warn!(
                 "skip loading plugin backends, because the plugin directory {} does not exist",
-                plugin_dir.display()
+                backend_plugin_dir.display()
             );
             return Ok(());
         }
