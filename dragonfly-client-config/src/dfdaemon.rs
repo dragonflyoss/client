@@ -413,6 +413,9 @@ pub struct Host {
 
     /// ip is the advertise ip of the host.
     pub ip: Option<IpAddr>,
+
+    /// scheduler_cluster_id is the ID of the cluster to which the scheduler belongs.
+    pub scheduler_cluster_id: Option<u64>,
 }
 
 /// Host implements Default.
@@ -423,6 +426,7 @@ impl Default for Host {
             location: None,
             hostname: default_host_hostname(),
             ip: None,
+            scheduler_cluster_id: None,
         }
     }
 }
@@ -1035,9 +1039,9 @@ pub struct Storage {
     /// |       |     -- Partial -->|   Cache   |          |
     /// |       |     |             +-----------+          |
     /// |       v     |                |    |              |
-    /// |   Download  |              Miss   |              |             
+    /// |   Download  |              Miss   |              |
     /// |     Task -->|                |    --- Hit ------>|<-- 2.Download
-    /// |             |                |               ^   |              
+    /// |             |                |               ^   |
     /// |             |                v               |   |
     /// |             |          +-----------+         |   |
     /// |             -- Full -->|   Disk    |----------   |
