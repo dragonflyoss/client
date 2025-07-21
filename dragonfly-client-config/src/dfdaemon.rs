@@ -417,6 +417,7 @@ pub struct Host {
     /// scheduler_cluster_id is the ID of the cluster to which the scheduler belongs.
     /// NOTE: This field is used to identify the cluster to which the scheduler belongs.
     /// If this flag is set, the idc, location, hostname and ip will be ignored when listing schedulers.
+    #[serde(rename = "schedulerClusterID")]
     pub scheduler_cluster_id: Option<u64>,
 }
 
