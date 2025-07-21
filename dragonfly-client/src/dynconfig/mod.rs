@@ -162,6 +162,7 @@ impl Dynconfig {
                 location: self.config.host.location.clone(),
                 version: CARGO_PKG_VERSION.to_string(),
                 commit: GIT_COMMIT_SHORT_HASH.to_string(),
+                scheduler_cluster_id: self.config.host.scheduler_cluster_id.unwrap_or(0),
             })
             .await
     }
