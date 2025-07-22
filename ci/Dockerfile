@@ -34,7 +34,11 @@ COPY dragonfly-client-util/src ./dragonfly-client-util/src
 COPY dragonfly-client-init/Cargo.toml ./dragonfly-client-init/Cargo.toml
 COPY dragonfly-client-init/src ./dragonfly-client-init/src
 
-RUN cargo build --release --verbose --bin dfget --bin dfdaemon --bin dfcache
+ARG TARGETPLATFORM
+RUN case "${TARGETPLATFORM}" in \
+  "linux/arm64") export JEMALLOC_SYS_WITH_LG_PAGE=16;; \
+  esac && \
+  cargo build --release --verbose --bin dfget --bin dfdaemon --bin dfcache
 
 FROM public.ecr.aws/docker/library/alpine:3.20 AS health
 
@@ -55,8 +59,9 @@ RUN go install github.com/google/pprof@latest
 
 FROM public.ecr.aws/debian/debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl bash-completion procps infiniband-diags ibverbs-utils \
-    apache2-utils ca-certificates binutils dnsutils iputils-ping llvm dstat sysstat net-tools \
+RUN apt-get update && apt-get install -y --no-install-recommends iperf3 fio curl \
+    iotop sysstat bash-completion procps apache2-utils ca-certificates binutils \
+    dnsutils iputils-ping llvm graphviz lsof strace dstat net-tools \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/client/target/release/dfget /usr/local/bin/dfget

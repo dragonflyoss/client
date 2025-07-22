@@ -18,7 +18,8 @@ use crate::metrics::{
     collect_delete_host_failure_metrics, collect_delete_host_started_metrics,
     collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
     collect_download_task_failure_metrics, collect_download_task_finished_metrics,
-    collect_download_task_started_metrics, collect_stat_task_failure_metrics,
+    collect_download_task_started_metrics, collect_list_task_entries_failure_metrics,
+    collect_list_task_entries_started_metrics, collect_stat_task_failure_metrics,
     collect_stat_task_started_metrics, collect_upload_task_failure_metrics,
     collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
 };
@@ -31,17 +32,20 @@ use dragonfly_api::dfdaemon::v2::{
         DfdaemonDownload, DfdaemonDownloadServer as DfdaemonDownloadGRPCServer,
     },
     DeleteTaskRequest, DownloadPersistentCacheTaskRequest, DownloadPersistentCacheTaskResponse,
-    DownloadTaskRequest, DownloadTaskResponse, StatPersistentCacheTaskRequest,
+    DownloadTaskRequest, DownloadTaskResponse, Entry, ListTaskEntriesRequest,
+    ListTaskEntriesResponse, StatPersistentCacheTaskRequest,
     StatTaskRequest as DfdaemonStatTaskRequest, UploadPersistentCacheTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::DeleteHostRequest as SchedulerDeleteHostRequest;
+use dragonfly_client_backend::HeadRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error as ClientError, Result as ClientResult,
 };
 use dragonfly_client_util::{
+    digest::{verify_file_digest, Digest},
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
     id_generator::{PersistentCacheTaskIDParameter, TaskIDParameter},
 };
@@ -115,6 +119,7 @@ impl DfdaemonDownloadServer {
         // Initialize the grpc service.
         let service = DfdaemonDownloadGRPCServer::with_interceptor(
             DfdaemonDownloadServerHandler {
+                config: self.config.clone(),
                 socket_path: self.socket_path.clone(),
                 task: self.task.clone(),
                 persistent_cache_task: self.persistent_cache_task.clone(),
@@ -205,6 +210,9 @@ impl DfdaemonDownloadServer {
 
 /// DfdaemonDownloadServerHandler is the handler of the dfdaemon download grpc service.
 pub struct DfdaemonDownloadServerHandler {
+    /// config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
     /// socket_path is the path of the unix domain socket.
     socket_path: PathBuf,
 
@@ -222,7 +230,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
     /// download_task tells the dfdaemon to download the task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id))]
+    #[instrument(skip_all, fields(host_id, task_id, peer_id, url, content_length))]
     async fn download_task(
         &self,
         request: Request<DownloadTaskRequest>,
@@ -273,6 +281,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
+        Span::current().record("url", download.url.clone());
         info!("download task in download server");
 
         // Download task started.
@@ -346,11 +355,14 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             error!("missing content length in the response");
             return Err(Status::internal("missing content length in the response"));
         };
+
         info!(
             "content length {}, piece length {}",
             content_length,
             task.piece_length().unwrap_or_default()
         );
+
+        Span::current().record("content_length", content_length);
 
         // Download's range priority is higher than the request header's range.
         // If download protocol is http, use the range of the request header.
@@ -484,22 +496,48 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                                     )),
                                                 )
                                                 .await;
+                                                return;
                                             }
                                             Err(err) => {
                                                 error!("check output path: {}", err);
                                                 handle_error(&out_stream_tx, err).await;
+                                                return;
                                             }
                                         }
-
-                                        return;
-                                    }
-
-                                    if let Err(err) = task_manager_clone
+                                    } else if let Err(err) = task_manager_clone
                                         .copy_task(task_clone.id.as_str(), output_path)
                                         .await
                                     {
                                         error!("copy task: {}", err);
                                         handle_error(&out_stream_tx, err).await;
+                                        return;
+                                    }
+                                }
+
+                                // Verify the file digest if it is provided.
+                                if let Some(raw_digest) = &download_clone.digest {
+                                    let digest = match raw_digest.parse::<Digest>() {
+                                        Ok(digest) => digest,
+                                        Err(err) => {
+                                            error!("parse digest: {}", err);
+                                            handle_error(
+                                                &out_stream_tx,
+                                                Status::invalid_argument(format!(
+                                                    "invalid digest({}): {}",
+                                                    raw_digest, err
+                                                )),
+                                            )
+                                            .await;
+                                            return;
+                                        }
+                                    };
+
+                                    if let Err(err) =
+                                        verify_file_digest(digest, Path::new(output_path.as_str()))
+                                    {
+                                        error!("verify file digest: {}", err);
+                                        handle_error(&out_stream_tx, err).await;
+                                        return;
                                     }
                                 }
                             }
@@ -667,6 +705,93 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(task))
     }
 
+    /// list_tasks lists the tasks.
+    #[instrument(skip_all, fields(task_id, url))]
+    async fn list_task_entries(
+        &self,
+        request: Request<ListTaskEntriesRequest>,
+    ) -> Result<Response<ListTaskEntriesResponse>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Span record the task id and url.
+        Span::current().record("task_id", request.task_id.as_str());
+        Span::current().record("url", request.url.as_str());
+        info!("list tasks in download server");
+
+        // Collect the list tasks started metrics.
+        collect_list_task_entries_started_metrics(TaskType::Standard as i32);
+
+        // Build the backend.
+        let backend = self
+            .task
+            .backend_factory
+            .build(request.url.as_str())
+            .map_err(|err| {
+                // Collect the list tasks failure metrics.
+                collect_list_task_entries_failure_metrics(TaskType::Standard as i32);
+
+                error!("build backend: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        let timeout = match request.timeout {
+            Some(timeout) => Duration::try_from(timeout).map_err(|err| {
+                // Collect the list tasks failure metrics.
+                collect_list_task_entries_failure_metrics(TaskType::Standard as i32);
+
+                error!("parse timeout: {}", err);
+                Status::invalid_argument(err.to_string())
+            })?,
+            None => self.config.download.piece_timeout,
+        };
+
+        // Head the task entries.
+        let response = backend
+            .head(HeadRequest {
+                task_id: request.task_id.clone(),
+                url: request.url.clone(),
+                http_header: Some(hashmap_to_headermap(&request.request_header).map_err(
+                    |err| {
+                        error!("parse request header: {}", err);
+                        Status::internal(err.to_string())
+                    },
+                )?),
+                timeout,
+                client_cert: None,
+                object_storage: request.object_storage.clone(),
+                hdfs: request.hdfs.clone(),
+            })
+            .await
+            .map_err(|err| {
+                // Collect the list tasks failure metrics.
+                collect_list_task_entries_failure_metrics(TaskType::Standard as i32);
+
+                error!("list task entries: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        Ok(Response::new(ListTaskEntriesResponse {
+            content_length: response.content_length.unwrap_or_default(),
+            response_header: headermap_to_hashmap(&response.http_header.unwrap_or_default()),
+            status_code: response.http_status_code.map(|code| code.as_u16().into()),
+            entries: response
+                .entries
+                .into_iter()
+                .map(|dir_entry| Entry {
+                    url: dir_entry.url,
+                    content_length: dir_entry.content_length as u64,
+                    is_dir: dir_entry.is_dir,
+                })
+                .collect(),
+        }))
+    }
+
     /// delete_task calls the dfdaemon to delete the task.
     #[instrument(skip_all, fields(host_id, task_id))]
     async fn delete_task(
@@ -748,7 +873,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         ReceiverStream<Result<DownloadPersistentCacheTaskResponse, Status>>;
 
     /// download_persistent_cache_task downloads the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id))]
+    #[instrument(skip_all, fields(host_id, task_id, peer_id, content_length))]
     async fn download_persistent_cache_task(
         &self,
         request: Request<DownloadPersistentCacheTaskRequest>,
@@ -834,11 +959,14 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 task
             }
         };
+
         info!(
             "content length {}, piece length {}",
             task.content_length(),
             task.piece_length()
         );
+
+        Span::current().record("content_length", task.content_length());
 
         // Initialize stream channel.
         let request_clone = request.clone();
@@ -921,22 +1049,48 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                                 )),
                                             )
                                             .await;
+                                            return;
                                         }
                                         Err(err) => {
                                             error!("check output path: {}", err);
                                             handle_error(&out_stream_tx, err).await;
+                                            return;
                                         }
                                     }
-
-                                    return;
-                                }
-
-                                if let Err(err) = task_manager_clone
+                                } else if let Err(err) = task_manager_clone
                                     .copy_task(task_clone.id.as_str(), output_path)
                                     .await
                                 {
                                     error!("copy task: {}", err);
                                     handle_error(&out_stream_tx, err).await;
+                                    return;
+                                }
+                            }
+
+                            // Verify the file digest if it is provided.
+                            if let Some(raw_digest) = &request_clone.digest {
+                                let digest = match raw_digest.parse::<Digest>() {
+                                    Ok(digest) => digest,
+                                    Err(err) => {
+                                        error!("parse digest: {}", err);
+                                        handle_error(
+                                            &out_stream_tx,
+                                            Status::invalid_argument(format!(
+                                                "invalid digest({}): {}",
+                                                raw_digest, err
+                                            )),
+                                        )
+                                        .await;
+                                        return;
+                                    }
+                                };
+
+                                if let Err(err) =
+                                    verify_file_digest(digest, Path::new(output_path.as_str()))
+                                {
+                                    error!("verify file digest: {}", err);
+                                    handle_error(&out_stream_tx, err).await;
+                                    return;
                                 }
                             }
                         }
@@ -1185,6 +1339,18 @@ impl DfdaemonDownloadClient {
     pub async fn stat_task(&self, request: DfdaemonStatTaskRequest) -> ClientResult<Task> {
         let request = Self::make_request(request);
         let response = self.client.clone().stat_task(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// list_task_entries lists the task entries.
+    #[instrument(skip_all)]
+    pub async fn list_task_entries(
+        &self,
+        request: ListTaskEntriesRequest,
+    ) -> ClientResult<ListTaskEntriesResponse> {
+        let request = Self::make_request(request);
+        info!("list task entries request: {:?}", request);
+        let response = self.client.clone().list_task_entries(request).await?;
         Ok(response.into_inner())
     }
 

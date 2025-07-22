@@ -27,11 +27,11 @@ percent-encoding.workspace = true
 futures.workspace = true
 reqwest-retry = "0.7"
 reqwest-tracing = "0.5"
-libloading = "0.8.7"
+libloading = "0.8.8"
 
 [dev-dependencies]
 tempfile.workspace = true
-wiremock = "0.6.3"
+wiremock = "0.6.4"
 rustls-pki-types.workspace = true
 rustls-pemfile.workspace = true
 hyper.workspace = true

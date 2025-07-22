@@ -938,7 +938,7 @@ impl Metadata<RocksdbStorageEngine> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempdir::TempDir;
+    use tempfile::tempdir;
 
     #[test]
     fn test_calculate_digest() {
@@ -956,7 +956,7 @@ mod tests {
 
     #[test]
     fn should_create_metadata() {
-        let dir = TempDir::new("metadata").unwrap();
+        let dir = tempdir().unwrap();
         let log_dir = dir.path().join("log");
         let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
         assert!(metadata.get_tasks().unwrap().is_empty());
@@ -968,7 +968,7 @@ mod tests {
 
     #[test]
     fn test_task_lifecycle() {
-        let dir = TempDir::new("metadata").unwrap();
+        let dir = tempdir().unwrap();
         let log_dir = dir.path().join("log");
         let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
         let task_id = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
@@ -1028,7 +1028,7 @@ mod tests {
 
     #[test]
     fn test_piece_lifecycle() {
-        let dir = TempDir::new("metadata").unwrap();
+        let dir = tempdir().unwrap();
         let log_dir = dir.path().join("log");
         let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
         let task_id = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";

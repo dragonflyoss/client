@@ -152,6 +152,12 @@ fn default_download_piece_timeout() -> Duration {
     Duration::from_secs(120)
 }
 
+/// default_collected_download_piece_timeout is the default timeout for collecting one piece from the parent in the stream.
+#[inline]
+fn default_collected_download_piece_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
 /// default_download_concurrent_piece_count is the default number of concurrent pieces to download.
 #[inline]
 fn default_download_concurrent_piece_count() -> u32 {
@@ -162,6 +168,12 @@ fn default_download_concurrent_piece_count() -> u32 {
 #[inline]
 fn default_download_max_schedule_count() -> u32 {
     5
+}
+
+/// default_tracing_path is the default tracing path for dfdaemon.
+#[inline]
+fn default_tracing_path() -> Option<PathBuf> {
+    Some(PathBuf::from("/v1/traces"))
 }
 
 /// default_scheduler_announce_interval is the default interval to announce peer to the scheduler.
@@ -242,6 +254,12 @@ fn default_gc_interval() -> Duration {
 #[inline]
 fn default_gc_policy_task_ttl() -> Duration {
     Duration::from_secs(21_600)
+}
+
+/// default_gc_policy_dist_threshold is the default threshold of the disk usage to do gc.
+#[inline]
+fn default_gc_policy_dist_threshold() -> ByteSize {
+    ByteSize::default()
 }
 
 /// default_gc_policy_dist_high_threshold_percent is the default high threshold percent of the disk usage.
@@ -401,6 +419,12 @@ pub struct Host {
 
     /// ip is the advertise ip of the host.
     pub ip: Option<IpAddr>,
+
+    /// scheduler_cluster_id is the ID of the cluster to which the scheduler belongs.
+    /// NOTE: This field is used to identify the cluster to which the scheduler belongs.
+    /// If this flag is set, the idc, location, hostname and ip will be ignored when listing schedulers.
+    #[serde(rename = "schedulerClusterID")]
+    pub scheduler_cluster_id: Option<u64>,
 }
 
 /// Host implements Default.
@@ -411,6 +435,7 @@ impl Default for Host {
             location: None,
             hostname: default_host_hostname(),
             ip: None,
+            scheduler_cluster_id: None,
         }
     }
 }
@@ -480,6 +505,14 @@ pub struct Download {
     #[serde(default = "default_download_piece_timeout", with = "humantime_serde")]
     pub piece_timeout: Duration,
 
+    /// collected_piece_timeout is the timeout for collecting one piece from the parent in the
+    /// stream.
+    #[serde(
+        default = "default_collected_download_piece_timeout",
+        with = "humantime_serde"
+    )]
+    pub collected_piece_timeout: Duration,
+
     /// concurrent_piece_count is the number of concurrent pieces to download.
     #[serde(default = "default_download_concurrent_piece_count")]
     #[validate(range(min = 1))]
@@ -494,6 +527,7 @@ impl Default for Download {
             parent_selector: ParentSelector::default(),
             rate_limit: default_download_rate_limit(),
             piece_timeout: default_download_piece_timeout(),
+            collected_piece_timeout: default_collected_download_piece_timeout(),
             concurrent_piece_count: default_download_concurrent_piece_count(),
         }
     }
@@ -1021,9 +1055,9 @@ pub struct Storage {
     /// |       |     -- Partial -->|   Cache   |          |
     /// |       |     |             +-----------+          |
     /// |       v     |                |    |              |
-    /// |   Download  |              Miss   |              |             
+    /// |   Download  |              Miss   |              |
     /// |     Task -->|                |    --- Hit ------>|<-- 2.Download
-    /// |             |                |               ^   |              
+    /// |             |                |               ^   |
     /// |             |                v               |   |
     /// |             |          +-----------+         |   |
     /// |             -- Full -->|   Disk    |----------   |
@@ -1062,6 +1096,19 @@ pub struct Policy {
     )]
     pub task_ttl: Duration,
 
+    /// dist_threshold optionally defines a specific disk capacity to be used as the base for
+    /// calculating GC trigger points with `dist_high_threshold_percent` and `dist_low_threshold_percent`.
+    ///
+    /// - If a value is provided (e.g., "500GB"), the percentage-based thresholds (`dist_high_threshold_percent`,
+    ///   `dist_low_threshold_percent`) are applied relative to this specified capacity.
+    /// - If not provided or set to 0 (the default behavior), these percentage-based thresholds are applied
+    ///   relative to the total actual disk space.
+    ///
+    /// This allows dfdaemon to effectively manage a logical portion of the disk for its cache,
+    /// rather than always considering the entire disk volume.
+    #[serde(with = "bytesize_serde", default = "default_gc_policy_dist_threshold")]
+    pub dist_threshold: ByteSize,
+
     /// dist_high_threshold_percent is the high threshold percent of the disk usage.
     /// If the disk usage is greater than the threshold, dfdaemon will do gc.
     #[serde(default = "default_gc_policy_dist_high_threshold_percent")]
@@ -1079,6 +1126,7 @@ pub struct Policy {
 impl Default for Policy {
     fn default() -> Self {
         Policy {
+            dist_threshold: default_gc_policy_dist_threshold(),
             task_ttl: default_gc_policy_task_ttl(),
             dist_high_threshold_percent: default_gc_policy_dist_high_threshold_percent(),
             dist_low_threshold_percent: default_gc_policy_dist_low_threshold_percent(),
@@ -1438,11 +1486,37 @@ pub struct Stats {
 }
 
 /// Tracing is the tracing configuration for dfdaemon.
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Tracing {
-    /// addr is the address to report tracing log.
-    pub addr: Option<String>,
+    /// Protocol specifies the communication protocol for the tracing server.
+    /// Supported values: "http", "https", "grpc" (default: None).
+    /// This determines how tracing logs are transmitted to the server.
+    pub protocol: Option<String>,
+
+    /// endpoint is the endpoint to report tracing log, example: "localhost:4317".
+    pub endpoint: Option<String>,
+
+    /// path is the path to report tracing log, example: "/v1/traces" if the protocol is "http" or
+    /// "https".
+    #[serde(default = "default_tracing_path")]
+    pub path: Option<PathBuf>,
+
+    /// headers is the headers to report tracing log.
+    #[serde(with = "http_serde::header_map")]
+    pub headers: reqwest::header::HeaderMap,
+}
+
+/// Tracing implements Default.
+impl Default for Tracing {
+    fn default() -> Self {
+        Self {
+            protocol: None,
+            endpoint: None,
+            path: default_tracing_path(),
+            headers: reqwest::header::HeaderMap::new(),
+        }
+    }
 }
 
 /// Config is the configuration for dfdaemon.
@@ -2046,18 +2120,18 @@ key: /etc/ssl/private/client.pem
     fn validate_policy() {
         let valid_policy = Policy {
             task_ttl: Duration::from_secs(12 * 3600),
+            dist_threshold: ByteSize::mb(100),
             dist_high_threshold_percent: 90,
             dist_low_threshold_percent: 70,
         };
-
         assert!(valid_policy.validate().is_ok());
 
         let invalid_policy = Policy {
             task_ttl: Duration::from_secs(12 * 3600),
+            dist_threshold: ByteSize::mb(100),
             dist_high_threshold_percent: 100,
             dist_low_threshold_percent: 70,
         };
-
         assert!(invalid_policy.validate().is_err());
     }
 
@@ -2157,12 +2231,19 @@ key: /etc/ssl/private/client.pem
     fn deserialize_tracing_correctly() {
         let json_data = r#"
         {
-            "addr": "http://tracing.example.com"
+            "protocol": "http",
+            "endpoint": "tracing.example.com",
+            "path": "/v1/traces",
+            "headers": {
+                "X-Custom-Header": "value"
+            }
         }"#;
 
         let tracing: Tracing = serde_json::from_str(json_data).unwrap();
-
-        assert_eq!(tracing.addr, Some("http://tracing.example.com".to_string()));
+        assert_eq!(tracing.protocol, Some("http".to_string()));
+        assert_eq!(tracing.endpoint, Some("tracing.example.com".to_string()));
+        assert_eq!(tracing.path, Some(PathBuf::from("/v1/traces")));
+        assert!(tracing.headers.contains_key("X-Custom-Header"));
     }
 
     #[test]

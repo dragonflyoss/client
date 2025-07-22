@@ -252,7 +252,7 @@ where
 mod tests {
     use super::*;
     use serde::{Deserialize, Serialize};
-    use tempdir::TempDir;
+    use tempfile::tempdir;
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
     struct Object {
@@ -265,7 +265,7 @@ mod tests {
     }
 
     fn create_test_engine() -> RocksdbStorageEngine {
-        let temp_dir = TempDir::new("rocksdb_test").unwrap();
+        let temp_dir = tempdir().unwrap();
         let log_dir = temp_dir.path().to_path_buf();
         RocksdbStorageEngine::open(temp_dir.path(), &log_dir, &[Object::NAMESPACE], false).unwrap()
     }

@@ -23,7 +23,6 @@ use libloading::Library;
 use reqwest::header::HeaderMap;
 use rustls_pki_types::CertificateDer;
 use std::path::Path;
-use std::str::FromStr;
 use std::{collections::HashMap, pin::Pin, time::Duration};
 use std::{fmt::Debug, fs};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -241,9 +240,9 @@ impl BackendFactory {
         Ok(backend_factory)
     }
 
-    /// supported_download_directory returns whether the scheme supports directory download.
-    pub fn supported_download_directory(scheme: &str) -> bool {
-        object_storage::Scheme::from_str(scheme).is_ok() || scheme == hdfs::HDFS_SCHEME
+    /// unsupported_download_directory returns whether the scheme does not support directory download.
+    pub fn unsupported_download_directory(scheme: &str) -> bool {
+        scheme == http::HTTP_SCHEME || scheme == http::HTTPS_SCHEME
     }
 
     /// build returns the backend by the scheme of the url.
@@ -331,7 +330,7 @@ impl BackendFactory {
         if !backend_plugin_dir.exists() {
             warn!(
                 "skip loading plugin backends, because the plugin directory {} does not exist",
-                plugin_dir.display()
+                backend_plugin_dir.display()
             );
             return Ok(());
         }

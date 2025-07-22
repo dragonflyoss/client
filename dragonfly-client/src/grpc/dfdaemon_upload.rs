@@ -67,7 +67,7 @@ use tonic::{
     Code, Request, Response, Status,
 };
 use tower::ServiceBuilder;
-use tracing::{debug, error, info, instrument, Instrument, Span};
+use tracing::{error, info, instrument, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
@@ -119,8 +119,7 @@ impl DfdaemonUploadServer {
     pub async fn run(&mut self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         // Initialize the grpc service.
         let interface =
-            get_interface_info(self.config.host.ip.unwrap(), self.config.upload.rate_limit)
-                .unwrap();
+            get_interface_info(self.config.host.ip.unwrap(), self.config.upload.rate_limit);
 
         let service = DfdaemonUploadGRPCServer::with_interceptor(
             DfdaemonUploadServerHandler {
@@ -204,7 +203,7 @@ impl DfdaemonUploadServer {
 /// DfdaemonUploadServerHandler is the handler of the dfdaemon upload grpc service.
 pub struct DfdaemonUploadServerHandler {
     /// interface is the network interface.
-    interface: Interface,
+    interface: Option<Interface>,
 
     /// socket_path is the path of the unix domain socket.
     socket_path: PathBuf,
@@ -223,7 +222,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
     /// download_task downloads the task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id))]
+    #[instrument(skip_all, fields(host_id, task_id, peer_id, url, content_length))]
     async fn download_task(
         &self,
         request: Request<DownloadTaskRequest>,
@@ -274,6 +273,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
+        Span::current().record("url", download.url.clone());
         info!("download task in upload server");
 
         // Download task started.
@@ -353,6 +353,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             content_length,
             task.piece_length().unwrap_or_default()
         );
+
+        Span::current().record("content_length", content_length);
 
         // Download's range priority is higher than the request header's range.
         // If download protocol is http, use the range of the request header.
@@ -714,7 +716,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     /// SyncPiecesStream is the stream of the sync pieces response.
     type SyncPiecesStream = ReceiverStream<Result<SyncPiecesResponse, Status>>;
 
-    /// sync_pieces provides the piece metadata for parent.
+    /// sync_pieces provides the piece metadata for parent. If the per-piece collection timeout is exceeded,
+    /// the stream will be closed.
     #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
     async fn sync_pieces(
         &self,
@@ -754,7 +757,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         tokio::spawn(
             async move {
                 loop {
-                    let mut has_started_piece = false;
                     let mut finished_piece_numbers = Vec::new();
                     for interested_piece_number in interested_piece_numbers.iter() {
                         let piece = match task_manager.piece.get(
@@ -819,11 +821,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             finished_piece_numbers.push(piece.number);
                             continue;
                         }
-
-                        // Check whether the piece is started.
-                        if piece.is_started() {
-                            has_started_piece = true;
-                        }
                     }
 
                     // Remove the finished piece numbers from the interested piece numbers.
@@ -833,13 +830,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     // If all the interested pieces are finished, return.
                     if interested_piece_numbers.is_empty() {
                         info!("all the interested pieces are finished");
-                        drop(out_stream_tx);
-                        return;
-                    }
-
-                    // If there is no started piece, return.
-                    if !has_started_piece {
-                        info!("there is no started piece");
                         drop(out_stream_tx);
                         return;
                     }
@@ -858,7 +848,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 
     /// download_piece provides the piece content for parent.
-    #[instrument(skip_all, fields(host_id, remote_host_id, task_id, piece_id))]
+    #[instrument(
+        skip_all,
+        fields(host_id, remote_host_id, task_id, piece_id, piece_length)
+    )]
     async fn download_piece(
         &self,
         request: Request<DownloadPieceRequest>,
@@ -906,6 +899,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 Status::not_found("piece metadata not found")
             })?;
 
+        Span::current().record("piece_length", piece.length);
+
         // Collect upload piece started metrics.
         collect_upload_piece_started_metrics();
         info!("start upload piece content");
@@ -939,6 +934,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             error!("upload piece content failed: {}", err);
             Status::internal(err.to_string())
         })?;
+        drop(reader);
 
         // Collect upload piece finished metrics.
         collect_upload_piece_finished_metrics();
@@ -1019,24 +1015,21 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                     // Init response.
                     let mut host = Host::default();
-                    if let Some(network_data) = networks.get(&interface.name) {
-                        let network = Network {
-                            download_rate: (network_data.received() as f64
-                                / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs_f64())
-                            .round() as u64,
-                            // Convert bandwidth to bytes per second.
-                            download_rate_limit: interface.bandwidth / 8 * MB,
-                            upload_rate: (network_data.transmitted() as f64
-                                / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs_f64())
-                            .round() as u64,
-                            // Convert bandwidth to bytes per second.
-                            upload_rate_limit: interface.bandwidth / 8 * MB,
-                            ..Default::default()
+                    if let Some(interface) = &interface {
+                        if let Some(network_data) = networks.get(&interface.name) {
+                            host.network = Some(Network {
+                                download_rate: network_data.received()
+                                    / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs(),
+                                // Convert bandwidth to bytes per second.
+                                download_rate_limit: interface.bandwidth / 8 * MB,
+                                upload_rate: network_data.transmitted()
+                                    / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs(),
+                                // Convert bandwidth to bytes per second.
+                                upload_rate_limit: interface.bandwidth / 8 * MB,
+                                ..Default::default()
+                            });
                         };
-                        host.network = Some(network.clone());
-
-                        debug!("interface: {}, network: {:?}", interface.name, network);
-                    };
+                    }
 
                     // Send host info.
                     match out_stream_tx.send(Ok(host.clone())).await {
@@ -1063,7 +1056,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         ReceiverStream<Result<DownloadPersistentCacheTaskResponse, Status>>;
 
     /// download_persistent_cache_task downloads the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id))]
+    #[instrument(skip_all, fields(host_id, task_id, peer_id, content_length))]
     async fn download_persistent_cache_task(
         &self,
         request: Request<DownloadPersistentCacheTaskRequest>,
@@ -1149,11 +1142,14 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 task
             }
         };
+
         info!(
             "content length {}, piece length {}",
             task.content_length(),
             task.piece_length()
         );
+
+        Span::current().record("content_length", task.content_length());
 
         // Initialize stream channel.
         let request_clone = request.clone();
@@ -1448,7 +1444,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         tokio::spawn(
             async move {
                 loop {
-                    let mut has_started_piece = false;
                     let mut finished_piece_numbers = Vec::new();
                     for interested_piece_number in interested_piece_numbers.iter() {
                         let piece = match task_manager.piece.get(
@@ -1507,11 +1502,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             finished_piece_numbers.push(piece.number);
                             continue;
                         }
-
-                        // Check whether the piece is started.
-                        if piece.is_started() {
-                            has_started_piece = true;
-                        }
                     }
 
                     // Remove the finished piece numbers from the interested piece numbers.
@@ -1521,13 +1511,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     // If all the interested pieces are finished, return.
                     if interested_piece_numbers.is_empty() {
                         info!("all the interested persistent cache pieces are finished");
-                        drop(out_stream_tx);
-                        return;
-                    }
-
-                    // If there is no started piece, return.
-                    if !has_started_piece {
-                        info!("there is no started persistent cache piece");
                         drop(out_stream_tx);
                         return;
                     }
@@ -1633,6 +1616,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             error!("upload persistent cache piece content failed: {}", err);
             Status::internal(err.to_string())
         })?;
+        drop(reader);
 
         // Collect upload piece finished metrics.
         collect_upload_piece_finished_metrics();
@@ -1863,6 +1847,7 @@ impl DfdaemonUploadClient {
     }
 
     /// sync_persistent_cache_pieces provides the persistent cache piece metadata for parent.
+    /// If the per-piece collection timeout is exceeded, the stream will be closed.
     #[instrument(skip_all)]
     pub async fn sync_persistent_cache_pieces(
         &self,

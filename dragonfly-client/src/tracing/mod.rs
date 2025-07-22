@@ -16,12 +16,14 @@
 
 use dragonfly_client_config::dfdaemon::Host;
 use opentelemetry::{global, trace::TracerProvider, KeyValue};
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::{WithExportConfig, WithTonicConfig};
 use opentelemetry_sdk::{propagation::TraceContextPropagator, Resource};
 use rolling_file::*;
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
+use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
 use tracing::{info, Level};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_opentelemetry::OpenTelemetryLayer;
@@ -42,7 +44,10 @@ pub fn init_tracing(
     log_dir: PathBuf,
     log_level: Level,
     log_max_files: usize,
-    jaeger_addr: Option<String>,
+    otel_protocol: Option<String>,
+    otel_endpoint: Option<String>,
+    otel_path: Option<PathBuf>,
+    otel_headers: Option<reqwest::header::HeaderMap>,
     host: Option<Host>,
     is_seed_peer: bool,
     console: bool,
@@ -102,20 +107,55 @@ pub fn init_tracing(
         .with(file_logging_layer)
         .with(stdout_logging_layer);
 
-    // Setup jaeger layer.
-    if let Some(mut jaeger_addr) = jaeger_addr {
-        jaeger_addr = if jaeger_addr.starts_with("http://") {
-            jaeger_addr
-        } else {
-            format!("http://{}", jaeger_addr)
-        };
+    // If OTLP protocol and endpoint are provided, set up OpenTelemetry tracing.
+    if let (Some(protocol), Some(endpoint)) = (otel_protocol, otel_endpoint) {
+        let otlp_exporter = match protocol.as_str() {
+            "grpc" => {
+                let mut metadata = MetadataMap::new();
+                if let Some(headers) = otel_headers {
+                    for (key, value) in headers.iter() {
+                        metadata.insert(
+                            MetadataKey::from_str(key.as_str())
+                                .expect("failed to create metadata key"),
+                            MetadataValue::from_str(value.to_str().unwrap())
+                                .expect("failed to create metadata value"),
+                        );
+                    }
+                }
 
-        let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
-            .with_tonic()
-            .with_endpoint(jaeger_addr)
-            .with_timeout(SPAN_EXPORTER_TIMEOUT)
-            .build()
-            .expect("failed to create OTLP exporter");
+                let endpoint_url = url::Url::parse(&format!("http://{}", endpoint))
+                    .expect("failed to parse OTLP endpoint URL");
+
+                opentelemetry_otlp::SpanExporter::builder()
+                    .with_tonic()
+                    .with_endpoint(endpoint_url)
+                    .with_timeout(SPAN_EXPORTER_TIMEOUT)
+                    .with_metadata(metadata)
+                    .build()
+                    .expect("failed to create OTLP exporter")
+            }
+            "http" | "https" => {
+                let mut endpoint_url = url::Url::parse(&format!("{}://{}", protocol, endpoint))
+                    .expect("failed to parse OTLP endpoint URL");
+
+                if let Some(path) = otel_path {
+                    endpoint_url = endpoint_url
+                        .join(path.to_str().unwrap())
+                        .expect("failed to join OTLP endpoint path");
+                }
+
+                opentelemetry_otlp::SpanExporter::builder()
+                    .with_http()
+                    .with_endpoint(endpoint_url.as_str())
+                    .with_protocol(opentelemetry_otlp::Protocol::HttpJson)
+                    .with_timeout(SPAN_EXPORTER_TIMEOUT)
+                    .build()
+                    .expect("failed to create OTLP exporter")
+            }
+            _ => {
+                panic!("unsupported OTLP protocol: {}", protocol);
+            }
+        };
 
         let host = host.unwrap();
         let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
@@ -163,6 +203,7 @@ pub fn init_tracing(
         subscriber.init();
     }
 
+    std::panic::set_hook(Box::new(tracing_panic::panic_hook));
     info!(
         "tracing initialized directory: {}, level: {}",
         log_dir.as_path().display(),
