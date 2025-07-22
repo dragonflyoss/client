@@ -995,6 +995,7 @@ dependencies = [
  "prometheus",
  "prost-wkt-types",
  "rcgen",
+ "regex",
  "reqwest",
  "rolling-file",
  "rustls 0.22.4",
