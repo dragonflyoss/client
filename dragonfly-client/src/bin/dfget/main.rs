@@ -996,7 +996,7 @@ fn filter_entries(
                 }
                 for c in file.chars() {
                     match c {
-                        '*' => pat.push_str(".*"),
+                        '*' => pat.push_str("[^/]*"),
                         '?' => pat.push('.'),
                         '.' => pat.push_str("\\."),
                         _ => pat.push(c),
@@ -1367,16 +1367,9 @@ mod tests {
             },
         ];
 
-        let filtered_entries = filter_entries(url, entries, Some(vec!["dir/file*".to_string()]));
-        assert_eq!(filtered_entries.len(), 2);
-        assert_eq!(
-            filtered_entries[0].url,
-            "http://example.com/root/dir/file.txt"
-        );
-        assert_eq!(
-            filtered_entries[1].url,
-            "http://example.com/root/dir/file2.txt"
-        );
+        let filtered_entries = filter_entries(url, entries, Some(vec!["dir/subdir/*.txt".to_string()]));
+        assert_eq!(filtered_entries.len(), 1);
+        assert_eq!(filtered_entries[0].url, "http://example.com/root/dir/subdir/file3.txt");
     }
 
     #[test]
