@@ -692,10 +692,7 @@ pub struct ParentSelector {
     pub sync_interval: Duration,
 
     /// timeout is the timeout for the sync host.
-    #[serde(
-        default = "default_parent_selector_timeout",
-        with = "humantime_serde"
-    )]
+    #[serde(default = "default_parent_selector_timeout", with = "humantime_serde")]
     pub timeout: Duration,
 
     /// capacity is the maximum number of gRPC connections that `DfdaemonUpload.SyncHost` maintains

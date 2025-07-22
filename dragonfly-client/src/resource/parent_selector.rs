@@ -273,10 +273,7 @@ impl ParentSelector {
     }
 
     /// get_connection returns a connection guard for the given parent, creating the connection if needed.
-    pub async fn get_connection(
-        &self,
-        parent: &CollectedParent,
-    ) -> Result<DfdaemonUploadClient> {
+    pub async fn get_connection(&self, parent: &CollectedParent) -> Result<DfdaemonUploadClient> {
         let remote_host_id = Self::get_host_id(&parent.host);
 
         // Try to get existing connection
@@ -363,11 +360,13 @@ impl ParentSelector {
                         client,
                         shutdown,
                         dfdaemon_shutdown_clone,
-                    ).await {
+                    )
+                    .await
+                    {
                         error!("sync host for parent {} failed: {}", parent.id, err);
                         return Err(err);
                     }
-                    
+
                     // Check if connection should be cleaned up.
                     if let Some(connection) = connections.get(&remote_host_id) {
                         if connection.active_requests() == 0 {
