@@ -67,7 +67,7 @@ use tonic::{
     Code, Request, Response, Status,
 };
 use tower::ServiceBuilder;
-use tracing::{debug, error, info, instrument, Instrument, Span};
+use tracing::{error, info, instrument, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
@@ -119,8 +119,7 @@ impl DfdaemonUploadServer {
     pub async fn run(&mut self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         // Initialize the grpc service.
         let interface =
-            get_interface_info(self.config.host.ip.unwrap(), self.config.upload.rate_limit)
-                .unwrap();
+            get_interface_info(self.config.host.ip.unwrap(), self.config.upload.rate_limit);
 
         let service = DfdaemonUploadGRPCServer::with_interceptor(
             DfdaemonUploadServerHandler {
@@ -204,7 +203,7 @@ impl DfdaemonUploadServer {
 /// DfdaemonUploadServerHandler is the handler of the dfdaemon upload grpc service.
 pub struct DfdaemonUploadServerHandler {
     /// interface is the network interface.
-    interface: Interface,
+    interface: Option<Interface>,
 
     /// socket_path is the path of the unix domain socket.
     socket_path: PathBuf,
@@ -1016,22 +1015,21 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                     // Init response.
                     let mut host = Host::default();
-                    if let Some(network_data) = networks.get(&interface.name) {
-                        let network = Network {
-                            download_rate: network_data.received()
-                                / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs(),
-                            // Convert bandwidth to bytes per second.
-                            download_rate_limit: interface.bandwidth / 8 * MB,
-                            upload_rate: network_data.transmitted()
-                                / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs(),
-                            // Convert bandwidth to bytes per second.
-                            upload_rate_limit: interface.bandwidth / 8 * MB,
-                            ..Default::default()
+                    if let Some(interface) = &interface {
+                        if let Some(network_data) = networks.get(&interface.name) {
+                            host.network = Some(Network {
+                                download_rate: network_data.received()
+                                    / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs(),
+                                // Convert bandwidth to bytes per second.
+                                download_rate_limit: interface.bandwidth / 8 * MB,
+                                upload_rate: network_data.transmitted()
+                                    / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs(),
+                                // Convert bandwidth to bytes per second.
+                                upload_rate_limit: interface.bandwidth / 8 * MB,
+                                ..Default::default()
+                            });
                         };
-                        host.network = Some(network.clone());
-
-                        debug!("interface: {}, network: {:?}", interface.name, network);
-                    };
+                    }
 
                     // Send host info.
                     match out_stream_tx.send(Ok(host.clone())).await {
