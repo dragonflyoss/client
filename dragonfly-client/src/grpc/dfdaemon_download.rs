@@ -230,7 +230,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
     /// download_task tells the dfdaemon to download the task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id, url, content_length))]
+    #[instrument(
+        skip_all,
+        fields(host_id, task_id, peer_id, url, remote_ip, content_length)
+    )]
     async fn download_task(
         &self,
         request: Request<DownloadTaskRequest>,
@@ -282,6 +285,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
         Span::current().record("url", download.url.clone());
+        Span::current().record(
+            "remote_ip",
+            download.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("download task in download server");
 
         // Download task started.
@@ -662,7 +669,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 
     /// stat_task gets the status of the task.
-    #[instrument(skip_all, fields(host_id, task_id))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_task(
         &self,
         request: Request<DfdaemonStatTaskRequest>,
@@ -684,6 +691,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("stat task in download server");
 
         // Collect the stat task metrics.
@@ -706,7 +717,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 
     /// list_tasks lists the tasks.
-    #[instrument(skip_all, fields(task_id, url))]
+    #[instrument(skip_all, fields(task_id, url, remote_ip))]
     async fn list_task_entries(
         &self,
         request: Request<ListTaskEntriesRequest>,
@@ -722,6 +733,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Span record the task id and url.
         Span::current().record("task_id", request.task_id.as_str());
         Span::current().record("url", request.url.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("list tasks in download server");
 
         // Collect the list tasks started metrics.
@@ -793,7 +808,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 
     /// delete_task calls the dfdaemon to delete the task.
-    #[instrument(skip_all, fields(host_id, task_id))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn delete_task(
         &self,
         request: Request<DeleteTaskRequest>,
@@ -815,6 +830,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("delete task in download server");
 
         // Collect the delete task started metrics.
@@ -873,7 +892,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         ReceiverStream<Result<DownloadPersistentCacheTaskResponse, Status>>;
 
     /// download_persistent_cache_task downloads the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id, content_length))]
+    #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip, content_length))]
     async fn download_persistent_cache_task(
         &self,
         request: Request<DownloadPersistentCacheTaskRequest>,
@@ -906,6 +925,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("download persistent cache task in download server");
 
         // Download task started.
@@ -1127,7 +1150,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 
     /// upload_persistent_cache_task uploads the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id))]
+    #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip))]
     async fn upload_persistent_cache_task(
         &self,
         request: Request<UploadPersistentCacheTaskRequest>,
@@ -1174,6 +1197,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("upload persistent cache task in download server");
 
         // Collect upload task started metrics.
@@ -1224,7 +1251,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 
     /// stat_persistent_cache_task stats the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_persistent_cache_task(
         &self,
         request: Request<StatPersistentCacheTaskRequest>,
@@ -1246,6 +1273,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("stat persistent cache task in download server");
 
         // Collect the stat persistent cache task started metrics.

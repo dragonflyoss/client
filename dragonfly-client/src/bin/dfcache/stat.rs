@@ -22,6 +22,7 @@ use dragonfly_client_core::{
     Error, Result,
 };
 use humantime::format_duration;
+use local_ip_address::local_ip;
 use std::time::Duration;
 use tabled::{
     settings::{object::Rows, Alignment, Modify, Style},
@@ -238,6 +239,7 @@ impl StatCommand {
         let task = dfdaemon_download_client
             .stat_persistent_cache_task(StatPersistentCacheTaskRequest {
                 task_id: self.id.clone(),
+                remote_ip: Some(local_ip().unwrap().to_string()),
             })
             .await?;
 

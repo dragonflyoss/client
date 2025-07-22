@@ -208,7 +208,7 @@ impl Proxy {
                                 service_fn(move |request|{
                                     let context = context.clone();
                                     async move {
-                                        handler(context.config, context.task, request, context.dfdaemon_download_client, context.registry_cert, context.server_ca_cert).await
+                                        handler(context.config, context.task, request, context.dfdaemon_download_client, context.registry_cert, context.server_ca_cert, remote_address.ip()).await
                                     }
                                 } ),
                                 )
@@ -231,7 +231,7 @@ impl Proxy {
 }
 
 /// handler handles the request from the client.
-#[instrument(skip_all, fields(uri, method))]
+#[instrument(skip_all, fields(uri, method, remote_ip))]
 pub async fn handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -239,7 +239,13 @@ pub async fn handler(
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
+    remote_ip: std::net::IpAddr,
 ) -> ClientResult<Response> {
+    // Span record the uri and method.
+    Span::current().record("uri", request.uri().to_string().as_str());
+    Span::current().record("method", request.method().as_str());
+    Span::current().record("remote_ip", remote_ip.to_string().as_str());
+
     // Record the proxy request started metrics. The metrics will be recorded
     // when the request is kept alive.
     collect_proxy_request_started_metrics();
@@ -252,6 +258,7 @@ pub async fn handler(
                 config,
                 task,
                 request,
+                remote_ip,
                 dfdaemon_download_client,
                 registry_cert,
                 server_ca_cert,
@@ -263,15 +270,12 @@ pub async fn handler(
             config,
             task,
             request,
+            remote_ip,
             dfdaemon_download_client,
             registry_cert,
         )
         .await;
     }
-
-    // Span record the uri and method.
-    Span::current().record("uri", request.uri().to_string().as_str());
-    Span::current().record("method", request.method().as_str());
 
     // Handle CONNECT request.
     if Method::CONNECT == request.method() {
@@ -279,6 +283,7 @@ pub async fn handler(
             config,
             task,
             request,
+            remote_ip,
             dfdaemon_download_client,
             registry_cert,
             server_ca_cert,
@@ -290,6 +295,7 @@ pub async fn handler(
         config,
         task,
         request,
+        remote_ip,
         dfdaemon_download_client,
         registry_cert,
     )
@@ -302,6 +308,7 @@ pub async fn registry_mirror_http_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
+    remote_ip: std::net::IpAddr,
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
@@ -310,6 +317,7 @@ pub async fn registry_mirror_http_handler(
         config,
         task,
         request,
+        remote_ip,
         dfdaemon_download_client,
         registry_cert,
     )
@@ -322,6 +330,7 @@ pub async fn registry_mirror_https_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
+    remote_ip: std::net::IpAddr,
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
@@ -331,6 +340,7 @@ pub async fn registry_mirror_https_handler(
         config,
         task,
         request,
+        remote_ip,
         dfdaemon_download_client,
         registry_cert,
         server_ca_cert,
@@ -344,6 +354,7 @@ pub async fn http_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
+    remote_ip: std::net::IpAddr,
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
@@ -375,7 +386,15 @@ pub async fn http_handler(
             request.method(),
             request_uri
         );
-        return proxy_via_dfdaemon(config, task, &rule, request, dfdaemon_download_client).await;
+        return proxy_via_dfdaemon(
+            config,
+            task,
+            &rule,
+            request,
+            remote_ip,
+            dfdaemon_download_client,
+        )
+        .await;
     }
 
     // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
@@ -391,6 +410,7 @@ pub async fn http_handler(
             task,
             &Rule::default(),
             request,
+            remote_ip,
             dfdaemon_download_client,
         )
         .await;
@@ -419,6 +439,7 @@ pub async fn https_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
+    remote_ip: std::net::IpAddr,
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
@@ -438,6 +459,7 @@ pub async fn https_handler(
                         upgraded,
                         host,
                         port,
+                        remote_ip,
                         dfdaemon_download_client,
                         registry_cert,
                         server_ca_cert,
@@ -468,6 +490,7 @@ async fn upgraded_tunnel(
     upgraded: Upgraded,
     host: String,
     port: u16,
+    remote_ip: std::net::IpAddr,
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
@@ -516,6 +539,7 @@ async fn upgraded_tunnel(
                     host.clone(),
                     port,
                     request,
+                    remote_ip,
                     dfdaemon_download_client.clone(),
                     registry_cert.clone(),
                 )
@@ -531,6 +555,7 @@ async fn upgraded_tunnel(
 }
 
 /// upgraded_handler handles the upgraded https request from the client.
+#[allow(clippy::too_many_arguments)]
 #[instrument(skip_all, fields(uri, method))]
 pub async fn upgraded_handler(
     config: Arc<Config>,
@@ -538,6 +563,7 @@ pub async fn upgraded_handler(
     host: String,
     port: u16,
     mut request: Request<hyper::body::Incoming>,
+    remote_ip: std::net::IpAddr,
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
@@ -587,7 +613,15 @@ pub async fn upgraded_handler(
             request.method(),
             request_uri
         );
-        return proxy_via_dfdaemon(config, task, &rule, request, dfdaemon_download_client).await;
+        return proxy_via_dfdaemon(
+            config,
+            task,
+            &rule,
+            request,
+            remote_ip,
+            dfdaemon_download_client,
+        )
+        .await;
     }
 
     // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
@@ -603,6 +637,7 @@ pub async fn upgraded_handler(
             task,
             &Rule::default(),
             request,
+            remote_ip,
             dfdaemon_download_client,
         )
         .await;
@@ -632,22 +667,24 @@ async fn proxy_via_dfdaemon(
     task: Arc<Task>,
     rule: &Rule,
     request: Request<hyper::body::Incoming>,
+    remote_ip: std::net::IpAddr,
     dfdaemon_download_client: DfdaemonDownloadClient,
 ) -> ClientResult<Response> {
     // Collect the metrics for the proxy request via dfdaemon.
     collect_proxy_request_via_dfdaemon_metrics();
 
     // Make the download task request.
-    let download_task_request = match make_download_task_request(config.clone(), rule, request) {
-        Ok(download_task_request) => download_task_request,
-        Err(err) => {
-            error!("make download task request failed: {}", err);
-            return Ok(make_error_response(
-                http::StatusCode::INTERNAL_SERVER_ERROR,
-                None,
-            ));
-        }
-    };
+    let download_task_request =
+        match make_download_task_request(config.clone(), rule, request, remote_ip) {
+            Ok(download_task_request) => download_task_request,
+            Err(err) => {
+                error!("make download task request failed: {}", err);
+                return Ok(make_error_response(
+                    http::StatusCode::INTERNAL_SERVER_ERROR,
+                    None,
+                ));
+            }
+        };
 
     // Download the task by the dfdaemon download client.
     let response = match dfdaemon_download_client
@@ -1016,6 +1053,7 @@ fn make_download_task_request(
     config: Arc<Config>,
     rule: &Rule,
     request: Request<hyper::body::Incoming>,
+    remote_ip: std::net::IpAddr,
 ) -> ClientResult<DownloadTaskRequest> {
     // Convert the Reqwest header to the Hyper header.
     let mut header = request.headers().clone();
@@ -1064,6 +1102,7 @@ fn make_download_task_request(
             load_to_cache: false,
             force_hard_link: header::get_force_hard_link(&header),
             content_for_calculating_task_id: header::get_content_for_calculating_task_id(&header),
+            remote_ip: Some(remote_ip.to_string()),
         }),
     })
 }

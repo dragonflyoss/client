@@ -222,7 +222,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
     /// download_task downloads the task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id, url, content_length))]
+    #[instrument(
+        skip_all,
+        fields(host_id, task_id, peer_id, url, remote_ip, content_length)
+    )]
     async fn download_task(
         &self,
         request: Request<DownloadTaskRequest>,
@@ -274,6 +277,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
         Span::current().record("url", download.url.clone());
+        Span::current().record(
+            "remote_ip",
+            download.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("download task in upload server");
 
         // Download task started.
@@ -630,7 +637,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 
     /// stat_task stats the task.
-    #[instrument(skip_all, fields(host_id, task_id))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_task(&self, request: Request<StatTaskRequest>) -> Result<Response<Task>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
@@ -649,6 +656,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("stat task in upload server");
 
         // Collect the stat task metrics.
@@ -671,7 +682,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 
     /// delete_task deletes the task.
-    #[instrument(skip_all, fields(host_id, task_id))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn delete_task(
         &self,
         request: Request<DeleteTaskRequest>,
@@ -693,6 +704,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("delete task in upload server");
 
         // Collect the delete task started metrics.
@@ -1056,7 +1071,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         ReceiverStream<Result<DownloadPersistentCacheTaskResponse, Status>>;
 
     /// download_persistent_cache_task downloads the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id, content_length))]
+    #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip, content_length))]
     async fn download_persistent_cache_task(
         &self,
         request: Request<DownloadPersistentCacheTaskRequest>,
@@ -1089,6 +1104,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("download persistent cache task in download server");
 
         // Download task started.
@@ -1284,7 +1303,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 
     /// update_persistent_cache_task update metadata of the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn update_persistent_cache_task(
         &self,
         request: Request<UpdatePersistentCacheTaskRequest>,
@@ -1306,6 +1325,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("update persistent cache task in upload server");
 
         // Collect the update task started metrics.
@@ -1327,7 +1350,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 
     /// stat_persistent_cache_task stats the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_persistent_cache_task(
         &self,
         request: Request<StatPersistentCacheTaskRequest>,
@@ -1349,6 +1372,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("stat persistent cache task in upload server");
 
         // Collect the stat task started metrics.
@@ -1370,7 +1397,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 
     /// delete_persistent_cache_task deletes the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn delete_persistent_cache_task(
         &self,
         request: Request<DeletePersistentCacheTaskRequest>,
@@ -1392,6 +1419,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("delete persistent cache task in upload server");
 
         // Collect the delete task started metrics.
