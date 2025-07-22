@@ -32,6 +32,7 @@ use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::{fs::fallocate, http::header_vec_to_hashmap};
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
+use local_ip_address::local_ip;
 use path_absolutize::*;
 use percent_encoding::percent_decode_str;
 use std::path::{Path, PathBuf};
@@ -779,6 +780,7 @@ async fn download(
                 load_to_cache: false,
                 force_hard_link: args.force_hard_link,
                 content_for_calculating_task_id: args.content_for_calculating_task_id,
+                remote_ip: Some(local_ip().unwrap().to_string()),
             }),
         })
         .await
@@ -898,6 +900,7 @@ async fn get_entries(
             certificate_chain: Vec::new(),
             object_storage,
             hdfs,
+            remote_ip: Some(local_ip().unwrap().to_string()),
         })
         .await
         .inspect_err(|err| {

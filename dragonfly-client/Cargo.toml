@@ -63,6 +63,7 @@ lru.workspace = true
 fs2.workspace = true
 lazy_static.workspace = true
 futures.workspace = true
+local-ip-address.workspace = true
 tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
 tracing-panic = "0.1.2"
