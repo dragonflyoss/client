@@ -1367,9 +1367,13 @@ mod tests {
             },
         ];
 
-        let filtered_entries = filter_entries(url, entries, Some(vec!["dir/subdir/*.txt".to_string()]));
+        let filtered_entries =
+            filter_entries(url, entries, Some(vec!["dir/subdir/*.txt".to_string()]));
         assert_eq!(filtered_entries.len(), 1);
-        assert_eq!(filtered_entries[0].url, "http://example.com/root/dir/subdir/file3.txt");
+        assert_eq!(
+            filtered_entries[0].url,
+            "http://example.com/root/dir/subdir/file3.txt"
+        );
     }
 
     #[test]
