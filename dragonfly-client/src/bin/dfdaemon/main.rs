@@ -213,6 +213,8 @@ async fn main() -> Result<(), anyhow::Error> {
         config.clone(),
         id_generator.host_id(),
         id_generator.peer_id(),
+        shutdown.clone(),
+        shutdown_complete_tx.clone(),
     );
     let parent_selector = Arc::new(parent_selector);
 
