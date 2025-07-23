@@ -148,7 +148,7 @@ impl DfdaemonDownloadServer {
 
         // Bind the unix domain socket and set the permissions for the socket.
         let uds = UnixListener::bind(&self.socket_path)?;
-        let perms = std::fs::Permissions::from_mode(0o660);
+        let perms = std::fs::Permissions::from_mode(0o777);
         fs::set_permissions(&self.socket_path, perms).await?;
 
         // TODO(Gaius): RateLimitLayer is not implemented Clone, so we can't use it here.
