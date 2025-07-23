@@ -20,7 +20,8 @@ use crate::metrics::{
     collect_backend_request_started_metrics,
 };
 use dragonfly_api::common::v2::{
-    Download, Hdfs, ObjectStorage, Peer, Piece, Task as CommonTask, TrafficType,
+    Download, Hdfs, ObjectStorage, Peer, Piece, SizeScope, Task as CommonTask, TaskType,
+    TrafficType,
 };
 use dragonfly_api::dfdaemon::{
     self,
@@ -48,6 +49,7 @@ use dragonfly_client_util::{
     id_generator::IDGenerator,
 };
 use reqwest::header::HeaderMap;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -392,6 +394,7 @@ impl Task {
                                 range: request.range,
                                 response_header: task.response_header.clone(),
                                 pieces,
+                                is_finished: task.is_finished(),
                             },
                         ),
                     ),
@@ -1835,7 +1838,74 @@ impl Task {
 
     /// stat_task returns the task metadata.
     #[instrument(skip_all)]
-    pub async fn stat(&self, task_id: &str, host_id: &str) -> ClientResult<CommonTask> {
+    pub async fn stat(
+        &self,
+        task_id: &str,
+        host_id: &str,
+        local_only: bool,
+    ) -> ClientResult<CommonTask> {
+        if local_only {
+            let Some(task_metadata) = self.storage.get_task(task_id).inspect_err(|err| {
+                error!("get task {} from local storage error: {:?}", task_id, err);
+            })?
+            else {
+                return Err(Error::TaskNotFound(task_id.to_owned()));
+            };
+
+            let piece_metadatas = self.piece.get_all(task_id).inspect_err(|err| {
+                error!(
+                    "get pieces for task {} from local storage error: {:?}",
+                    task_id, err
+                );
+            })?;
+
+            let pieces = piece_metadatas
+                .into_iter()
+                .filter(|piece| !piece.is_finished())
+                .map(|piece| {
+                    // The traffic_type indicates whether the first download was from the source or hit the remote peer cache.
+                    // If the parent_id exists, the piece was downloaded from a remote peer. Otherwise, it was
+                    // downloaded from the source.
+                    let traffic_type = match piece.parent_id {
+                        None => TrafficType::BackToSource,
+                        Some(_) => TrafficType::RemotePeer,
+                    };
+
+                    Piece {
+                        number: piece.number,
+                        parent_id: piece.parent_id.clone(),
+                        offset: piece.offset,
+                        length: piece.length,
+                        digest: piece.digest.clone(),
+                        content: None,
+                        traffic_type: Some(traffic_type as i32),
+                        cost: piece.prost_cost(),
+                        created_at: Some(prost_wkt_types::Timestamp::from(piece.created_at)),
+                    }
+                })
+                .collect::<Vec<Piece>>();
+
+            return Ok(CommonTask {
+                id: task_metadata.id,
+                r#type: TaskType::Standard as i32,
+                url: String::new(),
+                digest: None,
+                tag: None,
+                application: None,
+                filtered_query_params: Vec::new(),
+                request_header: HashMap::new(),
+                content_length: task_metadata.content_length.unwrap_or(0),
+                piece_count: pieces.len() as u32,
+                size_scope: SizeScope::Normal as i32,
+                pieces,
+                state: String::new(),
+                peer_count: 0,
+                has_available_peer: false,
+                created_at: Some(prost_wkt_types::Timestamp::from(task_metadata.created_at)),
+                updated_at: Some(prost_wkt_types::Timestamp::from(task_metadata.updated_at)),
+            });
+        }
+
         let task = self
             .scheduler_client
             .stat_task(StatTaskRequest {
