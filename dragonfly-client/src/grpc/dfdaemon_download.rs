@@ -715,7 +715,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 collect_stat_task_failure_metrics(TaskType::Standard as i32);
 
                 // Log the error with detailed context.
-                error!("stat task failed for task_id {}: {}", task_id, err);
+                error!("stat task failed: {}", err);
 
                 // Map the error to an appropriate gRPC status.
                 Err(match err {
