@@ -1171,6 +1171,13 @@ fn make_response_headers(
         );
     };
 
+    if download_task_started_response.is_finished {
+        download_task_started_response.response_header.insert(
+            header::DRAGONFLY_TASK_DOWNLOAD_FINISHED_HEADER.to_string(),
+            "true".to_string(),
+        );
+    }
+
     hashmap_to_headermap(&download_task_started_response.response_header)
 }
 
