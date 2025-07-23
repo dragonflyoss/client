@@ -669,20 +669,28 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Collect the stat task metrics.
         collect_stat_task_started_metrics(TaskType::Standard as i32);
 
-        // Get the task from the scheduler.
-        let task = self
+        match self
             .task
             .stat(task_id.as_str(), host_id.as_str(), local_only)
             .await
-            .map_err(|err| {
+        {
+            Ok(task) => Ok(Response::new(task)),
+            Err(err) => {
                 // Collect the stat task failure metrics.
                 collect_stat_task_failure_metrics(TaskType::Standard as i32);
 
-                error!("stat task: {}", err);
-                Status::internal(err.to_string())
-            })?;
+                // Log the error with detailed context.
+                error!("stat task failed: {}", err);
 
-        Ok(Response::new(task))
+                // Map the error to an appropriate gRPC status.
+                Err(match err {
+                    ClientError::TaskNotFound(id) => {
+                        Status::not_found(format!("task not found: {}", id))
+                    }
+                    _ => Status::internal(err.to_string()),
+                })
+            }
+        }
     }
 
     /// delete_task deletes the task.
