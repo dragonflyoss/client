@@ -669,7 +669,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 
     /// stat_task gets the status of the task.
-    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip, local_only))]
     async fn stat_task(
         &self,
         request: Request<DfdaemonStatTaskRequest>,
@@ -688,6 +688,9 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Get the task id from the request.
         let task_id = request.task_id;
 
+        // Get the local_only flag from the request, default to false.
+        let local_only = request.local_only;
+
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
@@ -695,25 +698,34 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             "remote_ip",
             request.remote_ip.clone().unwrap_or_default().as_str(),
         );
+        Span::current().record("local_only", local_only.to_string().as_str());
         info!("stat task in download server");
 
         // Collect the stat task metrics.
         collect_stat_task_started_metrics(TaskType::Standard as i32);
 
-        // Get the task from the scheduler.
-        let task = self
+        match self
             .task
-            .stat(task_id.as_str(), host_id.as_str())
+            .stat(task_id.as_str(), host_id.as_str(), local_only)
             .await
-            .map_err(|err| {
+        {
+            Ok(task) => Ok(Response::new(task)),
+            Err(err) => {
                 // Collect the stat task failure metrics.
                 collect_stat_task_failure_metrics(TaskType::Standard as i32);
 
-                error!("stat task: {}", err);
-                Status::internal(err.to_string())
-            })?;
+                // Log the error with detailed context.
+                error!("stat task failed for task_id {}: {}", task_id, err);
 
-        Ok(Response::new(task))
+                // Map the error to an appropriate gRPC status.
+                Err(match err {
+                    ClientError::TaskNotFound(id) => {
+                        Status::not_found(format!("task not found: {}", id))
+                    }
+                    _ => Status::internal(err.to_string()),
+                })
+            }
+        }
     }
 
     /// list_tasks lists the tasks.
