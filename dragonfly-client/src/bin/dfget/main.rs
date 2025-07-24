@@ -623,9 +623,6 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
 
 /// download_dir downloads all files in the directory.
 async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Result<()> {
-    // If the include_files is provided, then check the include_files.
-    validate_include_files(args.include_files.clone())?;
-
     // Initialize the object storage config and the hdfs config.
     let object_storage = Some(ObjectStorage {
         access_key_id: args.storage_access_key_id.clone(),
@@ -947,27 +944,6 @@ fn make_output_by_entry(url: Url, output: &Path, entry: DirEntry) -> Result<Path
         .into())
 }
 
-fn validate_include_files(include_files: Option<Vec<String>>) -> Result<()> {
-    // If the include_files is provided, then check the include_files.
-    fn is_valid_relative_path(p: &str) -> bool {
-        !p.is_empty()
-            && !p.starts_with('/')
-            && !p.contains("..")
-            && !p.chars().any(|c| c == '\0')
-            && Path::new(p).is_relative()
-    }
-    if let Some(ref include_files) = include_files {
-        let invalid = include_files
-            .iter()
-            .any(|file| Pattern::new(file).is_err() || !is_valid_relative_path(file));
-        if invalid {
-            return Err(Error::InvalidParameter);
-        }
-    }
-
-    Ok(())
-}
-
 /// filter_entries filters the entries by the include_files.
 fn filter_entries(
     url: Url,
@@ -1068,6 +1044,26 @@ fn validate_args(args: &Args) -> Result<()> {
                 "piece length {} bytes is less than the minimum piece length {} bytes",
                 piece_length.as_u64(),
                 MIN_PIECE_LENGTH
+            )));
+        }
+    }
+
+    // If the include_files is provided, then check the include_files.
+    fn is_valid_relative_path(p: &str) -> bool {
+        !p.is_empty()
+            && !p.starts_with('/')
+            && !p.contains("..")
+            && !p.chars().any(|c| c == '\0')
+            && Path::new(p).is_relative()
+    }
+    if let Some(ref include_files) = args.include_files {
+        let invalid = include_files
+            .iter()
+            .any(|file| Pattern::new(file).is_err() || !is_valid_relative_path(file));
+        if invalid {
+            return Err(Error::ValidationError(format!(
+                "invalid include files: {}",
+                include_files.join(", ")
             )));
         }
     }
