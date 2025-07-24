@@ -31,12 +31,11 @@ use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::{fs::fallocate, http::header_vec_to_hashmap};
+use glob::Pattern;
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
 use path_absolutize::*;
 use percent_encoding::percent_decode_str;
-use regex::Regex;
-use std::collections::HashSet;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -625,16 +624,7 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
 /// download_dir downloads all files in the directory.
 async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Result<()> {
     // If the include_files is provided, then check the include_files.
-    if let Some(ref include_files) = args.include_files {
-        let invalid = include_files.iter().any(|file| {
-            !Path::new(file).is_relative()
-                || file.chars().any(|c| c == '\0')
-                || file.trim().is_empty()
-        });
-        if invalid {
-            return Err(Error::InvalidParameter);
-        }
-    }
+    validate_include_files(args.include_files.clone())?;
 
     // Initialize the object storage config and the hdfs config.
     let object_storage = Some(ObjectStorage {
@@ -957,111 +947,53 @@ fn make_output_by_entry(url: Url, output: &Path, entry: DirEntry) -> Result<Path
         .into())
 }
 
+fn validate_include_files(include_files: Option<Vec<String>>) -> Result<()> {
+    // If the include_files is provided, then check the include_files.
+    fn is_valid_relative_path(p: &str) -> bool {
+        !p.is_empty()
+            && !p.starts_with('/')
+            && !p.contains("..")
+            && !p.chars().any(|c| c == '\0')
+            && Path::new(p).is_relative()
+    }
+    if let Some(ref include_files) = include_files {
+        let invalid = include_files
+            .iter()
+            .any(|file| Pattern::new(file).is_err() || !is_valid_relative_path(file));
+        if invalid {
+            return Err(Error::InvalidParameter);
+        }
+    }
+
+    Ok(())
+}
+
 /// filter_entries filters the entries by the include_files.
 fn filter_entries(
     url: Url,
     entries: Vec<DirEntry>,
     include_files: Option<Vec<String>>,
 ) -> Vec<DirEntry> {
-    fn norm(path: &str) -> String {
-        let mut norm = String::new();
-        for comp in Path::new(path).components() {
-            match comp {
-                Component::RootDir => norm.push('/'),
-                Component::Normal(s) => {
-                    if !norm.ends_with('/') {
-                        norm.push('/');
-                    }
-                    norm.push_str(&s.to_string_lossy());
-                }
-                _ => {}
-            }
-        }
-        if norm.len() > 1 && norm.ends_with('/') {
-            norm.pop();
-        }
-        norm
-    }
-
-    let root_path = norm(url.path());
+    let root_path = url.path();
     if let Some(ref include_files) = include_files {
-        let mut regexes = Vec::new();
-        let mut include_paths = Vec::new();
+        let mut patterns = Vec::new();
         for file in include_files {
-            let is_glob = file.contains('*') || file.contains('?');
-            let regex_pattern = if is_glob {
-                let mut pat = format!("^{}", root_path);
-                if !pat.ends_with('/') {
-                    pat.push('/');
-                }
-                for c in file.chars() {
-                    match c {
-                        '*' => pat.push_str("[^/]*"),
-                        '?' => pat.push('.'),
-                        '.' => pat.push_str("\\."),
-                        _ => pat.push(c),
-                    }
-                }
-                pat
-            } else {
-                let mut pat = format!("^{}", root_path);
-                if !pat.ends_with('/') {
-                    pat.push('/');
-                }
-                pat.push_str(file);
-                pat.push('$');
-                pat
-            };
-            if let Ok(re) = Regex::new(&regex_pattern) {
-                regexes.push(re);
-            } else if let Ok(u) = url.join(file) {
-                include_paths.push(norm(u.path()));
+            if let Ok(pattern) = Pattern::new(file) {
+                patterns.push(pattern);
             }
         }
-
-        let mut keep_urls = HashSet::new();
-        for entry in &entries {
-            if let Ok(entry_url) = Url::parse(&entry.url) {
-                let entry_path = norm(entry_url.path());
-                if !entry_path.starts_with(&root_path) {
-                    continue;
-                }
-                let path_match = include_paths.iter().any(|inc| entry_path == *inc);
-                let regex_match = regexes.iter().any(|re| re.is_match(&entry_path));
-                if path_match || regex_match {
-                    let mut cur_url = entry.url.clone();
-                    loop {
-                        if keep_urls.insert(cur_url.clone()) {
-                            if let Ok(parsed_url) = Url::parse(&cur_url) {
-                                let parent = Path::new(parsed_url.path()).parent();
-                                if let Some(parent_path) = parent {
-                                    if parent_path == Path::new("") || parent_path == Path::new("/")
-                                    {
-                                        break;
-                                    }
-                                    let mut parent_url = parsed_url.clone();
-                                    parent_url.set_path(&format!("{}/", parent_path.display()));
-                                    cur_url = parent_url.to_string();
-                                    continue;
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-
         entries
             .into_iter()
             .filter(|entry| {
-                keep_urls.contains(&entry.url) && {
-                    if let Ok(entry_url) = Url::parse(&entry.url) {
-                        let entry_path = norm(entry_url.path());
-                        entry_path.starts_with(&root_path)
-                    } else {
-                        false
-                    }
+                if let Ok(entry_url) = Url::parse(&entry.url) {
+                    let entry_path = entry_url.path();
+                    let rel_path = entry_path
+                        .strip_prefix(root_path)
+                        .unwrap_or(entry_path)
+                        .trim_start_matches('/');
+                    patterns.iter().any(|pat| pat.matches(rel_path))
+                } else {
+                    false
                 }
             })
             .collect()
@@ -1070,8 +1002,8 @@ fn filter_entries(
             .into_iter()
             .filter(|entry| {
                 if let Ok(entry_url) = Url::parse(&entry.url) {
-                    let entry_path = norm(entry_url.path());
-                    entry_path.starts_with(&root_path)
+                    let entry_path = entry_url.path();
+                    entry_path.starts_with(root_path)
                 } else {
                     false
                 }
@@ -1307,6 +1239,29 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn should_validate_include_files() {
+        let test_cases = vec![
+            (Some(vec!["dir/file.txt".to_string()]), Ok(())),
+            (
+                Some(vec!["dir/*.txt".to_string(), "dir/file2.txt".to_string()]),
+                Ok(()),
+            ),
+            (
+                Some(vec!["dir/ ".to_string(), "dir/file2.txt".to_string()]),
+                Err(Error::InvalidParameter),
+            ),
+            (
+                Some(vec!["/file.txt".to_string(), "dir/file2.txt".to_string()]),
+                Err(Error::InvalidParameter),
+            ),
+        ];
+
+        for (include_files, _) in test_cases {
+            let result = validate_include_files(include_files);
+            assert_eq!(result.is_ok(), result.is_ok());
+        }
+    }
     #[test]
     fn should_filter_entries() {
         let url = Url::parse("http://example.com/root/").unwrap();
