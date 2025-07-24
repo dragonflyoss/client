@@ -53,8 +53,8 @@ use std::os::windows::io::{AsRawSocket, RawSocket};
 
 const HEADER_SIZE: usize = 6;
 
-/// QuicServer is a Quic-based server for dfdaemon upload service.
-pub struct QuicServer {
+/// QUICServer is a QUIC-based server for dfdaemon upload service.
+pub struct QUICServer {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
@@ -62,7 +62,7 @@ pub struct QuicServer {
     addr: SocketAddr,
 
     /// handler is the request handler.
-    handler: QuicServerHandler,
+    handler: QUICServerHandler,
 
     /// shutdown is used to shutdown the TCP server.
     shutdown: shutdown::Shutdown,
@@ -71,7 +71,7 @@ pub struct QuicServer {
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-impl QuicServer {
+impl QUICServer {
     /// Creates a new TCPServer.
     #[instrument(skip_all)]
     pub fn new(
@@ -86,7 +86,7 @@ impl QuicServer {
         let interface =
             get_interface_info(config.host.ip.unwrap(), config.upload.rate_limit).unwrap();
 
-        let handler = QuicServerHandler {
+        let handler = QUICServerHandler {
             interface,
             socket_path: config.download.server.socket_path.clone(),
             id_generator,
@@ -182,9 +182,9 @@ impl QuicServer {
 
 }
 
-/// QuicServerHandler handles QUIC connections and requests.
+/// QUICServerHandler handles QUIC connections and requests.
 #[derive(Clone)]
-pub struct QuicServerHandler {
+pub struct QUICServerHandler {
     /// interface is the network interface.
     interface: Interface,
 
@@ -198,7 +198,7 @@ pub struct QuicServerHandler {
     config: Arc<Config>,
 }
 
-impl QuicServerHandler {
+impl QUICServerHandler {
     /// Handles a single QUIC bi-directional stream.
     async fn handle_connection(&self, mut send: SendStream, mut recv: RecvStream) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         loop {
@@ -211,7 +211,7 @@ impl QuicServerHandler {
                     return Err(err.into());
                 }
             }
-            info!("QuicServer can receive data");
+            info!("QUICServer can receive data");
             let length = u32::from_be_bytes(header_buf[2..HEADER_SIZE].try_into().expect("Failed to read value length")) as usize;
 
             // Read request data
@@ -415,3 +415,4 @@ impl QuicServerHandler {
         Ok(response.encode_to_vec())
     }
 }
+
