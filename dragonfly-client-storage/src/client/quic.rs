@@ -40,9 +40,9 @@ use std::net::SocketAddr;
 
 const HEADER_SIZE: usize = 6;
 
-/// QuicClient is a Quic-based client for dfdaemon upload service.
+/// QUICClient is a QUIC-based client for dfdaemon upload service.
 #[derive(Clone, Validate)]
-pub struct QuicClient {
+pub struct QUICClient {
     /// server_addr is the address of the QUIC server.
     #[validate(custom = "validate_ip_port")]
     addr: String,
@@ -59,8 +59,8 @@ fn validate_ip_port(address: &str) -> Result<(), ValidationError> {
     }
 }
 
-impl QuicClient {
-    /// Creates a new QuicClient.
+impl QUICClient {
+    /// Creates a new QUICClient.
     #[instrument(skip_all)]
     pub async fn new(
         config: Arc<Config>,
@@ -154,7 +154,7 @@ impl QuicClient {
             error!("Failed to read response header: {}", err);
             ClientError::UnexpectedResponse
         })?;
-        info!("QuicClient can receive data");
+        info!("QUICClient can receive data");
         let length = u32::from_be_bytes(header_buf[2..HEADER_SIZE].try_into().expect("Failed to read value length")) as usize;
 
         // Read response data
@@ -190,3 +190,4 @@ impl QuicClient {
     }
 
 }
+
