@@ -768,7 +768,10 @@ async fn proxy_via_dfdaemon(
 
     // Construct the response.
     let mut response = Response::new(boxed_body);
-    *response.headers_mut() = make_response_headers(download_task_started_response.clone())?;
+    *response.headers_mut() = make_response_headers(
+        message.task_id.as_str(),
+        download_task_started_response.clone(),
+    )?;
     *response.status_mut() = http::StatusCode::OK;
 
     // Return the response if the client return the first piece.
@@ -1151,6 +1154,7 @@ fn make_download_url(
 
 /// make_response_headers makes the response headers.
 fn make_response_headers(
+    task_id: &str,
     mut download_task_started_response: DownloadTaskStartedResponse,
 ) -> ClientResult<hyper::header::HeaderMap> {
     // Insert the content range header to the response header.
@@ -1177,6 +1181,11 @@ fn make_response_headers(
             "true".to_string(),
         );
     }
+
+    download_task_started_response.response_header.insert(
+        header::DRAGONFLY_TASK_ID_HEADER.to_string(),
+        task_id.to_string(),
+    );
 
     hashmap_to_headermap(&download_task_started_response.response_header)
 }
