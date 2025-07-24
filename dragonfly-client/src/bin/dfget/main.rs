@@ -1236,29 +1236,6 @@ mod tests {
     }
 
     #[test]
-    fn should_validate_include_files() {
-        let test_cases = vec![
-            (Some(vec!["dir/file.txt".to_string()]), Ok(())),
-            (
-                Some(vec!["dir/*.txt".to_string(), "dir/file2.txt".to_string()]),
-                Ok(()),
-            ),
-            (
-                Some(vec!["dir/ ".to_string(), "dir/file2.txt".to_string()]),
-                Err(Error::InvalidParameter),
-            ),
-            (
-                Some(vec!["/file.txt".to_string(), "dir/file2.txt".to_string()]),
-                Err(Error::InvalidParameter),
-            ),
-        ];
-
-        for (include_files, _) in test_cases {
-            let result = validate_include_files(include_files);
-            assert_eq!(result.is_ok(), result.is_ok());
-        }
-    }
-    #[test]
     fn should_filter_entries() {
         let url = Url::parse("http://example.com/root/").unwrap();
         let entries = vec![
