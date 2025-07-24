@@ -894,9 +894,7 @@ async fn get_entries(
             task_id: Uuid::new_v4().to_string(),
             url: args.url.to_string(),
             request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
-            timeout: Some(
-                prost_wkt_types::Duration::try_from(args.timeout).or_err(ErrorType::ParseError)?,
-            ),
+            timeout: None,
             certificate_chain: Vec::new(),
             object_storage,
             hdfs,

@@ -767,17 +767,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 Status::internal(err.to_string())
             })?;
 
-        let timeout = match request.timeout {
-            Some(timeout) => Duration::try_from(timeout).map_err(|err| {
-                // Collect the list tasks failure metrics.
-                collect_list_task_entries_failure_metrics(TaskType::Standard as i32);
-
-                error!("parse timeout: {}", err);
-                Status::invalid_argument(err.to_string())
-            })?,
-            None => self.config.download.piece_timeout,
-        };
-
         // Head the task entries.
         let response = backend
             .head(HeadRequest {
@@ -789,7 +778,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         Status::internal(err.to_string())
                     },
                 )?),
-                timeout,
+                timeout: self.config.download.piece_timeout,
                 client_cert: None,
                 object_storage: request.object_storage.clone(),
                 hdfs: request.hdfs.clone(),
