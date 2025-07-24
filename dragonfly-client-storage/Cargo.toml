@@ -10,6 +10,8 @@ license.workspace = true
 edition.workspace = true
 
 [dependencies]
+vortex-protocol.workspace = true
+quinn.workspace = true
 dragonfly-client-core.workspace = true
 dragonfly-client-config.workspace = true
 dragonfly-client-util.workspace = true
@@ -28,9 +30,17 @@ fs2.workspace = true
 lru.workspace = true
 bytes.workspace = true
 bytesize.workspace = true
+tonic.workspace = true
+url.workspace = true
+lazy_static.workspace = true
+warp.workspace = true
+sysinfo = { version = "0.32.1", default-features = false, features = ["component", "disk", "network", "system", "user"] }
+prometheus = { version = "0.13", features = ["process"] }
 num_cpus = "1.17"
 bincode = "1.3.3"
 walkdir = "2.5.0"
+prost = "0.13.5"
+leaky-bucket = "1.1.2"
 
 [dev-dependencies]
 tempfile.workspace = true
