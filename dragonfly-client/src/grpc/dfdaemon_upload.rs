@@ -67,7 +67,7 @@ use tonic::{
     Code, Request, Response, Status,
 };
 use tower::ServiceBuilder;
-use tracing::{debug, error, info, instrument, Instrument, Span};
+use tracing::{error, info, instrument, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
@@ -119,8 +119,7 @@ impl DfdaemonUploadServer {
     pub async fn run(&mut self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         // Initialize the grpc service.
         let interface =
-            get_interface_info(self.config.host.ip.unwrap(), self.config.upload.rate_limit)
-                .unwrap();
+            get_interface_info(self.config.host.ip.unwrap(), self.config.upload.rate_limit);
 
         let service = DfdaemonUploadGRPCServer::with_interceptor(
             DfdaemonUploadServerHandler {
@@ -166,7 +165,7 @@ impl DfdaemonUploadServer {
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
             .layer(rate_limit_layer)
-            .add_service(reflection.clone())
+            .add_service(reflection)
             .add_service(health_service)
             .add_service(service)
             .serve_with_shutdown(self.addr, async move {
@@ -204,7 +203,7 @@ impl DfdaemonUploadServer {
 /// DfdaemonUploadServerHandler is the handler of the dfdaemon upload grpc service.
 pub struct DfdaemonUploadServerHandler {
     /// interface is the network interface.
-    interface: Interface,
+    interface: Option<Interface>,
 
     /// socket_path is the path of the unix domain socket.
     socket_path: PathBuf,
@@ -223,7 +222,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
     /// download_task downloads the task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id, url, content_length))]
+    #[instrument(
+        skip_all,
+        fields(host_id, task_id, peer_id, url, remote_ip, content_length)
+    )]
     async fn download_task(
         &self,
         request: Request<DownloadTaskRequest>,
@@ -275,6 +277,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
         Span::current().record("url", download.url.clone());
+        Span::current().record(
+            "remote_ip",
+            download.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("download task in upload server");
 
         // Download task started.
@@ -631,7 +637,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 
     /// stat_task stats the task.
-    #[instrument(skip_all, fields(host_id, task_id))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip, local_only))]
     async fn stat_task(&self, request: Request<StatTaskRequest>) -> Result<Response<Task>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
@@ -647,32 +653,48 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Get the task id from the request.
         let task_id = request.task_id;
 
+        // Get the local_only flag from the request, default to false.
+        let local_only = request.local_only;
+
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        Span::current().record("local_only", local_only.to_string().as_str());
         info!("stat task in upload server");
 
         // Collect the stat task metrics.
         collect_stat_task_started_metrics(TaskType::Standard as i32);
 
-        // Get the task from the scheduler.
-        let task = self
+        match self
             .task
-            .stat(task_id.as_str(), host_id.as_str())
+            .stat(task_id.as_str(), host_id.as_str(), local_only)
             .await
-            .map_err(|err| {
+        {
+            Ok(task) => Ok(Response::new(task)),
+            Err(err) => {
                 // Collect the stat task failure metrics.
                 collect_stat_task_failure_metrics(TaskType::Standard as i32);
 
-                error!("stat task: {}", err);
-                Status::internal(err.to_string())
-            })?;
+                // Log the error with detailed context.
+                error!("stat task failed: {}", err);
 
-        Ok(Response::new(task))
+                // Map the error to an appropriate gRPC status.
+                Err(match err {
+                    ClientError::TaskNotFound(id) => {
+                        Status::not_found(format!("task not found: {}", id))
+                    }
+                    _ => Status::internal(err.to_string()),
+                })
+            }
+        }
     }
 
     /// delete_task deletes the task.
-    #[instrument(skip_all, fields(host_id, task_id))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn delete_task(
         &self,
         request: Request<DeleteTaskRequest>,
@@ -694,6 +716,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("delete task in upload server");
 
         // Collect the delete task started metrics.
@@ -1016,22 +1042,21 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                     // Init response.
                     let mut host = Host::default();
-                    if let Some(network_data) = networks.get(&interface.name) {
-                        let network = Network {
-                            download_rate: network_data.received()
-                                / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs(),
-                            // Convert bandwidth to bytes per second.
-                            download_rate_limit: interface.bandwidth / 8 * MB,
-                            upload_rate: network_data.transmitted()
-                                / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs(),
-                            // Convert bandwidth to bytes per second.
-                            upload_rate_limit: interface.bandwidth / 8 * MB,
-                            ..Default::default()
+                    if let Some(interface) = &interface {
+                        if let Some(network_data) = networks.get(&interface.name) {
+                            host.network = Some(Network {
+                                download_rate: network_data.received()
+                                    / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs(),
+                                // Convert bandwidth to bytes per second.
+                                download_rate_limit: interface.bandwidth / 8 * MB,
+                                upload_rate: network_data.transmitted()
+                                    / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs(),
+                                // Convert bandwidth to bytes per second.
+                                upload_rate_limit: interface.bandwidth / 8 * MB,
+                                ..Default::default()
+                            });
                         };
-                        host.network = Some(network.clone());
-
-                        debug!("interface: {}, network: {:?}", interface.name, network);
-                    };
+                    }
 
                     // Send host info.
                     match out_stream_tx.send(Ok(host.clone())).await {
@@ -1058,7 +1083,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         ReceiverStream<Result<DownloadPersistentCacheTaskResponse, Status>>;
 
     /// download_persistent_cache_task downloads the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id, content_length))]
+    #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip, content_length))]
     async fn download_persistent_cache_task(
         &self,
         request: Request<DownloadPersistentCacheTaskRequest>,
@@ -1091,6 +1116,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("download persistent cache task in download server");
 
         // Download task started.
@@ -1286,7 +1315,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 
     /// update_persistent_cache_task update metadata of the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn update_persistent_cache_task(
         &self,
         request: Request<UpdatePersistentCacheTaskRequest>,
@@ -1308,6 +1337,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("update persistent cache task in upload server");
 
         // Collect the update task started metrics.
@@ -1329,7 +1362,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 
     /// stat_persistent_cache_task stats the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_persistent_cache_task(
         &self,
         request: Request<StatPersistentCacheTaskRequest>,
@@ -1351,6 +1384,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("stat persistent cache task in upload server");
 
         // Collect the stat task started metrics.
@@ -1372,7 +1409,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 
     /// delete_persistent_cache_task deletes the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn delete_persistent_cache_task(
         &self,
         request: Request<DeletePersistentCacheTaskRequest>,
@@ -1394,6 +1431,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("delete persistent cache task in upload server");
 
         // Collect the delete task started metrics.
