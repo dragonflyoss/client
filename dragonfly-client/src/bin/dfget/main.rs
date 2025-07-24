@@ -190,7 +190,7 @@ struct Args {
     #[arg(
         long = "include-files",
         required = false,
-        help = "Include files in the downloaded directory, use relative path. e.g. --include-files='*.txt' --include-files='*.txt'"
+        help = "Specify which files to download when retrieving a directory. The file paths listed in include-files should be relative to the current directory. e.g. --include-files='*.txt' --include-files='example.txt'"
     )]
     include_files: Option<Vec<String>>,
 
