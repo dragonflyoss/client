@@ -166,7 +166,7 @@ where
 }
 
 /// The File Entry of a directory, including some relevant file metadata.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct DirEntry {
     /// url is the url of the entry.
     pub url: String,

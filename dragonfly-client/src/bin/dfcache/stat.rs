@@ -74,7 +74,13 @@ pub struct StatCommand {
 
 /// Implement the execute for StatCommand.
 impl StatCommand {
-    /// execute executes the stat command.
+    /// Executes the stat command with comprehensive error handling and user feedback.
+    ///
+    /// This function serves as the main entry point for the dfcache stat command execution.
+    /// It handles the complete lifecycle including argument parsing, logging initialization,
+    /// dfdaemon client setup, and command execution with detailed error reporting. The
+    /// function provides colored terminal output for better user experience and exits
+    /// with appropriate status codes on failure.
     pub async fn execute(&self) -> Result<()> {
         // Parse command line arguments.
         Args::parse();
@@ -234,7 +240,12 @@ impl StatCommand {
         Ok(())
     }
 
-    /// run runs the stat command.
+    /// Executes the stat command to retrieve and display persistent cache task information.
+    ///
+    /// This function queries the dfdaemon service for detailed information about a specific
+    /// persistent cache task and presents it in a formatted table for user consumption.
+    /// It handles data conversion from raw protocol buffer values to human-readable formats
+    /// including byte sizes, durations, and timestamps with proper timezone conversion.
     async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
         let task = dfdaemon_download_client
             .stat_persistent_cache_task(StatPersistentCacheTaskRequest {

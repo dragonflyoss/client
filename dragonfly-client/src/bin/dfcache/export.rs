@@ -129,7 +129,13 @@ pub struct ExportCommand {
 
 /// Implement the execute for ExportCommand.
 impl ExportCommand {
-    /// execute executes the export command.
+    /// Executes the export command with comprehensive validation and advanced error handling.
+    ///
+    /// This function serves as the main entry point for the dfcache export command execution.
+    /// It handles the complete workflow including argument parsing, validation, logging setup,
+    /// dfdaemon client connection, and export operation execution. The function provides
+    /// sophisticated error reporting with colored terminal output, including specialized
+    /// handling for backend errors with HTTP status codes and headers.
     pub async fn execute(&self) -> Result<()> {
         // Parse command line arguments.
         Args::parse();
@@ -436,7 +442,13 @@ impl ExportCommand {
         Ok(())
     }
 
-    /// run runs the export command.
+    /// Executes the export operation to retrieve cached files from the persistent cache system.
+    ///
+    /// This function handles the core export functionality by downloading a cached file from the
+    /// dfdaemon persistent cache system. It supports two transfer modes: direct file transfer
+    /// by dfdaemon (hardlink/copy) or streaming piece content through the client for manual
+    /// file assembly. The operation provides real-time progress feedback and handles file
+    /// creation, directory setup, and efficient piece-by-piece writing with sparse file allocation.
     async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
         // Dfcache needs to notify dfdaemon to transfer the piece content of downloading file via unix domain socket
         // when the `transfer_from_dfdaemon` is true. Otherwise, dfdaemon will download the file and hardlink or
@@ -565,7 +577,12 @@ impl ExportCommand {
         Ok(())
     }
 
-    /// validate_args validates the command line arguments.
+    /// Validates command line arguments for the export operation to ensure safe file output.
+    ///
+    /// This function performs essential validation of the output path to prevent file conflicts
+    /// and ensure the target location is suitable for export operations. It checks parent
+    /// directory existence, prevents accidental file overwrites, and validates path accessibility
+    /// before allowing the export operation to proceed.
     fn validate_args(&self) -> Result<()> {
         let absolute_path = Path::new(&self.output).absolutize()?;
         match absolute_path.parent() {
