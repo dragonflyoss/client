@@ -31,6 +31,7 @@ use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::{fs::fallocate, http::header_vec_to_hashmap};
+use glob::Pattern;
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
 use local_ip_address::local_ip;
 use path_absolutize::*;
@@ -186,6 +187,13 @@ struct Args {
         help = "Filter the query parameters of the downloaded URL. If the download URL is the same, it will be scheduled as the same task, e.g. --filtered-query-param='signature' --filtered-query-param='timeout'"
     )]
     filtered_query_params: Option<Vec<String>>,
+
+    #[arg(
+        long = "include-files",
+        required = false,
+        help = "Specify which files to download when retrieving a directory. The file paths listed in include-files should be relative to the current directory. e.g. --include-files='*.txt' --include-files='example.txt'"
+    )]
+    include_files: Option<Vec<String>>,
 
     #[arg(
         long = "disable-back-to-source",
@@ -631,12 +639,21 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         delegation_token: args.hdfs_delegation_token.clone(),
     });
 
-    // Get all entries in the directory. If the directory is empty, then return directly.
+    // Get all entries in the directory.
     let entries = get_entries(args.clone(), object_storage, hdfs, download_client.clone()).await?;
-    if entries.is_empty() {
-        warn!("directory {} is empty", args.url);
-        return Ok(());
+    // Filter the entries by the include_files.
+    let entries = match args.include_files {
+        Some(ref include_files) => {
+            filter_entries(args.url.clone(), entries, include_files.clone())?
+        }
+        None => entries,
     };
+
+    // If the entries is empty, then return directly.
+    if entries.is_empty() {
+        warn!("no entries found in directory {}", args.url);
+        return Ok(());
+    }
 
     // If the actual file count is greater than the max_files, then reject the downloading.
     let count = entries.iter().filter(|entry| !entry.is_dir).count();
@@ -934,6 +951,67 @@ fn make_output_by_entry(url: Url, output: &Path, entry: DirEntry) -> Result<Path
         .into())
 }
 
+/// filter_entries filters the entries by the include_files.
+fn filter_entries(
+    url: Url,
+    entries: Vec<DirEntry>,
+    include_files: Vec<String>,
+) -> Result<Vec<DirEntry>> {
+    let root_path = url.path();
+
+    // Compile all glob patterns from include_files.
+    let patterns: Vec<Pattern> = include_files
+        .into_iter()
+        .filter_map(|file| Pattern::new(&file).ok())
+        .collect();
+
+    // Map relative path (from root) to DirEntry for quick lookup.
+    let mut rel_path_to_entry = std::collections::HashMap::new();
+    for entry in entries {
+        let entry_url = Url::parse(&entry.url).map_err(|_| {
+            error!("backend url {} is not a right url", entry.url);
+            Error::UnexpectedResponse
+        })?;
+        let entry_path = entry_url.path();
+        let rel_path = entry_path
+            .strip_prefix(root_path)
+            .map(|p| p.trim_start_matches('/'))
+            .ok_or_else(|| {
+                error!("backend url {} is not a right url", entry_path);
+                Error::UnexpectedResponse
+            })?;
+        rel_path_to_entry.insert(rel_path.to_string(), entry);
+    }
+
+    let mut filtered_entries = Vec::new();
+    let mut seen_rel_paths = std::collections::HashSet::new();
+
+    // For each entry, if it matches any pattern, add it and its parent directory (if present).
+    for (rel_path, entry) in &rel_path_to_entry {
+        // Check if this entry matches any glob pattern.
+        if patterns.iter().any(|pat| pat.matches(rel_path)) {
+            // Add the entry itself if not already added.
+            if seen_rel_paths.insert(rel_path.clone()) {
+                filtered_entries.push(entry.clone());
+            }
+            // Add the immediate parent directory if present in the map and not already added.
+            if let Some(parent) = std::path::Path::new(rel_path).parent() {
+                // Always use trailing slash for directory keys.
+                let parent_str = format!("{}/", parent.to_string_lossy());
+                if !parent_str.is_empty() {
+                    if let Some(parent_entry) = rel_path_to_entry.get(&parent_str) {
+                        if seen_rel_paths.insert(parent_str.clone()) {
+                            filtered_entries.push(parent_entry.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(filtered_entries)
+}
+
 /// get_and_check_dfdaemon_download_client gets a dfdaemon download client and checks its health.
 async fn get_dfdaemon_download_client(endpoint: PathBuf) -> Result<DfdaemonDownloadClient> {
     // Check dfdaemon's health.
@@ -990,6 +1068,26 @@ fn validate_args(args: &Args) -> Result<()> {
                 "piece length {} bytes is less than the minimum piece length {} bytes",
                 piece_length.as_u64(),
                 MIN_PIECE_LENGTH
+            )));
+        }
+    }
+
+    // If the include_files is provided, then check the include_files.
+    fn is_valid_relative_path(p: &str) -> bool {
+        !p.is_empty()
+            && !p.starts_with('/')
+            && !p.contains("..")
+            && !p.chars().any(|c| c == '\0')
+            && Path::new(p).is_relative()
+    }
+    if let Some(ref include_files) = args.include_files {
+        let invalid = include_files
+            .iter()
+            .any(|file| Pattern::new(file).is_err() || !is_valid_relative_path(file));
+        if invalid {
+            return Err(Error::ValidationError(format!(
+                "invalid include files: {}",
+                include_files.join(", ")
             )));
         }
     }
@@ -1159,5 +1257,162 @@ mod tests {
 
         let result = make_output_by_entry(url, output, entry);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn should_filter_entries() {
+        let url = Url::parse("http://example.com/root/").unwrap();
+        let entries = vec![
+            DirEntry {
+                url: "http://example.com/root/dir/".to_string(),
+                content_length: 10,
+                is_dir: true,
+            },
+            DirEntry {
+                url: "http://example.com/root/dir/file.txt".to_string(),
+                content_length: 100,
+                is_dir: false,
+            },
+            DirEntry {
+                url: "http://example.com/root/dir/file2.txt".to_string(),
+                content_length: 100,
+                is_dir: false,
+            },
+            DirEntry {
+                url: "http://example.com/root/dir/subdir/".to_string(),
+                content_length: 10,
+                is_dir: true,
+            },
+            DirEntry {
+                url: "http://example.com/root/dir/subdir/file3.txt".to_string(),
+                content_length: 100,
+                is_dir: false,
+            },
+            DirEntry {
+                url: "http://example.com/root/dir/subdir/file4.png".to_string(),
+                content_length: 100,
+                is_dir: false,
+            },
+        ];
+
+        let filtered_entries =
+            filter_entries(url, entries, vec!["dir/file.txt".to_string()]).unwrap();
+        assert_eq!(filtered_entries.len(), 2);
+        assert_eq!(
+            filtered_entries[0].url,
+            "http://example.com/root/dir/file.txt"
+        );
+        assert_eq!(filtered_entries[1].url, "http://example.com/root/dir/");
+    }
+
+    #[test]
+    fn should_filter_entries_with_regex() {
+        let url = Url::parse("http://example.com/root/").unwrap();
+        let entries = vec![
+            DirEntry {
+                url: "http://example.com/root/dir/".to_string(),
+                content_length: 10,
+                is_dir: true,
+            },
+            DirEntry {
+                url: "http://example.com/root/dir/file.txt".to_string(),
+                content_length: 100,
+                is_dir: false,
+            },
+            DirEntry {
+                url: "http://example.com/root/dir/file2.txt".to_string(),
+                content_length: 100,
+                is_dir: false,
+            },
+            DirEntry {
+                url: "http://example.com/root/dir/subdir/".to_string(),
+                content_length: 10,
+                is_dir: true,
+            },
+            DirEntry {
+                url: "http://example.com/root/dir/subdir/file3.txt".to_string(),
+                content_length: 100,
+                is_dir: false,
+            },
+            DirEntry {
+                url: "http://example.com/root/dir/subdir/file4.png".to_string(),
+                content_length: 100,
+                is_dir: false,
+            },
+        ];
+
+        let filtered_entries =
+            filter_entries(url, entries, vec!["dir/subdir/*.txt".to_string()]).unwrap();
+        assert_eq!(filtered_entries.len(), 2);
+        assert_eq!(
+            filtered_entries[0].url,
+            "http://example.com/root/dir/subdir/file3.txt"
+        );
+        assert_eq!(
+            filtered_entries[1].url,
+            "http://example.com/root/dir/subdir/"
+        );
+    }
+
+    #[test]
+    fn should_filter_entries_with_dir_path() {
+        let url = Url::parse("http://example.com/root/").unwrap();
+        let entries = vec![
+            DirEntry {
+                url: "http://example.com/root/dir/".to_string(),
+                content_length: 10,
+                is_dir: true,
+            },
+            DirEntry {
+                url: "http://example.com/root/dir/file.txt".to_string(),
+                content_length: 100,
+                is_dir: false,
+            },
+            DirEntry {
+                url: "http://example.com/root/dir/file2.txt".to_string(),
+                content_length: 100,
+                is_dir: false,
+            },
+            DirEntry {
+                url: "http://example.com/root/dir/subdir/".to_string(),
+                content_length: 10,
+                is_dir: true,
+            },
+            DirEntry {
+                url: "http://example.com/root/dir/subdir/file3.txt".to_string(),
+                content_length: 100,
+                is_dir: false,
+            },
+            DirEntry {
+                url: "http://example.com/root/dir/subdir/file4.png".to_string(),
+                content_length: 100,
+                is_dir: false,
+            },
+        ];
+
+        let filtered_entries =
+            filter_entries(url, entries, vec!["dir/subdir/*".to_string()]).unwrap();
+        println!("{:?}", filtered_entries);
+        assert_eq!(filtered_entries.len(), 4);
+    }
+
+    #[test]
+    fn should_filter_entries_with_empty() {
+        let url = Url::parse("http://example.com/root/").unwrap();
+        let entries = vec![
+            DirEntry {
+                url: "http://example.com/root/dir/file.txt".to_string(),
+                content_length: 100,
+                is_dir: false,
+            },
+            DirEntry {
+                url: " ".to_string(),
+                content_length: 100,
+                is_dir: false,
+            },
+        ];
+
+        let filtered_entries = filter_entries(url, entries, vec!["dir/subdir/*".to_string()]);
+        assert!(matches!(filtered_entries, Err(Error::UnexpectedResponse)));
     }
 }
