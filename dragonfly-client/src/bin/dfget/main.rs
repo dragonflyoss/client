@@ -1360,9 +1360,9 @@ mod tests {
             },
         ];
 
-        for (include_files, expected_entries_nums) in test_cases {
+        for (include_files, expected_entries_number) in test_cases {
             let filtered_entries = filter_entries(&url, entries.clone(), &include_files).unwrap();
-            assert_eq!(filtered_entries.len(), expected_entries_nums);
+            assert_eq!(filtered_entries.len(), expected_entries_number);
         }
     }
 
