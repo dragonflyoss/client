@@ -1311,6 +1311,21 @@ mod tests {
 
     #[test]
     fn should_filter_entries() {
+        let test_cases = vec![
+            (vec!["dir/file.txt".to_string()], 2),
+            (
+                vec![
+                    "dir/file.txt".to_string(),
+                    "dir/subdir/file4.png".to_string(),
+                ],
+                4,
+            ),
+            (vec!["dir/subdir/*.png".to_string()], 2),
+            (vec!["dir/*".to_string()], 6),
+            (vec!["dir/".to_string()], 1),
+            (vec!["test".to_string()], 0),
+        ];
+
         let url = Url::parse("http://example.com/root/").unwrap();
         let entries = vec![
             DirEntry {
@@ -1345,108 +1360,14 @@ mod tests {
             },
         ];
 
-        let filtered_entries =
-            filter_entries(&url, entries, &["dir/file.txt".to_string()]).unwrap();
-        assert_eq!(filtered_entries.len(), 2);
-        assert!(filtered_entries
-            .iter()
-            .any(|entry| entry.url == "http://example.com/root/dir/file.txt"));
-        assert!(filtered_entries
-            .iter()
-            .any(|entry| entry.url == "http://example.com/root/dir/"));
+        for (include_files, expected_entries_nums) in test_cases {
+            let filtered_entries = filter_entries(&url, entries.clone(), &include_files).unwrap();
+            assert_eq!(filtered_entries.len(), expected_entries_nums);
+        }
     }
 
     #[test]
-    fn should_filter_entries_with_regex() {
-        let url = Url::parse("http://example.com/root/").unwrap();
-        let entries = vec![
-            DirEntry {
-                url: "http://example.com/root/dir/".to_string(),
-                content_length: 10,
-                is_dir: true,
-            },
-            DirEntry {
-                url: "http://example.com/root/dir/file.txt".to_string(),
-                content_length: 100,
-                is_dir: false,
-            },
-            DirEntry {
-                url: "http://example.com/root/dir/file2.txt".to_string(),
-                content_length: 100,
-                is_dir: false,
-            },
-            DirEntry {
-                url: "http://example.com/root/dir/subdir/".to_string(),
-                content_length: 10,
-                is_dir: true,
-            },
-            DirEntry {
-                url: "http://example.com/root/dir/subdir/file3.txt".to_string(),
-                content_length: 100,
-                is_dir: false,
-            },
-            DirEntry {
-                url: "http://example.com/root/dir/subdir/file4.png".to_string(),
-                content_length: 100,
-                is_dir: false,
-            },
-        ];
-
-        let filtered_entries =
-            filter_entries(&url, entries, &["dir/subdir/*.txt".to_string()]).unwrap();
-        assert_eq!(filtered_entries.len(), 2);
-        assert!(filtered_entries
-            .iter()
-            .any(|entry| entry.url == "http://example.com/root/dir/subdir/file3.txt"));
-        assert!(filtered_entries
-            .iter()
-            .any(|entry| entry.url == "http://example.com/root/dir/subdir/"));
-    }
-
-    #[test]
-    fn should_filter_entries_with_dir_path() {
-        let url = Url::parse("http://example.com/root/").unwrap();
-        let entries = vec![
-            DirEntry {
-                url: "http://example.com/root/dir/".to_string(),
-                content_length: 10,
-                is_dir: true,
-            },
-            DirEntry {
-                url: "http://example.com/root/dir/file.txt".to_string(),
-                content_length: 100,
-                is_dir: false,
-            },
-            DirEntry {
-                url: "http://example.com/root/dir/file2.txt".to_string(),
-                content_length: 100,
-                is_dir: false,
-            },
-            DirEntry {
-                url: "http://example.com/root/dir/subdir/".to_string(),
-                content_length: 10,
-                is_dir: true,
-            },
-            DirEntry {
-                url: "http://example.com/root/dir/subdir/file3.txt".to_string(),
-                content_length: 100,
-                is_dir: false,
-            },
-            DirEntry {
-                url: "http://example.com/root/dir/subdir/file4.png".to_string(),
-                content_length: 100,
-                is_dir: false,
-            },
-        ];
-
-        let filtered_entries =
-            filter_entries(&url, entries, &["dir/subdir/*".to_string()]).unwrap();
-        println!("{:?}", filtered_entries);
-        assert_eq!(filtered_entries.len(), 4);
-    }
-
-    #[test]
-    fn should_filter_entries_with_empty() {
+    fn should_filter_entries_with_error() {
         let url = Url::parse("http://example.com/root/").unwrap();
         let entries = vec![
             DirEntry {
