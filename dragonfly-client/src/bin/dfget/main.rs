@@ -1347,7 +1347,18 @@ mod tests {
                     },
                 ],
                 vec!["dir/file.txt".to_string()],
-                2,
+                vec![
+                    DirEntry {
+                        url: "http://example.com/root/dir/".to_string(),
+                        content_length: 10,
+                        is_dir: true,
+                    },
+                    DirEntry {
+                        url: "http://example.com/root/dir/file.txt".to_string(),
+                        content_length: 100,
+                        is_dir: false,
+                    },
+                ],
             ),
             (
                 Url::parse("http://example.com/root/").unwrap(),
@@ -1387,7 +1398,28 @@ mod tests {
                     "dir/file.txt".to_string(),
                     "dir/subdir/file4.png".to_string(),
                 ],
-                4,
+                vec![
+                    DirEntry {
+                        url: "http://example.com/root/dir/".to_string(),
+                        content_length: 10,
+                        is_dir: true,
+                    },
+                    DirEntry {
+                        url: "http://example.com/root/dir/file.txt".to_string(),
+                        content_length: 100,
+                        is_dir: false,
+                    },
+                    DirEntry {
+                        url: "http://example.com/root/dir/subdir/".to_string(),
+                        content_length: 10,
+                        is_dir: true,
+                    },
+                    DirEntry {
+                        url: "http://example.com/root/dir/subdir/file4.png".to_string(),
+                        content_length: 100,
+                        is_dir: false,
+                    },
+                ],
             ),
             (
                 Url::parse("http://example.com/root/").unwrap(),
@@ -1424,7 +1456,18 @@ mod tests {
                     },
                 ],
                 vec!["dir/subdir/*.png".to_string()],
-                2,
+                vec![
+                    DirEntry {
+                        url: "http://example.com/root/dir/subdir/".to_string(),
+                        content_length: 10,
+                        is_dir: true,
+                    },
+                    DirEntry {
+                        url: "http://example.com/root/dir/subdir/file4.png".to_string(),
+                        content_length: 100,
+                        is_dir: false,
+                    },
+                ],
             ),
             (
                 Url::parse("http://example.com/root/").unwrap(),
@@ -1461,7 +1504,38 @@ mod tests {
                     },
                 ],
                 vec!["dir/*".to_string()],
-                6,
+                vec![
+                    DirEntry {
+                        url: "http://example.com/root/dir/".to_string(),
+                        content_length: 10,
+                        is_dir: true,
+                    },
+                    DirEntry {
+                        url: "http://example.com/root/dir/file.txt".to_string(),
+                        content_length: 100,
+                        is_dir: false,
+                    },
+                    DirEntry {
+                        url: "http://example.com/root/dir/file2.txt".to_string(),
+                        content_length: 100,
+                        is_dir: false,
+                    },
+                    DirEntry {
+                        url: "http://example.com/root/dir/subdir/".to_string(),
+                        content_length: 10,
+                        is_dir: true,
+                    },
+                    DirEntry {
+                        url: "http://example.com/root/dir/subdir/file3.txt".to_string(),
+                        content_length: 100,
+                        is_dir: false,
+                    },
+                    DirEntry {
+                        url: "http://example.com/root/dir/subdir/file4.png".to_string(),
+                        content_length: 100,
+                        is_dir: false,
+                    },
+                ],
             ),
             (
                 Url::parse("http://example.com/root/").unwrap(),
@@ -1498,7 +1572,11 @@ mod tests {
                     },
                 ],
                 vec!["dir/".to_string()],
-                1,
+                vec![DirEntry {
+                    url: "http://example.com/root/dir/".to_string(),
+                    content_length: 10,
+                    is_dir: true,
+                }],
             ),
             (
                 Url::parse("http://example.com/root/").unwrap(),
@@ -1535,7 +1613,7 @@ mod tests {
                     },
                 ],
                 vec!["test".to_string()],
-                0,
+                vec![],
             ),
             (
                 Url::parse("http://example.com/root/").unwrap(),
@@ -1552,17 +1630,23 @@ mod tests {
                     },
                 ],
                 vec!["dir/file.txt".to_string()],
-                0,
+                vec![],
             ),
         ];
 
-        for (url, entries, include_files, expected_entries_number) in test_cases {
+        for (url, entries, include_files, expected_entries) in test_cases {
             let result = filter_entries(&url, entries, &include_files);
             if result.is_err() {
                 assert!(matches!(result, Err(Error::ValidationError(_))));
             } else {
                 let filtered_entries = result.unwrap();
-                assert_eq!(filtered_entries.len(), expected_entries_number);
+                assert_eq!(filtered_entries.len(), expected_entries.len());
+
+                for filtered_entry in &filtered_entries {
+                    assert!(expected_entries
+                        .iter()
+                        .any(|expected_entry| { expected_entry.url == filtered_entry.url }));
+                }
             }
         }
     }
