@@ -231,7 +231,7 @@ impl Proxy {
 }
 
 /// handler handles the request from the client.
-#[instrument(skip_all, fields(uri, method, remote_ip))]
+#[instrument(skip_all, fields(url, method, remote_ip))]
 pub async fn handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -241,8 +241,8 @@ pub async fn handler(
     server_ca_cert: Arc<Option<Certificate>>,
     remote_ip: std::net::IpAddr,
 ) -> ClientResult<Response> {
-    // Span record the uri and method.
-    Span::current().record("uri", request.uri().to_string().as_str());
+    // Span record the url and method.
+    Span::current().record("url", request.uri().to_string().as_str());
     Span::current().record("method", request.method().as_str());
     Span::current().record("remote_ip", remote_ip.to_string().as_str());
 
@@ -556,7 +556,7 @@ async fn upgraded_tunnel(
 
 /// upgraded_handler handles the upgraded https request from the client.
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip_all, fields(uri, method))]
+#[instrument(skip_all, fields(url, method))]
 pub async fn upgraded_handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -567,8 +567,8 @@ pub async fn upgraded_handler(
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
-    // Span record the uri and method.
-    Span::current().record("uri", request.uri().to_string().as_str());
+    // Span record the url and method.
+    Span::current().record("url", request.uri().to_string().as_str());
     Span::current().record("method", request.method().as_str());
 
     // Authenticate the request with the basic auth.
