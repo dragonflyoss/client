@@ -14,10 +14,9 @@
  * limitations under the License.
  */
 
-use crate::grpc::{manager::ManagerClient, scheduler::SchedulerClient};
+use crate::grpc::scheduler::SchedulerClient;
 use crate::shutdown;
 use dragonfly_api::common::v2::{Build, Cpu, Disk, Host, Memory, Network};
-use dragonfly_api::manager::v2::{DeleteSeedPeerRequest, SourceType, UpdateSeedPeerRequest};
 use dragonfly_api::scheduler::v2::{AnnounceHostRequest, DeleteHostRequest};
 use dragonfly_client_config::{
     dfdaemon::{Config, HostType},
@@ -31,83 +30,6 @@ use std::time::Duration;
 use sysinfo::System;
 use tokio::sync::mpsc;
 use tracing::{error, info, instrument};
-
-/// ManagerAnnouncer is used to announce the dfdaemon information to the manager.
-pub struct ManagerAnnouncer {
-    /// config is the configuration of the dfdaemon.
-    config: Arc<Config>,
-
-    /// manager_client is the grpc client of the manager.
-    manager_client: Arc<ManagerClient>,
-
-    /// shutdown is used to shutdown the announcer.
-    shutdown: shutdown::Shutdown,
-
-    /// _shutdown_complete is used to notify the announcer is shutdown.
-    _shutdown_complete: mpsc::UnboundedSender<()>,
-}
-
-/// ManagerAnnouncer implements the manager announcer of the dfdaemon.
-impl ManagerAnnouncer {
-    /// new creates a new manager announcer.
-    pub fn new(
-        config: Arc<Config>,
-        manager_client: Arc<ManagerClient>,
-        shutdown: shutdown::Shutdown,
-        shutdown_complete_tx: mpsc::UnboundedSender<()>,
-    ) -> Self {
-        Self {
-            config,
-            manager_client,
-            shutdown,
-            _shutdown_complete: shutdown_complete_tx,
-        }
-    }
-
-    /// run announces the dfdaemon information to the manager.
-    pub async fn run(&self) -> Result<()> {
-        // Clone the shutdown channel.
-        let mut shutdown = self.shutdown.clone();
-
-        // If the seed peer is enabled, we should announce the seed peer to the manager.
-        if self.config.seed_peer.enable {
-            // Register the seed peer to the manager.
-            self.manager_client
-                .update_seed_peer(UpdateSeedPeerRequest {
-                    source_type: SourceType::SeedPeerSource.into(),
-                    hostname: self.config.host.hostname.clone(),
-                    r#type: self.config.seed_peer.kind.to_string(),
-                    idc: self.config.host.idc.clone(),
-                    location: self.config.host.location.clone(),
-                    ip: self.config.host.ip.unwrap().to_string(),
-                    port: self.config.upload.server.port as i32,
-                    download_port: self.config.upload.server.port as i32,
-                    seed_peer_cluster_id: self.config.seed_peer.cluster_id,
-                })
-                .await?;
-
-            // Announce to scheduler shutting down with signals.
-            shutdown.recv().await;
-
-            // Delete the seed peer from the manager.
-            self.manager_client
-                .delete_seed_peer(DeleteSeedPeerRequest {
-                    source_type: SourceType::SeedPeerSource.into(),
-                    hostname: self.config.host.hostname.clone(),
-                    ip: self.config.host.ip.unwrap().to_string(),
-                    seed_peer_cluster_id: self.config.seed_peer.cluster_id,
-                })
-                .await?;
-
-            info!("announce to manager shutting down");
-        } else {
-            shutdown.recv().await;
-            info!("announce to manager shutting down");
-        }
-
-        Ok(())
-    }
-}
 
 /// Announcer is used to announce the dfdaemon information to the manager and scheduler.
 pub struct SchedulerAnnouncer {
