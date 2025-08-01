@@ -23,7 +23,7 @@ use crate::metrics::{
     collect_upload_piece_finished_metrics, collect_upload_piece_started_metrics,
 };
 use crate::resource::{persistent_cache_task, task};
-use crate::shutdown;
+use dragonfly_client_util::shutdown;
 use bytesize::MB;
 use dragonfly_api::common::v2::{
     Host, Network, PersistentCacheTask, Piece, Priority, Task, TaskType,

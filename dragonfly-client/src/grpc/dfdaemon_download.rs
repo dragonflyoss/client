@@ -24,7 +24,7 @@ use crate::metrics::{
     collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
 };
 use crate::resource::{persistent_cache_task, task};
-use crate::shutdown;
+use dragonfly_client_util::shutdown;
 use dragonfly_api::common::v2::{PersistentCacheTask, Priority, Task, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_download_client::DfdaemonDownloadClient as DfdaemonDownloadGRPCClient,
