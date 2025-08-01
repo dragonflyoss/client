@@ -20,7 +20,7 @@ use crate::metrics::{
     collect_proxy_request_via_dfdaemon_metrics,
 };
 use crate::resource::{piece::MIN_PIECE_LENGTH, task::Task};
-use crate::shutdown;
+use dragonfly_client_util::shutdown;
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::{
