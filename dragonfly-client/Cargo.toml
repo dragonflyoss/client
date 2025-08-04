@@ -75,7 +75,7 @@ opentelemetry-semantic-conventions = { version = "0.30.0", features = ["semconv_
 rolling-file = "0.2.0"
 pprof = { version = "0.15", features = ["flamegraph", "protobuf-codec"] }
 prometheus = { version = "0.13", features = ["process"] }
-tonic-health = "0.12.3"
+tonic-health = "0.14.0"
 sysinfo = { version = "0.32.1", default-features = false, features = ["component", "disk", "network", "system", "user"] }
 tower = { version = "0.4.13", features = ["limit", "load-shed", "buffer"] }
 indicatif = "0.18.0"
