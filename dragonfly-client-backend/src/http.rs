@@ -138,6 +138,13 @@ impl super::Backend for HTTP {
             .client(request.client_cert)?
             .get(&request.url)
             .headers(header)
+            // Add Range header to ensure Content-Length is returned in response headers.
+            // Some servers (especially when using Transfer-Encoding: chunked,
+            // refer to https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Transfer-Encoding.) may not
+            // include Content-Length in HEAD requests. Using "bytes=0-" requests the
+            // entire file starting from byte 0, forcing the server to include file size
+            // information in the response headers.
+            .header(reqwest::header::RANGE, "bytes=0-")
             .timeout(request.timeout)
             .send()
             .await
