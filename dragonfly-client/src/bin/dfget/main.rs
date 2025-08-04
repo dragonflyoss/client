@@ -808,7 +808,6 @@ async fn download(
                 need_piece_content,
                 object_storage,
                 hdfs,
-                load_to_cache: false,
                 force_hard_link: args.force_hard_link,
                 content_for_calculating_task_id: args.content_for_calculating_task_id,
                 remote_ip: Some(local_ip().unwrap().to_string()),

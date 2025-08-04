@@ -25,15 +25,16 @@ use crate::metrics::{
 };
 use crate::resource::{persistent_cache_task, task};
 use crate::shutdown;
-use dragonfly_api::common::v2::{PersistentCacheTask, Priority, Task, TaskType};
+use dragonfly_api::common::v2::{CacheTask, PersistentCacheTask, Priority, Task, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_download_client::DfdaemonDownloadClient as DfdaemonDownloadGRPCClient,
     dfdaemon_download_server::{
         DfdaemonDownload, DfdaemonDownloadServer as DfdaemonDownloadGRPCServer,
     },
-    DeleteTaskRequest, DownloadPersistentCacheTaskRequest, DownloadPersistentCacheTaskResponse,
-    DownloadTaskRequest, DownloadTaskResponse, Entry, ListTaskEntriesRequest,
-    ListTaskEntriesResponse, StatPersistentCacheTaskRequest,
+    DeleteCacheTaskRequest, DeleteTaskRequest, DownloadCacheTaskRequest, DownloadCacheTaskResponse,
+    DownloadPersistentCacheTaskRequest, DownloadPersistentCacheTaskResponse, DownloadTaskRequest,
+    DownloadTaskResponse, Entry, ListTaskEntriesRequest, ListTaskEntriesResponse,
+    StatCacheTaskRequest as DfdaemonStatCacheTaskRequest, StatPersistentCacheTaskRequest,
     StatTaskRequest as DfdaemonStatTaskRequest, UploadPersistentCacheTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
@@ -1296,6 +1297,39 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             })?;
 
         Ok(Response::new(task))
+    }
+
+    /// DownloadCacheTaskStream is the stream of the download cache task response.
+    type DownloadCacheTaskStream = ReceiverStream<Result<DownloadCacheTaskResponse, Status>>;
+
+    /// download_cache_task tells the dfdaemon to download the cache task.
+    #[instrument(
+        skip_all,
+        fields(host_id, task_id, peer_id, url, remote_ip, content_length)
+    )]
+    async fn download_cache_task(
+        &self,
+        _request: Request<DownloadCacheTaskRequest>,
+    ) -> Result<Response<Self::DownloadCacheTaskStream>, Status> {
+        todo!();
+    }
+
+    /// stat_cache_task gets the status of the cache task.
+    #[instrument(skip_all, fields(host_id, task_id, remote_pi, local_only))]
+    async fn stat_cache_task(
+        &self,
+        _request: Request<DfdaemonStatCacheTaskRequest>,
+    ) -> Result<Response<CacheTask>, Status> {
+        todo!();
+    }
+
+    /// delete_cache_task calls the dfdaemon to delete the cache task.
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
+    async fn delete_cache_task(
+        &self,
+        _request: Request<DeleteCacheTaskRequest>,
+    ) -> Result<Response<()>, Status> {
+        todo!();
     }
 }
 
