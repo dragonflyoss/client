@@ -51,10 +51,10 @@ impl HTTP {
             .with_no_client_auth();
 
         let client = reqwest::Client::builder()
-            .gzip(true)
-            .brotli(true)
-            .zstd(true)
-            .deflate(true)
+            .no_gzip()
+            .no_brotli()
+            .no_zstd()
+            .no_deflate()
             .use_preconfigured_tls(client_config_builder)
             .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
             .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
@@ -89,10 +89,10 @@ impl HTTP {
                     .with_no_client_auth();
 
                 let client = reqwest::Client::builder()
-                    .gzip(true)
-                    .brotli(true)
-                    .zstd(true)
-                    .deflate(true)
+                    .no_gzip()
+                    .no_brotli()
+                    .no_zstd()
+                    .no_deflate()
                     .use_preconfigured_tls(client_config_builder)
                     .build()?;
 
