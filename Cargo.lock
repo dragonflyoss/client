@@ -996,6 +996,7 @@ dependencies = [
  "pprof",
  "prometheus",
  "prost-wkt-types",
+ "rand 0.9.1",
  "rcgen",
  "reqwest",
  "rolling-file",
