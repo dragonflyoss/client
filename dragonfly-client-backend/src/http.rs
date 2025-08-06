@@ -50,6 +50,17 @@ impl HTTP {
             .with_custom_certificate_verifier(NoVerifier::new())
             .with_no_client_auth();
 
+        // Disable automatic compression to prevent double-decompression issues.
+        //
+        // Problem scenario:
+        // 1. Origin server supports gzip and returns "content-encoding: gzip" header.
+        // 2. Backend decompresses the response and stores uncompressed content to disk.
+        // 3. When user's client downloads via dfdaemon proxy, the original "content-encoding: gzip".
+        //    header is forwarded to it.
+        // 4. User's client attempts to decompress the already-decompressed content, causing errors.
+        //
+        // Solution: Disable all compression formats (gzip, brotli, zstd, deflate) to ensure
+        // we receive and store uncompressed content, eliminating the double-decompression issue.
         let client = reqwest::Client::builder()
             .no_gzip()
             .no_brotli()
@@ -88,6 +99,17 @@ impl HTTP {
                     .with_root_certificates(root_cert_store)
                     .with_no_client_auth();
 
+                // Disable automatic compression to prevent double-decompression issues.
+                //
+                // Problem scenario:
+                // 1. Origin server supports gzip and returns "content-encoding: gzip" header.
+                // 2. Backend decompresses the response and stores uncompressed content to disk.
+                // 3. When user's client downloads via dfdaemon proxy, the original "content-encoding: gzip".
+                //    header is forwarded to it.
+                // 4. User's client attempts to decompress the already-decompressed content, causing errors.
+                //
+                // Solution: Disable all compression formats (gzip, brotli, zstd, deflate) to ensure
+                // we receive and store uncompressed content, eliminating the double-decompression issue.
                 let client = reqwest::Client::builder()
                     .no_gzip()
                     .no_brotli()
