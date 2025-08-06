@@ -1027,31 +1027,33 @@ pub struct Storage {
     /// cache_capacity is the cache capacity for downloading, default is 100.
     ///
     /// Cache storage:
-    /// 1. Users can create preheating jobs and preheat tasks to memory and disk by setting `load_to_cache` to `true`.
-    ///    For more details, refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L443.
+    /// 1. Users can preheat task by caching to memory (via CacheTask) or to disk (via Task).
+    ///    For more details, refer to https://github.com/dragonflyoss/api/blob/main/proto/dfdaemon.proto#L174.
     /// 2. If the download hits the memory cache, it will be faster than reading from the disk, because there is no
     ///    page cache for the first read.
     ///
-    /// ```text
-    ///     1.Preheat
-    ///         |
-    ///         |
-    /// +--------------------------------------------------+
-    /// |       |              Peer                        |
-    /// |       |                   +-----------+          |
-    /// |       |     -- Partial -->|   Cache   |          |
-    /// |       |     |             +-----------+          |
-    /// |       v     |                |    |              |
-    /// |   Download  |              Miss   |              |
-    /// |     Task -->|                |    --- Hit ------>|<-- 2.Download
-    /// |             |                |               ^   |
-    /// |             |                v               |   |
-    /// |             |          +-----------+         |   |
-    /// |             -- Full -->|   Disk    |----------   |
-    /// |                        +-----------+             |
-    /// |                                                  |
-    /// +--------------------------------------------------+
-    /// ```
+    ///```text
+    ///                    +--------+
+    ///                    │ Source │
+    ///                    +--------+
+    ///                       ^ ^                Preheat
+    ///                       │ │                   |
+    /// +-----------------+   │ │    +----------------------------+
+    /// │   Other Peers   │   │ │    │  Peer        |             │
+    /// │                 │   │ │    │              v             │
+    /// │  +----------+   │   │ │    │        +----------+        │
+    /// │  │  Cache   |<--|----------|<-Miss--|  Cache   |--Hit-->|<----Download CacheTask
+    /// │  +----------+   │     │    │        +----------+        │
+    /// │                 │     │    │                            │
+    /// │  +----------+   │     │    │        +----------+        │
+    /// │  │   Disk   |<--|----------|<-Miss--|   Disk   |--Hit-->|<----Download Task
+    /// │  +----------+   │          │        +----------+        │
+    /// │                 │          │              ^             │
+    /// │                 │          │              |             │
+    /// +-----------------+          +----------------------------+
+    ///                                             |
+    ///                                          Preheat
+    ///```   
     #[serde(with = "bytesize_serde", default = "default_storage_cache_capacity")]
     pub cache_capacity: ByteSize,
 }
