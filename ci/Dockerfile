@@ -59,6 +59,7 @@ RUN if [ "$(uname -m)" = "ppc64le" ]; then \
 FROM public.ecr.aws/docker/library/golang:1.23.0-alpine3.20 AS pprof
 
 RUN go install github.com/google/pprof@latest
+RUN go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
 
 FROM public.ecr.aws/debian/debian:bookworm-slim
 
@@ -72,6 +73,7 @@ COPY --from=builder /app/client/target/release/dfdaemon /usr/local/bin/dfdaemon
 COPY --from=builder /app/client/target/release/dfcache /usr/local/bin/dfcache
 COPY --from=builder /usr/local/bin/tokio-console /usr/local/bin/
 COPY --from=pprof /go/bin/pprof /bin/pprof
+COPY --from=pprof /go/bin/grpcurl /bin/grpcurl
 COPY --from=health /bin/grpc_health_probe /bin/grpc_health_probe
 
 ENTRYPOINT ["/usr/local/bin/dfdaemon"]
