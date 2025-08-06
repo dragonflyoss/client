@@ -26,18 +26,21 @@ use crate::resource::{persistent_cache_task, task};
 use crate::shutdown;
 use bytesize::MB;
 use dragonfly_api::common::v2::{
-    Host, Network, PersistentCacheTask, Piece, Priority, Task, TaskType,
+    CacheTask, Host, Network, PersistentCacheTask, Piece, Priority, Task, TaskType,
 };
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient,
     dfdaemon_upload_server::{DfdaemonUpload, DfdaemonUploadServer as DfdaemonUploadGRPCServer},
-    DeletePersistentCacheTaskRequest, DeleteTaskRequest, DownloadPersistentCachePieceRequest,
+    DeleteCacheTaskRequest, DeletePersistentCacheTaskRequest, DeleteTaskRequest,
+    DownloadCachePieceRequest, DownloadCachePieceResponse, DownloadCacheTaskRequest,
+    DownloadCacheTaskResponse, DownloadPersistentCachePieceRequest,
     DownloadPersistentCachePieceResponse, DownloadPersistentCacheTaskRequest,
     DownloadPersistentCacheTaskResponse, DownloadPieceRequest, DownloadPieceResponse,
     DownloadTaskRequest, DownloadTaskResponse, ExchangeIbVerbsQueuePairEndpointRequest,
-    ExchangeIbVerbsQueuePairEndpointResponse, StatPersistentCacheTaskRequest, StatTaskRequest,
-    SyncHostRequest, SyncPersistentCachePiecesRequest, SyncPersistentCachePiecesResponse,
-    SyncPiecesRequest, SyncPiecesResponse, UpdatePersistentCacheTaskRequest,
+    ExchangeIbVerbsQueuePairEndpointResponse, StatCacheTaskRequest, StatPersistentCacheTaskRequest,
+    StatTaskRequest, SyncCachePiecesRequest, SyncCachePiecesResponse, SyncHostRequest,
+    SyncPersistentCachePiecesRequest, SyncPersistentCachePiecesResponse, SyncPiecesRequest,
+    SyncPiecesResponse, UpdatePersistentCacheTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_config::dfdaemon::Config;
@@ -1691,6 +1694,63 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         _request: Request<ExchangeIbVerbsQueuePairEndpointRequest>,
     ) -> Result<Response<ExchangeIbVerbsQueuePairEndpointResponse>, Status> {
         unimplemented!()
+    }
+
+    /// DownloadCacheTaskStream is the stream of the download cache task response.
+    type DownloadCacheTaskStream = ReceiverStream<Result<DownloadCacheTaskResponse, Status>>;
+
+    /// download_cache_task downloads the cache task.
+    #[instrument(
+        skip_all,
+        fields(host_id, task_id, peer_id, url, remote_ip, content_length)
+    )]
+    async fn download_cache_task(
+        &self,
+        _request: Request<DownloadCacheTaskRequest>,
+    ) -> Result<Response<Self::DownloadCacheTaskStream>, Status> {
+        todo!();
+    }
+
+    /// stat_cache_task stats the cache task.
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip, local_only))]
+    async fn stat_cache_task(
+        &self,
+        _request: Request<StatCacheTaskRequest>,
+    ) -> Result<Response<CacheTask>, Status> {
+        todo!();
+    }
+
+    /// delete_cache_task deletes the cache task.
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
+    async fn delete_cache_task(
+        &self,
+        _request: Request<DeleteCacheTaskRequest>,
+    ) -> Result<Response<()>, Status> {
+        todo!();
+    }
+
+    /// SyncCachePiecesStream is the stream of the sync cache pieces response.
+    type SyncCachePiecesStream = ReceiverStream<Result<SyncCachePiecesResponse, Status>>;
+
+    /// sync_cache_pieces provides the cache piece metadata for parent.
+    #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
+    async fn sync_cache_pieces(
+        &self,
+        _request: Request<SyncCachePiecesRequest>,
+    ) -> Result<Response<Self::SyncCachePiecesStream>, Status> {
+        todo!();
+    }
+
+    /// download_cache_piece provides the cache piece content for parent.
+    #[instrument(
+        skip_all,
+        fields(host_id, remote_host_id, task_id, piece_id, piece_length)
+    )]
+    async fn download_cache_piece(
+        &self,
+        _request: Request<DownloadCachePieceRequest>,
+    ) -> Result<Response<DownloadCachePieceResponse>, Status> {
+        todo!();
     }
 }
 
