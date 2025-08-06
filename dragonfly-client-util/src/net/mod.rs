@@ -14,48 +14,13 @@
  * limitations under the License.
  */
 
-use bytesize::{ByteSize, MB};
+use bytesize::ByteSize;
 use pnet::datalink::{self, NetworkInterface};
 use std::cmp::min;
 use std::net::IpAddr;
-
-#[cfg(not(target_os = "linux"))]
-use tracing::warn;
-
-/// get_interface_by_ip returns the name of the network interface that has the specified IP
-/// address.
-pub fn get_interface_by_ip(ip: IpAddr) -> Option<NetworkInterface> {
-    for interface in datalink::interfaces() {
-        for ip_network in interface.ips.iter() {
-            if ip_network.ip() == ip {
-                return Some(interface);
-            }
-        }
-    }
-
-    None
-}
-
-/// get_interface_speed_by_ip returns the speed of the network interface that has the specified IP
-/// address in Mbps.
-pub fn get_interface_speed(interface_name: &str) -> Option<u64> {
-    #[cfg(target_os = "linux")]
-    {
-        let speed_path = format!("/sys/class/net/{}/speed", interface_name);
-        std::fs::read_to_string(&speed_path)
-            .ok()
-            .and_then(|speed_str| speed_str.trim().parse::<u64>().ok())
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        warn!(
-            "can not get interface {} speed on non-linux platform",
-            interface_name
-        );
-        None
-    }
-}
+use std::time::Duration;
+use sysinfo::Networks;
+use tracing::{info, warn};
 
 /// Interface represents a network interface with its information.
 #[derive(Debug, Clone, Default)]
@@ -63,23 +28,147 @@ pub struct Interface {
     /// name is the name of the network interface.
     pub name: String,
 
-    // bandwidth is the bandwidth of the network interface in Mbps.
+    // bandwidth is the bandwidth of the network interface in bps.
     pub bandwidth: u64,
 }
 
-/// get_interface_info returns the network interface information for the specified IP address.
-pub fn get_interface_info(ip: IpAddr, rate_limit: ByteSize) -> Option<Interface> {
-    let rate_limit = rate_limit.as_u64() / MB * 8; // convert to Mbps
+/// NetworkData represents the network data for a specific interface,
+#[derive(Debug, Clone, Default)]
+pub struct NetworkData {
+    /// max_rx_bandwidth is the maximum receive bandwidth of the interface in bps.
+    pub max_rx_bandwidth: u64,
 
-    let interface = get_interface_by_ip(ip)?;
-    match get_interface_speed(&interface.name) {
-        Some(speed) => Some(Interface {
-            name: interface.name,
-            bandwidth: min(speed, rate_limit),
-        }),
-        None => Some(Interface {
-            name: interface.name,
-            bandwidth: rate_limit,
-        }),
+    /// rx_bandwidth is the current receive bandwidth of the interface in bps.
+    pub rx_bandwidth: Option<u64>,
+
+    /// max_tx_bandwidth is the maximum transmit bandwidth of the interface in bps.
+    pub max_tx_bandwidth: u64,
+
+    /// tx_bandwidth is the current transmit bandwidth of the interface in bps.
+    pub tx_bandwidth: Option<u64>,
+}
+
+/// Interface methods provide functionality to get network interface information.
+impl Interface {
+    /// DEFAULT_NETWORKS_REFRESH_INTERVAL is the default interval for refreshing network data.
+    const DEFAULT_NETWORKS_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+
+    /// new creates a new Interface instance based on the provided IP address and rate limit.
+    pub fn new(ip: IpAddr, rate_limit: ByteSize) -> Interface {
+        let rate_limit = byte_size_to_bits(rate_limit); // convert to Mbps
+        let Some(interface) = Self::get_network_interface_by_ip(ip) else {
+            warn!(
+            "can not find interface for IP address {}, network interface unknown with bandwidth {} bps",
+            ip, rate_limit
+        );
+            return Interface {
+                name: "unknown".to_string(),
+                bandwidth: rate_limit,
+            };
+        };
+
+        match Self::get_speed(&interface.name) {
+            Some(speed) => {
+                let bandwidth = min(megabits_to_bits(speed), rate_limit);
+                info!(
+                    "network interface {} with bandwidth {} bps",
+                    interface.name, bandwidth
+                );
+
+                Interface {
+                    name: interface.name,
+                    bandwidth,
+                }
+            }
+            None => {
+                warn!(
+                    "can not get speed, network interface {} with bandwidth {} bps",
+                    interface.name, rate_limit
+                );
+
+                Interface {
+                    name: interface.name,
+                    bandwidth: rate_limit,
+                }
+            }
+        }
     }
+
+    /// get_network_data retrieves the network data for the interface.
+    pub async fn get_network_data(&self) -> Option<NetworkData> {
+        // Initialize sysinfo network.
+        let mut networks = Networks::new_with_refreshed_list();
+
+        // Sleep to calculate the network traffic difference over
+        // the DEFAULT_NETWORKS_REFRESH_INTERVAL.
+        tokio::time::sleep(Self::DEFAULT_NETWORKS_REFRESH_INTERVAL).await;
+
+        // Refresh network information.
+        networks.refresh();
+        let Some(network_data) = networks.get(self.name.as_str()) else {
+            warn!("can not find network data for interface {}", self.name);
+            return Some(NetworkData {
+                max_rx_bandwidth: self.bandwidth,
+                max_tx_bandwidth: self.bandwidth,
+                ..Default::default()
+            });
+        };
+
+        // Calculate the receive and transmit bandwidth in bits per second.
+        let rx_bandwidth = (bytes_to_bits(network_data.received()) as f64
+            / Self::DEFAULT_NETWORKS_REFRESH_INTERVAL.as_secs_f64())
+        .round() as u64;
+
+        // Calculate the transmit bandwidth in bits per second.
+        let tx_bandwidth = (bytes_to_bits(network_data.transmitted()) as f64
+            / Self::DEFAULT_NETWORKS_REFRESH_INTERVAL.as_secs_f64())
+        .round() as u64;
+
+        Some(NetworkData {
+            max_rx_bandwidth: self.bandwidth,
+            rx_bandwidth: Some(rx_bandwidth),
+            max_tx_bandwidth: self.bandwidth,
+            tx_bandwidth: Some(tx_bandwidth),
+        })
+    }
+
+    /// get_speed returns the speed of the network interface in Mbps.
+    pub fn get_speed(name: &str) -> Option<u64> {
+        #[cfg(target_os = "linux")]
+        {
+            let speed_path = format!("/sys/class/net/{}/speed", name);
+            std::fs::read_to_string(&speed_path)
+                .ok()
+                .and_then(|speed_str| speed_str.trim().parse::<u64>().ok())
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            warn!("can not get interface {} speed on non-linux platform", name);
+            None
+        }
+    }
+
+    /// get_network_interface_by_ip returns the network interface that has the specified
+    /// IP address.
+    pub fn get_network_interface_by_ip(ip: IpAddr) -> Option<NetworkInterface> {
+        datalink::interfaces()
+            .into_iter()
+            .find(|interface| interface.ips.iter().any(|ip_net| ip_net.ip() == ip))
+    }
+}
+
+/// byte_size_to_bits converts a ByteSize to bits.
+pub fn byte_size_to_bits(size: ByteSize) -> u64 {
+    size.as_u64() * 8
+}
+
+/// megabits_to_bit converts megabits to bits.
+pub fn megabits_to_bits(size: u64) -> u64 {
+    size * 1_000_000 // 1 Mbit = 1,000,000 bits
+}
+
+/// bytes_to_bits converts bytes to bits.
+pub fn bytes_to_bits(size: u64) -> u64 {
+    size * 8 // 1 byte = 8 bits
 }
