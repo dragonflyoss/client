@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY Cargo.toml Cargo.lock ./
+COPY .cargo ./cargo
 
 COPY dragonfly-client/Cargo.toml ./dragonfly-client/Cargo.toml
 COPY dragonfly-client/src ./dragonfly-client/src
@@ -40,6 +41,8 @@ RUN case "${TARGETPLATFORM}" in \
   esac && \
   cargo build --release --verbose --bin dfget --bin dfdaemon --bin dfcache
 
+RUN cargo install tokio-console --locked --root /usr/local
+
 FROM public.ecr.aws/docker/library/alpine:3.20 AS health
 
 ENV GRPC_HEALTH_PROBE_VERSION=v0.4.24
@@ -67,6 +70,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends iperf3 fio curl
 COPY --from=builder /app/client/target/release/dfget /usr/local/bin/dfget
 COPY --from=builder /app/client/target/release/dfdaemon /usr/local/bin/dfdaemon
 COPY --from=builder /app/client/target/release/dfcache /usr/local/bin/dfcache
+COPY --from=builder /usr/local/bin/tokio-console /usr/local/bin/
 COPY --from=pprof /go/bin/pprof /bin/pprof
 COPY --from=health /bin/grpc_health_probe /bin/grpc_health_probe
 
