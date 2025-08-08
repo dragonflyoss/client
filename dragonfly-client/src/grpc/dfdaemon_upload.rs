@@ -24,7 +24,6 @@ use crate::metrics::{
 };
 use crate::resource::{persistent_cache_task, task};
 use crate::shutdown;
-use bytesize::MB;
 use dragonfly_api::common::v2::{
     CacheTask, Host, Network, PersistentCacheTask, Piece, Priority, Task, TaskType,
 };
@@ -51,7 +50,7 @@ use dragonfly_client_core::{
 use dragonfly_client_util::{
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
     id_generator::TaskIDParameter,
-    net::{get_interface_info, Interface},
+    net::Interface,
 };
 use opentelemetry::Context;
 use std::net::SocketAddr;
@@ -121,8 +120,7 @@ impl DfdaemonUploadServer {
     /// run starts the upload server.
     pub async fn run(&mut self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         // Initialize the grpc service.
-        let interface =
-            get_interface_info(self.config.host.ip.unwrap(), self.config.upload.rate_limit);
+        let interface = Interface::new(self.config.host.ip.unwrap(), self.config.upload.rate_limit);
 
         let service = DfdaemonUploadGRPCServer::with_interceptor(
             DfdaemonUploadServerHandler {
@@ -1003,8 +1001,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             Span::current().set_parent(parent_ctx.clone());
         };
 
-        // DEFAULT_HOST_INFO_REFRESH_INTERVAL is the default interval for refreshing the host info.
-        const DEFAULT_HOST_INFO_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+        // DEFAULT_NETWORKS_REFRESH_INTERVAL is the default interval for refreshing the networks.
+        const DEFAULT_NETWORKS_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
         // Clone the request.
         let request = request.into_inner();
@@ -1037,8 +1035,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 // Start the host info update loop.
                 loop {
                     // Sleep to calculate the network traffic difference over
-                    // the DEFAULT_HOST_INFO_REFRESH_INTERVAL.
-                    tokio::time::sleep(DEFAULT_HOST_INFO_REFRESH_INTERVAL).await;
+                    // the DEFAULT_NETWORKS_REFRESH_INTERVAL.
+                    tokio::time::sleep(DEFAULT_NETWORKS_REFRESH_INTERVAL).await;
 
                     // Refresh network information.
                     networks.refresh();
@@ -1048,14 +1046,14 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     if let Some(interface) = &interface {
                         if let Some(network_data) = networks.get(&interface.name) {
                             host.network = Some(Network {
-                                download_rate: network_data.received()
-                                    / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs(),
-                                // Convert bandwidth to bytes per second.
-                                download_rate_limit: interface.bandwidth / 8 * MB,
-                                upload_rate: network_data.transmitted()
-                                    / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs(),
-                                // Convert bandwidth to bytes per second.
-                                upload_rate_limit: interface.bandwidth / 8 * MB,
+                                download_rate: (network_data.received() as f64
+                                    / DEFAULT_NETWORKS_REFRESH_INTERVAL.as_secs_f64())
+                                .round() as u64,
+                                download_rate_limit: megabits_to_bytes(interface.bandwidth),
+                                upload_rate: (network_data.transmitted() as f64
+                                    / DEFAULT_NETWORKS_REFRESH_INTERVAL.as_secs_f64())
+                                .round() as u64,
+                                upload_rate_limit: megabits_to_bytes(interface.bandwidth),
                                 ..Default::default()
                             });
                         };

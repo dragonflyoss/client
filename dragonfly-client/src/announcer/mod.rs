@@ -152,11 +152,6 @@ impl SchedulerAnnouncer {
 
         // Get the network information.
         let network = Network {
-            // TODO: Get the count of the tcp connection.
-            tcp_connection_count: 0,
-
-            // TODO: Get the count of the upload tcp connection.
-            upload_tcp_connection_count: 0,
             idc: self.config.host.idc.clone(),
             location: self.config.host.location.clone(),
 
@@ -169,6 +164,7 @@ impl SchedulerAnnouncer {
             // https://docs.rs/sysinfo/latest/sysinfo/struct.NetworkData.html#method.transmitted
             upload_rate: 0,
             upload_rate_limit: self.config.upload.rate_limit.as_u64(),
+            ..Default::default()
         };
 
         // Get the disk information.
