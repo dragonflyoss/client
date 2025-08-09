@@ -726,11 +726,14 @@ impl Task {
                         }
                     };
 
-                    // Remove the finished pieces from the pieces.
-                    let remaining_interested_pieces = self.piece.remove_finished_from_interested(
-                        finished_pieces.clone(),
-                        interested_pieces.clone(),
-                    );
+                    // // Remove the finished pieces from the pieces.
+                    // let remaining_interested_pieces = self.piece.remove_finished_from_interested(
+                    //     finished_pieces.clone(),
+                    //     interested_pieces.clone(),
+                    // );
+
+                    // TODO: The remove function useless? Cause `finished_pieces` MUST be empty here
+                    let remaining_interested_pieces = interested_pieces.clone();
 
                     // Download the pieces from the parent.
                     let partial_finished_pieces = match self
@@ -2012,10 +2015,12 @@ mod tests {
         let config = Arc::new(config);
 
         // Create storage.
-        let storage = Storage::new(config.clone(), temp_dir.path(), log_dir)
+        let storage = Storage::new(config.clone(), temp_dir.path(), log_dir, None)
             .await
             .unwrap();
         let storage = Arc::new(storage);
+
+        // TODO bad id < 64 bytes?
 
         // Test Storage.get_task and Error::TaskNotFound.
         let task_id = "non-existent-task-id";

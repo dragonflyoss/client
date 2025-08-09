@@ -18,7 +18,9 @@ use bytesize::ByteSize;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
+use crate::encrypt::{DecryptReader, EncryptReader};
 use dragonfly_client_util::fs::fallocate;
+use tokio_util::either::Either;
 use std::cmp::{max, min};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -46,6 +48,9 @@ pub struct Content {
 
     /// dir is the directory to store content.
     dir: PathBuf,
+
+    /// key is the encryption key
+    key: Option<Vec<u8>>,
 }
 
 /// WritePieceResponse is the response of writing a piece.
@@ -69,7 +74,7 @@ pub struct WritePersistentCacheTaskResponse {
 /// Content implements the content storage.
 impl Content {
     /// new returns a new content.
-    pub async fn new(config: Arc<Config>, dir: &Path) -> Result<Content> {
+    pub async fn new(config: Arc<Config>, dir: &Path, key: Option<Vec<u8>>) -> Result<Content> {
         let dir = dir.join(DEFAULT_CONTENT_DIR);
 
         // If the storage is not kept, remove the directory.
@@ -82,7 +87,7 @@ impl Content {
         fs::create_dir_all(&dir.join(DEFAULT_TASK_DIR)).await?;
         fs::create_dir_all(&dir.join(DEFAULT_PERSISTENT_CACHE_TASK_DIR)).await?;
         info!("content initialized directory: {:?}", dir);
-        Ok(Content { config, dir })
+        Ok(Content { config, dir, key })
     }
 
     /// available_space returns the available space of the disk.
@@ -508,6 +513,9 @@ impl Content {
         offset: u64,
         length: u64,
         range: Option<Range>,
+        // ADDED
+        // encrypt: bool,
+        piece_id: &str,
     ) -> Result<impl AsyncRead> {
         let task_path = self.get_persistent_cache_task_path(task_id);
 
@@ -526,9 +534,23 @@ impl Content {
                 error!("seek {:?} failed: {}", task_path, err);
             })?;
 
-        Ok(f_reader.take(target_length))
+        if self.config.storage.encryption.enable {
+            let key = self.key.as_ref().expect("should have key when encryption enabled");
+                
+            let limited_reader = f_reader.take(target_length);
+            let decrypt_reader = DecryptReader::new(
+                limited_reader, 
+                key, 
+                piece_id
+            );
+
+            return Ok(Either::Left(decrypt_reader));
+        }
+        
+        Ok(Either::Right(f_reader.take(target_length)))
     }
 
+    // TODO encryption?
     /// read_persistent_cache_piece_with_dual_read return two readers, one is the range reader, and the other is the
     /// full reader of the persistent cache piece. It is used for cache the piece content to the proxy cache.
     #[instrument(skip_all)]
@@ -583,6 +605,9 @@ impl Content {
         offset: u64,
         expected_length: u64,
         reader: &mut R,
+        // ADDED
+        // encrypt: bool,
+        piece_id: &str,
     ) -> Result<WritePieceResponse> {
         // Open the file and seek to the offset.
         let task_path = self.get_persistent_cache_task_path(task_id);
@@ -604,11 +629,24 @@ impl Content {
 
         // Copy the piece to the file while updating the CRC32 value.
         let mut hasher = crc32fast::Hasher::new();
-        let mut tee = InspectReader::new(reader, |bytes| {
+        let tee = InspectReader::new(reader, |bytes| {
             hasher.update(bytes);
         });
 
-        let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
+        let mut tee_warpper = if self.config.storage.encryption.enable {
+            let key = self.key.as_ref().expect("should have key when encryption enabled");
+
+            let encrypt_reader = EncryptReader::new(
+                tee, 
+                key, 
+                piece_id
+            );
+            Either::Left(encrypt_reader)
+        } else {
+            Either::Right(tee)
+        };
+
+        let length = io::copy(&mut tee_warpper, &mut writer).await.inspect_err(|err| {
             error!("copy {:?} failed: {}", task_path, err);
         })?;
 
@@ -676,7 +714,7 @@ mod tests {
     async fn test_create_task() {
         let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
-        let content = Content::new(config, temp_dir.path()).await.unwrap();
+        let content = Content::new(config, temp_dir.path(), None).await.unwrap();
 
         let task_id = "60409bd0ec44160f44c53c39b3fe1c5fdfb23faded0228c68bee83bc15a200e3";
         let task_path = content.create_task(task_id, 0).await.unwrap();
@@ -691,7 +729,7 @@ mod tests {
     async fn test_hard_link_task() {
         let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
-        let content = Content::new(config, temp_dir.path()).await.unwrap();
+        let content = Content::new(config, temp_dir.path(), None).await.unwrap();
 
         let task_id = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4";
         content.create_task(task_id, 0).await.unwrap();
@@ -709,7 +747,7 @@ mod tests {
     async fn test_copy_task() {
         let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
-        let content = Content::new(config, temp_dir.path()).await.unwrap();
+        let content = Content::new(config, temp_dir.path(), None).await.unwrap();
 
         let task_id = "bfd3c02fb31a7373e25b405fd5fd3082987ccfbaf210889153af9e65bbf13002";
         content.create_task(task_id, 64).await.unwrap();
@@ -725,7 +763,7 @@ mod tests {
     async fn test_delete_task() {
         let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
-        let content = Content::new(config, temp_dir.path()).await.unwrap();
+        let content = Content::new(config, temp_dir.path(), None).await.unwrap();
 
         let task_id = "4e19f03b0fceb38f23ff4f657681472a53ef335db3660ae5494912570b7a2bb7";
         let task_path = content.create_task(task_id, 0).await.unwrap();
@@ -739,7 +777,7 @@ mod tests {
     async fn test_read_piece() {
         let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
-        let content = Content::new(config, temp_dir.path()).await.unwrap();
+        let content = Content::new(config, temp_dir.path(), None).await.unwrap();
 
         let task_id = "c794a3bbae81e06d1c8d362509bdd42a7c105b0fb28d80ffe27f94b8f04fc845";
         content.create_task(task_id, 13).await.unwrap();
@@ -777,7 +815,7 @@ mod tests {
     async fn test_write_piece() {
         let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
-        let content = Content::new(config, temp_dir.path()).await.unwrap();
+        let content = Content::new(config, temp_dir.path(), None).await.unwrap();
 
         let task_id = "60b48845606946cea72084f14ed5cce61ec96e69f80a30f891a6963dccfd5b4f";
         content.create_task(task_id, 4).await.unwrap();
@@ -796,7 +834,7 @@ mod tests {
     async fn test_create_persistent_task() {
         let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
-        let content = Content::new(config, temp_dir.path()).await.unwrap();
+        let content = Content::new(config, temp_dir.path(), None).await.unwrap();
 
         let task_id = "c4f108ab1d2b8cfdffe89ea9676af35123fa02e3c25167d62538f630d5d44745";
         let task_path = content
@@ -817,7 +855,7 @@ mod tests {
     async fn test_hard_link_persistent_cache_task() {
         let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
-        let content = Content::new(config, temp_dir.path()).await.unwrap();
+        let content = Content::new(config, temp_dir.path(), None).await.unwrap();
 
         let task_id = "5e81970eb2b048910cc84cab026b951f2ceac0a09c72c0717193bb6e466e11cd";
         content
@@ -844,7 +882,7 @@ mod tests {
     async fn test_copy_persistent_cache_task() {
         let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
-        let content = Content::new(config, temp_dir.path()).await.unwrap();
+        let content = Content::new(config, temp_dir.path(), None).await.unwrap();
 
         let task_id = "194b9c2018429689fb4e596a506c7e9db564c187b9709b55b33b96881dfb6dd5";
         content
@@ -866,7 +904,7 @@ mod tests {
     async fn test_delete_persistent_cache_task() {
         let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
-        let content = Content::new(config, temp_dir.path()).await.unwrap();
+        let content = Content::new(config, temp_dir.path(), None).await.unwrap();
 
         let task_id = "17430ba545c3ce82790e9c9f77e64dca44bb6d6a0c9e18be175037c16c73713d";
         let task_path = content
@@ -883,7 +921,7 @@ mod tests {
     async fn test_read_persistent_cache_piece() {
         let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
-        let content = Content::new(config, temp_dir.path()).await.unwrap();
+        let content = Content::new(config, temp_dir.path(), None).await.unwrap();
 
         let task_id = "9cb27a4af09aee4eb9f904170217659683f4a0ea7cd55e1a9fbcb99ddced659a";
         content
@@ -894,12 +932,12 @@ mod tests {
         let data = b"hello, world!";
         let mut reader = Cursor::new(data);
         content
-            .write_persistent_cache_piece(task_id, 0, 13, &mut reader)
+            .write_persistent_cache_piece(task_id, 0, 13, &mut reader, "")
             .await
             .unwrap();
 
         let mut reader = content
-            .read_persistent_cache_piece(task_id, 0, 13, None)
+            .read_persistent_cache_piece(task_id, 0, 13, None, "")
             .await
             .unwrap();
         let mut buffer = Vec::new();
@@ -915,6 +953,7 @@ mod tests {
                     start: 0,
                     length: 5,
                 }),
+                "",
             )
             .await
             .unwrap();
@@ -927,7 +966,7 @@ mod tests {
     async fn test_write_persistent_cache_piece() {
         let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
-        let content = Content::new(config, temp_dir.path()).await.unwrap();
+        let content = Content::new(config, temp_dir.path(), None).await.unwrap();
 
         let task_id = "ca1afaf856e8a667fbd48093ca3ca1b8eeb4bf735912fbe551676bc5817a720a";
         content
@@ -938,7 +977,7 @@ mod tests {
         let data = b"test";
         let mut reader = Cursor::new(data);
         let response = content
-            .write_persistent_cache_piece(task_id, 0, 4, &mut reader)
+            .write_persistent_cache_piece(task_id, 0, 4, &mut reader, "")
             .await
             .unwrap();
         assert_eq!(response.length, 4);
@@ -949,7 +988,7 @@ mod tests {
     async fn test_has_enough_space() {
         let config = Arc::new(Config::default());
         let temp_dir = tempdir().unwrap();
-        let content = Content::new(config, temp_dir.path()).await.unwrap();
+        let content = Content::new(config, temp_dir.path(), None).await.unwrap();
 
         let has_space = content.has_enough_space(1).unwrap();
         assert!(has_space);
@@ -960,7 +999,7 @@ mod tests {
         let mut config = Config::default();
         config.gc.policy.dist_threshold = ByteSize::mib(10);
         let config = Arc::new(config);
-        let content = Content::new(config, temp_dir.path()).await.unwrap();
+        let content = Content::new(config, temp_dir.path(), None).await.unwrap();
 
         let file_path = Path::new(temp_dir.path())
             .join(DEFAULT_CONTENT_DIR)
@@ -1052,5 +1091,63 @@ mod tests {
             assert_eq!(target_offset, expected_offset);
             assert_eq!(target_length, expected_length);
         }
+    }
+
+    #[tokio::test]
+    async fn test_encryption_write_read_persistent_cache_piece() {
+        // cargo test --package dragonfly-client-storage --lib 
+        // \ -- content::tests::test_encrypt_write_persistent_cache_piece --exact --show-output
+        use base64;
+
+        let temp_dir = tempdir().unwrap();
+        let mut config = Config::default();
+        config.storage.encryption.enable = true;
+        
+        // base64 key
+        let base64_key = "jqe8buWT8rsfBMYt8mpwSbnjy44WNy/5v1gN1JfFsNk=";
+        let key = base64::decode(base64_key).expect("Failed to decode base64 key");
+        println!("key: {:#x?}", key);
+        
+        let config = Arc::new(config);
+        let content = Content::new(config, temp_dir.path(), Some(key)).await.unwrap();
+
+        let task_id = "ca1afaf856e8a667fbd48093ca3ca1b8eeb4bf735912fbe551676bc5817a720a";
+        let piece_id = "ca1afaf856e8a667fbd48093ca3ca1b8eeb4bf735912fbe551676bc5817a720a-1";
+        content
+            .create_persistent_cache_task(task_id, 4)
+            .await
+            .unwrap();
+
+        let data = b"data";
+        
+        // cal CRC
+        let mut plaintext_hasher = crc32fast::Hasher::new();
+        plaintext_hasher.update(data);
+        let plaintext_crc = plaintext_hasher.finalize();
+
+        // encrypted write
+        let mut reader = Cursor::new(data);
+        let response = content
+            .write_persistent_cache_piece(task_id, 0, data.len() as u64, &mut reader, piece_id)
+            .await
+            .unwrap();
+
+        // check len
+        assert_eq!(response.length, data.len() as u64);
+        
+        // check with plaintext crc
+        let response_crc = response.hash.parse::<u32>().expect("Failed to parse CRC");
+        assert_eq!(response_crc, plaintext_crc, "Encrypted CRC should match plaintext CRC");
+        
+        // decrypted read
+        let mut decrypted_reader = content
+            .read_persistent_cache_piece(task_id, 0, data.len() as u64, None, piece_id)
+            .await
+            .unwrap();
+        
+        let mut decrypted_data = Vec::new();
+        decrypted_reader.read_to_end(&mut decrypted_data).await.unwrap();
+        
+        assert_eq!(decrypted_data, data, "Decrypted data should match original data");
     }
 }
