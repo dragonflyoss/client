@@ -18,6 +18,7 @@ use crate::grpc::health::HealthClient;
 use dragonfly_api::manager::v2::{
     manager_client::ManagerClient as ManagerGRPCClient, DeleteSeedPeerRequest,
     ListSchedulersRequest, ListSchedulersResponse, SeedPeer, UpdateSeedPeerRequest,
+    RequestEncryptionKeyRequest,
 };
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
@@ -129,6 +130,16 @@ impl ManagerClient {
         let request = Self::make_request(request);
         self.client.clone().delete_seed_peer(request).await?;
         Ok(())
+    }
+
+    /// request_encryption_key request a key from manager
+    pub async fn request_encryption_key(&self, request: RequestEncryptionKeyRequest) -> Result<Vec<u8>> {
+        let request = Self::make_request(request);
+        let response = self.client
+            .clone()
+            .request_encryption_key(request)
+            .await?;
+        Ok(response.into_inner().encryption_key)
     }
 
     /// make_request creates a new request with timeout.

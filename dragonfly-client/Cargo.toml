@@ -28,7 +28,8 @@ dragonfly-client-config.workspace = true
 dragonfly-client-storage.workspace = true
 dragonfly-client-backend.workspace = true
 dragonfly-client-util.workspace = true
-dragonfly-api.workspace = true
+# dragonfly-api.workspace = true
+dragonfly-api = { git = "file:///codes/dragonflyoss/api_fork", branch = "for_client"}
 rcgen.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true

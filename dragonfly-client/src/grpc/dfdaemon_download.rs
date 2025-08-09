@@ -1051,8 +1051,24 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             return;
                         }
 
+                        // TODO: encryption is not compatible with hardlink
+                        assert!(!task_manager_clone.encrypted() || !request_clone.force_hard_link);
+
                         if let Some(output_path) = &request_clone.output_path {
-                            if !request_clone.force_hard_link {
+                            // if encryption is enabled, copy to path instead of hard link
+                            if task_manager_clone.encrypted() {
+                                let output_path = Path::new(output_path.as_str());
+                                if output_path.exists() {
+                                    return;
+                                }
+                                let _res = task_manager_clone.export_encryption_file(
+                                    task_clone.id.as_ref(),
+                                    output_path
+                                )
+                                .await
+                                .map_err(|e| {error!("export encryption file: {}", e); return;})
+                                .expect("export should success");
+                            } else if !request_clone.force_hard_link {
                                 let output_path = Path::new(output_path.as_str());
                                 if output_path.exists() {
                                     match task_manager_clone
@@ -1090,7 +1106,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                     handle_error(&out_stream_tx, err).await;
                                     return;
                                 }
+                            } else {
+                                panic!("should not reach here")
                             }
+
+                            // TODO: need to be decrypt first when calculate the digest of a encrypted file
 
                             // Verify the file digest if it is provided.
                             if let Some(raw_digest) = &request_clone.digest {
