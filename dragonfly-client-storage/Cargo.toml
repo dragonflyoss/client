@@ -13,10 +13,12 @@ edition.workspace = true
 dragonfly-client-core.workspace = true
 dragonfly-client-config.workspace = true
 dragonfly-client-util.workspace = true
-dragonfly-api.workspace = true
+# dragonfly-api.workspace = true
+dragonfly-api = { git = "file:///codes/dragonflyoss/api_fork", branch = "for_client"}
 chrono.workspace = true
 reqwest.workspace = true
 rocksdb.workspace = true
+# rocksdb = { path = "/codes/rust-rocksdb" }
 serde.workspace = true
 tracing.workspace = true
 prost-wkt-types.workspace = true
@@ -29,6 +31,15 @@ bytesize.workspace = true
 num_cpus = "1.17"
 bincode = "1.3.3"
 walkdir = "2.5.0"
+base64 = "0.22.1"
+
+# encryption
+# chacha20poly1305 = { version = "0.10", features = ["std"] }
+aes = "0.8"
+ctr = "0.9"
+# chacha20 = "0.9.1"
+cipher = "0.4"
+rand = "0.8" 
 
 [dev-dependencies]
 tempfile.workspace = true

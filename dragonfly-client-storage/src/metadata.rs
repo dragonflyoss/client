@@ -862,6 +862,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
             })
             .collect::<Result<Vec<Box<[u8]>>>>()?;
 
+        info!("query for task [{}] found {} pieces", task_id, pieces.len());
+
         pieces
             .iter()
             .map(|piece| Piece::deserialize_from(piece))

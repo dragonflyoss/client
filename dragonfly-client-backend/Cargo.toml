@@ -12,7 +12,8 @@ edition.workspace = true
 [dependencies]
 dragonfly-client-core.workspace = true
 dragonfly-client-util.workspace = true
-dragonfly-api.workspace = true
+# dragonfly-api.workspace = true
+dragonfly-api = { git = "file:///codes/dragonflyoss/api_fork", branch = "for_client"}
 reqwest.workspace = true
 reqwest-middleware.workspace = true
 tokio.workspace = true

@@ -15,6 +15,7 @@
  */
 
 use clap::Parser;
+use dragonfly_api::manager::v2::{RequestEncryptionKeyRequest, SourceType};
 use dragonfly_client::announcer::SchedulerAnnouncer;
 use dragonfly_client::dynconfig::Dynconfig;
 use dragonfly_client::gc::GC;
@@ -154,8 +155,38 @@ async fn main() -> Result<(), anyhow::Error> {
         args.console,
     );
 
+    // Initialize manager client.
+    let manager_client = ManagerClient::new(config.clone(), config.manager.addr.clone())
+        .await
+        .inspect_err(|err| {
+            error!("initialize manager client failed: {}", err);
+        })?;
+    let manager_client = Arc::new(manager_client);
+
+    // Get key from Manager
+    let key = if config.storage.encryption.enable { 
+        let source_type = if config.seed_peer.enable {
+            SourceType::SeedPeerSource.into()
+        } else {
+            SourceType::PeerSource.into()
+        };
+        // Request a key from Manager
+        let key = manager_client.request_encryption_key(
+            RequestEncryptionKeyRequest {
+                source_type: source_type,
+                hostname: config.host.hostname.clone(),
+                ip: config.host.ip.unwrap().to_string(),
+            }
+        ).await?;
+
+        info!("Key response: \n{:x?}", key);
+        Some(key)
+    } else {
+        None
+    };
+
     // Initialize storage.
-    let storage = Storage::new(config.clone(), config.storage.dir.as_path(), args.log_dir)
+    let storage = Storage::new(config.clone(), config.storage.dir.as_path(), args.log_dir, key)
         .await
         .inspect_err(|err| {
             error!("initialize storage failed: {}", err);
@@ -169,14 +200,6 @@ async fn main() -> Result<(), anyhow::Error> {
         config.seed_peer.enable,
     );
     let id_generator = Arc::new(id_generator);
-
-    // Initialize manager client.
-    let manager_client = ManagerClient::new(config.clone(), config.manager.addr.clone())
-        .await
-        .inspect_err(|err| {
-            error!("initialize manager client failed: {}", err);
-        })?;
-    let manager_client = Arc::new(manager_client);
 
     // Initialize channel for graceful shutdown.
     let shutdown = shutdown::Shutdown::default();
