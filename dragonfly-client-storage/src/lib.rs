@@ -24,7 +24,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncRead;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::time::sleep;
 use tokio_util::either::Either;
 use tracing::{debug, error, info, instrument, warn};
@@ -33,6 +33,7 @@ pub mod cache;
 pub mod content;
 pub mod metadata;
 pub mod storage_engine;
+pub mod encrypt;
 
 /// DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.
 pub const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(100);
@@ -50,14 +51,17 @@ pub struct Storage {
 
     /// cache implements the cache storage.
     cache: cache::Cache,
+
+    // /// key is the encryption key
+    // key: Option<Vec<u8>>,
 }
 
 /// Storage implements the storage.
 impl Storage {
     /// new returns a new storage.
-    pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf) -> Result<Self> {
+    pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf, key: Option<Vec<u8>>) -> Result<Self> {
         let metadata = metadata::Metadata::new(config.clone(), dir, &log_dir)?;
-        let content = content::Content::new(config.clone(), dir).await?;
+        let content = content::Content::new(config.clone(), dir, key).await?;
         let cache = cache::Cache::new(config.clone());
 
         Ok(Storage {
@@ -65,6 +69,7 @@ impl Storage {
             metadata,
             content,
             cache,
+            // key,
         })
     }
 
@@ -376,7 +381,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_persistent_cache_piece(task_id, offset, length, reader)
+            .write_persistent_cache_piece(task_id, offset, length, reader, piece_id)
             .await?;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
 
@@ -645,7 +650,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_persistent_cache_piece(task_id, offset, length, reader)
+            .write_persistent_cache_piece(task_id, offset, length, reader, piece_id)
             .await?;
 
         let length = response.length;
@@ -696,7 +701,7 @@ impl Storage {
             Ok(Some(piece)) => {
                 match self
                     .content
-                    .read_persistent_cache_piece(task_id, piece.offset, piece.length, range)
+                    .read_persistent_cache_piece(task_id, piece.offset, piece.length, range, piece_id)
                     .await
                 {
                     Ok(reader) => {
