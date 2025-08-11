@@ -62,6 +62,7 @@ fs2.workspace = true
 lazy_static.workspace = true
 futures.workspace = true
 local-ip-address.workspace = true
+sysinfo.workspace = true
 tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
 tracing-panic = "0.1.2"
@@ -74,7 +75,6 @@ rolling-file = "0.2.0"
 pprof = { version = "0.15", features = ["flamegraph", "protobuf-codec"] }
 prometheus = { version = "0.13", features = ["process"] }
 tonic-health = "0.12.3"
-sysinfo = { version = "0.32.1", default-features = false, features = ["component", "disk", "network", "system", "user"] }
 tower = { version = "0.4.13", features = ["limit", "load-shed", "buffer"] }
 indicatif = "0.18.0"
 hashring = "0.3.6"

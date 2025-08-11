@@ -29,7 +29,7 @@ dragonfly-client-storage = { path = "dragonfly-client-storage", version = "1.0.1
 dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.0.10" }
 dragonfly-client-util = { path = "dragonfly-client-util", version = "1.0.10" }
 dragonfly-client-init = { path = "dragonfly-client-init", version = "1.0.10" }
-dragonfly-api = "2.1.55"
+dragonfly-api = "2.1.57"
 thiserror = "2.0"
 futures = "0.3.31"
 reqwest = { version = "0.12.4", features = [
@@ -106,6 +106,7 @@ fs2 = "0.4.3"
 lazy_static = "1.5"
 bytes = "1.10"
 local-ip-address = "0.6.5"
+sysinfo = { version = "0.32.1", default-features = false, features = ["component", "disk", "network", "system", "user"] }
 
 [profile.release]
 opt-level = 3

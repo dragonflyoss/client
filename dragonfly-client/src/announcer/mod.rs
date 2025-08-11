@@ -24,12 +24,13 @@ use dragonfly_client_config::{
 };
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::Result;
+use dragonfly_client_util::net::Interface;
 use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 use sysinfo::System;
 use tokio::sync::mpsc;
-use tracing::{error, info, instrument};
+use tracing::{debug, error, info, instrument};
 
 /// Announcer is used to announce the dfdaemon information to the manager and scheduler.
 pub struct SchedulerAnnouncer {
@@ -41,6 +42,9 @@ pub struct SchedulerAnnouncer {
 
     /// scheduler_client is the grpc client of the scheduler.
     scheduler_client: Arc<SchedulerClient>,
+
+    /// interface is the network interface.
+    interface: Arc<Interface>,
 
     /// shutdown is used to shutdown the announcer.
     shutdown: shutdown::Shutdown,
@@ -56,6 +60,7 @@ impl SchedulerAnnouncer {
         config: Arc<Config>,
         host_id: String,
         scheduler_client: Arc<SchedulerClient>,
+        interface: Arc<Interface>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Result<Self> {
@@ -63,6 +68,7 @@ impl SchedulerAnnouncer {
             config,
             host_id,
             scheduler_client,
+            interface,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         };
@@ -70,7 +76,7 @@ impl SchedulerAnnouncer {
         // Initialize the scheduler announcer.
         announcer
             .scheduler_client
-            .init_announce_host(announcer.make_announce_host_request(Duration::ZERO)?)
+            .init_announce_host(announcer.make_announce_host_request(Duration::ZERO).await?)
             .await?;
         Ok(announcer)
     }
@@ -85,7 +91,7 @@ impl SchedulerAnnouncer {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    let request = match self.make_announce_host_request(interval.period()) {
+                    let request = match self.make_announce_host_request(interval.period()).await {
                         Ok(request) => request,
                         Err(err) => {
                             error!("make announce host request failed: {}", err);
@@ -114,7 +120,7 @@ impl SchedulerAnnouncer {
 
     /// make_announce_host_request makes the announce host request.
     #[instrument(skip_all)]
-    fn make_announce_host_request(&self, interval: Duration) -> Result<AnnounceHostRequest> {
+    async fn make_announce_host_request(&self, interval: Duration) -> Result<AnnounceHostRequest> {
         // If the seed peer is enabled, we should announce the seed peer to the scheduler.
         let host_type = if self.config.seed_peer.enable {
             self.config.seed_peer.kind
@@ -150,25 +156,25 @@ impl SchedulerAnnouncer {
             free: sys.free_memory(),
         };
 
+        // Wait for getting the network data.
+        let network_data = self.interface.get_network_data().await;
+        debug!(
+            "network data: rx bandwidth {}/{} bps, tx bandwidth {}/{} bps",
+            network_data.rx_bandwidth.unwrap_or(0),
+            network_data.max_rx_bandwidth,
+            network_data.tx_bandwidth.unwrap_or(0),
+            network_data.max_tx_bandwidth
+        );
+
         // Get the network information.
         let network = Network {
-            // TODO: Get the count of the tcp connection.
-            tcp_connection_count: 0,
-
-            // TODO: Get the count of the upload tcp connection.
-            upload_tcp_connection_count: 0,
             idc: self.config.host.idc.clone(),
             location: self.config.host.location.clone(),
-
-            // TODO: Get the network download rate, refer to
-            // https://docs.rs/sysinfo/latest/sysinfo/struct.NetworkData.html#method.received.
-            download_rate: 0,
-            download_rate_limit: self.config.download.rate_limit.as_u64(),
-
-            // TODO: Get the network download rate, refer to
-            // https://docs.rs/sysinfo/latest/sysinfo/struct.NetworkData.html#method.transmitted
-            upload_rate: 0,
-            upload_rate_limit: self.config.upload.rate_limit.as_u64(),
+            max_rx_bandwidth: network_data.max_rx_bandwidth,
+            rx_bandwidth: network_data.rx_bandwidth,
+            max_tx_bandwidth: network_data.max_tx_bandwidth,
+            tx_bandwidth: network_data.tx_bandwidth,
+            ..Default::default()
         };
 
         // Get the disk information.
