@@ -32,8 +32,8 @@ lazy_static.workspace = true
 bytesize.workspace = true
 lru.workspace = true
 tokio.workspace = true
+base64.workspace = true
 rustix = { version = "1.0.8", features = ["fs"] }
-base64 = "0.22.1"
 pnet = "0.35.0"
 
 [dev-dependencies]
