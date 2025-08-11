@@ -24,7 +24,6 @@ use crate::metrics::{
 };
 use crate::resource::{persistent_cache_task, task};
 use crate::shutdown;
-use bytesize::MB;
 use dragonfly_api::common::v2::{
     CacheTask, Host, Network, PersistentCacheTask, Piece, Priority, Task, TaskType,
 };
@@ -51,14 +50,13 @@ use dragonfly_client_core::{
 use dragonfly_client_util::{
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
     id_generator::TaskIDParameter,
-    net::{get_interface_info, Interface},
+    net::Interface,
 };
 use opentelemetry::Context;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use sysinfo::Networks;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
@@ -70,7 +68,7 @@ use tonic::{
     Code, Request, Response, Status,
 };
 use tower::ServiceBuilder;
-use tracing::{error, info, instrument, Instrument, Span};
+use tracing::{debug, error, info, instrument, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
@@ -90,6 +88,9 @@ pub struct DfdaemonUploadServer {
     /// persistent_cache_task is the persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 
+    /// interface is the network interface.
+    interface: Arc<Interface>,
+
     /// shutdown is used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
 
@@ -105,6 +106,7 @@ impl DfdaemonUploadServer {
         addr: SocketAddr,
         task: Arc<task::Task>,
         persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
+        interface: Arc<Interface>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -112,6 +114,7 @@ impl DfdaemonUploadServer {
             config,
             addr,
             task,
+            interface,
             persistent_cache_task,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
@@ -120,16 +123,12 @@ impl DfdaemonUploadServer {
 
     /// run starts the upload server.
     pub async fn run(&mut self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
-        // Initialize the grpc service.
-        let interface =
-            get_interface_info(self.config.host.ip.unwrap(), self.config.upload.rate_limit);
-
         let service = DfdaemonUploadGRPCServer::with_interceptor(
             DfdaemonUploadServerHandler {
-                interface,
                 socket_path: self.config.download.server.socket_path.clone(),
                 task: self.task.clone(),
                 persistent_cache_task: self.persistent_cache_task.clone(),
+                interface: self.interface.clone(),
             },
             ExtractTracingInterceptor,
         );
@@ -205,9 +204,6 @@ impl DfdaemonUploadServer {
 
 /// DfdaemonUploadServerHandler is the handler of the dfdaemon upload grpc service.
 pub struct DfdaemonUploadServerHandler {
-    /// interface is the network interface.
-    interface: Option<Interface>,
-
     /// socket_path is the path of the unix domain socket.
     socket_path: PathBuf,
 
@@ -216,6 +212,9 @@ pub struct DfdaemonUploadServerHandler {
 
     /// persistent_cache_task is the persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
+
+    /// interface is the network interface.
+    interface: Arc<Interface>,
 }
 
 /// DfdaemonUploadServerHandler implements the dfdaemon upload grpc service.
@@ -1003,9 +1002,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             Span::current().set_parent(parent_ctx.clone());
         };
 
-        // DEFAULT_HOST_INFO_REFRESH_INTERVAL is the default interval for refreshing the host info.
-        const DEFAULT_HOST_INFO_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
-
         // Clone the request.
         let request = request.into_inner();
 
@@ -1027,42 +1023,42 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Get local interface.
         let interface = self.interface.clone();
 
+        // DEFAULT_HOST_INFO_REFRESH_INTERVAL is the default interval for refreshing the host info.
+        const DEFAULT_HOST_INFO_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
-                // Initialize sysinfo network.
-                let mut networks = Networks::new_with_refreshed_list();
-
                 // Start the host info update loop.
                 loop {
-                    // Sleep to calculate the network traffic difference over
-                    // the DEFAULT_HOST_INFO_REFRESH_INTERVAL.
+                    // Wait for the host info refresh interval.
                     tokio::time::sleep(DEFAULT_HOST_INFO_REFRESH_INTERVAL).await;
 
-                    // Refresh network information.
-                    networks.refresh();
-
-                    // Init response.
-                    let mut host = Host::default();
-                    if let Some(interface) = &interface {
-                        if let Some(network_data) = networks.get(&interface.name) {
-                            host.network = Some(Network {
-                                download_rate: network_data.received()
-                                    / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs(),
-                                // Convert bandwidth to bytes per second.
-                                download_rate_limit: interface.bandwidth / 8 * MB,
-                                upload_rate: network_data.transmitted()
-                                    / DEFAULT_HOST_INFO_REFRESH_INTERVAL.as_secs(),
-                                // Convert bandwidth to bytes per second.
-                                upload_rate_limit: interface.bandwidth / 8 * MB,
-                                ..Default::default()
-                            });
-                        };
-                    }
+                    // Wait for getting the network data.
+                    let network_data = interface.get_network_data().await;
+                    debug!(
+                        "network data: rx bandwidth {}/{} bps, tx bandwidth {}/{} bps",
+                        network_data.rx_bandwidth.unwrap_or(0),
+                        network_data.max_rx_bandwidth,
+                        network_data.tx_bandwidth.unwrap_or(0),
+                        network_data.max_tx_bandwidth
+                    );
 
                     // Send host info.
-                    match out_stream_tx.send(Ok(host.clone())).await {
+                    match out_stream_tx
+                        .send(Ok(Host {
+                            network: Some(Network {
+                                max_rx_bandwidth: network_data.max_rx_bandwidth,
+                                rx_bandwidth: network_data.rx_bandwidth,
+                                max_tx_bandwidth: network_data.max_tx_bandwidth,
+                                tx_bandwidth: network_data.tx_bandwidth,
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }))
+                        .await
+                    {
                         Ok(_) => {}
                         Err(err) => {
                             error!(
@@ -1070,7 +1066,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                 remote_host_id, err
                             );
 
-                            break;
+                            return;
                         }
                     };
                 }
