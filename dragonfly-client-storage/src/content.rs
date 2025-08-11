@@ -216,6 +216,11 @@ impl Content {
     ///    2.2. If the hard link fails, copy the task content to the destination once the task is finished, then return immediately.
     #[instrument(skip_all)]
     pub async fn hard_link_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        // check
+        if self.config.storage.encryption.enable {
+            panic!("HARD LINK is not compatible with encryption");
+        }
+
         let task_path = self.get_task_path(task_id);
         if let Err(err) = fs::hard_link(task_path.clone(), to).await {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
@@ -292,6 +297,8 @@ impl Content {
         offset: u64,
         length: u64,
         range: Option<Range>,
+        // Added
+        piece_id: &str,
     ) -> Result<impl AsyncRead> {
         let task_path = self.get_task_path(task_id);
 
@@ -310,7 +317,19 @@ impl Content {
                 error!("seek {:?} failed: {}", task_path, err);
             })?;
 
-        Ok(f_reader.take(target_length))
+        let limited_reader = f_reader.take(target_length);
+
+        if self.config.storage.encryption.enable {
+            let key = self.key.as_ref().expect("should have key when encryption enabled");
+            let decrypt_reader = DecryptReader::new(
+                limited_reader, 
+                key, 
+                piece_id
+            );
+            Ok(Either::Left(decrypt_reader))
+        } else {
+            Ok(Either::Right(limited_reader))
+        }
     }
 
     /// read_piece_with_dual_read return two readers, one is the range reader, and the other is the
@@ -366,6 +385,8 @@ impl Content {
         offset: u64,
         expected_length: u64,
         reader: &mut R,
+        // ADDED
+        piece_id: &str,
     ) -> Result<WritePieceResponse> {
         // Open the file and seek to the offset.
         let task_path = self.get_task_path(task_id);
@@ -387,11 +408,24 @@ impl Content {
 
         // Copy the piece to the file while updating the CRC32 value.
         let mut hasher = crc32fast::Hasher::new();
-        let mut tee = InspectReader::new(reader, |bytes| {
+        let tee = InspectReader::new(reader, |bytes| {
             hasher.update(bytes);
         });
 
-        let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
+        let mut tee_wrapper = if self.config.storage.encryption.enable {
+            let key = self.key.as_ref().expect("should have key when encryption enabled");
+
+            let encrypt_reader = EncryptReader::new(
+                tee, 
+                key, 
+                piece_id
+            );
+            Either::Left(encrypt_reader)
+        } else {
+            Either::Right(tee)
+        };
+
+        let length = io::copy(&mut tee_wrapper, &mut writer).await.inspect_err(|err| {
             error!("copy {:?} failed: {}", task_path, err);
         })?;
 
@@ -533,11 +567,12 @@ impl Content {
             .inspect_err(|err| {
                 error!("seek {:?} failed: {}", task_path, err);
             })?;
-
+    
+        let limited_reader = f_reader.take(target_length);
+        
         if self.config.storage.encryption.enable {
             let key = self.key.as_ref().expect("should have key when encryption enabled");
                 
-            let limited_reader = f_reader.take(target_length);
             let decrypt_reader = DecryptReader::new(
                 limited_reader, 
                 key, 
@@ -547,7 +582,7 @@ impl Content {
             return Ok(Either::Left(decrypt_reader));
         }
         
-        Ok(Either::Right(f_reader.take(target_length)))
+        Ok(Either::Right(limited_reader))
     }
 
     // TODO encryption?
@@ -633,7 +668,7 @@ impl Content {
             hasher.update(bytes);
         });
 
-        let mut tee_warpper = if self.config.storage.encryption.enable {
+        let mut tee_wrapper = if self.config.storage.encryption.enable {
             let key = self.key.as_ref().expect("should have key when encryption enabled");
 
             let encrypt_reader = EncryptReader::new(
@@ -646,7 +681,7 @@ impl Content {
             Either::Right(tee)
         };
 
-        let length = io::copy(&mut tee_warpper, &mut writer).await.inspect_err(|err| {
+        let length = io::copy(&mut tee_wrapper, &mut writer).await.inspect_err(|err| {
             error!("copy {:?} failed: {}", task_path, err);
         })?;
 
@@ -785,11 +820,11 @@ mod tests {
         let data = b"hello, world!";
         let mut reader = Cursor::new(data);
         content
-            .write_piece(task_id, 0, 13, &mut reader)
+            .write_piece(task_id, 0, 13, &mut reader, "")
             .await
             .unwrap();
 
-        let mut reader = content.read_piece(task_id, 0, 13, None).await.unwrap();
+        let mut reader = content.read_piece(task_id, 0, 13, None, "").await.unwrap();
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await.unwrap();
         assert_eq!(buffer, data);
@@ -803,6 +838,7 @@ mod tests {
                     start: 0,
                     length: 5,
                 }),
+                "",
             )
             .await
             .unwrap();
@@ -823,7 +859,7 @@ mod tests {
         let data = b"test";
         let mut reader = Cursor::new(data);
         let response = content
-            .write_piece(task_id, 0, 4, &mut reader)
+            .write_piece(task_id, 0, 4, &mut reader, "")
             .await
             .unwrap();
         assert_eq!(response.length, 4);

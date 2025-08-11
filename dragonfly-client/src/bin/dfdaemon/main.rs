@@ -42,6 +42,7 @@ use termion::{color, style};
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
 use tracing::{error, info, Level};
+use base64::{prelude::BASE64_STANDARD, Engine as _};
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
@@ -166,21 +167,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Get key from Manager
     let key = if config.storage.encryption.enable { 
-        let source_type = if config.seed_peer.enable {
-            SourceType::SeedPeerSource.into()
-        } else {
-            SourceType::PeerSource.into()
-        };
-        // Request a key from Manager
-        let key = manager_client.request_encryption_key(
-            RequestEncryptionKeyRequest {
-                source_type: source_type,
-                hostname: config.host.hostname.clone(),
-                ip: config.host.ip.unwrap().to_string(),
-            }
-        ).await?;
-
-        info!("Key response: \n{:x?}", key);
+        let key = get_key_from_manager(&config, &manager_client).await;
         Some(key)
     } else {
         None
@@ -474,4 +461,27 @@ async fn main() -> Result<(), anyhow::Error> {
     let _ = shutdown_complete_rx.recv().await;
 
     Ok(())
+}
+
+async fn get_key_from_manager(config: &dfdaemon::Config, client: &ManagerClient) -> Vec<u8>{
+    let source_type = if config.seed_peer.enable {
+        SourceType::SeedPeerSource.into()
+    } else {
+        SourceType::PeerSource.into()
+    };
+    // Request a key from Manager
+    let key = client.request_encryption_key(
+        RequestEncryptionKeyRequest {
+            source_type: source_type,
+            hostname: config.host.hostname.clone(),
+            ip: config.host.ip.unwrap().to_string(),
+        }
+    ).await
+    .expect("Fail to get key from Manager");
+
+    let key_base64 = BASE64_STANDARD.encode(&key);
+
+    info!("Key response(base64): {} \n (hex): {:x?}", key_base64, key);
+
+    key
 }

@@ -3,9 +3,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::ReadBuf;
 
-use crate::encrypt::{EncryptAlgo, Aes256Ctr};
+use crate::encrypt::{EncryptionAlgorithm, Aes256Ctr};
 
-pub struct EncryptReader<R, A: EncryptAlgo> {
+pub struct EncryptReader<R: AsyncRead, A: EncryptionAlgorithm> {
     inner: R,
     cipher: A,
 }
@@ -21,7 +21,7 @@ fn parse_piece_id(piece_id: &str) -> Option<(&str, u32)> {
         })
 }
 
-// impl<R, A: EncryptAlgo> EncryptReader<R, A> {
+// impl<R, A: EncryptionAlgorithm> EncryptReader<R, A> {
 //     pub fn new(inner: R, key: &[u8], piece_id: &str) -> Self {
 //         let (task_id, piece_num) = parse_piece_id(piece_id)
 //             .expect("should have task_id and piece_num");
@@ -33,22 +33,22 @@ fn parse_piece_id(piece_id: &str) -> Option<(&str, u32)> {
 //     }
 // }
 
-impl<R> EncryptReader<R, Aes256Ctr> {
+impl<R: AsyncRead> EncryptReader<R, Aes256Ctr> {
     /// default for Aes256Ctr
     pub fn new(inner: R, key: &[u8], piece_id: &str) -> Self {
         let (task_id, piece_num) = parse_piece_id(piece_id)
             .expect("should have task_id and piece_num");
 
         let nonce = Aes256Ctr::build_nonce(task_id, piece_num);
-        let cipher = <Aes256Ctr as EncryptAlgo>::new(key, &nonce);
+        let cipher = <Aes256Ctr as EncryptionAlgorithm>::new(key, &nonce);
 
         Self { inner, cipher }
     }
 }
 
-impl<R, A: EncryptAlgo> Unpin for EncryptReader<R, A> where R: Unpin {}
+impl<R: AsyncRead, A: EncryptionAlgorithm> Unpin for EncryptReader<R, A> where R: Unpin {}
 
-impl<R: AsyncRead + Unpin, A: EncryptAlgo> AsyncRead for EncryptReader<R, A> {
+impl<R: AsyncRead + Unpin, A: EncryptionAlgorithm> AsyncRead for EncryptReader<R, A> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,

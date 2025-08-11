@@ -2,11 +2,11 @@ use aes::Aes256;
 use ctr::Ctr128BE;
 use ctr::cipher::{StreamCipher, KeyIvInit};
 
-use super::EncryptAlgo;
+use super::EncryptionAlgorithm;
 
 pub type Aes256Ctr = Ctr128BE<Aes256>;
 
-impl EncryptAlgo for Aes256Ctr {
+impl EncryptionAlgorithm for Aes256Ctr {
     const NONCE_SIZE: usize = 16;
     const KEY_SIZE: usize = 32;
 

@@ -1011,6 +1011,7 @@ name = "dragonfly-client"
 version = "1.0.24"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "bytes",
  "bytesize",
  "chrono",

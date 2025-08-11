@@ -900,14 +900,11 @@ impl PersistentCacheTask {
                         }
                     };
 
-                    // // Remove the finished pieces from the pieces.
-                    // let remaining_interested_pieces = self.piece.remove_finished_from_interested(
-                    //     finished_pieces.clone(),
-                    //     interested_pieces.clone(),
-                    // );
-
-                    // TODO: The remove function useless? Cause `finished_pieces` MUST be empty here
-                    let remaining_interested_pieces = interested_pieces.clone();
+                    // Remove the finished pieces from the pieces.
+                    let remaining_interested_pieces = self.piece.remove_finished_from_interested(
+                        finished_pieces.clone(),
+                        interested_pieces.clone(),
+                    );
 
                     // Download the pieces from the parent.
                     let partial_finished_pieces = match self
@@ -1453,11 +1450,6 @@ impl PersistentCacheTask {
         self.storage.delete_persistent_cache_task(task_id).await
     }
     
-    /// whether the encrytion is enabled
-    pub fn encrypted(&self) -> bool {
-        self.config.storage.encryption.enable
-    }
-
     /// export encryption file to path
     pub async fn export_encryption_file(&self, task_id: &str, to: &Path) -> ClientResult<()> {
         let task = self.storage.get_persistent_cache_task(task_id)?

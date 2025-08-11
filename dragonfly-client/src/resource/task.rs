@@ -57,7 +57,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::time::Instant;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::sync::{
     mpsc::{self, Sender},
     Semaphore,
@@ -141,6 +141,12 @@ impl Task {
         let task = self.storage.prepare_download_task_started(id).await?;
 
         if task.content_length.is_some() && task.piece_length.is_some() {
+            // Omit HARD-LINK when use encryption
+            if self.config.storage.encryption.enable {
+                info!("Omit HARD-LINK when encryption is enabled");
+                return Ok(task);
+            }
+
             // Attempt to create a hard link from the task file to the output path.
             //
             // Behavior based on force_hard_link setting:
@@ -258,6 +264,12 @@ impl Task {
             .storage
             .download_task_started(id, piece_length, content_length, response.http_header)
             .await;
+
+        // Omit HARD-LINK when use encryption
+        if self.config.storage.encryption.enable {
+            info!("Omit HARD-LINK when encryption is enabled");
+            return task;
+        }
 
         // Attempt to create a hard link from the task file to the output path.
         //
@@ -726,14 +738,11 @@ impl Task {
                         }
                     };
 
-                    // // Remove the finished pieces from the pieces.
-                    // let remaining_interested_pieces = self.piece.remove_finished_from_interested(
-                    //     finished_pieces.clone(),
-                    //     interested_pieces.clone(),
-                    // );
-
-                    // TODO: The remove function useless? Cause `finished_pieces` MUST be empty here
-                    let remaining_interested_pieces = interested_pieces.clone();
+                    // Remove the finished pieces from the pieces.
+                    let remaining_interested_pieces = self.piece.remove_finished_from_interested(
+                        finished_pieces.clone(),
+                        interested_pieces.clone(),
+                    );
 
                     // Download the pieces from the parent.
                     let partial_finished_pieces = match self
@@ -1993,6 +2002,75 @@ impl Task {
                 Err(Error::TaskNotFound(task_id.to_owned()))
             }
         }
+    }
+
+    /// export encryption file to path
+    pub async fn export_encryption_file(&self, task_id: &str, to: &Path) -> ClientResult<()> {
+        let task = self.storage.get_task(task_id)?
+            .ok_or_else(|| Error::TaskNotFound(task_id.to_string()))?;
+
+        if !task.is_finished() {
+            // TODO errors
+            return Err(Error::Unknown(format!("Task {} is not finished", task_id)));
+        }
+
+        // get all pieces
+        let mut pieces = self.storage.get_pieces(task_id)?;
+        // TODO: need sort?
+        pieces.sort_by_key(|p| p.number);
+
+        if pieces.is_empty() {
+            return Err(Error::Unknown(format!("No pieces found for task {}", task_id)));
+        }
+
+        info!("Exporting encrypted file for task {} with {} pieces to {:?}", 
+              task_id, pieces.len(), to);
+
+        let output_file = tokio::fs::File::create(to).await
+            // .or_err(ErrorType::StorageError)?;
+            .map_err(|e| Error::Unknown(format!("Failed to create output file: {}", e)))?;
+        let mut writer = BufWriter::new(output_file);
+
+        // process every piece
+        for piece in pieces {
+            if !piece.is_finished() {
+                // warn!("Piece {} is not finished, skipping", piece.number);
+                // continue;
+                panic!("Piece {} is not finished", piece.number);
+            }
+
+            debug!("Processing piece {} (offset: {}, length: {})", 
+                  piece.number, piece.offset, piece.length);
+
+            // read and decrypt piece
+            let piece_id = self.piece.id(task_id, piece.number);
+            let mut reader = self.storage.upload_piece(
+                piece_id.as_str(),
+                task_id,
+                None, // read whole piece
+            ).await?;
+
+            // write decrypted content to file
+            let bytes_copied = tokio::io::copy(&mut reader, &mut writer).await
+                // .or_err(ErrorType::StorageError)?;
+                .map_err(|e| Error::Unknown(format!("Failed to copy piece {}: {}", piece.number, e)))?;
+
+            if bytes_copied != piece.length {
+                return Err(Error::Unknown(format!(
+                    "Piece {} length mismatch: expected {}, got {}", 
+                    piece.number, piece.length, bytes_copied
+                )));
+            }
+
+            debug!("Successfully processed piece {} ({} bytes)", piece.number, bytes_copied);
+        }
+
+        writer.flush().await
+            // .or_err(ErrorType::StorageError)?;
+            .map_err(|e| Error::Unknown(format!("Failed to flush output file: {}", e)))?;
+
+        info!("Successfully exported encrypted file for task {} to {:?}", task_id, to);
+        Ok(())
     }
 }
 

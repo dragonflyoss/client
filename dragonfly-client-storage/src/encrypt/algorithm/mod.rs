@@ -2,9 +2,11 @@ mod aes_ctr;
 
 pub use aes_ctr::Aes256Ctr;
 
-pub trait EncryptAlgo {
-    const NONCE_SIZE: usize;
+pub trait EncryptionAlgorithm {
+    /// Bytes of key
     const KEY_SIZE: usize;
+    /// Bytes of nonce
+    const NONCE_SIZE: usize;
 
     fn new(key: &[u8], nonce: &[u8]) -> Self;
 
