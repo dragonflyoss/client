@@ -442,6 +442,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
         }
 
+
+        // clone config for async
+        let config_clone = self.config.clone();
+
         tokio::spawn(
             async move {
                 match task_manager_clone
@@ -481,8 +485,25 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                 return;
                             }
 
+                            // TODO: encryption is not compatible with hardlink
+                            let encryption_enable = config_clone.storage.encryption.enable;
+                            assert!(!encryption_enable || !download_clone.force_hard_link);
+
                             if let Some(output_path) = &download_clone.output_path {
-                                if !download_clone.force_hard_link {
+                                // if encryption is enabled, copy to path instead of hard link
+                                if encryption_enable {
+                                    let output_path = Path::new(output_path.as_str());
+                                    if output_path.exists() {
+                                        return;
+                                    }
+                                    let _res = task_manager_clone.export_encryption_file(
+                                        task_clone.id.as_ref(),
+                                        output_path
+                                    )
+                                    .await
+                                    .map_err(|e| {error!("export encryption file: {}", e); return;})
+                                    .expect("export should success");
+                                } else if !download_clone.force_hard_link {
                                     let output_path = Path::new(output_path.as_str());
                                     if output_path.exists() {
                                         match task_manager_clone
@@ -1013,6 +1034,9 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
         }
 
+        // clone config for async
+        let config_clone = self.config.clone();
+
         tokio::spawn(
             async move {
                 match task_manager_clone
@@ -1052,11 +1076,12 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         }
 
                         // TODO: encryption is not compatible with hardlink
-                        assert!(!task_manager_clone.encrypted() || !request_clone.force_hard_link);
+                        let encryption_enable = config_clone.storage.encryption.enable;
+                        assert!(!encryption_enable || !request_clone.force_hard_link);
 
                         if let Some(output_path) = &request_clone.output_path {
                             // if encryption is enabled, copy to path instead of hard link
-                            if task_manager_clone.encrypted() {
+                            if encryption_enable {
                                 let output_path = Path::new(output_path.as_str());
                                 if output_path.exists() {
                                     return;

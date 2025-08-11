@@ -24,7 +24,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::AsyncRead;
 use tokio::time::sleep;
 use tokio_util::either::Either;
 use tracing::{debug, error, info, instrument, warn};
@@ -444,7 +444,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_piece(task_id, offset, length, reader)
+            .write_piece(task_id, offset, length, reader, piece_id)
             .await?;
 
         let digest = Digest::new(Algorithm::Crc32, response.hash);
@@ -496,7 +496,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_piece(task_id, offset, length, reader)
+            .write_piece(task_id, offset, length, reader, piece_id)
             .await?;
 
         let length = response.length;
@@ -563,7 +563,7 @@ impl Storage {
 
                 match self
                     .content
-                    .read_piece(task_id, piece.offset, piece.length, range)
+                    .read_piece(task_id, piece.offset, piece.length, range, piece_id)
                     .await
                 {
                     Ok(reader) => {
