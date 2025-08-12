@@ -226,18 +226,6 @@ fn default_storage_cache_capacity() -> ByteSize {
     ByteSize::mib(64)
 }
 
-/// default_seed_peer_cluster_id is the default cluster id of seed peer.
-#[inline]
-fn default_seed_peer_cluster_id() -> u64 {
-    1
-}
-
-/// default_seed_peer_keepalive_interval is the default interval to keepalive with manager.
-#[inline]
-fn default_seed_peer_keepalive_interval() -> Duration {
-    Duration::from_secs(15)
-}
-
 /// default_gc_interval is the default interval to do gc.
 #[inline]
 fn default_gc_interval() -> Duration {
@@ -924,18 +912,6 @@ pub struct SeedPeer {
     /// kind is the type of seed peer.
     #[serde(default, rename = "type")]
     pub kind: HostType,
-
-    /// cluster_id is the cluster id of the seed peer cluster.
-    #[serde(default = "default_seed_peer_cluster_id", rename = "clusterID")]
-    #[validate(range(min = 1))]
-    pub cluster_id: u64,
-
-    /// keepalive_interval is the interval to keep alive with manager.
-    #[serde(
-        default = "default_seed_peer_keepalive_interval",
-        with = "humantime_serde"
-    )]
-    pub keepalive_interval: Duration,
 }
 
 /// SeedPeer implements Default.
@@ -944,8 +920,6 @@ impl Default for SeedPeer {
         SeedPeer {
             enable: false,
             kind: HostType::Normal,
-            cluster_id: default_seed_peer_cluster_id(),
-            keepalive_interval: default_seed_peer_keepalive_interval(),
         }
     }
 }
@@ -1027,31 +1001,33 @@ pub struct Storage {
     /// cache_capacity is the cache capacity for downloading, default is 100.
     ///
     /// Cache storage:
-    /// 1. Users can create preheating jobs and preheat tasks to memory and disk by setting `load_to_cache` to `true`.
-    ///    For more details, refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L443.
+    /// 1. Users can preheat task by caching to memory (via CacheTask) or to disk (via Task).
+    ///    For more details, refer to https://github.com/dragonflyoss/api/blob/main/proto/dfdaemon.proto#L174.
     /// 2. If the download hits the memory cache, it will be faster than reading from the disk, because there is no
     ///    page cache for the first read.
     ///
-    /// ```text
-    ///     1.Preheat
-    ///         |
-    ///         |
-    /// +--------------------------------------------------+
-    /// |       |              Peer                        |
-    /// |       |                   +-----------+          |
-    /// |       |     -- Partial -->|   Cache   |          |
-    /// |       |     |             +-----------+          |
-    /// |       v     |                |    |              |
-    /// |   Download  |              Miss   |              |
-    /// |     Task -->|                |    --- Hit ------>|<-- 2.Download
-    /// |             |                |               ^   |
-    /// |             |                v               |   |
-    /// |             |          +-----------+         |   |
-    /// |             -- Full -->|   Disk    |----------   |
-    /// |                        +-----------+             |
-    /// |                                                  |
-    /// +--------------------------------------------------+
-    /// ```
+    ///```text
+    ///                    +--------+
+    ///                    │ Source │
+    ///                    +--------+
+    ///                       ^ ^                Preheat
+    ///                       │ │                   |
+    /// +-----------------+   │ │    +----------------------------+
+    /// │   Other Peers   │   │ │    │  Peer        |             │
+    /// │                 │   │ │    │              v             │
+    /// │  +----------+   │   │ │    │        +----------+        │
+    /// │  │  Cache   |<--|----------|<-Miss--|  Cache   |--Hit-->|<----Download CacheTask
+    /// │  +----------+   │     │    │        +----------+        │
+    /// │                 │     │    │                            │
+    /// │  +----------+   │     │    │        +----------+        │
+    /// │  │   Disk   |<--|----------|<-Miss--|   Disk   |--Hit-->|<----Download Task
+    /// │  +----------+   │          │        +----------+        │
+    /// │                 │          │              ^             │
+    /// │                 │          │              |             │
+    /// +-----------------+          +----------------------------+
+    ///                                             |
+    ///                                          Preheat
+    ///```   
     #[serde(with = "bytesize_serde", default = "default_storage_cache_capacity")]
     pub cache_capacity: ByteSize,
 }
@@ -2013,11 +1989,6 @@ key: /etc/ssl/private/client.pem
         let default_seed_peer = SeedPeer::default();
         assert!(!default_seed_peer.enable);
         assert_eq!(default_seed_peer.kind, HostType::Normal);
-        assert_eq!(default_seed_peer.cluster_id, 1);
-        assert_eq!(
-            default_seed_peer.keepalive_interval,
-            default_seed_peer_keepalive_interval()
-        );
     }
 
     #[test]
@@ -2025,20 +1996,9 @@ key: /etc/ssl/private/client.pem
         let valid_seed_peer = SeedPeer {
             enable: true,
             kind: HostType::Weak,
-            cluster_id: 5,
-            keepalive_interval: Duration::from_secs(90),
         };
 
         assert!(valid_seed_peer.validate().is_ok());
-
-        let invalid_seed_peer = SeedPeer {
-            enable: true,
-            kind: HostType::Weak,
-            cluster_id: 0,
-            keepalive_interval: Duration::from_secs(90),
-        };
-
-        assert!(invalid_seed_peer.validate().is_err());
     }
 
     #[test]
@@ -2055,8 +2015,6 @@ key: /etc/ssl/private/client.pem
 
         assert!(seed_peer.enable);
         assert_eq!(seed_peer.kind, HostType::Super);
-        assert_eq!(seed_peer.cluster_id, 2);
-        assert_eq!(seed_peer.keepalive_interval, Duration::from_secs(60));
     }
 
     #[test]

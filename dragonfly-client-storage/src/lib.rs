@@ -27,7 +27,6 @@ use std::time::Duration;
 use tokio::io::AsyncRead;
 use tokio::time::sleep;
 use tokio_util::either::Either;
-use tokio_util::io::InspectReader;
 use tracing::{debug, error, info, instrument, warn};
 
 pub mod cache;
@@ -119,14 +118,8 @@ impl Storage {
         piece_length: u64,
         content_length: u64,
         response_header: Option<HeaderMap>,
-        load_to_cache: bool,
     ) -> Result<metadata::Task> {
         self.content.create_task(id, content_length).await?;
-        if load_to_cache {
-            let mut cache = self.cache.clone();
-            cache.put_task(id, content_length).await;
-            debug!("put task to cache: {}", id);
-        }
 
         self.metadata.download_task_started(
             id,
@@ -424,11 +417,10 @@ impl Storage {
         offset: u64,
         length: u64,
         reader: &mut R,
-        load_to_cache: bool,
         timeout: Duration,
     ) -> Result<metadata::Piece> {
         tokio::select! {
-            piece = self.handle_downloaded_from_source_finished(piece_id, task_id, offset, length, reader, load_to_cache) => {
+            piece = self.handle_downloaded_from_source_finished(piece_id, task_id, offset, length, reader) => {
                 piece
             }
             _ = sleep(timeout) => {
@@ -446,30 +438,11 @@ impl Storage {
         offset: u64,
         length: u64,
         reader: &mut R,
-        load_to_cache: bool,
     ) -> Result<metadata::Piece> {
-        let response = if load_to_cache {
-            let mut buffer = Vec::with_capacity(length as usize);
-            let mut tee = InspectReader::new(reader, |bytes| {
-                buffer.extend_from_slice(bytes);
-            });
-
-            let response = self
-                .content
-                .write_piece(task_id, offset, length, &mut tee)
-                .await?;
-
-            self.cache
-                .write_piece(task_id, piece_id, bytes::Bytes::from(buffer))
-                .await?;
-            debug!("put piece to cache: {}", piece_id);
-
-            response
-        } else {
-            self.content
-                .write_piece(task_id, offset, length, reader)
-                .await?
-        };
+        let response = self
+            .content
+            .write_piece(task_id, offset, length, reader)
+            .await?;
 
         let digest = Digest::new(Algorithm::Crc32, response.hash);
         self.metadata.download_piece_finished(
@@ -493,11 +466,10 @@ impl Storage {
         expected_digest: &str,
         parent_id: &str,
         reader: &mut R,
-        load_to_cache: bool,
         timeout: Duration,
     ) -> Result<metadata::Piece> {
         tokio::select! {
-            piece = self.handle_downloaded_piece_from_parent_finished(piece_id, task_id, offset, length, expected_digest, parent_id, reader, load_to_cache) => {
+            piece = self.handle_downloaded_piece_from_parent_finished(piece_id, task_id, offset, length, expected_digest, parent_id, reader) => {
                 piece
             }
             _ = sleep(timeout) => {
@@ -518,30 +490,11 @@ impl Storage {
         expected_digest: &str,
         parent_id: &str,
         reader: &mut R,
-        load_to_cache: bool,
     ) -> Result<metadata::Piece> {
-        let response = if load_to_cache {
-            let mut buffer = Vec::with_capacity(length as usize);
-            let mut tee = InspectReader::new(reader, |bytes| {
-                buffer.extend_from_slice(bytes);
-            });
-
-            let response = self
-                .content
-                .write_piece(task_id, offset, length, &mut tee)
-                .await?;
-
-            self.cache
-                .write_piece(task_id, piece_id, bytes::Bytes::from(buffer))
-                .await?;
-            debug!("put piece to cache: {}", piece_id);
-
-            response
-        } else {
-            self.content
-                .write_piece(task_id, offset, length, reader)
-                .await?
-        };
+        let response = self
+            .content
+            .write_piece(task_id, offset, length, reader)
+            .await?;
 
         let length = response.length;
         let digest = Digest::new(Algorithm::Crc32, response.hash);

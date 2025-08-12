@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.7"
+version = "1.0.10"
 authors = ["The Dragonfly Developers"]
 homepage = "https://d7y.io/"
 repository = "https://github.com/dragonflyoss/client.git"
@@ -22,14 +22,14 @@ readme = "README.md"
 edition = "2021"
 
 [workspace.dependencies]
-dragonfly-client = { path = "dragonfly-client", version = "1.0.7" }
-dragonfly-client-core = { path = "dragonfly-client-core", version = "1.0.7" }
-dragonfly-client-config = { path = "dragonfly-client-config", version = "1.0.7" }
-dragonfly-client-storage = { path = "dragonfly-client-storage", version = "1.0.7" }
-dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.0.7" }
-dragonfly-client-util = { path = "dragonfly-client-util", version = "1.0.7" }
-dragonfly-client-init = { path = "dragonfly-client-init", version = "1.0.7" }
-dragonfly-api = "=2.1.49"
+dragonfly-client = { path = "dragonfly-client", version = "1.0.10" }
+dragonfly-client-core = { path = "dragonfly-client-core", version = "1.0.10" }
+dragonfly-client-config = { path = "dragonfly-client-config", version = "1.0.10" }
+dragonfly-client-storage = { path = "dragonfly-client-storage", version = "1.0.10" }
+dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.0.10" }
+dragonfly-client-util = { path = "dragonfly-client-util", version = "1.0.10" }
+dragonfly-client-init = { path = "dragonfly-client-init", version = "1.0.10" }
+dragonfly-api = "2.1.57"
 vortex-protocol = "=0.1.0"
 thiserror = "2.0"
 futures = "0.3.31"
@@ -47,7 +47,7 @@ reqwest = { version = "0.12.4", features = [
 reqwest-middleware = "0.4"
 rcgen = { version = "0.12.1", features = ["x509-parser"] }
 hyper = { version = "1.6", features = ["full"] }
-hyper-util = { version = "0.1.15", features = [
+hyper-util = { version = "0.1.16", features = [
     "client",
     "client-legacy",
     "tokio",
@@ -72,8 +72,8 @@ serde_yaml = "0.9"
 http = "1"
 tonic = { version = "0.12.2", features = ["tls"] }
 tonic-reflection = "0.12.3"
-tokio = { version = "1.46.1", features = ["full"] }
-tokio-util = { version = "0.7.15", features = ["full"] }
+tokio = { version = "1.47.1", features = ["full", "tracing"] }
+tokio-util = { version = "0.7.16", features = ["full"] }
 tokio-stream = "0.1.17"
 validator = { version = "0.16", features = ["derive"] }
 warp = "0.3.5"
@@ -101,12 +101,13 @@ bytesize-serde = "0.2.1"
 percent-encoding = "2.3.1"
 tempfile = "3.20.0"
 tokio-rustls = "0.25.0-alpha.4"
-serde_json = "1.0.141"
+serde_json = "1.0.142"
 lru = "0.12.5"
 fs2 = "0.4.3"
 lazy_static = "1.5"
 bytes = "1.10"
 local-ip-address = "0.6.5"
+sysinfo = { version = "0.32.1", default-features = false, features = ["component", "disk", "network", "system", "user"] }
 
 [profile.release]
 opt-level = 3
