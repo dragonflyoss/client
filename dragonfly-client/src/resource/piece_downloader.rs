@@ -570,21 +570,23 @@ impl Downloader for TCPDownloader {
         &self,
         addr: &str,
         number: u32,
-        host_id: &str,
+        _host_id: &str,
         task_id: &str,
     ) -> Result<(Vec<u8>, u64, String)> {
-        let mut addr1 = addr.to_string();
-        if let Some((ip_str, port_str)) = addr.split_once(':') {
-            if let Ok(port) = port_str.parse::<i32>() {
-                let ip = ip_str.to_string();
-                addr1 = format!("{}:{}", ip, port + 1); // port加1
-            } else {
-                println!("端口解析失败");
+        let tcp_addr = if let Some((ip_str, port_str)) = addr.split_once(':') {
+            match port_str.parse::<i32>() {
+                Ok(port) => format!("{}:{}", ip_str, port + 1),
+                Err(_) => {
+                    error!("Failed to parse port");
+                    addr.to_string()
+                }
             }
         } else {
-            println!("格式错误");
-        }
-        let addr = addr1.as_str();
+            error!("Invalid address format");
+            addr.to_string()
+        };
+        let addr = tcp_addr.as_str();
+
         let client = self.client(addr).await?;
 
         let entry = self
@@ -648,21 +650,23 @@ impl Downloader for TCPDownloader {
         &self,
         addr: &str,
         number: u32,
-        host_id: &str,
+        _host_id: &str,
         task_id: &str,
     ) -> Result<(Vec<u8>, u64, String)> {
-        let mut addr1 = addr.to_string();
-        if let Some((ip_str, port_str)) = addr.split_once(':') {
-            if let Ok(port) = port_str.parse::<i32>() {
-                let ip = ip_str.to_string();
-                addr1 = format!("{}:{}", ip, port + 1); // port加1
-            } else {
-                println!("端口解析失败");
+        let tcp_addr = if let Some((ip_str, port_str)) = addr.split_once(':') {
+            match port_str.parse::<i32>() {
+                Ok(port) => format!("{}:{}", ip_str, port + 1),
+                Err(_) => {
+                    error!("Failed to parse port");
+                    addr.to_string()
+                }
             }
         } else {
-            println!("格式错误");
-        }
-        let addr = addr1.as_str();
+            error!("Invalid address format");
+            addr.to_string()
+        };
+        let addr = tcp_addr.as_str();
+
         let client = self.client(addr).await?;
 
         let entry = self

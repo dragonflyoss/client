@@ -24,20 +24,16 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     Error as ClientError, Result as ClientResult,
 };
-use dragonfly_client_util::{
-    net::{get_interface_info, Interface},
-    id_generator::IDGenerator,
-};
+use dragonfly_client_util::id_generator::IDGenerator;
 use prost::Message;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
-use tracing::{error, info, instrument, Span};
+use tracing::{error, info, Span};
 use vortex_protocol::{
     Vortex,
     tlv::{Tag, download_piece::DownloadPiece},
@@ -45,6 +41,7 @@ use vortex_protocol::{
 use crate::Storage;
 use leaky_bucket::RateLimiter;
 use std::time::Duration;
+use bytes::Bytes;
 
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -55,9 +52,6 @@ const HEADER_SIZE: usize = 6;
 
 /// TCPServer is a TCP-based server for dfdaemon upload service.
 pub struct TCPServer {
-    /// config is the configuration of the dfdaemon.
-    config: Arc<Config>,
-
     /// addr is the address of the TCP server.
     addr: SocketAddr,
 
@@ -73,7 +67,6 @@ pub struct TCPServer {
 
 impl TCPServer {
     /// Creates a new TCPServer.
-    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
@@ -82,16 +75,10 @@ impl TCPServer {
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
-        // Initialize the interface info.
-        let interface =
-            get_interface_info(config.host.ip.unwrap(), config.upload.rate_limit).unwrap();
 
         let handler = TCPServerHandler {
-            interface,
-            socket_path: config.download.server.socket_path.clone(),
             id_generator,
             storage,
-            config: config.clone(),
             upload_rate_limiter: Arc::new(
                 RateLimiter::builder()
                     .initial(config.upload.rate_limit.as_u64() as usize)
@@ -104,7 +91,6 @@ impl TCPServer {
         };
 
         Self {
-            config,
             addr,
             handler,
             shutdown,
@@ -113,17 +99,14 @@ impl TCPServer {
     }
 
     /// Starts the TCP upload server.
-    #[instrument(skip_all)]
-    pub async fn run(&mut self, tcp_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
+    pub async fn run(&mut self, tcp_server_started_barrier: Arc<Barrier>) -> ClientResult<()> { 
+        // Initialize the TCP service.
         let listener = TokioTcpListener::bind(self.addr).await.map_err(|err| {
             error!("Failed to bind to {}: {}", self.addr, err);
             ClientError::HostNotFound(self.addr.to_string())
         })?;
 
         info!("TCP upload server listening on {}", self.addr);
-
-        // Clone the shutdown channel.
-        let mut shutdown = self.shutdown.clone();
 
         // Notify that the server is ready
         tcp_server_started_barrier.wait().await;
@@ -154,7 +137,7 @@ impl TCPServer {
                 }
                 
                 // Handle shutdown signal
-                _ = shutdown.recv() => {
+                _ = self.shutdown.recv() => {
                     info!("TCP upload server shutting down");
                     break;
                 }
@@ -166,40 +149,28 @@ impl TCPServer {
 
     /// Gets the socket file descriptor from a TcpStream
     #[cfg(unix)]
-    fn get_socket_fd(stream: &TokioTcpStream) -> Option<RawFd> {
-        Some(stream.as_raw_fd())
+    fn get_socket_fd(stream: &TokioTcpStream) -> RawFd {
+        stream.as_raw_fd()
     }
 
     /// Gets the socket handle from a TcpStream (Windows)
     #[cfg(windows)]
-    fn get_socket_fd(stream: &TokioTcpStream) -> Option<RawSocket> {
-        Some(stream.as_raw_socket())
+    fn get_socket_fd(stream: &TokioTcpStream) -> RawSocket {
+        stream.as_raw_socket()
     }
-
-    /// Gets socket information as a generic identifier
-    #[cfg(not(any(unix, windows)))]
-    fn get_socket_fd(stream: &TokioTcpStream) -> Option<String> {
-        // For other platforms, we can use the peer address as identifier
-        stream.peer_addr().ok().map(|addr| addr.to_string())
-    }
-
 }
 
 /// TCPServerHandler handles TCP connections and requests.
 #[derive(Clone)]
 pub struct TCPServerHandler {
-    /// interface is the network interface.
-    interface: Interface,
 
-    /// socket_path is the path of the unix domain socket.
-    socket_path: PathBuf,
-
+    /// id_generator is the id generator.
     id_generator: Arc<IDGenerator>,
 
+    /// storage is the local storage.
     storage: Arc<Storage>,
 
-    config: Arc<Config>,
-
+    /// upload_rate_limiter is the rate limiter of the upload speed in bps(bytes per second).
     upload_rate_limiter: Arc<RateLimiter>,
 }
 
@@ -220,16 +191,18 @@ impl TCPServerHandler {
                     return Err(err.into());
                 }
             }
-            info!("TCPServer can receive data");
+
             let length = u32::from_be_bytes(header_buf[2..HEADER_SIZE].try_into().expect("Failed to read value length")) as usize;
 
             // Read request data
             let mut request_data = vec![0u8; length];
             stream.read_exact(&mut request_data).await?;
 
-            request_data.splice(0..0, header_buf.iter().copied());
+            let mut complete_data = Vec::with_capacity(header_buf.len() + request_data.len());
+            complete_data.extend_from_slice(&header_buf);
+            complete_data.extend_from_slice(&request_data);
 
-            let deserialized = Vortex::from_bytes(request_data.into()).expect("Failed to deserialize packet");
+            let deserialized = Vortex::from_bytes(complete_data.into()).expect("Failed to deserialize packet");
 
             // Process request based on message type
             let response_result = match deserialized {
@@ -249,7 +222,7 @@ impl TCPServerHandler {
                     stream.write_all(&rsp.to_bytes()).await?;
                 }
                 Err(error_message) => {
-                    let ersp = Vortex::new(Tag::Error, error_message.into()).expect("Failed to create Vortex packet");
+                    let ersp = Vortex::new(Tag::Error, Bytes::from(error_message)).expect("Failed to create Vortex packet");
                     stream.write_all(&ersp.to_bytes()).await?;
                 }
             }
@@ -259,7 +232,6 @@ impl TCPServerHandler {
     }
 
     /// Handles download piece request.
-    #[instrument(skip_all, fields(host_id, task_id, piece_id))]
     async fn handle_piece(
         &self,
         request: &DownloadPiece,
@@ -334,7 +306,6 @@ impl TCPServerHandler {
     }
 
     /// Handles download piece request.
-    #[instrument(skip_all, fields(host_id, task_id, piece_id))]
     async fn handle_persistent_cache_piece(
         &self,
         request: &DownloadPiece,
