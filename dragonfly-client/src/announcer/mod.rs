@@ -15,7 +15,7 @@
  */
 
 use crate::grpc::scheduler::SchedulerClient;
-use crate::shutdown;
+use dragonfly_client_util::shutdown;
 use dragonfly_api::common::v2::{Build, Cpu, Disk, Host, Memory, Network};
 use dragonfly_api::scheduler::v2::{AnnounceHostRequest, DeleteHostRequest};
 use dragonfly_client_config::{

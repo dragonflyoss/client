@@ -30,6 +30,7 @@ dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.0.1
 dragonfly-client-util = { path = "dragonfly-client-util", version = "1.0.10" }
 dragonfly-client-init = { path = "dragonfly-client-init", version = "1.0.10" }
 dragonfly-api = "2.1.57"
+vortex-protocol = "0.1.0"
 thiserror = "2.0"
 futures = "0.3.31"
 reqwest = { version = "0.12.4", features = [

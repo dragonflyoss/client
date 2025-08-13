@@ -33,6 +33,8 @@ pub mod cache;
 pub mod content;
 pub mod metadata;
 pub mod storage_engine;
+pub mod client;
+pub mod server;
 
 /// DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.
 pub const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(100);

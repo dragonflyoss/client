@@ -26,12 +26,12 @@ use dragonfly_client::health::Health;
 use dragonfly_client::metrics::Metrics;
 use dragonfly_client::proxy::Proxy;
 use dragonfly_client::resource::{persistent_cache_task::PersistentCacheTask, task::Task};
-use dragonfly_client::shutdown;
+use dragonfly_client_util::shutdown;
 use dragonfly_client::stats::Stats;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::{dfdaemon, VersionValueParser};
-use dragonfly_client_storage::Storage;
+use dragonfly_client_storage::{Storage, server::tcp::TCPServer};
 use dragonfly_client_util::{id_generator::IDGenerator, net::Interface};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -137,6 +137,12 @@ async fn main() -> Result<(), anyhow::Error> {
         }
     };
 
+    let mut tcp_config = config.clone();
+
+    tcp_config.storage.server.protocol = "tcp".to_string();
+
+    let tcp_config = Arc::new(tcp_config);
+
     let config = Arc::new(config);
 
     // Initialize tracing.
@@ -219,6 +225,15 @@ async fn main() -> Result<(), anyhow::Error> {
     )?;
     let task = Arc::new(task);
 
+    let tcp_task = Task::new(
+        tcp_config.clone(),
+        id_generator.clone(),
+        storage.clone(),
+        scheduler_client.clone(),
+        backend_factory.clone(),
+    )?;
+    let tcp_task = Arc::new(tcp_task);
+
     // Initialize persistent cache task manager.
     let persistent_cache_task = PersistentCacheTask::new(
         config.clone(),
@@ -228,6 +243,15 @@ async fn main() -> Result<(), anyhow::Error> {
         backend_factory.clone(),
     )?;
     let persistent_cache_task = Arc::new(persistent_cache_task);
+
+    let tcp_persistent_cache_task = PersistentCacheTask::new(
+        tcp_config.clone(),
+        id_generator.clone(),
+        storage.clone(),
+        scheduler_client.clone(),
+        backend_factory.clone(),
+    )?;
+    let tcp_persistent_cache_task = Arc::new(tcp_persistent_cache_task);
 
     let interface = Interface::new(config.host.ip.unwrap(), config.upload.rate_limit);
     let interface = Arc::new(interface);
@@ -290,8 +314,18 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut dfdaemon_download_grpc = DfdaemonDownloadServer::new(
         config.clone(),
         config.download.server.socket_path.clone(),
-        task.clone(),
-        persistent_cache_task.clone(),
+        tcp_task.clone(),
+        tcp_persistent_cache_task.clone(),
+        shutdown.clone(),
+        shutdown_complete_tx.clone(),
+    );
+
+    // Initialize upload TCP server.
+    let mut dfdaemon_upload_tcp = TCPServer::new(
+        config.clone(),
+        id_generator.clone(),
+        storage.clone(),
+        SocketAddr::new(config.upload.server.ip.unwrap(), config.upload.server.port + 1),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
@@ -311,6 +345,9 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // grpc server started barrier.
     let grpc_server_started_barrier = Arc::new(Barrier::new(3));
+
+    // TCP server started barrier.
+    let tcp_server_started_barrier = Arc::new(Barrier::new(3));
 
     // Wait for servers to exit or shutdown signal.
     tokio::select! {
@@ -354,6 +391,15 @@ async fn main() -> Result<(), anyhow::Error> {
             })
         } => {
             info!("dfdaemon download grpc unix server exited");
+        },
+
+        _ = {
+            let barrier = tcp_server_started_barrier.clone();
+            tokio::spawn(async move {
+                dfdaemon_upload_tcp.run(barrier).await.unwrap_or_else(|err| error!("dfdaemon upload tcp server failed: {}", err));
+            })
+        } => {
+            info!("dfdaemon upload tcp server exited");
         },
 
         _ = {

@@ -15,10 +15,11 @@
  */
 
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
-use dragonfly_api::dfdaemon::v2::{DownloadPersistentCachePieceRequest, DownloadPieceRequest};
+use dragonfly_api::dfdaemon::v2::{DownloadPersistentCachePieceRequest, DownloadPersistentCachePieceResponse,
+    DownloadPieceRequest, DownloadPieceResponse};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_storage::metadata;
+use dragonfly_client_storage::{metadata, client::tcp::TCPClient};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -67,8 +68,13 @@ pub struct DownloaderFactory {
 impl DownloaderFactory {
     /// new returns a new DownloadFactory.
     pub fn new(protocol: &str, config: Arc<Config>) -> Result<Self> {
-        let downloader = match protocol {
-            "grpc" => Arc::new(GRPCDownloader::new(
+        let downloader: Arc<dyn Downloader> = match protocol {
+            "grpc" => Arc::new(TCPDownloader::new(
+                config.clone(),
+                DEFAULT_DOWNLOADER_CAPACITY,
+                DEFAULT_DOWNLOADER_IDLE_TIMEOUT,
+            )),
+            "tcp" => Arc::new(TCPDownloader::new(
                 config.clone(),
                 DEFAULT_DOWNLOADER_CAPACITY,
                 DEFAULT_DOWNLOADER_IDLE_TIMEOUT,
@@ -359,6 +365,319 @@ impl Downloader for GRPCDownloader {
                     piece_number: number,
                 },
                 self.config.download.piece_timeout,
+            )
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                // If the request fails, it will drop the request guard and remove the client
+                // entry to avoid using the invalid client.
+                drop(request_guard);
+                self.remove_client_entry(addr).await;
+                return Err(err);
+            }
+        };
+
+        let Some(piece) = response.piece else {
+            return Err(Error::InvalidParameter);
+        };
+
+        let Some(content) = piece.content else {
+            return Err(Error::InvalidParameter);
+        };
+
+        // Calculate the digest of the piece metadata and compare it with the expected digest,
+        // it verifies the integrity of the piece metadata.
+        let piece_metadata = metadata::Piece {
+            number,
+            length: piece.length,
+            offset: piece.offset,
+            digest: piece.digest.clone(),
+            ..Default::default()
+        };
+
+        if let Some(expected_digest) = response.digest {
+            let digest = piece_metadata.calculate_digest();
+            if expected_digest != digest {
+                return Err(Error::DigestMismatch(
+                    expected_digest.to_string(),
+                    digest.to_string(),
+                ));
+            }
+        }
+
+        Ok((content, piece.offset, piece.digest))
+    }
+}
+
+/// TCPClientEntry is the entry of the tcp client.
+#[derive(Clone)]
+struct TCPClientEntry {
+    /// client is the tcp client.
+    client: TCPClient,
+
+    /// active_requests is the number of the active requests.
+    active_requests: Arc<AtomicUsize>,
+
+    /// actived_at is the time when the client is the last active time.
+    actived_at: Arc<std::sync::Mutex<Instant>>,
+}
+
+/// TCPDownloader is the downloader for downloading pieces by the TCP protocol.
+/// It will reuse the tcp clients to download pieces from the other peers by
+/// peer's address.
+pub struct TCPDownloader {
+    /// config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
+    /// clients is the map of the tcp clients.
+    clients: Arc<Mutex<HashMap<String, TCPClientEntry>>>,
+
+    /// capacity is the capacity of the tcp clients. If the number of the
+    /// clients exceeds the capacity, it will clean up the idle clients.
+    capacity: usize,
+
+    /// client_idle_timeout is the idle timeout for the client. If the client is idle for a long
+    /// time, it will be removed when cleaning up the idle clients.
+    idle_timeout: Duration,
+
+    /// cleanup_at is the time when the client is the last cleanup time.
+    cleanup_at: Arc<Mutex<Instant>>,
+}
+
+/// TCPDownloader implements the downloader with the TCP protocol.
+impl TCPDownloader {
+    /// new returns a new TCPDownloader.
+    pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
+        Self {
+            config,
+            clients: Arc::new(Mutex::new(HashMap::new())),
+            capacity,
+            idle_timeout,
+            cleanup_at: Arc::new(Mutex::new(Instant::now())),
+        }
+    }
+
+    /// client returns the tcp client by the address.
+    ///
+    /// Opterations:
+    /// 1. If the client entry exists, it will return the client directly to reuse the client by
+    ///    the address.
+    /// 2. If the client entry does not exist, it will create a new client entry and insert it
+    ///    into the clients map.
+    async fn client(&self, addr: &str) -> Result<TCPClient> {
+        let now = Instant::now();
+
+        // Cleanup the idle clients first to avoid the clients exceeding the capacity and the
+        // clients are idle for a long time.
+        self.cleanup_idle_client_entries().await;
+
+        let clients = self.clients.lock().await;
+        if let Some(entry) = clients.get(addr) {
+            debug!("reusing client: {}", addr);
+            *entry.actived_at.lock().unwrap() = now;
+            return Ok(entry.client.clone());
+        }
+        drop(clients);
+
+        // If there are many concurrent requests to create the client, it will create multiple
+        // clients for the same address. But it will reuse the same client by entry operation.
+        debug!("creating client: {}", addr);
+        let client =
+            TCPClient::new(self.config.clone(), addr.to_string())
+                .await?;
+
+        let mut clients = self.clients.lock().await;
+        let entry = clients
+            .entry(addr.to_string())
+            .or_insert(TCPClientEntry {
+                client: client.clone(),
+                active_requests: Arc::new(AtomicUsize::new(0)),
+                actived_at: Arc::new(std::sync::Mutex::new(now)),
+            });
+
+        // If it is created by other concurrent requests and reused client, need to update the
+        // last active time.
+        *entry.actived_at.lock().unwrap() = now;
+        Ok(entry.client.clone())
+    }
+
+    /// get_client_entry returns the client entry by the address.
+    async fn get_client_entry(&self, addr: &str) -> Option<TCPClientEntry> {
+        let clients = self.clients.lock().await;
+        clients.get(addr).cloned()
+    }
+
+    /// remove_client_entry removes the client entry if it is idle.
+    async fn remove_client_entry(&self, addr: &str) {
+        let mut clients = self.clients.lock().await;
+        if let Some(entry) = clients.get(addr) {
+            if entry.active_requests.load(Ordering::SeqCst) == 0 {
+                clients.remove(addr);
+            }
+        }
+    }
+
+    /// cleanup_idle_clients cleans up the idle clients, which are idle for a long time or have no
+    /// active requests.
+    async fn cleanup_idle_client_entries(&self) {
+        let now = Instant::now();
+
+        // Avoid hot cleanup for the clients.
+        let cleanup_at = self.cleanup_at.lock().await;
+        let interval = self.idle_timeout / 2;
+        if now.duration_since(*cleanup_at) < interval {
+            debug!("avoid hot cleanup");
+            return;
+        }
+        drop(cleanup_at);
+
+        let mut clients = self.clients.lock().await;
+        let exceeds_capacity = clients.len() > self.capacity;
+        clients.retain(|addr, entry| {
+            let active_requests = entry.active_requests.load(Ordering::SeqCst);
+            let is_active = active_requests > 0;
+            let actived_at = entry.actived_at.lock().unwrap();
+            let idel_duration = now.duration_since(*actived_at);
+            let is_recent = idel_duration <= self.idle_timeout;
+
+            // Retain the client if it is active or not exceeds the capacity and is recent.
+            let should_retain = is_active || (!exceeds_capacity && is_recent);
+            if !should_retain {
+                debug!(
+                    "removing idle client: {}, exceeds_capacity: {}, idle_duration: {}s",
+                    addr,
+                    exceeds_capacity,
+                    idel_duration.as_secs(),
+                );
+            }
+
+            should_retain
+        });
+
+        // Update the cleanup time.
+        *self.cleanup_at.lock().await = now;
+    }
+}
+
+/// TCPDownloader implements the Downloader trait.
+#[tonic::async_trait]
+impl Downloader for TCPDownloader {
+    /// download_piece downloads a piece from the other peer by the TCP protocol.
+    #[instrument(skip_all)]
+    async fn download_piece(
+        &self,
+        addr: &str,
+        number: u32,
+        _host_id: &str,
+        task_id: &str,
+    ) -> Result<(Vec<u8>, u64, String)> {
+        let tcp_addr = if let Some((ip_str, port_str)) = addr.split_once(':') {
+            match port_str.parse::<i32>() {
+                Ok(port) => format!("{}:{}", ip_str, port + 1),
+                Err(_) => {
+                    error!("Failed to parse port");
+                    addr.to_string()
+                }
+            }
+        } else {
+            error!("Invalid address format");
+            addr.to_string()
+        };
+        let addr = tcp_addr.as_str();
+
+        let client = self.client(addr).await?;
+
+        let entry = self
+            .get_client_entry(addr)
+            .await
+            .ok_or(Error::UnexpectedResponse)?;
+        let request_guard = RequestGuard::new(entry.active_requests.clone());
+
+        let response: DownloadPieceResponse = match client
+            .send(
+                number,
+                task_id,
+            )
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                // If the request fails, it will drop the request guard and remove the client
+                // entry to avoid using the invalid client.
+                drop(request_guard);
+                self.remove_client_entry(addr).await;
+                return Err(err);
+            }
+        };
+
+        let Some(piece) = response.piece else {
+            return Err(Error::InvalidParameter);
+        };
+
+        let Some(content) = piece.content else {
+            return Err(Error::InvalidParameter);
+        };
+
+        // Calculate the digest of the piece metadata and compare it with the expected digest,
+        // it verifies the integrity of the piece metadata.
+        let piece_metadata = metadata::Piece {
+            number,
+            length: piece.length,
+            offset: piece.offset,
+            digest: piece.digest.clone(),
+            ..Default::default()
+        };
+
+        if let Some(expected_digest) = response.digest {
+            let digest = piece_metadata.calculate_digest();
+            if expected_digest != digest {
+                return Err(Error::DigestMismatch(
+                    expected_digest.to_string(),
+                    digest.to_string(),
+                ));
+            }
+        }
+
+        Ok((content, piece.offset, piece.digest))
+    }
+
+    /// download_persistent_cache_piece downloads a persistent cache piece from the other peer by
+    /// the TCP protocol.
+    #[instrument(skip_all)]
+    async fn download_persistent_cache_piece(
+        &self,
+        addr: &str,
+        number: u32,
+        _host_id: &str,
+        task_id: &str,
+    ) -> Result<(Vec<u8>, u64, String)> {
+        let tcp_addr = if let Some((ip_str, port_str)) = addr.split_once(':') {
+            match port_str.parse::<i32>() {
+                Ok(port) => format!("{}:{}", ip_str, port + 1),
+                Err(_) => {
+                    error!("Failed to parse port");
+                    addr.to_string()
+                }
+            }
+        } else {
+            error!("Invalid address format");
+            addr.to_string()
+        };
+        let addr = tcp_addr.as_str();
+
+        let client = self.client(addr).await?;
+
+        let entry = self
+            .get_client_entry(addr)
+            .await
+            .ok_or(Error::UnexpectedResponse)?;
+        let request_guard = RequestGuard::new(entry.active_requests.clone());
+
+        let response: DownloadPersistentCachePieceResponse = match client
+            .send(
+                number,
+                task_id,
             )
             .await
         {
