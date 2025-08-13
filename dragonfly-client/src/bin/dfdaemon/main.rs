@@ -323,7 +323,7 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     );
 
-    // Initialize download grpc server.
+    // Initialize upload TCP server.
     let mut dfdaemon_upload_tcp = TCPServer::new(
         config.clone(),
         id_generator.clone(),
@@ -348,6 +348,9 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // grpc server started barrier.
     let grpc_server_started_barrier = Arc::new(Barrier::new(3));
+
+    // TCP server started barrier.
+    let tcp_server_started_barrier = Arc::new(Barrier::new(3));
 
     // Wait for servers to exit or shutdown signal.
     tokio::select! {
@@ -394,7 +397,7 @@ async fn main() -> Result<(), anyhow::Error> {
         },
         
         _ = {
-            let barrier = grpc_server_started_barrier.clone();
+            let barrier = tcp_server_started_barrier.clone();
             tokio::spawn(async move {
                 dfdaemon_upload_tcp.run(barrier).await.unwrap_or_else(|err| error!("dfdaemon upload tcp server failed: {}", err));
             })
