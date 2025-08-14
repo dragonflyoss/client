@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use dragonfly_api::dfdaemon::v2::{ 
+use dragonfly_api::dfdaemon::v2::{
     DownloadPieceResponse,
     DownloadPersistentCachePieceResponse,
 };
@@ -24,170 +24,173 @@ use dragonfly_client_core::{
 };
 use prost::Message;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use quinn::{ClientConfig, Endpoint, NewConnection, RecvStream, SendStream};
-use tokio::time::timeout;
-use tracing::{error, info, instrument};
+use tokio::sync::Mutex;
+use tracing::error;
 use vortex_protocol::{
     Vortex,
     tlv::Tag,
     tlv::download_piece::DownloadPiece,
 };
 use bytes::Bytes;
-use validator::{Validate, ValidationError};
 use std::net::SocketAddr;
+use std::any::TypeId;
+use quinn::{Endpoint, Connection, ClientConfig, ConnectError, ConnectionError};
+use rustls::ClientConfig as RustlsClientConfig;
+use rustls::RootCertStore;
+use std::time::Duration;
+use quinn::crypto::rustls::QuicClientConfig;
 
 const HEADER_SIZE: usize = 6;
 
-/// QUICClient is a QUIC-based client for dfdaemon upload service.
-#[derive(Clone, Validate)]
+/// QUICClient is a QUIC-based client for dfdaemon download service.
+#[derive(Clone)]
 pub struct QUICClient {
-    /// server_addr is the address of the QUIC server.
-    #[validate(custom = "validate_ip_port")]
-    addr: String,
-    /// timeout is the request timeout.
-    timeout: Duration,
-    endpoint: Endpoint,
-}
-
-/// Validate the address.
-fn validate_ip_port(address: &str) -> Result<(), ValidationError> {
-    match address.parse::<SocketAddr>() {
-        Ok(_) => Ok(()),
-        Err(_) => Err(ValidationError::new("invalid_ip_port")),
-    }
+    /// connection is the single long QUIC connection.
+    connection: Arc<Mutex<Connection>>,
 }
 
 impl QUICClient {
     /// Creates a new QUICClient.
-    #[instrument(skip_all)]
     pub async fn new(
         config: Arc<Config>,
         addr: String,
     ) -> ClientResult<Self> {
-        // If it is download piece, use the download piece timeout, otherwise use the
-        // default request timeout.
-        let mut timeout = config.download.piece_timeout;
-        if timeout.is_zero() {
-            timeout = Duration::from_secs(30);
-        }
+        // Validate address format
+        Self::validate(addr.as_str())?;
 
-        // Setup QUIC endpoint (client)
-        let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap())
-            .map_err(|e| ClientError::ValidationError(e.to_string()))?;
-        endpoint.set_default_client_config(ClientConfig::with_native_roots());
+        // Basic TLS configuration using rustls
+        let mut root_store = RootCertStore::empty();
+        // Add trusted root certificates if needed
+        // for cert in trusted_certs {
+        //     root_store.add(cert)?;
+        // }
 
-        let client = Self {
-            addr,
-            timeout,
-            endpoint,
+        let tls_config = RustlsClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+
+        // Create client config with default transport settings
+        let client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(tls_config)?));
+        // Create endpoint
+        let addr1 = addr.parse::<SocketAddr>().unwrap();
+        let mut endpoint = Endpoint::client(addr1)
+            .map_err(|err| {
+                error!("Failed to create QUIC endpoint: {}", err);
+                ClientError::IO(err)
+            })?;
+        endpoint.set_default_client_config(client_config);
+
+        // Parse server address
+        let server_addr: SocketAddr = addr.parse().map_err(|e| {
+            error!("Failed to parse server address: {}", e);
+            ClientError::InvalidParameter
+        })?;
+
+        let connecting = endpoint.connect(server_addr, "localhost")
+            .map_err(|err| {
+                error!("Connection initialization failed: {}", err);
+                ClientError::IO(err.into())
+            })?;
+
+        // Establish connection with timeout
+        let timeout = config.download.piece_timeout;
+        let connection = match tokio::time::timeout(timeout, connecting).await {
+            Ok(Ok(conn)) => conn,
+            Ok(Err(e)) => {
+                error!("Connection failed: {}", e);
+                return Err(ClientError::IO(e.into()));
+            }
+            Err(_) => {
+                error!("Connection timed out");
+                return Err(ClientError::SendTimeout);
+            }
         };
 
-        // Validate the address
-        match client.validate() {
-            Ok(_) => println!("Valid IP:Port"),
-            Err(e) => println!("Validation error: {:?}", e),
-        }
-        Ok(client)
+        Ok(Self {
+            connection: Arc::new(Mutex::new(connection)),
+        })
     }
 
-    /// Downloads piece content from parent.
-    #[instrument(skip_all)]
-    pub async fn download_piece(
+    /// Validates the address format.
+    fn validate(address: &str) -> ClientResult<()> {
+        address.parse::<SocketAddr>().map_err(|_| {
+            error!("Invalid address: {}", address);
+            ClientError::InvalidParameter
+        })?;
+        Ok(())
+    }
+
+    /// Sends a request and receives a response using the Vortex protocol.
+    pub async fn send<R: Message + Default + 'static>(
         &self,
         number: u32,
         task_id: &str,
-    ) -> ClientResult<DownloadPieceResponse> {
-        let value: Bytes = DownloadPiece::new(task_id.to_string(), number).into();
-        let packet = Vortex::new(Tag::DownloadPiece, value).expect("Failed to create Vortex packet");        
-        self.send_and_receive(&packet).await
-    }
-
-    /// Downloads piece content from parent.
-    #[instrument(skip_all)]
-    pub async fn download_persistent_cache_piece(
-        &self,
-        number: u32,
-        task_id: &str,
-    ) -> ClientResult<DownloadPersistentCachePieceResponse> {
-        let value: Bytes = DownloadPiece::new(task_id.to_string(), number).into();
-        let packet = Vortex::new(Tag::DownloadPiece, value).expect("Failed to create Vortex packet");        
-        self.send_and_receive(&packet).await
-    }
-
-    /// Establishes a QUIC connection to the server.
-    async fn connect(&self) -> Result<NewConnection, ClientError> {
-        let conn = timeout(self.timeout, self.endpoint.connect(self.addr.parse().unwrap(), "dragonfly")).await
-            .map_err(|_| ClientError::HostNotFound(self.addr.clone()))?
-            .map_err(|err| {
-                error!("Failed to connect to {}: {}", self.addr, err);
-                ClientError::HostNotFound(self.addr.clone())
-            })?;
-        Ok(conn)
-    }
-
-    /// Sends a request and receives a response over QUIC.
-    async fn send_and_receive<R: Message + Default>(
-        &self,
-        request: &Vortex,
     ) -> ClientResult<R> {
-        let conn = self.connect().await?;
-        let (mut send, mut recv) = conn.connection.open_bi().await.map_err(|err| {
-            error!("Failed to open QUIC stream: {}", err);
-            ClientError::MpscSend(err.to_string())
+        // Create Vortex request packet
+        let value = DownloadPiece::new(task_id.to_string(), number).into();
+        let packet = match TypeId::of::<R>() {
+            id if id == TypeId::of::<DownloadPieceResponse>() => {
+                Vortex::new(Tag::DownloadPiece, value)
+                    .map_err(|_| ClientError::ValidationError("Failed to create Vortex packet".to_string()))?
+            }
+            id if id == TypeId::of::<DownloadPersistentCachePieceResponse>() => {
+                Vortex::new(Tag::DownloadPiece, value)
+                    .map_err(|_| ClientError::ValidationError("Failed to create Vortex packet".to_string()))?
+            }
+            _ => return Err(ClientError::Unimplemented),
+        };
+
+        let mut connection = self.connection.lock().await;
+        let (mut send, mut recv) = connection.open_bi().await.map_err(|e| {
+            error!("Failed to open bidirectional stream: {}", e);
+            ClientError::IO(e.into())
         })?;
 
         // Send request data
-        send.write_all(&request.to_bytes()).await.map_err(|err| {
-            error!("Failed to send request: {}", err);
-            ClientError::MpscSend(err.to_string())
+        send.write_all(&packet.to_bytes()).await.map_err(|e| {
+            error!("Failed to send request: {}", e);
+            ClientError::MpscSend(e.to_string())
         })?;
-        send.finish().await.map_err(|err| {
-            error!("Failed to finish sending: {}", err);
-            ClientError::MpscSend(err.to_string())
+        send.finish().map_err(|e| {
+            error!("Failed to finish sending stream: {}", e);
+            ClientError::IO(e.into())
         })?;
 
         // Read response header
         let mut header_buf = [0u8; HEADER_SIZE];
-        recv.read_exact(&mut header_buf).await.map_err(|err| {
-            error!("Failed to read response header: {}", err);
+        recv.read_exact(&mut header_buf).await.map_err(|e| {
+            error!("Failed to read response header: {}", e);
             ClientError::UnexpectedResponse
         })?;
-        info!("QUICClient can receive data");
-        let length = u32::from_be_bytes(header_buf[2..HEADER_SIZE].try_into().expect("Failed to read value length")) as usize;
 
-        // Read response data
+        let length = u32::from_be_bytes(header_buf[2..].try_into().map_err(|_| ClientError::InvalidPieceLength)?) as usize;
         let mut response_data = vec![0u8; length];
-        recv.read_exact(&mut response_data).await.map_err(|err| {
-            error!("Failed to read response data: {}", err);
+        recv.read_exact(&mut response_data).await.map_err(|e| {
+            error!("Failed to read response data: {}", e);
             ClientError::UnexpectedResponse
         })?;
 
-        response_data.splice(0..0, header_buf.iter().copied());
-
-        let deserialized = Vortex::from_bytes(response_data.into()).expect("Failed to deserialize packet");
+        // Parse response
+        let mut complete_data = header_buf.to_vec();
+        complete_data.extend(response_data);
+        let deserialized = Vortex::from_bytes(complete_data.into())
+            .map_err(|_| ClientError::ValidationError("Failed to deserialize packet".to_string()))?;
 
         match deserialized {
-            Vortex::DownloadPiece(_, _) => {
-                return Err(ClientError::UnexpectedResponse);
-            }
             Vortex::PieceContent(_, piece_content) => {
-                let bytes_back: Bytes = piece_content.into();
-                return R::decode(&*bytes_back).map_err(|err| {
-                    error!("Failed to decode response: {}", err);
-                    ClientError::ValidationError(err.to_string())
+                let bytes: Bytes = piece_content.into();
+                R::decode(bytes).map_err(|e| {
+                    error!("Failed to decode response: {}", e);
+                    ClientError::ValidationError(e.to_string())
                 })
             }
-            Vortex::Reserved(_) => {return Err(ClientError::UnexpectedResponse);}
-            Vortex::Close(_) => {return Err(ClientError::UnexpectedResponse);}
-            Vortex::Error(_, error) => {
-                error!("Invalid error response: {}", error.message());
-                let code: u8 = error.code().into();
-                return Err(ClientError::InvalidState(code.to_string()));
+            Vortex::Error(_, err) => {
+                error!("Invalid error response: {}", err.message());
+                let code: u8 = err.code().into();
+                Err(ClientError::InvalidState(code.to_string()))
             }
+            _ => Err(ClientError::UnexpectedResponse),
         }
     }
-
 }
 

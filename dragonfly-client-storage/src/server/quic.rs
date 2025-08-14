@@ -15,6 +15,7 @@
  */
 
 use dragonfly_client_util::shutdown;
+use dragonfly_client_util::tls;
 use dragonfly_api::common::v2::Piece;
 use dragonfly_api::dfdaemon::v2::{
     DownloadPieceResponse,
@@ -24,20 +25,15 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     Error as ClientError, Result as ClientResult,
 };
-use dragonfly_client_util::{
-    net::{get_interface_info, Interface},
-    id_generator::IDGenerator,
-};
+use dragonfly_client_util::id_generator::IDGenerator;
 use prost::Message;
-use std::io::ErrorKind;
+use std::io::{self, ErrorKind};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use quinn::{Endpoint, ServerConfig, Incoming, RecvStream, SendStream};
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
-use tracing::{error, info, instrument, Span};
+use tracing::{error, info, Span};
 use vortex_protocol::{
     Vortex,
     tlv::{Tag, download_piece::DownloadPiece},
@@ -45,83 +41,91 @@ use vortex_protocol::{
 use crate::Storage;
 use leaky_bucket::RateLimiter;
 use std::time::Duration;
-
-#[cfg(unix)]
-use std::os::unix::io::{AsRawFd, RawFd};
-#[cfg(windows)]
-use std::os::windows::io::{AsRawSocket, RawSocket};
-
+use bytes::{Bytes, BytesMut};
+use quinn::{ConnectError, Endpoint, ReadExactError, ServerConfig, TransportConfig};
+use tokio::io::AsyncReadExt;
 const HEADER_SIZE: usize = 6;
 
 /// QUICServer is a QUIC-based server for dfdaemon upload service.
 pub struct QUICServer {
-    /// config is the configuration of the dfdaemon.
-    config: Arc<Config>,
-
-    /// addr is the address of the TCP server.
+    /// addr is the address of the QUIC server.
     addr: SocketAddr,
 
     /// handler is the request handler.
     handler: QUICServerHandler,
 
-    /// shutdown is used to shutdown the TCP server.
+    /// shutdown is used to shutdown the QUIC server.
     shutdown: shutdown::Shutdown,
 
-    /// _shutdown_complete is used to notify the TCP server is shutdown.
+    /// _shutdown_complete is used to notify the QUIC server is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
+
+    /// ca_cert_path is the path to the CA certificate file.
+    ca_cert_path: PathBuf,
+
+    /// ca_key_path is the path to the CA private key file.
+    ca_key_path: PathBuf,
 }
 
 impl QUICServer {
-    /// Creates a new TCPServer.
-    #[instrument(skip_all)]
+    /// Creates a new QUIC server instance.
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
         addr: SocketAddr,
+        ca_cert_path: PathBuf,
+        ca_key_path: PathBuf,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
-        // Initialize the interface info.
-        let interface =
-            get_interface_info(config.host.ip.unwrap(), config.upload.rate_limit).unwrap();
-
         let handler = QUICServerHandler {
-            interface,
-            socket_path: config.download.server.socket_path.clone(),
             id_generator,
             storage,
-            config: config.clone(),
+            upload_rate_limiter: Arc::new(
+                RateLimiter::builder()
+                    .initial(config.upload.rate_limit.as_u64() as usize)
+                    .refill(config.upload.rate_limit.as_u64() as usize)
+                    .max(config.upload.rate_limit.as_u64() as usize)
+                    .interval(Duration::from_secs(1))
+                    .fair(false)
+                    .build(),
+            ),
         };
 
         Self {
-            config,
             addr,
             handler,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
+            ca_cert_path,
+            ca_key_path,
         }
     }
 
-    /// Starts the QUIC upload server.
-    #[instrument(skip_all)]
+    /// Starts the QUIC server.
     pub async fn run(&mut self, quic_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
-        // Build QUIC server config (for demo, use insecure config, production use real certs!)
-        let mut server_config = ServerConfig::with_single_cert(
-            quinn::CertificateChain::from_certs(vec![quinn::Certificate::from_der(&[0u8; 1]).unwrap()]),
-            quinn::PrivateKey::from_der(&[0u8; 1]).unwrap(),
-        ).unwrap();
-        server_config.transport = Arc::new(quinn::TransportConfig::default());
+        let ca_cert = tls::generate_ca_cert_from_pem(&self.ca_cert_path, &self.ca_key_path).unwrap();
+        let self_signed_certs = tls::generate_self_signed_certs_by_ca_cert(&ca_cert, "localhost", vec!(String::from("quic")));
+        let (tls_certs, tls_key) = self_signed_certs
+            .map_err(|err| ClientError::InvalidParameter)?;
 
-        let (endpoint, mut incoming) = Endpoint::server(server_config, self.addr).map_err(|err| {
-            error!("Failed to bind QUIC endpoint to {}: {}", self.addr, err);
+        let mut server_config = ServerConfig::with_single_cert(tls_certs, tls_key)
+            .map_err(|err| ClientError::InvalidParameter)?;
+
+        let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
+        transport_config.max_concurrent_uni_streams(0_u8.into());
+
+        // Create QUIC endpoint
+        let endpoint = Endpoint::server(
+            server_config,
+            self.addr,
+        ).map_err(|e| {
+            error!("Failed to bind QUIC server to {}: {}", self.addr, e);
             ClientError::HostNotFound(self.addr.to_string())
         })?;
 
         info!("QUIC upload server listening on {}", self.addr);
-
-        // Clone the shutdown channel.
-        let mut shutdown = self.shutdown.clone();
 
         // Notify that the server is ready
         quic_server_started_barrier.wait().await;
@@ -130,27 +134,88 @@ impl QUICServer {
         loop {
             tokio::select! {
                 // Accept new connections
-                Some(connecting) = incoming.next() => {
-                    match connecting.await {
-                        Ok(new_conn) => {
+                result = endpoint.connect(self.addr, "quic") => {
+                    match result {
+                        Ok((connection,)) => {
                             let handler = self.handler.clone();
+                            let shutdown = self.shutdown.clone();
+
+                            // Handle the connection
                             tokio::spawn(async move {
-                                let mut bi_streams = new_conn.bi_streams;
-                                while let Some(Ok((send, recv))) = bi_streams.next().await {
-                                    if let Err(err) = handler.handle_connection(send, recv).await {
-                                        error!("Error handling QUIC stream: {}", err);
-                                    }
+                                if let Err(err) = handler.handle_connection(connection, shutdown).await {
+                                    error!("Error handling QUIC connection: {}", err);
                                 }
                             });
                         }
-                        Err(err) => {
-                            error!("Failed to accept QUIC connection: {}", err);
-                        }
                     }
                 }
+
+                // Handle shutdown signal
+                _ = self.shutdown.recv() => {
+                    info!("QUIC upload server is shutting down");
+                    break;
+                }
+            }
+        }
+
+        // Close the server endpoint
+        endpoint.close(0u32.into(), b"shutdown");
+        Ok(())
+    }
+}
+
+/// QUICServerHandler processes QUIC connections and streams.
+#[derive(Clone)]
+pub struct QUICServerHandler {
+    /// id_generator is the ID generator.
+    id_generator: Arc<IDGenerator>,
+
+    /// storage is the local storage.
+    storage: Arc<Storage>,
+
+    /// upload_rate_limiter is the rate limiter for upload speed in bps (bytes per second).
+    upload_rate_limiter: Arc<RateLimiter>,
+}
+
+impl QUICServerHandler {
+    /// Handles a QUIC connection (manages multiple streams).
+    async fn handle_connection(
+        &self,
+        connection: quinn::Connection,
+        mut shutdown: shutdown::Shutdown,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let peer_addr = connection.remote_address();
+
+        loop {
+            tokio::select! {
+                // Accept new bidirectional stream
+                stream_result = connection.accept_bi() => {
+                    let (send_stream, recv_stream) = match stream_result {
+                        Ok(s) => s,
+                        Err(e) => {
+                            error!("Failed to accept stream from {}: {}", peer_addr, e);
+                            break; // Connection closed
+                        }
+                    };
+
+                    let handler = self.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = handler.handle_stream(send_stream, recv_stream).await {
+                            error!("Error handling QUIC stream: {}", err);
+                        }
+                    });
+                }
+
                 // Handle shutdown signal
                 _ = shutdown.recv() => {
-                    info!("QUIC upload server shutting down");
+                    info!("Shutting down QUIC connection with {}", peer_addr);
+                    connection.close(0u32.into(), b"shutdown");
+                    break;
+                }
+
+                // Connection closed
+                _ = connection.closed() => {
+                    info!("QUIC connection with {} closed", peer_addr);
                     break;
                 }
             }
@@ -159,159 +224,130 @@ impl QUICServer {
         Ok(())
     }
 
-    /// Gets the socket file descriptor from a TcpStream
-    #[cfg(unix)]
-    fn get_socket_fd(stream: &quinn::RecvStream) -> Option<RawFd> {
-        // For other platforms, we can use the peer address as identifier
-        stream.peer_addr().ok().map(|addr| addr.to_string().into_bytes().into_iter().collect())
-    }
-
-    /// Gets the socket handle from a TcpStream (Windows)
-    #[cfg(windows)]
-    fn get_socket_fd(stream: &quinn::RecvStream) -> Option<RawSocket> {
-        // For other platforms, we can use the peer address as identifier
-        stream.peer_addr().ok().map(|addr| addr.to_string().into_bytes().into_iter().collect())
-    }
-
-    /// Gets socket information as a generic identifier
-    #[cfg(not(any(unix, windows)))]
-    fn get_socket_fd(stream: &quinn::RecvStream) -> Option<String> {
-        // For other platforms, we can use the peer address as identifier
-        stream.peer_addr().ok().map(|addr| addr.to_string())
-    }
-
-}
-
-/// QUICServerHandler handles QUIC connections and requests.
-#[derive(Clone)]
-pub struct QUICServerHandler {
-    /// interface is the network interface.
-    interface: Interface,
-
-    /// socket_path is the path of the unix domain socket.
-    socket_path: PathBuf,
-
-    id_generator: Arc<IDGenerator>,
-
-    storage: Arc<Storage>,
-
-    config: Arc<Config>,
-}
-
-impl QUICServerHandler {
-    /// Handles a single QUIC bi-directional stream.
-    async fn handle_connection(&self, mut send: SendStream, mut recv: RecvStream) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    /// Handles a single QUIC bidirectional stream.
+    async fn handle_stream(
+        &self,
+        mut send_stream: quinn::SendStream,
+        mut recv_stream: quinn::RecvStream,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         loop {
-            // Read header
+            // Read header (same format as TCP: 6 bytes)
             let mut header_buf = [0u8; HEADER_SIZE];
-            match recv.read_exact(&mut header_buf).await {
+            match recv_stream.read_exact(&mut header_buf).await {
                 Ok(_) => {}
-                Err(err) => {
-                    error!("Failed to read header: {}", err);
-                    return Err(err.into());
+                Err(e) if e == ReadExactError::FinishedEarly(0) => {
+                    // Stream closed by client
+                    info!("QUIC stream closed by client");
+                    break;
+                }
+                Err(e) => {
+                    error!("Failed to read header from stream: {}", e);
+                    return Err(e.into());
                 }
             }
-            info!("QUICServer can receive data");
-            let length = u32::from_be_bytes(header_buf[2..HEADER_SIZE].try_into().expect("Failed to read value length")) as usize;
+
+            // Parse length from header (same as TCP implementation)
+            let length = u32::from_be_bytes(
+                header_buf[2..HEADER_SIZE].try_into().expect("failed to read length")
+            ) as usize;
 
             // Read request data
             let mut request_data = vec![0u8; length];
-            recv.read_exact(&mut request_data).await?;
+            recv_stream.read_exact(&mut request_data).await?;
 
-            request_data.splice(0..0, header_buf.iter().copied());
+            // Deserialize Vortex message (same as TCP)
+            let mut complete_data = BytesMut::with_capacity(header_buf.len() + request_data.len());
+            complete_data.extend_from_slice(&header_buf);
+            complete_data.extend_from_slice(&request_data);
 
-            let deserialized = Vortex::from_bytes(request_data.into()).expect("Failed to deserialize packet");
+            let deserialized = Vortex::from_bytes(complete_data.freeze())
+                .map_err(|e| format!("failed to deserialize packet: {}", e))?;
 
-            // Process request based on message type
+            // Process request (same business logic as TCP)
             let response_result = match deserialized {
                 Vortex::DownloadPiece(_, download_piece) => {
-                    self.send_piece(&download_piece).await
+                    self.handle_piece(&download_piece).await
                 }
                 _ => {
                     error!("Unsupported message type: {:?}", deserialized.tag());
-                    Err("Unsupported message type".to_string())
+                    Err("unsupported message type".to_string())
                 }
             };
 
-            // Send response
+            // Send response through QUIC stream
             match response_result {
                 Ok(response_data) => {
-                    let rsp = Vortex::new(Tag::PieceContent, response_data.into()).expect("Failed to create Vortex packet");
-                    send.write_all(&rsp.to_bytes()).await?;
+                    let rsp = Vortex::new(Tag::PieceContent, Bytes::from(response_data))
+                        .map_err(|e| format!("failed to create Vortex packet: {}", e))?;
+                    send_stream.write_all(&rsp.to_bytes()).await?;
+                    send_stream.finish().expect("failed to finish sending response");
                 }
                 Err(error_message) => {
-                    let ersp = Vortex::new(Tag::Error, error_message.into()).expect("Failed to create Vortex packet");
-                    send.write_all(&ersp.to_bytes()).await?;
+                    let ersp = Vortex::new(Tag::Error, Bytes::from(error_message))
+                        .map_err(|e| format!("failed to create error packet: {}", e))?;
+                    send_stream.write_all(&ersp.to_bytes()).await?;
+                    send_stream.finish().expect("failed to finish sending error");
                 }
             }
         }
 
-        // Ok(())
+        Ok(())
     }
 
     /// Handles download piece request.
-    #[instrument(skip_all, fields(host_id, task_id, piece_id))]
-    async fn send_piece(
+    async fn handle_piece(
         &self,
         request: &DownloadPiece,
     ) -> Result<Vec<u8>, String> {
-
-        // Generate the host id.
+        // Generate host ID
         let host_id = self.id_generator.host_id();
 
-        // Get the task id from the request.
+        // Get task ID from request
         let task_id = request.task_id();
 
-        // Get the interested piece number from the request.
+        // Get piece number from request
         let piece_number = request.piece_number();
 
-        // Generate the piece id.
+        // Generate piece ID
         let piece_id = self.storage.piece_id(task_id, piece_number);
 
-        // Span record the host id, task id and piece number.
+        // Record host ID, task ID and piece number in span
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id);
         Span::current().record("piece_id", piece_id.as_str());
-        info!("download piece content in TCP upload server");
+        info!("downloading piece content in QUIC upload server");
 
-        // Get the piece metadata from the local storage.
+        // Get piece metadata from local storage
         let piece = self
             .storage
             .get_piece(piece_id.as_str())
-            .map_err(|err| format!("Failed to get piece metadata: {}", err))?
-            .ok_or_else(|| "Piece metadata not found".to_string())?;
+            .map_err(|err| format!("failed to get piece metadata: {}", err))?
+            .ok_or_else(|| "piece metadata not found".to_string())?;
 
-        info!("start upload piece content");
+        info!("starting to upload piece content");
 
-        // Span record the piece_id.
+        // Record piece ID and length in span
         Span::current().record("piece_id", piece_id.as_str());
         Span::current().record("piece_length", piece.length);
 
-        // Acquire the upload rate limiter.
-        Arc::new(
-        RateLimiter::builder()
-            .initial(self.config.upload.rate_limit.as_u64() as usize)
-            .refill(self.config.upload.rate_limit.as_u64() as usize)
-            .max(self.config.upload.rate_limit.as_u64() as usize)
-            .interval(Duration::from_secs(1))
-            .fair(false)
-            .build(),
-        ).acquire(piece.length as usize).await;
+        // Acquire upload rate limiter
+        self.upload_rate_limiter.acquire(piece.length as usize).await;
 
-        // Upload the piece content.
+        // Upload piece content
         let mut reader = self.storage
             .upload_piece(piece_id.as_str(), task_id, None)
             .await
             .map_err(|err| {
-                format!("Failed to get piece content: {}", err)
+                format!("failed to get piece content: {}", err)
             })?;
-        // Read the content of the piece.
+
+        // Read piece content
         let mut content = vec![0; piece.length as usize];
         reader.read_exact(&mut content).await.map_err(|err| {
-            format!("Failed to read piece content: {}", err)
+            format!("failed to read piece content: {}", err)
         })?;
 
-        info!("finished upload piece content");
+        info!("finished uploading piece content");
 
         // Create response
         let response = DownloadPieceResponse {
@@ -332,69 +368,60 @@ impl QUICServerHandler {
         Ok(response.encode_to_vec())
     }
 
-    /// Handles download piece request.
-    #[instrument(skip_all, fields(host_id, task_id, piece_id))]
-    async fn send_persistent_cache_piece(
+    /// Handles download persistent cache piece request.
+    async fn handle_persistent_cache_piece(
         &self,
         request: &DownloadPiece,
     ) -> Result<Vec<u8>, String> {
-
-        // Generate the host id.
+        // Generate host ID
         let host_id = self.id_generator.host_id();
 
-        // Get the task id from the request.
+        // Get task ID from request
         let task_id = request.task_id();
 
-        // Get the interested piece number from the request.
+        // Get piece number from request
         let piece_number = request.piece_number();
 
-        // Generate the piece id.
+        // Generate piece ID
         let piece_id = self.storage.piece_id(task_id, piece_number);
 
-        // Span record the host id, task id and piece number.
+        // Record host ID, task ID and piece number in span
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id);
         Span::current().record("piece_id", piece_id.as_str());
-        info!("download piece content in TCP upload server");
+        info!("downloading persistent cache piece content in QUIC upload server");
 
-        // Get the piece metadata from the local storage.
+        // Get piece metadata from local storage
         let piece = self
             .storage
             .get_persistent_cache_piece(piece_id.as_str())
-            .map_err(|err| format!("Failed to get persistent cache piece metadata: {}", err))?
-            .ok_or_else(|| "Persistent cache piece metadata not found".to_string())?;
+            .map_err(|err| format!("failed to get persistent cache piece metadata: {}", err))?
+            .ok_or_else(|| "persistent cache piece metadata not found".to_string())?;
 
-        info!("start upload persistent cache piece content");
+        info!("starting to upload persistent cache piece content");
 
-        // Span record the piece_id.
+        // Record piece ID and length in span
         Span::current().record("piece_id", piece_id.as_str());
         Span::current().record("piece_length", piece.length);
 
-        // Acquire the upload rate limiter.
-        Arc::new(
-        RateLimiter::builder()
-            .initial(self.config.upload.rate_limit.as_u64() as usize)
-            .refill(self.config.upload.rate_limit.as_u64() as usize)
-            .max(self.config.upload.rate_limit.as_u64() as usize)
-            .interval(Duration::from_secs(1))
-            .fair(false)
-            .build(),
-        ).acquire(piece.length as usize).await;
+        // Acquire upload rate limiter
+        self.upload_rate_limiter.acquire(piece.length as usize).await;
 
-        // Upload the piece content.
+        // Upload piece content
         let mut reader = self.storage
             .upload_persistent_cache_piece(piece_id.as_str(), task_id, None)
             .await
             .map_err(|err| {
-                format!("Failed to get persistent cache piece content: {}", err)
+                format!("failed to get persistent cache piece content: {}", err)
             })?;
-        // Read the content of the piece.
+
+        // Read piece content
         let mut content = vec![0; piece.length as usize];
         reader.read_exact(&mut content).await.map_err(|err| {
-            format!("Failed to read persistent cache piece content: {}", err)
+            format!("failed to read persistent cache piece content: {}", err)
         })?;
 
-        info!("finished persistent cache upload piece content");
+        info!("finished uploading persistent cache piece content");
 
         // Create response
         let response = DownloadPersistentCachePieceResponse {
@@ -415,4 +442,3 @@ impl QUICServerHandler {
         Ok(response.encode_to_vec())
     }
 }
-

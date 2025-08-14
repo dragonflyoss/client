@@ -26,13 +26,14 @@ use dragonfly_client::health::Health;
 use dragonfly_client::metrics::Metrics;
 use dragonfly_client::proxy::Proxy;
 use dragonfly_client::resource::{persistent_cache_task::PersistentCacheTask, task::Task};
-use dragonfly_client::shutdown;
 use dragonfly_client::stats::Stats;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::{dfdaemon, VersionValueParser};
+use dragonfly_client_storage::server::quic::QUICServer;
 use dragonfly_client_storage::Storage;
 use dragonfly_client_util::id_generator::IDGenerator;
+use dragonfly_client_util::shutdown;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -137,6 +138,12 @@ async fn main() -> Result<(), anyhow::Error> {
         }
     };
 
+    let mut quic_config = config.clone();
+
+    quic_config.storage.server.protocol = "quic".to_string();
+
+    let quic_config = Arc::new(quic_config);
+
     let config = Arc::new(config);
 
     // Initialize tracing.
@@ -219,6 +226,16 @@ async fn main() -> Result<(), anyhow::Error> {
     )?;
     let task = Arc::new(task);
 
+    let quic_task = Task::new(
+        quic_config.clone(),
+        id_generator.clone(),
+        storage.clone(),
+        scheduler_client.clone(),
+        backend_factory.clone(),
+    )?;
+
+    let quic_task = Arc::new(quic_task);
+
     // Initialize persistent cache task manager.
     let persistent_cache_task = PersistentCacheTask::new(
         config.clone(),
@@ -228,6 +245,15 @@ async fn main() -> Result<(), anyhow::Error> {
         backend_factory.clone(),
     )?;
     let persistent_cache_task = Arc::new(persistent_cache_task);
+
+    let quic_persistent_cache_task = PersistentCacheTask::new(
+        quic_config.clone(),
+        id_generator.clone(),
+        storage.clone(),
+        scheduler_client.clone(),
+        backend_factory.clone(),
+    )?;
+    let quic_persistent_cache_task = Arc::new(quic_persistent_cache_task);
 
     // Initialize health server.
     let health = Health::new(
@@ -293,8 +319,18 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut dfdaemon_download_grpc = DfdaemonDownloadServer::new(
         config.clone(),
         config.download.server.socket_path.clone(),
-        task.clone(),
-        persistent_cache_task.clone(),
+        quic_task.clone(),
+        quic_persistent_cache_task.clone(),
+        shutdown.clone(),
+        shutdown_complete_tx.clone(),
+    );
+
+    // Initialize download grpc server.
+    let mut dfdaemon_upload_quic = QUICServer::new(
+        config.clone(),
+        id_generator.clone(),
+        storage.clone(),
+        SocketAddr::new(config.upload.server.ip.unwrap(), config.upload.server.port + 1),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
@@ -361,6 +397,15 @@ async fn main() -> Result<(), anyhow::Error> {
             })
         } => {
             info!("dfdaemon download grpc unix server exited");
+        },
+
+        _ = {
+            let barrier = grpc_server_started_barrier.clone();
+            tokio::spawn(async move {
+                dfdaemon_upload_quic.run(barrier).await.unwrap_or_else(|err| error!("dfdaemon upload quic server failed: {}", err));
+            })
+        } => {
+            info!("dfdaemon upload quic server exited");
         },
 
         _ = {
