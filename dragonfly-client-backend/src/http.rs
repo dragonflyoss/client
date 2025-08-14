@@ -50,11 +50,22 @@ impl HTTP {
             .with_custom_certificate_verifier(NoVerifier::new())
             .with_no_client_auth();
 
+        // Disable automatic compression to prevent double-decompression issues.
+        //
+        // Problem scenario:
+        // 1. Origin server supports gzip and returns "content-encoding: gzip" header.
+        // 2. Backend decompresses the response and stores uncompressed content to disk.
+        // 3. When user's client downloads via dfdaemon proxy, the original "content-encoding: gzip".
+        //    header is forwarded to it.
+        // 4. User's client attempts to decompress the already-decompressed content, causing errors.
+        //
+        // Solution: Disable all compression formats (gzip, brotli, zstd, deflate) to ensure
+        // we receive and store uncompressed content, eliminating the double-decompression issue.
         let client = reqwest::Client::builder()
-            .gzip(true)
-            .brotli(true)
-            .zstd(true)
-            .deflate(true)
+            .no_gzip()
+            .no_brotli()
+            .no_zstd()
+            .no_deflate()
             .use_preconfigured_tls(client_config_builder)
             .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
             .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
@@ -88,11 +99,22 @@ impl HTTP {
                     .with_root_certificates(root_cert_store)
                     .with_no_client_auth();
 
+                // Disable automatic compression to prevent double-decompression issues.
+                //
+                // Problem scenario:
+                // 1. Origin server supports gzip and returns "content-encoding: gzip" header.
+                // 2. Backend decompresses the response and stores uncompressed content to disk.
+                // 3. When user's client downloads via dfdaemon proxy, the original "content-encoding: gzip".
+                //    header is forwarded to it.
+                // 4. User's client attempts to decompress the already-decompressed content, causing errors.
+                //
+                // Solution: Disable all compression formats (gzip, brotli, zstd, deflate) to ensure
+                // we receive and store uncompressed content, eliminating the double-decompression issue.
                 let client = reqwest::Client::builder()
-                    .gzip(true)
-                    .brotli(true)
-                    .zstd(true)
-                    .deflate(true)
+                    .no_gzip()
+                    .no_brotli()
+                    .no_zstd()
+                    .no_deflate()
                     .use_preconfigured_tls(client_config_builder)
                     .build()?;
 
@@ -138,6 +160,13 @@ impl super::Backend for HTTP {
             .client(request.client_cert)?
             .get(&request.url)
             .headers(header)
+            // Add Range header to ensure Content-Length is returned in response headers.
+            // Some servers (especially when using Transfer-Encoding: chunked,
+            // refer to https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Transfer-Encoding.) may not
+            // include Content-Length in HEAD requests. Using "bytes=0-" requests the
+            // entire file starting from byte 0, forcing the server to include file size
+            // information in the response headers.
+            .header(reqwest::header::RANGE, "bytes=0-")
             .timeout(request.timeout)
             .send()
             .await

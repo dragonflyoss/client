@@ -15,7 +15,7 @@
  */
 
 use clap::Parser;
-use dragonfly_client::announcer::{ManagerAnnouncer, SchedulerAnnouncer};
+use dragonfly_client::announcer::SchedulerAnnouncer;
 use dragonfly_client::dynconfig::Dynconfig;
 use dragonfly_client::gc::GC;
 use dragonfly_client::grpc::{
@@ -32,8 +32,7 @@ use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::{dfdaemon, VersionValueParser};
 use dragonfly_client_storage::server::quic::QUICServer;
 use dragonfly_client_storage::Storage;
-use dragonfly_client_util::id_generator::IDGenerator;
-use dragonfly_client_util::shutdown;
+use dragonfly_client_util::{id_generator::IDGenerator, net::Interface, shutdown};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -255,6 +254,9 @@ async fn main() -> Result<(), anyhow::Error> {
     )?;
     let quic_persistent_cache_task = Arc::new(quic_persistent_cache_task);
 
+    let interface = Interface::new(config.host.ip.unwrap(), config.upload.rate_limit);
+    let interface = Arc::new(interface);
+
     // Initialize health server.
     let health = Health::new(
         SocketAddr::new(config.health.server.ip.unwrap(), config.health.server.port),
@@ -284,19 +286,12 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     );
 
-    // Initialize manager announcer.
-    let manager_announcer = ManagerAnnouncer::new(
-        config.clone(),
-        manager_client.clone(),
-        shutdown.clone(),
-        shutdown_complete_tx.clone(),
-    );
-
     // Initialize scheduler announcer.
     let scheduler_announcer = SchedulerAnnouncer::new(
         config.clone(),
         id_generator.host_id(),
         scheduler_client.clone(),
+        interface.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     )
@@ -311,6 +306,7 @@ async fn main() -> Result<(), anyhow::Error> {
         SocketAddr::new(config.upload.server.ip.unwrap(), config.upload.server.port),
         task.clone(),
         persistent_cache_task.clone(),
+        interface.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
@@ -367,10 +363,6 @@ async fn main() -> Result<(), anyhow::Error> {
 
         _ = tokio::spawn(async move { stats.run().await }) => {
             info!("stats server exited");
-        },
-
-        _ = tokio::spawn(async move { manager_announcer.run().await.unwrap_or_else(|err| error!("announcer manager failed: {}", err))} ) => {
-            info!("announcer manager exited");
         },
 
         _ = tokio::spawn(async move { scheduler_announcer.run().await }) => {
