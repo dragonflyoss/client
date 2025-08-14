@@ -165,7 +165,7 @@ impl DfdaemonDownloadServer {
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
             .layer(rate_limit_layer)
-            .add_service(reflection.clone())
+            .add_service(reflection)
             .add_service(health_service)
             .add_service(service)
             .serve_with_incoming_shutdown(uds_stream, async move {
@@ -767,17 +767,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 Status::internal(err.to_string())
             })?;
 
-        let timeout = match request.timeout {
-            Some(timeout) => Duration::try_from(timeout).map_err(|err| {
-                // Collect the list tasks failure metrics.
-                collect_list_task_entries_failure_metrics(TaskType::Standard as i32);
-
-                error!("parse timeout: {}", err);
-                Status::invalid_argument(err.to_string())
-            })?,
-            None => self.config.download.piece_timeout,
-        };
-
         // Head the task entries.
         let response = backend
             .head(HeadRequest {
@@ -789,7 +778,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         Status::internal(err.to_string())
                     },
                 )?),
-                timeout,
+                timeout: self.config.download.piece_timeout,
                 client_cert: None,
                 object_storage: request.object_storage.clone(),
                 hdfs: request.hdfs.clone(),

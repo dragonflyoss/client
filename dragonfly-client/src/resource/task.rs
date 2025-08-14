@@ -1861,7 +1861,7 @@ impl Task {
 
             let pieces = piece_metadatas
                 .into_iter()
-                .filter(|piece| !piece.is_finished())
+                .filter(|piece| piece.is_finished())
                 .map(|piece| {
                     // The traffic_type indicates whether the first download was from the source or hit the remote peer cache.
                     // If the parent_id exists, the piece was downloaded from a remote peer. Otherwise, it was

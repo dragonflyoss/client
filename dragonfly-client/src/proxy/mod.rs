@@ -231,7 +231,7 @@ impl Proxy {
 }
 
 /// handler handles the request from the client.
-#[instrument(skip_all, fields(uri, method, remote_ip))]
+#[instrument(skip_all, fields(url, method, remote_ip))]
 pub async fn handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -241,8 +241,8 @@ pub async fn handler(
     server_ca_cert: Arc<Option<Certificate>>,
     remote_ip: std::net::IpAddr,
 ) -> ClientResult<Response> {
-    // Span record the uri and method.
-    Span::current().record("uri", request.uri().to_string().as_str());
+    // Span record the url and method.
+    Span::current().record("url", request.uri().to_string().as_str());
     Span::current().record("method", request.method().as_str());
     Span::current().record("remote_ip", remote_ip.to_string().as_str());
 
@@ -556,7 +556,7 @@ async fn upgraded_tunnel(
 
 /// upgraded_handler handles the upgraded https request from the client.
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip_all, fields(uri, method))]
+#[instrument(skip_all, fields(url, method))]
 pub async fn upgraded_handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -567,8 +567,8 @@ pub async fn upgraded_handler(
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
-    // Span record the uri and method.
-    Span::current().record("uri", request.uri().to_string().as_str());
+    // Span record the url and method.
+    Span::current().record("url", request.uri().to_string().as_str());
     Span::current().record("method", request.method().as_str());
 
     // Authenticate the request with the basic auth.
@@ -768,7 +768,10 @@ async fn proxy_via_dfdaemon(
 
     // Construct the response.
     let mut response = Response::new(boxed_body);
-    *response.headers_mut() = make_response_headers(download_task_started_response.clone())?;
+    *response.headers_mut() = make_response_headers(
+        message.task_id.as_str(),
+        download_task_started_response.clone(),
+    )?;
     *response.status_mut() = http::StatusCode::OK;
 
     // Return the response if the client return the first piece.
@@ -1151,6 +1154,7 @@ fn make_download_url(
 
 /// make_response_headers makes the response headers.
 fn make_response_headers(
+    task_id: &str,
     mut download_task_started_response: DownloadTaskStartedResponse,
 ) -> ClientResult<hyper::header::HeaderMap> {
     // Insert the content range header to the response header.
@@ -1177,6 +1181,11 @@ fn make_response_headers(
             "true".to_string(),
         );
     }
+
+    download_task_started_response.response_header.insert(
+        header::DRAGONFLY_TASK_ID_HEADER.to_string(),
+        task_id.to_string(),
+    );
 
     hashmap_to_headermap(&download_task_started_response.response_header)
 }

@@ -79,10 +79,14 @@ pub const DRAGONFLY_PIECE_LENGTH_HEADER: &str = "X-Dragonfly-Piece-Length";
 pub const DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID_HEADER: &str =
     "X-Dragonfly-Content-For-Calculating-Task-ID";
 
-/// DRAGONFLY_TASK_DOWNLOAD_FINISHED_HEADER is the header key to indicate whether the task download finished.
+/// DRAGONFLY_TASK_DOWNLOAD_FINISHED_HEADER is the response header key to indicate whether the task download finished.
 /// When the task download is finished, the response will include this header with the value `"true"`,
 /// indicating that the download hit the local cache.
 pub const DRAGONFLY_TASK_DOWNLOAD_FINISHED_HEADER: &str = "X-Dragonfly-Task-Download-Finished";
+
+/// DRAGONFLY_TASK_ID_HEADER is the response header key of task id. Client will calculate the task ID
+/// based on `url`, `piece_length`, `tag`, `application`, and `filtered_query_params`.
+pub const DRAGONFLY_TASK_ID_HEADER: &str = "X-Dragonfly-Task-ID";
 
 /// get_tag gets the tag from http header.
 pub fn get_tag(header: &HeaderMap) -> Option<String> {
