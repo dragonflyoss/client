@@ -131,6 +131,14 @@ struct Args {
     endpoint: PathBuf,
 
     #[arg(
+        short = 'r',
+        long = "recursive",
+        default_value_t = false,
+        help = "Specify whether to download the directory recursively. If it is true, dfget will download all files in the directory. If it is false, dfget will download the single file specified by the URL."
+    )]
+    recursive: bool,
+
+    #[arg(
         long = "timeout",
         value_parser= humantime::parse_duration,
         default_value = "2h",
@@ -299,7 +307,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Parse command line arguments.
-    let args = Args::parse();
+    let mut args = Args::parse();
 
     // Initialize tracing.
     let _guards = init_tracing(
@@ -317,7 +325,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Validate command line arguments.
-    if let Err(err) = validate_args(&args) {
+    if let Err(err) = validate_args(&mut args) {
         println!(
             "{}{}{}Validating Failed!{}",
             color::Fg(color::Red),
@@ -1060,7 +1068,14 @@ async fn get_dfdaemon_download_client(endpoint: PathBuf) -> Result<DfdaemonDownl
 /// directory existence, file conflicts, piece length constraints, and glob pattern validity.
 /// The validation prevents common user errors and potential security issues before
 /// starting the download process.
-fn validate_args(args: &Args) -> Result<()> {
+fn validate_args(args: &mut Args) -> Result<()> {
+    // If the URL is a directory and the recursive flag is set, ensure the URL ends with '/'.
+    if args.recursive && !args.url.path().ends_with('/') {
+        let mut path = args.url.path().to_string();
+        path.push('/');
+        args.url.set_path(&path);
+    }
+
     // If the URL is a directory, the output path should be a directory.
     if args.url.path().ends_with('/') && !args.output.is_dir() {
         return Err(Error::ValidationError(format!(
@@ -1155,27 +1170,41 @@ mod tests {
 
         // Download file.
         let output_file_path = tempdir.path().join("test.txt");
-        let args = Args::parse_from(vec![
+        let mut args = Args::parse_from(vec![
             "dfget",
             "http://test.local/test.txt",
             "--output",
             output_file_path.as_os_str().to_str().unwrap(),
         ]);
 
-        let result = validate_args(&args);
+        let result = validate_args(&mut args);
         assert!(result.is_ok());
 
         // Download directory.
         let output_dir_path = tempdir.path();
-        let args = Args::parse_from(vec![
+        let mut args = Args::parse_from(vec![
             "dfget",
             "http://test.local/test-dir/",
             "--output",
             output_dir_path.as_os_str().to_str().unwrap(),
         ]);
 
-        let result = validate_args(&args);
+        let result = validate_args(&mut args);
         assert!(result.is_ok());
+
+        // Download directory with recursive flag.
+        let output_dir_path = tempdir.path();
+        let mut args = Args::parse_from(vec![
+            "dfget",
+            "http://test.local/test-dir",
+            "--recursive",
+            "--output",
+            output_dir_path.as_os_str().to_str().unwrap(),
+        ]);
+
+        let result = validate_args(&mut args);
+        assert!(result.is_ok());
+        assert!(args.url.path().ends_with('/'));
     }
 
     #[test]
@@ -1236,8 +1265,8 @@ mod tests {
             ),
         ];
 
-        for (args, error_message) in test_cases {
-            let result = validate_args(&args);
+        for (mut args, error_message) in test_cases {
+            let result = validate_args(&mut args);
             assert!(result.is_err());
             assert_eq!(
                 result.unwrap_err().to_string(),
