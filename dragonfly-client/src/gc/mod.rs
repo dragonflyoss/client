@@ -15,7 +15,7 @@
  */
 
 use crate::grpc::scheduler::SchedulerClient;
-use crate::shutdown;
+use dragonfly_client_util::shutdown;
 use chrono::Utc;
 use dragonfly_api::scheduler::v2::DeleteTaskRequest;
 use dragonfly_client_config::dfdaemon::Config;
