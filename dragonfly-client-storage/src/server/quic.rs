@@ -231,7 +231,7 @@ impl QUICServerHandler {
         mut recv_stream: quinn::RecvStream,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         loop {
-            // Read header (same format as TCP: 6 bytes)
+            // Read header 
             let mut header_buf = [0u8; HEADER_SIZE];
             match recv_stream.read_exact(&mut header_buf).await {
                 Ok(_) => {}
@@ -246,7 +246,7 @@ impl QUICServerHandler {
                 }
             }
 
-            // Parse length from header (same as TCP implementation)
+            // Parse length from header 
             let length = u32::from_be_bytes(
                 header_buf[2..HEADER_SIZE].try_into().expect("failed to read length")
             ) as usize;
@@ -255,7 +255,7 @@ impl QUICServerHandler {
             let mut request_data = vec![0u8; length];
             recv_stream.read_exact(&mut request_data).await?;
 
-            // Deserialize Vortex message (same as TCP)
+            // Deserialize Vortex message 
             let mut complete_data = BytesMut::with_capacity(header_buf.len() + request_data.len());
             complete_data.extend_from_slice(&header_buf);
             complete_data.extend_from_slice(&request_data);
@@ -263,7 +263,7 @@ impl QUICServerHandler {
             let deserialized = Vortex::from_bytes(complete_data.freeze())
                 .map_err(|e| format!("failed to deserialize packet: {}", e))?;
 
-            // Process request (same business logic as TCP)
+            // Process request 
             let response_result = match deserialized {
                 Vortex::DownloadPiece(_, download_piece) => {
                     self.handle_piece(&download_piece).await
