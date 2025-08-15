@@ -16,12 +16,12 @@
 
 use crate::grpc::health::HealthClient;
 use crate::grpc::manager::ManagerClient;
-use dragonfly_client_util::shutdown;
 use dragonfly_api::manager::v2::{
     ListSchedulersRequest, ListSchedulersResponse, Scheduler, SourceType,
 };
 use dragonfly_client_config::{dfdaemon::Config, CARGO_PKG_VERSION, GIT_COMMIT_SHORT_HASH};
 use dragonfly_client_core::{Error, Result};
+use dragonfly_client_util::shutdown;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tonic_health::pb::health_check_response::ServingStatus;

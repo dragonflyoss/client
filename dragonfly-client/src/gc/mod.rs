@@ -15,12 +15,12 @@
  */
 
 use crate::grpc::scheduler::SchedulerClient;
-use dragonfly_client_util::shutdown;
 use chrono::Utc;
 use dragonfly_api::scheduler::v2::DeleteTaskRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
 use dragonfly_client_storage::{metadata, Storage};
+use dragonfly_client_util::shutdown;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;

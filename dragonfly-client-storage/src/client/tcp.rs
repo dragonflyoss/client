@@ -14,29 +14,20 @@
  * limitations under the License.
  */
 
-use dragonfly_api::dfdaemon::v2::{ 
-    DownloadPieceResponse,
-    DownloadPersistentCachePieceResponse,
-};
+use bytes::Bytes;
+use dragonfly_api::dfdaemon::v2::{DownloadPersistentCachePieceResponse, DownloadPieceResponse}; 
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::{
-    Error as ClientError, Result as ClientResult,
-};
+use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use prost::Message;
+use std::any::TypeId;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream as TokioTcpStream;
-use tokio::time;
 use tokio::sync::Mutex;
+use tokio::time;
 use tracing::error;
-use vortex_protocol::{
-    Vortex,
-    tlv::Tag,
-    tlv::download_piece::DownloadPiece,
-};
-use bytes::Bytes;
-use std::net::SocketAddr;
-use std::any::TypeId;
+use vortex_protocol::{tlv::download_piece::DownloadPiece, tlv::Tag, Vortex};
 
 const HEADER_SIZE: usize = 6;
 
@@ -49,23 +40,20 @@ pub struct TCPClient {
 
 impl TCPClient {
     /// Creates a new TCPClient.
-    pub async fn new(
-        config: Arc<Config>,
-        addr: String,
-    ) -> ClientResult<Self> {
+    pub async fn new(config: Arc<Config>, addr: String) -> ClientResult<Self> {
         // Validate address
         Self::validate(addr.as_str())?;
 
         // Establishes a TCP connection to the server.
         let timeout = config.download.piece_timeout;
         match time::timeout(timeout, TokioTcpStream::connect(addr.clone())).await {
-            Ok(Ok(stream)) => {
-                Ok(Self {connection: Arc::new(Mutex::new(stream))})
-            }
+            Ok(Ok(stream)) => Ok(Self {
+                connection: Arc::new(Mutex::new(stream)),
+            }),
             Ok(Err(err)) => {
                 error!("Failed to connect to {}: {}", addr, err);
                 Err(ClientError::IO(err))
-            },
+            }
             Err(_) => {
                 error!("Connection timeout to {}", addr);
                 Err(ClientError::SendTimeout)
@@ -94,12 +82,14 @@ impl TCPClient {
         let value = DownloadPiece::new(task_id.to_string(), number).into();
         let packet = match TypeId::of::<R>() {
             id if id == TypeId::of::<DownloadPieceResponse>() => {
-                Vortex::new(Tag::DownloadPiece, value)
-                    .map_err(|_| ClientError::ValidationError("Failed to create Vortex packet".to_string()))?
+                Vortex::new(Tag::DownloadPiece, value).map_err(|_| {
+                    ClientError::ValidationError("Failed to create Vortex packet".to_string())
+                })?
             }
             id if id == TypeId::of::<DownloadPersistentCachePieceResponse>() => {
-                Vortex::new(Tag::DownloadPiece, value)
-                    .map_err(|_| ClientError::ValidationError("Failed to create Vortex packet".to_string()))?
+                Vortex::new(Tag::DownloadPiece, value).map_err(|_| {
+                    ClientError::ValidationError("Failed to create Vortex packet".to_string())
+                })?
             }
             _ => {
                 return Err(ClientError::Unimplemented);
@@ -121,9 +111,11 @@ impl TCPClient {
             ClientError::UnexpectedResponse
         })?;
 
-        let length = u32::from_be_bytes(header_buf[2..HEADER_SIZE]
-            .try_into()
-            .map_err(|_| ClientError::InvalidPieceLength)?) as usize;
+        let length = u32::from_be_bytes(
+            header_buf[2..HEADER_SIZE]
+                .try_into()
+                .map_err(|_| ClientError::InvalidPieceLength)?,
+        ) as usize;
 
         // Read response data
         let mut response_data = vec![0u8; length];
@@ -137,13 +129,14 @@ impl TCPClient {
         complete_data.extend_from_slice(&header_buf);
         complete_data.extend_from_slice(&response_data);
 
-        let deserialized = Vortex::from_bytes(complete_data.into())
-            .map_err(|_| ClientError::ValidationError("Failed to deserialize packet".to_string()))?;
+        let deserialized = Vortex::from_bytes(complete_data.into()).map_err(|_| {
+            ClientError::ValidationError("Failed to deserialize packet".to_string())
+        })?;
 
         match deserialized {
-            Vortex::DownloadPiece(_, _) |
-            Vortex::Reserved(_) |
-            Vortex::Close(_) => Err(ClientError::UnexpectedResponse),
+            Vortex::DownloadPiece(_, _) | Vortex::Reserved(_) | Vortex::Close(_) => {
+                Err(ClientError::UnexpectedResponse)
+            }
             Vortex::PieceContent(_, piece_content) => {
                 let bytes_back: Bytes = piece_content.into();
                 R::decode(bytes_back).map_err(|err| {

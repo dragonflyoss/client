@@ -15,11 +15,13 @@
  */
 
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
-use dragonfly_api::dfdaemon::v2::{DownloadPersistentCachePieceRequest, DownloadPersistentCachePieceResponse,
-    DownloadPieceRequest, DownloadPieceResponse};
+use dragonfly_api::dfdaemon::v2::{
+    DownloadPersistentCachePieceRequest, DownloadPersistentCachePieceResponse,
+    DownloadPieceRequest, DownloadPieceResponse,
+};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_storage::{metadata, client::tcp::TCPClient};
+use dragonfly_client_storage::{client::tcp::TCPClient, metadata};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -483,18 +485,14 @@ impl TCPDownloader {
         // If there are many concurrent requests to create the client, it will create multiple
         // clients for the same address. But it will reuse the same client by entry operation.
         debug!("creating client: {}", addr);
-        let client =
-            TCPClient::new(self.config.clone(), addr.to_string())
-                .await?;
+        let client = TCPClient::new(self.config.clone(), addr.to_string()).await?;
 
         let mut clients = self.clients.lock().await;
-        let entry = clients
-            .entry(addr.to_string())
-            .or_insert(TCPClientEntry {
-                client: client.clone(),
-                active_requests: Arc::new(AtomicUsize::new(0)),
-                actived_at: Arc::new(std::sync::Mutex::new(now)),
-            });
+        let entry = clients.entry(addr.to_string()).or_insert(TCPClientEntry {
+            client: client.clone(),
+            active_requests: Arc::new(AtomicUsize::new(0)),
+            actived_at: Arc::new(std::sync::Mutex::new(now)),
+        });
 
         // If it is created by other concurrent requests and reused client, need to update the
         // last active time.
@@ -594,13 +592,7 @@ impl Downloader for TCPDownloader {
             .ok_or(Error::UnexpectedResponse)?;
         let request_guard = RequestGuard::new(entry.active_requests.clone());
 
-        let response: DownloadPieceResponse = match client
-            .send(
-                number,
-                task_id,
-            )
-            .await
-        {
+        let response: DownloadPieceResponse = match client.send(number, task_id).await {
             Ok(response) => response,
             Err(err) => {
                 // If the request fails, it will drop the request guard and remove the client
@@ -674,22 +666,17 @@ impl Downloader for TCPDownloader {
             .ok_or(Error::UnexpectedResponse)?;
         let request_guard = RequestGuard::new(entry.active_requests.clone());
 
-        let response: DownloadPersistentCachePieceResponse = match client
-            .send(
-                number,
-                task_id,
-            )
-            .await
-        {
-            Ok(response) => response,
-            Err(err) => {
-                // If the request fails, it will drop the request guard and remove the client
-                // entry to avoid using the invalid client.
-                drop(request_guard);
-                self.remove_client_entry(addr).await;
-                return Err(err);
-            }
-        };
+        let response: DownloadPersistentCachePieceResponse =
+            match client.send(number, task_id).await {
+                Ok(response) => response,
+                Err(err) => {
+                    // If the request fails, it will drop the request guard and remove the client
+                    // entry to avoid using the invalid client.
+                    drop(request_guard);
+                    self.remove_client_entry(addr).await;
+                    return Err(err);
+                }
+            };
 
         let Some(piece) = response.piece else {
             return Err(Error::InvalidParameter);

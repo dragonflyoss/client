@@ -14,34 +14,29 @@
  * limitations under the License.
  */
 
-use dragonfly_client_util::shutdown;
+use crate::Storage;
+use bytes::Bytes;
 use dragonfly_api::common::v2::Piece;
-use dragonfly_api::dfdaemon::v2::{
-    DownloadPieceResponse,
-    DownloadPersistentCachePieceResponse,
-};
+use dragonfly_api::dfdaemon::v2::{DownloadPersistentCachePieceResponse, DownloadPieceResponse};
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::{
-    Error as ClientError, Result as ClientResult,
-};
+use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_util::id_generator::IDGenerator;
+use dragonfly_client_util::shutdown;
+use leaky_bucket::RateLimiter;
 use prost::Message;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
 use tracing::{error, info, Span};
 use vortex_protocol::{
+    tlv::{download_piece::DownloadPiece, Tag},
     Vortex,
-    tlv::{Tag, download_piece::DownloadPiece},
 };
-use crate::Storage;
-use leaky_bucket::RateLimiter;
-use std::time::Duration;
-use bytes::Bytes;
 
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -75,7 +70,6 @@ impl TCPServer {
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
-
         let handler = TCPServerHandler {
             id_generator,
             storage,
@@ -99,7 +93,7 @@ impl TCPServer {
     }
 
     /// Starts the TCP upload server.
-    pub async fn run(&mut self, tcp_server_started_barrier: Arc<Barrier>) -> ClientResult<()> { 
+    pub async fn run(&mut self, tcp_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         // Initialize the TCP service.
         let listener = TokioTcpListener::bind(self.addr).await.map_err(|err| {
             error!("Failed to bind to {}: {}", self.addr, err);
@@ -163,7 +157,6 @@ impl TCPServer {
 /// TCPServerHandler handles TCP connections and requests.
 #[derive(Clone)]
 pub struct TCPServerHandler {
-
     /// id_generator is the id generator.
     id_generator: Arc<IDGenerator>,
 
@@ -176,7 +169,10 @@ pub struct TCPServerHandler {
 
 impl TCPServerHandler {
     /// Handles a single TCP connection.
-    async fn handle_connection(&self, mut stream: TokioTcpStream) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn handle_connection(
+        &self,
+        mut stream: TokioTcpStream,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         loop {
             // Read header
             let mut header_buf = [0u8; HEADER_SIZE];
@@ -192,7 +188,11 @@ impl TCPServerHandler {
                 }
             }
 
-            let length = u32::from_be_bytes(header_buf[2..HEADER_SIZE].try_into().expect("Failed to read value length")) as usize;
+            let length = u32::from_be_bytes(
+                header_buf[2..HEADER_SIZE]
+                    .try_into()
+                    .expect("Failed to read value length"),
+            ) as usize;
 
             // Read request data
             let mut request_data = vec![0u8; length];
@@ -202,7 +202,8 @@ impl TCPServerHandler {
             complete_data.extend_from_slice(&header_buf);
             complete_data.extend_from_slice(&request_data);
 
-            let deserialized = Vortex::from_bytes(complete_data.into()).expect("Failed to deserialize packet");
+            let deserialized =
+                Vortex::from_bytes(complete_data.into()).expect("Failed to deserialize packet");
 
             // Process request based on message type
             let response_result = match deserialized {
@@ -218,11 +219,13 @@ impl TCPServerHandler {
             // Send response
             match response_result {
                 Ok(response_data) => {
-                    let rsp = Vortex::new(Tag::PieceContent, response_data.into()).expect("Failed to create Vortex packet");
+                    let rsp = Vortex::new(Tag::PieceContent, response_data.into())
+                        .expect("Failed to create Vortex packet");
                     stream.write_all(&rsp.to_bytes()).await?;
                 }
                 Err(error_message) => {
-                    let ersp = Vortex::new(Tag::Error, Bytes::from(error_message)).expect("Failed to create Vortex packet");
+                    let ersp = Vortex::new(Tag::Error, Bytes::from(error_message))
+                        .expect("Failed to create Vortex packet");
                     stream.write_all(&ersp.to_bytes()).await?;
                 }
             }
@@ -232,11 +235,7 @@ impl TCPServerHandler {
     }
 
     /// Handles download piece request.
-    async fn handle_piece(
-        &self,
-        request: &DownloadPiece,
-    ) -> Result<Vec<u8>, String> {
-
+    async fn handle_piece(&self, request: &DownloadPiece) -> Result<Vec<u8>, String> {
         // Generate the host id.
         let host_id = self.id_generator.host_id();
 
@@ -269,20 +268,22 @@ impl TCPServerHandler {
         Span::current().record("piece_length", piece.length);
 
         // Acquire the upload rate limiter.
-        self.upload_rate_limiter.acquire(piece.length as usize).await;
+        self.upload_rate_limiter
+            .acquire(piece.length as usize)
+            .await;
 
         // Upload the piece content.
-        let mut reader = self.storage
+        let mut reader = self
+            .storage
             .upload_piece(piece_id.as_str(), task_id, None)
             .await
-            .map_err(|err| {
-                format!("Failed to get piece content: {}", err)
-            })?;
+            .map_err(|err| format!("Failed to get piece content: {}", err))?;
         // Read the content of the piece.
         let mut content = vec![0; piece.length as usize];
-        reader.read_exact(&mut content).await.map_err(|err| {
-            format!("Failed to read piece content: {}", err)
-        })?;
+        reader
+            .read_exact(&mut content)
+            .await
+            .map_err(|err| format!("Failed to read piece content: {}", err))?;
 
         info!("finished upload piece content");
 
@@ -310,7 +311,6 @@ impl TCPServerHandler {
         &self,
         request: &DownloadPiece,
     ) -> Result<Vec<u8>, String> {
-
         // Generate the host id.
         let host_id = self.id_generator.host_id();
 
@@ -343,20 +343,22 @@ impl TCPServerHandler {
         Span::current().record("piece_length", piece.length);
 
         // Acquire the upload rate limiter.
-        self.upload_rate_limiter.acquire(piece.length as usize).await;
+        self.upload_rate_limiter
+            .acquire(piece.length as usize)
+            .await;
 
         // Upload the piece content.
-        let mut reader = self.storage
+        let mut reader = self
+            .storage
             .upload_persistent_cache_piece(piece_id.as_str(), task_id, None)
             .await
-            .map_err(|err| {
-                format!("Failed to get persistent cache piece content: {}", err)
-            })?;
+            .map_err(|err| format!("Failed to get persistent cache piece content: {}", err))?;
         // Read the content of the piece.
         let mut content = vec![0; piece.length as usize];
-        reader.read_exact(&mut content).await.map_err(|err| {
-            format!("Failed to read persistent cache piece content: {}", err)
-        })?;
+        reader
+            .read_exact(&mut content)
+            .await
+            .map_err(|err| format!("Failed to read persistent cache piece content: {}", err))?;
 
         info!("finished persistent cache upload piece content");
 

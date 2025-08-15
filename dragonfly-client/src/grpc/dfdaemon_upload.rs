@@ -23,7 +23,6 @@ use crate::metrics::{
     collect_upload_piece_finished_metrics, collect_upload_piece_started_metrics,
 };
 use crate::resource::{persistent_cache_task, task};
-use dragonfly_client_util::shutdown;
 use dragonfly_api::common::v2::{
     CacheTask, Host, Network, PersistentCacheTask, Piece, Priority, Task, TaskType,
 };
@@ -47,6 +46,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error as ClientError, Result as ClientResult,
 };
+use dragonfly_client_util::shutdown;
 use dragonfly_client_util::{
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
     id_generator::TaskIDParameter,
