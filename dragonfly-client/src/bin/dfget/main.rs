@@ -1178,7 +1178,7 @@ mod tests {
     fn should_convert_args() {
         let tempdir = tempfile::tempdir().unwrap();
 
-        let vec = vec![
+        let test_cases = vec![
             (
                 Args::parse_from(vec![
                     "dfget",
@@ -1219,7 +1219,7 @@ mod tests {
             ),
         ];
 
-        for (args, expected_url) in vec {
+        for (args, expected_url) in test_cases {
             let args = convert_args(args);
             assert!(args.url.to_string() == expected_url);
         }
