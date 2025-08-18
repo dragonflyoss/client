@@ -131,6 +131,14 @@ struct Args {
     endpoint: PathBuf,
 
     #[arg(
+        short = 'r',
+        long = "recursive",
+        default_value_t = false,
+        help = "Specify whether to download the directory recursively. If it is true, dfget will download all files in the directory. If it is false, dfget will download the single file specified by the URL."
+    )]
+    recursive: bool,
+
+    #[arg(
         long = "timeout",
         value_parser= humantime::parse_duration,
         default_value = "2h",
@@ -300,6 +308,8 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     // Parse command line arguments.
     let args = Args::parse();
+
+    let args = convert_args(args);
 
     // Initialize tracing.
     let _guards = init_tracing(
@@ -1053,6 +1063,21 @@ async fn get_dfdaemon_download_client(endpoint: PathBuf) -> Result<DfdaemonDownl
     Ok(dfdaemon_download_client)
 }
 
+/// Converts command line arguments for download operations.
+///
+/// This function modifies the command line arguments to ensure
+/// the arguments are in a suitable format for processing.
+fn convert_args(mut args: Args) -> Args {
+    // If the URL is a directory and the recursive flag is set, ensure the URL ends with '/'.
+    // This is necessary to ensure that the URL is treated as a directory, can be downloaded recursively.
+    if args.recursive && !args.url.path().ends_with('/') {
+        let mut path = args.url.path().to_string();
+        path.push('/');
+        args.url.set_path(&path);
+    }
+    args
+}
+
 /// Validates command line arguments for consistency and safety requirements.
 ///
 /// This function performs comprehensive validation of the download arguments to ensure
@@ -1148,6 +1173,62 @@ fn is_normal_relative_path(path: &str) -> bool {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn should_convert_args() {
+        let tempdir = tempfile::tempdir().unwrap();
+
+        let test_cases = vec![
+            (
+                Args::parse_from(vec![
+                    "dfget",
+                    "http://test.local/test.txt",
+                    "--output",
+                    tempdir
+                        .path()
+                        .join("test.txt")
+                        .as_os_str()
+                        .to_str()
+                        .unwrap(),
+                ]),
+                "http://test.local/test.txt",
+            ),
+            (
+                Args::parse_from(vec![
+                    "dfget",
+                    "http://test.local/test-dir",
+                    "--recursive",
+                    "--output",
+                    tempdir.path().as_os_str().to_str().unwrap(),
+                ]),
+                "http://test.local/test-dir/",
+            ),
+            (
+                Args::parse_from(vec![
+                    "dfget",
+                    "http://test.local/test-dir/",
+                    "--recursive",
+                    "--output",
+                    tempdir.path().as_os_str().to_str().unwrap(),
+                ]),
+                "http://test.local/test-dir/",
+            ),
+            (
+                Args::parse_from(vec![
+                    "dfget",
+                    "http://test.local/test-dir/",
+                    "--output",
+                    tempdir.path().as_os_str().to_str().unwrap(),
+                ]),
+                "http://test.local/test-dir/",
+            ),
+        ];
+
+        for (args, expected_url) in test_cases {
+            let args = convert_args(args);
+            assert!(args.url.to_string() == expected_url);
+        }
+    }
 
     #[test]
     fn should_validate_args() {
