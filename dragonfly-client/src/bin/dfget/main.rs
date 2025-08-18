@@ -1184,7 +1184,12 @@ mod tests {
                     "dfget",
                     "http://test.local/test.txt",
                     "--output",
-                    tempdir.path().join("test.txt").as_os_str().to_str().unwrap(),
+                    tempdir
+                        .path()
+                        .join("test.txt")
+                        .as_os_str()
+                        .to_str()
+                        .unwrap(),
                 ]),
                 "http://test.local/test.txt",
             ),
