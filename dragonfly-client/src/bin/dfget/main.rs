@@ -1178,7 +1178,19 @@ mod tests {
     fn should_convert_args() {
         let tempdir = tempfile::tempdir().unwrap();
 
-        // Download directory with recursive flag.
+        // Download file without recursive flag.
+        let output_file_path = tempdir.path().join("test.txt");
+        let args = Args::parse_from(vec![
+            "dfget",
+            "http://test.local/test.txt",
+            "--output",
+            output_file_path.as_os_str().to_str().unwrap(),
+        ]);
+
+        let args = convert_args(args);
+        assert!(args.url.to_string() == "http://test.local/test.txt");
+
+        // Download directory without '/' , and with recursive flag.
         let output_dir_path = tempdir.path();
         let mut args = Args::parse_from(vec![
             "dfget",
@@ -1188,9 +1200,20 @@ mod tests {
             output_dir_path.as_os_str().to_str().unwrap(),
         ]);
 
-        // Convert args to ensure the URL ends with '/'.
         args = convert_args(args);
-        assert!(args.url.path().ends_with('/'));
+        assert!(args.url.to_string() == "http://test.local/test-dir/");
+
+        // Download directory with '/' , and with recursive flag.
+        let mut args = Args::parse_from(vec![
+            "dfget",
+            "http://test.local/test-dir/",
+            "--recursive",
+            "--output",
+            output_dir_path.as_os_str().to_str().unwrap(),
+        ]);
+
+        args = convert_args(args);
+        assert!(args.url.to_string() == "http://test.local/test-dir/");
     }
 
     #[test]
