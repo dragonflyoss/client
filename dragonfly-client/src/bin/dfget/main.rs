@@ -1178,42 +1178,51 @@ mod tests {
     fn should_convert_args() {
         let tempdir = tempfile::tempdir().unwrap();
 
-        // Download file without recursive flag.
-        let output_file_path = tempdir.path().join("test.txt");
-        let args = Args::parse_from(vec![
-            "dfget",
-            "http://test.local/test.txt",
-            "--output",
-            output_file_path.as_os_str().to_str().unwrap(),
-        ]);
+        let vec = vec![
+            (
+                Args::parse_from(vec![
+                    "dfget",
+                    "http://test.local/test.txt",
+                    "--output",
+                    tempdir.path().join("test.txt").as_os_str().to_str().unwrap(),
+                ]),
+                "http://test.local/test.txt",
+            ),
+            (
+                Args::parse_from(vec![
+                    "dfget",
+                    "http://test.local/test-dir",
+                    "--recursive",
+                    "--output",
+                    tempdir.path().as_os_str().to_str().unwrap(),
+                ]),
+                "http://test.local/test-dir/",
+            ),
+            (
+                Args::parse_from(vec![
+                    "dfget",
+                    "http://test.local/test-dir/",
+                    "--recursive",
+                    "--output",
+                    tempdir.path().as_os_str().to_str().unwrap(),
+                ]),
+                "http://test.local/test-dir/",
+            ),
+            (
+                Args::parse_from(vec![
+                    "dfget",
+                    "http://test.local/test-dir/",
+                    "--output",
+                    tempdir.path().as_os_str().to_str().unwrap(),
+                ]),
+                "http://test.local/test-dir/",
+            ),
+        ];
 
-        let args = convert_args(args);
-        assert!(args.url.to_string() == "http://test.local/test.txt");
-
-        // Download directory without '/' , and with recursive flag.
-        let output_dir_path = tempdir.path();
-        let mut args = Args::parse_from(vec![
-            "dfget",
-            "http://test.local/test-dir",
-            "--recursive",
-            "--output",
-            output_dir_path.as_os_str().to_str().unwrap(),
-        ]);
-
-        args = convert_args(args);
-        assert!(args.url.to_string() == "http://test.local/test-dir/");
-
-        // Download directory with '/' , and with recursive flag.
-        let mut args = Args::parse_from(vec![
-            "dfget",
-            "http://test.local/test-dir/",
-            "--recursive",
-            "--output",
-            output_dir_path.as_os_str().to_str().unwrap(),
-        ]);
-
-        args = convert_args(args);
-        assert!(args.url.to_string() == "http://test.local/test-dir/");
+        for (args, expected_url) in vec {
+            let args = convert_args(args);
+            assert!(args.url.to_string() == expected_url);
+        }
     }
 
     #[test]
