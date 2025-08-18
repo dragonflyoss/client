@@ -42,7 +42,7 @@ RUN case "${TARGETPLATFORM}" in \
   cargo build --verbose --bin dfget --bin dfdaemon --bin dfcache
 
 RUN cargo install flamegraph --root /usr/local
-RUN cargo install bottom --locked --root /usr/local
+RUN cargo install bottom --version 0.11.0 --locked --root /usr/local
 RUN cargo install tokio-console --locked --root /usr/local
 
 FROM public.ecr.aws/docker/library/alpine:3.20 AS health
