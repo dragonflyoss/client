@@ -234,10 +234,9 @@ impl SchedulerAnnouncer {
             network: Some(network),
             disk: Some(disk),
             build: Some(build),
-
-            // TODO: Get scheduler cluster id from dynconfig.
-            scheduler_cluster_id: 0,
+            scheduler_cluster_id: self.config.host.scheduler_cluster_id.unwrap_or_default(),
             disable_shared: self.config.upload.disable_shared,
+            proxy_port: self.config.proxy.server.port as i32,
         };
 
         Ok(AnnounceHostRequest {
