@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY Cargo.toml Cargo.lock ./
-COPY .cargo ./cargo
+COPY .cargo ./.cargo
 
 COPY dragonfly-client/Cargo.toml ./dragonfly-client/Cargo.toml
 COPY dragonfly-client/src ./dragonfly-client/src
