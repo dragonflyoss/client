@@ -734,6 +734,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
             Ok(_) => continue,
             Err(err) => {
                 error!("download entry failed: {}", err);
+                join_set.abort_all();
                 return Err(err);
             }
         }
