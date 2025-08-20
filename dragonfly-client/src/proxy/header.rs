@@ -88,6 +88,10 @@ pub const DRAGONFLY_TASK_DOWNLOAD_FINISHED_HEADER: &str = "X-Dragonfly-Task-Down
 /// based on `url`, `piece_length`, `tag`, `application`, and `filtered_query_params`.
 pub const DRAGONFLY_TASK_ID_HEADER: &str = "X-Dragonfly-Task-ID";
 
+/// DRAGONFLY_SERVER_IP_HEADER is the response header key of server IP.
+/// It is used to indicate the IP address of the server that handled the request.
+pub const DRAGONFLY_SERVER_IP_HEADER: &str = "X-Dragonfly-Server-IP";
+
 /// get_tag gets the tag from http header.
 pub fn get_tag(header: &HeaderMap) -> Option<String> {
     header
