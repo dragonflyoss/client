@@ -770,6 +770,7 @@ async fn proxy_via_dfdaemon(
     let mut response = Response::new(boxed_body);
     *response.headers_mut() = make_response_headers(
         message.task_id.as_str(),
+        config.host.ip.unwrap(),
         download_task_started_response.clone(),
     )?;
     *response.status_mut() = http::StatusCode::OK;
@@ -1154,6 +1155,7 @@ fn make_download_url(
 /// make_response_headers makes the response headers.
 fn make_response_headers(
     task_id: &str,
+    server_ip: std::net::IpAddr,
     mut download_task_started_response: DownloadTaskStartedResponse,
 ) -> ClientResult<hyper::header::HeaderMap> {
     // Insert the content range header to the response header.
@@ -1184,6 +1186,11 @@ fn make_response_headers(
     download_task_started_response.response_header.insert(
         header::DRAGONFLY_TASK_ID_HEADER.to_string(),
         task_id.to_string(),
+    );
+
+    download_task_started_response.response_header.insert(
+        header::DRAGONFLY_SERVER_IP_HEADER.to_string(),
+        server_ip.to_string(),
     );
 
     hashmap_to_headermap(&download_task_started_response.response_header)
