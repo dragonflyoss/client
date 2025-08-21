@@ -1696,6 +1696,7 @@ impl Task {
                 length: u64,
                 request_header: HeaderMap,
                 is_prefetch: bool,
+                need_piece_content: bool,
                 piece_manager: Arc<piece::Piece>,
                 semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
@@ -1724,7 +1725,7 @@ impl Task {
                     .await?;
 
                 // Construct the piece.
-                let piece = Piece {
+                let mut piece = Piece {
                     number: metadata.number,
                     parent_id: None,
                     offset: metadata.offset,
@@ -1735,6 +1736,30 @@ impl Task {
                     cost: metadata.prost_cost(),
                     created_at: Some(prost_wkt_types::Timestamp::from(metadata.created_at)),
                 };
+
+                // If need_piece_content is true, read the piece content from the local.
+                if need_piece_content {
+                    let mut reader = piece_manager
+                        .download_from_local_into_async_read(
+                            piece_id.as_str(),
+                            task_id.as_str(),
+                            piece.length,
+                            None,
+                            true,
+                            false,
+                        )
+                        .await
+                        .inspect_err(|err| {
+                            error!("read piece {} failed: {:?}", piece_id, err);
+                        })?;
+
+                    let mut content = vec![0; piece.length as usize];
+                    reader.read_exact(&mut content).await.inspect_err(|err| {
+                        error!("read piece {} failed: {:?}", piece_id, err);
+                    })?;
+
+                    piece.content = Some(content);
+                }
 
                 // Send the download progress.
                 download_progress_tx
@@ -1776,6 +1801,7 @@ impl Task {
                     interested_piece.length,
                     request_header.clone(),
                     request.is_prefetch,
+                    request.need_piece_content,
                     self.piece.clone(),
                     semaphore.clone(),
                     download_progress_tx.clone(),

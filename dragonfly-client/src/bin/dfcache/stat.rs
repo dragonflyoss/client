@@ -29,6 +29,7 @@ use tabled::{
     Table, Tabled,
 };
 use termion::{color, style};
+use tracing::error;
 
 use super::*;
 
@@ -285,8 +286,14 @@ impl StatCommand {
         };
 
         // Convert ttl to human readable format.
-        let ttl = Duration::try_from(task.ttl.ok_or(Error::InvalidParameter)?)
-            .or_err(ErrorType::ParseError)?;
+        let ttl = task
+            .ttl
+            .ok_or(Error::InvalidParameter)
+            .inspect_err(|_err| {
+                error!("task ttl is missing");
+            })?;
+
+        let ttl = Duration::try_from(ttl).or_err(ErrorType::ParseError)?;
         table_task.ttl = format_duration(ttl).to_string();
 
         // Convert created_at to human readable format.
