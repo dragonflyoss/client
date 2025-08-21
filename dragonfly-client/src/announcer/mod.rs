@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-use crate::grpc::scheduler::SchedulerClient;
-use crate::shutdown;
+use crate::grpc::{manager::ManagerClient, scheduler::SchedulerClient};
+use dragonfly_client_util::shutdown;
 use dragonfly_api::common::v2::{Build, Cpu, Disk, Host, Memory, Network};
 use dragonfly_api::scheduler::v2::{AnnounceHostRequest, DeleteHostRequest};
 use dragonfly_client_config::{

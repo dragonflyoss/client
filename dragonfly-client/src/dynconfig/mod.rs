@@ -16,7 +16,7 @@
 
 use crate::grpc::health::HealthClient;
 use crate::grpc::manager::ManagerClient;
-use crate::shutdown;
+use dragonfly_client_util::shutdown;
 use dragonfly_api::manager::v2::{
     ListSchedulersRequest, ListSchedulersResponse, Scheduler, SourceType,
 };

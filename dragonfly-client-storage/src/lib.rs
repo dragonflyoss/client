@@ -29,10 +29,38 @@ use tokio::time::sleep;
 use tokio_util::either::Either;
 use tracing::{debug, error, info, instrument, warn};
 
+use async_trait::async_trait;
+use dragonfly_client_core::{Error, Result};
+
+/// Downloader trait for downloading pieces using different protocols
+#[async_trait]
+pub trait Downloader: Send + Sync {
+    /// Download piece from peer using different protocols
+    async fn download_piece(
+        &self,
+        addr: &str,
+        number: u32,
+        host_id: &str,
+        task_id: &str,
+    ) -> Result<(Vec<u8>, u64, String)>;
+
+    /// Download persistent cache piece from peer using different protocols
+    async fn download_persistent_cache_piece(
+        &self,
+        addr: &str,
+        number: u32,
+        host_id: &str,
+        task_id: &str,
+    ) -> Result<(Vec<u8>, u64, String)>;
+}
+
 pub mod cache;
 pub mod content;
 pub mod metadata;
+pub mod quic;
 pub mod storage_engine;
+pub mod client;
+pub mod server;
 
 /// DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.
 pub const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(100);

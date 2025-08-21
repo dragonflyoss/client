@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::shutdown;
+use dragonfly_client_util::shutdown;
 use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use tracing::{info, instrument};
