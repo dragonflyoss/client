@@ -65,7 +65,7 @@ FROM public.ecr.aws/debian/debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends iperf3 fio curl \
     iotop sysstat bash-completion procps apache2-utils ca-certificates binutils \
-    dnsutils iputils-ping llvm graphviz lsof strace dstat net-tools \
+    dnsutils iputils-ping llvm graphviz lsof strace dstat net-tools bpftrace \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/client/target/release/dfget /usr/local/bin/dfget
