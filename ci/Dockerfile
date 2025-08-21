@@ -41,7 +41,7 @@ RUN case "${TARGETPLATFORM}" in \
   esac && \
   cargo build --release --verbose --bin dfget --bin dfdaemon --bin dfcache
 
-RUN cargo install tokio-console --locked --root /usr/local
+RUN cargo install tokio-console --version 0.1.13 --locked --root /usr/local
 
 FROM public.ecr.aws/docker/library/alpine:3.20 AS health
 
@@ -63,8 +63,8 @@ RUN go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
 
 FROM public.ecr.aws/debian/debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends iperf3 fio curl \
-    iotop sysstat bash-completion procps apache2-utils ca-certificates binutils \
+RUN apt-get update && apt-get install -y --no-install-recommends iperf3 linux-libc-dev libc6-dev \
+    iotop sysstat bash-completion procps apache2-utils ca-certificates binutils fio curl \
     dnsutils iputils-ping llvm graphviz lsof strace dstat net-tools bpftrace \
     && rm -rf /var/lib/apt/lists/*
 
