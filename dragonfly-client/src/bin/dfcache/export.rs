@@ -547,7 +547,9 @@ impl ExportCommand {
                 Some(download_persistent_cache_task_response::Response::DownloadPieceFinishedResponse(
                     response,
                 )) => {
-                    let piece = response.piece.ok_or(Error::InvalidParameter)?;
+                    let piece = response.piece.ok_or(Error::InvalidParameter).inspect_err(|_err| {
+                        error!("response piece is missing");
+                    })?;
 
                     // Dfcache needs to write the piece content to the output file.
                     if let Some(f) = &mut f {
@@ -557,7 +559,10 @@ impl ExportCommand {
                                 error!("seek {:?} failed: {}", self.output, err);
                             })?;
 
-                        let content = piece.content.ok_or(Error::InvalidParameter)?;
+                        let content = piece.content.ok_or(Error::InvalidParameter).inspect_err(|_err| {
+                            error!("piece content is missing");
+                        })?;
+
                         f.write_all(&content).await.inspect_err(|err| {
                             error!("write {:?} failed: {}", self.output, err);
                         })?;

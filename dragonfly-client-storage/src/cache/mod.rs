@@ -25,7 +25,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, BufReader};
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{error, info};
 
 pub mod lru_cache;
 
@@ -170,6 +170,15 @@ impl Cache {
         let begin = target_offset;
         let end = target_offset + target_length;
         if begin >= piece_content.len() || end > piece_content.len() {
+            error!(
+                "invalid range for piece {} in task {}: begin {}, end {}, piece length {}",
+                piece_id,
+                task_id,
+                begin,
+                end,
+                piece_content.len()
+            );
+
             return Err(Error::InvalidParameter);
         }
 

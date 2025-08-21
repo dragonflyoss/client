@@ -888,7 +888,12 @@ async fn download(
                 progress_bar.set_length(response.content_length);
             }
             Some(download_task_response::Response::DownloadPieceFinishedResponse(response)) => {
-                let piece = response.piece.ok_or(Error::InvalidParameter)?;
+                let piece = response
+                    .piece
+                    .ok_or(Error::InvalidParameter)
+                    .inspect_err(|_err| {
+                        error!("response piece is missing");
+                    })?;
 
                 // Dfget needs to write the piece content to the output file.
                 if let Some(f) = &mut f {
@@ -898,7 +903,14 @@ async fn download(
                             error!("seek {:?} failed: {}", args.output, err);
                         })?;
 
-                    let content = piece.content.ok_or(Error::InvalidParameter)?;
+                    let content =
+                        piece
+                            .content
+                            .ok_or(Error::InvalidParameter)
+                            .inspect_err(|_err| {
+                                error!("piece content is missing");
+                            })?;
+
                     f.write_all(&content).await.inspect_err(|err| {
                         error!("write {:?} failed: {}", args.output, err);
                     })?;

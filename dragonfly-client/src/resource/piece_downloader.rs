@@ -303,10 +303,12 @@ impl Downloader for GRPCDownloader {
         };
 
         let Some(piece) = response.piece else {
+            error!("resource piece is missing");
             return Err(Error::InvalidParameter);
         };
 
         let Some(content) = piece.content else {
+            error!("resource piece content is missing");
             return Err(Error::InvalidParameter);
         };
 
@@ -373,10 +375,12 @@ impl Downloader for GRPCDownloader {
         };
 
         let Some(piece) = response.piece else {
+            error!("persistent cache piece is missing");
             return Err(Error::InvalidParameter);
         };
 
         let Some(content) = piece.content else {
+            error!("persistent cache piece content is missing");
             return Err(Error::InvalidParameter);
         };
 

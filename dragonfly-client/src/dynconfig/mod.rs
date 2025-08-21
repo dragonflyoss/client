@@ -184,9 +184,9 @@ impl Dynconfig {
             let addr = format!("http://{}:{}", scheduler.ip, scheduler.port);
             let domain_name = Url::parse(addr.as_str())?
                 .host_str()
-                .ok_or_else(|| {
+                .ok_or(Error::InvalidParameter)
+                .inspect(|_err| {
                     error!("invalid address: {}", addr);
-                    Error::InvalidParameter
                 })?
                 .to_string();
 
