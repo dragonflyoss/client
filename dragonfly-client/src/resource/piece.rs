@@ -164,6 +164,7 @@ impl Piece {
         // If range is not None, calculate the pieces by range.
         if let Some(range) = range {
             if range.length == 0 {
+                error!("range length is 0");
                 return Err(Error::InvalidParameter);
             }
 
@@ -226,10 +227,13 @@ impl Piece {
         loop {
             // If offset is greater than content_length, break the loop.
             if offset >= content_length {
-                let mut piece = pieces.pop().ok_or_else(|| {
-                    error!("piece not found");
-                    Error::InvalidParameter
-                })?;
+                let mut piece =
+                    pieces
+                        .pop()
+                        .ok_or(Error::InvalidParameter)
+                        .inspect_err(|_err| {
+                            error!("piece not found");
+                        })?;
 
                 piece.length = piece_length + content_length - offset;
                 pieces.push(piece);

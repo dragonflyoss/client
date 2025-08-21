@@ -429,13 +429,28 @@ impl PersistentCacheTask {
             .await?;
 
         // Convert prost_wkt_types::Duration to std::time::Duration.
-        let ttl = Duration::try_from(response.ttl.ok_or(Error::InvalidParameter)?)
-            .or_err(ErrorType::ParseError)?;
+        let ttl = response
+            .ttl
+            .ok_or(Error::InvalidParameter)
+            .inspect_err(|_err| {
+                error!("persistent cache task ttl is missing");
+            })?;
+
+        let ttl = Duration::try_from(ttl).or_err(ErrorType::ParseError)?;
 
         // Convert prost_wkt_types::Timestamp to chrono::DateTime.
-        let created_at = response.created_at.ok_or(Error::InvalidParameter)?;
+        let created_at = response
+            .created_at
+            .ok_or(Error::InvalidParameter)
+            .inspect_err(|_err| {
+                error!("persistent cache task created_at is missing");
+            })?;
+
         let created_at = DateTime::from_timestamp(created_at.seconds, created_at.nanos as u32)
-            .ok_or(Error::InvalidParameter)?;
+            .ok_or(Error::InvalidParameter)
+            .inspect_err(|_err| {
+                error!("invalid created_at: {}", created_at);
+            })?;
 
         // If the persistent cache task is not found, check if the storage has enough space to
         // store the persistent cache task.

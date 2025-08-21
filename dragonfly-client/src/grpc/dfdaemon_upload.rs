@@ -1767,9 +1767,9 @@ impl DfdaemonUploadClient {
     ) -> ClientResult<Self> {
         let domain_name = Url::parse(addr.as_str())?
             .host_str()
-            .ok_or_else(|| {
+            .ok_or(ClientError::InvalidParameter)
+            .inspect_err(|_err| {
                 error!("invalid address: {}", addr);
-                ClientError::InvalidParameter
             })?
             .to_string();
 
