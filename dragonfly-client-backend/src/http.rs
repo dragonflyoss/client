@@ -155,7 +155,7 @@ impl super::Backend for HTTP {
         let header = request
             .http_header
             .ok_or(Error::InvalidParameter)
-            .inspect(|_err| {
+            .inspect_err(|_err| {
                 error!("request header is missing");
             })?;
 
@@ -217,7 +217,7 @@ impl super::Backend for HTTP {
         let header = request
             .http_header
             .ok_or(Error::InvalidParameter)
-            .inspect(|_err| {
+            .inspect_err(|_err| {
                 error!("request header is missing");
             })?;
 
