@@ -163,7 +163,7 @@ impl super::Backend for HTTP {
         // the request method. Therefore, the signed URL of the GET method cannot be requested
         // through the HEAD method. Use GET request to replace of HEAD request
         // to get header and status code.
-        let response = self
+        let response = match self
             .client(request.client_cert)?
             .get(&request.url)
             .headers(header)
@@ -177,12 +177,24 @@ impl super::Backend for HTTP {
             .timeout(request.timeout)
             .send()
             .await
-            .inspect_err(|err| {
+        {
+            Ok(response) => response,
+            Err(err) => {
                 error!(
                     "head request failed {} {}: {}",
                     request.task_id, request.url, err
                 );
-            })?;
+
+                return Ok(super::HeadResponse {
+                    success: false,
+                    content_length: None,
+                    http_header: None,
+                    http_status_code: None,
+                    entries: Vec::new(),
+                    error_message: None,
+                });
+            }
+        };
 
         let header = response.headers().clone();
         let status_code = response.status();
@@ -221,19 +233,30 @@ impl super::Backend for HTTP {
                 error!("request header is missing");
             })?;
 
-        let response = self
+        let response = match self
             .client(request.client_cert)?
             .get(&request.url)
             .headers(header)
             .timeout(request.timeout)
             .send()
             .await
-            .inspect_err(|err| {
+        {
+            Ok(response) => response,
+            Err(err) => {
                 error!(
                     "get request failed {} {} {}: {}",
                     request.task_id, request.piece_id, request.url, err
                 );
-            })?;
+
+                return Ok(super::GetResponse {
+                    success: false,
+                    http_header: None,
+                    http_status_code: None,
+                    reader: Box::new(tokio::io::empty()),
+                    error_message: Some(err.to_string()),
+                });
+            }
+        };
 
         let header = response.headers().clone();
         let status_code = response.status();
@@ -546,7 +569,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             })
             .await;
 
-        assert!(resp.is_err());
+        assert!(!resp.unwrap().success);
     }
 
     #[tokio::test]
@@ -590,7 +613,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             })
             .await;
 
-        assert!(resp.is_err());
+        assert!(!resp.unwrap().success);
     }
 
     #[tokio::test]

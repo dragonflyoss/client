@@ -208,8 +208,8 @@ impl Task {
 
             return Err(Error::BackendError(Box::new(BackendError {
                 message: response.error_message.unwrap_or_default(),
-                status_code: Some(response.http_status_code.unwrap_or_default()),
-                header: Some(response.http_header.unwrap_or_default()),
+                status_code: response.http_status_code,
+                header: response.http_header,
             })));
         }
 

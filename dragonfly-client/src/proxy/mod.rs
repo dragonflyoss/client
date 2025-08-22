@@ -366,11 +366,19 @@ pub async fn http_handler(
             Ok(_) => {}
             Err(ClientError::Unauthorized) => {
                 error!("basic auth failed");
-                return Ok(make_error_response(http::StatusCode::UNAUTHORIZED, None));
+                return Ok(make_error_response(
+                    header::ErrorType::Proxy,
+                    http::StatusCode::UNAUTHORIZED,
+                    None,
+                ));
             }
             Err(err) => {
                 error!("verify basic auth failed: {}", err);
-                return Ok(make_error_response(http::StatusCode::BAD_REQUEST, None));
+                return Ok(make_error_response(
+                    header::ErrorType::Proxy,
+                    http::StatusCode::BAD_REQUEST,
+                    None,
+                ));
             }
         }
     }
@@ -475,7 +483,11 @@ pub async fn https_handler(
 
         Ok(Response::new(empty()))
     } else {
-        return Ok(make_error_response(http::StatusCode::BAD_REQUEST, None));
+        return Ok(make_error_response(
+            header::ErrorType::Proxy,
+            http::StatusCode::BAD_REQUEST,
+            None,
+        ));
     }
 }
 
@@ -576,11 +588,19 @@ pub async fn upgraded_handler(
         match basic_auth.credentials().verify(request.headers()) {
             Ok(_) => {}
             Err(ClientError::Unauthorized) => {
-                return Ok(make_error_response(http::StatusCode::UNAUTHORIZED, None));
+                return Ok(make_error_response(
+                    header::ErrorType::Proxy,
+                    http::StatusCode::UNAUTHORIZED,
+                    None,
+                ));
             }
             Err(err) => {
                 error!("verify basic auth failed: {}", err);
-                return Ok(make_error_response(http::StatusCode::BAD_REQUEST, None));
+                return Ok(make_error_response(
+                    header::ErrorType::Proxy,
+                    http::StatusCode::BAD_REQUEST,
+                    None,
+                ));
             }
         }
     }
@@ -680,6 +700,7 @@ async fn proxy_via_dfdaemon(
             Err(err) => {
                 error!("make download task request failed: {}", err);
                 return Ok(make_error_response(
+                    header::ErrorType::Proxy,
                     http::StatusCode::INTERNAL_SERVER_ERROR,
                     None,
                 ));
@@ -698,6 +719,7 @@ async fn proxy_via_dfdaemon(
                     Ok(backend) => {
                         error!("download task failed: {:?}", backend);
                         return Ok(make_error_response(
+                            header::ErrorType::Backend,
                             http::StatusCode::from_u16(
                                 backend.status_code.unwrap_or_default() as u16
                             )
@@ -708,6 +730,7 @@ async fn proxy_via_dfdaemon(
                     Err(_) => {
                         error!("download task failed: {}", err);
                         return Ok(make_error_response(
+                            header::ErrorType::Dfdaemon,
                             http::StatusCode::INTERNAL_SERVER_ERROR,
                             None,
                         ));
@@ -717,6 +740,7 @@ async fn proxy_via_dfdaemon(
             _ => {
                 error!("download task failed: {}", err);
                 return Ok(make_error_response(
+                    header::ErrorType::Dfdaemon,
                     http::StatusCode::INTERNAL_SERVER_ERROR,
                     None,
                 ));
@@ -729,6 +753,7 @@ async fn proxy_via_dfdaemon(
     let Ok(Some(message)) = out_stream.message().await else {
         error!("response message failed");
         return Ok(make_error_response(
+            header::ErrorType::Dfdaemon,
             http::StatusCode::INTERNAL_SERVER_ERROR,
             None,
         ));
@@ -746,6 +771,7 @@ async fn proxy_via_dfdaemon(
     else {
         error!("response is not started");
         return Ok(make_error_response(
+            header::ErrorType::Dfdaemon,
             http::StatusCode::INTERNAL_SERVER_ERROR,
             None,
         ));
@@ -908,6 +934,7 @@ async fn proxy_via_dfdaemon(
                                 sender
                                     .send_timeout(
                                         Some(make_error_response(
+                                            header::ErrorType::Backend,
                                             http::StatusCode::from_u16(
                                                 backend.status_code.unwrap_or_default() as u16,
                                             )
@@ -927,6 +954,7 @@ async fn proxy_via_dfdaemon(
                                 sender
                                     .send_timeout(
                                         Some(make_error_response(
+                                            header::ErrorType::Dfdaemon,
                                             http::StatusCode::INTERNAL_SERVER_ERROR,
                                             None,
                                         )),
@@ -949,6 +977,7 @@ async fn proxy_via_dfdaemon(
         Some(Some(response)) => Ok(response),
         Some(None) => return Ok(response),
         None => Ok(make_error_response(
+            header::ErrorType::Dfdaemon,
             http::StatusCode::INTERNAL_SERVER_ERROR,
             None,
         )),
@@ -960,7 +989,11 @@ async fn proxy_via_dfdaemon(
 async fn proxy_via_http(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
     let Some(host) = request.uri().host() else {
         error!("CONNECT host is not socket addr: {:?}", request.uri());
-        return Ok(make_error_response(http::StatusCode::BAD_REQUEST, None));
+        return Ok(make_error_response(
+            header::ErrorType::Proxy,
+            http::StatusCode::BAD_REQUEST,
+            None,
+        ));
     };
     let port = request.uri().port_u16().unwrap_or(80);
 
@@ -1203,7 +1236,11 @@ fn find_matching_rule(rules: Option<&[Rule]>, url: &str) -> Option<Rule> {
 }
 
 /// make_error_response makes an error response with the given status and message.
-fn make_error_response(status: http::StatusCode, header: Option<http::HeaderMap>) -> Response {
+fn make_error_response(
+    error_type: header::ErrorType,
+    status: http::StatusCode,
+    header: Option<http::HeaderMap>,
+) -> Response {
     let mut response = Response::new(empty());
     *response.status_mut() = status;
     if let Some(header) = header {
@@ -1211,6 +1248,12 @@ fn make_error_response(status: http::StatusCode, header: Option<http::HeaderMap>
             response.headers_mut().insert(k, v.clone());
         }
     }
+
+    // Insert the error type header for client to identify where the error occurred.
+    response.headers_mut().insert(
+        header::DRAGONFLY_ERROR_TYPE_HEADER,
+        error_type.as_str().parse().unwrap(),
+    );
 
     response
 }

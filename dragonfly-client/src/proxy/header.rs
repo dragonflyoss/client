@@ -17,6 +17,7 @@
 use bytesize::ByteSize;
 use dragonfly_api::common::v2::Priority;
 use reqwest::header::HeaderMap;
+use std::{fmt, str::FromStr};
 use tracing::error;
 
 /// DRAGONFLY_TAG_HEADER is the header key of tag in http request.
@@ -91,6 +92,60 @@ pub const DRAGONFLY_TASK_ID_HEADER: &str = "X-Dragonfly-Task-ID";
 /// DRAGONFLY_SERVER_IP_HEADER is the response header key of server IP.
 /// It is used to indicate the IP address of the server that handled the request.
 pub const DRAGONFLY_SERVER_IP_HEADER: &str = "X-Dragonfly-Server-IP";
+
+/// DRAGONFLY_ERROR_TYPE_HEADER is the response header key of error type.
+/// It is used to indicate the type of error that occurred during the request.
+/// The value of this header can be one of the following:
+/// - "backend": Indicates an upstream error occurred during the request.
+/// - "proxy": Indicates a proxy error occurred during the request.
+/// - "dfdaemon": Indicates a dfdaemon error occurred during the request.
+pub const DRAGONFLY_ERROR_TYPE_HEADER: &str = "X-Dragonfly-Error-Type";
+
+/// ErrorType represents the type of error that occurred during the request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorType {
+    /// Backend indicates an upstream error occurred during the request.
+    Backend,
+
+    /// Proxy indicates a proxy error occurred during the request.
+    Proxy,
+
+    /// Dfdaemon indicates a dfdaemon error occurred during the request.
+    Dfdaemon,
+}
+
+/// ErrorType implements as_str.
+impl ErrorType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ErrorType::Backend => "backend",
+            ErrorType::Proxy => "proxy",
+            ErrorType::Dfdaemon => "dfdaemon",
+        }
+    }
+}
+
+/// ErrorType implements fmt::Display.
+impl fmt::Display for ErrorType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// ErrorType implements std::str::FromStr.
+impl FromStr for ErrorType {
+    type Err = String;
+
+    /// from_str parses a string into a ErrorType.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "backend" => Ok(ErrorType::Backend),
+            "proxy" => Ok(ErrorType::Proxy),
+            "dfdaemon" => Ok(ErrorType::Dfdaemon),
+            _ => Err(format!("invalid error type: {}", s)),
+        }
+    }
+}
 
 /// get_tag gets the tag from http header.
 pub fn get_tag(header: &HeaderMap) -> Option<String> {
