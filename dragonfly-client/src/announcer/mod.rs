@@ -15,7 +15,6 @@
  */
 
 use crate::grpc::scheduler::SchedulerClient;
-use crate::shutdown;
 use dragonfly_api::common::v2::{Build, Cpu, Disk, Host, Memory, Network};
 use dragonfly_api::scheduler::v2::{AnnounceHostRequest, DeleteHostRequest};
 use dragonfly_client_config::{
@@ -24,7 +23,7 @@ use dragonfly_client_config::{
 };
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::Result;
-use dragonfly_client_util::net::Interface;
+use dragonfly_client_util::{net::Interface, shutdown};
 use std::env;
 use std::sync::Arc;
 use std::time::Duration;

@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-use crate::shutdown;
 use dragonfly_api::common::v2::{Range, TrafficType};
 use dragonfly_client_config::{
     dfdaemon::Config, BUILD_PLATFORM, CARGO_PKG_VERSION, GIT_COMMIT_DATE, GIT_COMMIT_SHORT_HASH,
 };
+use dragonfly_client_util::shutdown;
 use lazy_static::lazy_static;
 use prometheus::{
     exponential_buckets, gather, Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGaugeVec,
