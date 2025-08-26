@@ -93,7 +93,7 @@ opendal = { version = "0.48.0", features = [
     "services-webhdfs",
 ] }
 clap = { version = "4.5.45", features = ["derive"] }
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 toml_edit = "0.22.26"
 toml = "0.8.23"
 bytesize = { version = "1.3.3", features = ["serde"] }
