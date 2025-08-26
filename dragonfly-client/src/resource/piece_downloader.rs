@@ -24,13 +24,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, info, instrument};
 
 /// DEFAULT_DOWNLOADER_CAPACITY is the default capacity of the downloader to store the clients.
 const DEFAULT_DOWNLOADER_CAPACITY: usize = 2000;
 
 /// DEFAULT_DOWNLOADER_IDLE_TIMEOUT is the default idle timeout for the downloader.
-const DEFAULT_DOWNLOADER_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_DOWNLOADER_IDLE_TIMEOUT: Duration = Duration::from_secs(420);
 
 /// Downloader is the interface for downloading pieces, which is implemented by different
 /// protocols. The downloader is used to download pieces from the other peers.
@@ -159,14 +159,14 @@ impl GRPCDownloader {
         }
     }
 
-    /// client returns the dfdaemon upload client by the address.
+    /// client_entry returns the dfdaemon upload client entry by the address.
     ///
     /// Opterations:
     /// 1. If the client entry exists, it will return the client directly to reuse the client by
     ///    the address.
     /// 2. If the client entry does not exist, it will create a new client entry and insert it
     ///    into the clients map.
-    async fn client(&self, addr: &str) -> Result<DfdaemonUploadClient> {
+    async fn client_entry(&self, addr: &str) -> Result<DfdaemonUploadClientEntry> {
         let now = Instant::now();
 
         // Cleanup the idle clients first to avoid the clients exceeding the capacity and the
@@ -177,7 +177,7 @@ impl GRPCDownloader {
         if let Some(entry) = clients.get(addr) {
             debug!("reusing client: {}", addr);
             *entry.actived_at.lock().unwrap() = now;
-            return Ok(entry.client.clone());
+            return Ok(entry.clone());
         }
         drop(clients);
 
@@ -200,13 +200,7 @@ impl GRPCDownloader {
         // If it is created by other concurrent requests and reused client, need to update the
         // last active time.
         *entry.actived_at.lock().unwrap() = now;
-        Ok(entry.client.clone())
-    }
-
-    /// get_client_entry returns the client entry by the address.
-    async fn get_client_entry(&self, addr: &str) -> Option<DfdaemonUploadClientEntry> {
-        let clients = self.clients.lock().await;
-        clients.get(addr).cloned()
+        Ok(entry.clone())
     }
 
     /// remove_client_entry removes the client entry if it is idle.
@@ -245,7 +239,7 @@ impl GRPCDownloader {
             // Retain the client if it is active or not exceeds the capacity and is recent.
             let should_retain = is_active || (!exceeds_capacity && is_recent);
             if !should_retain {
-                debug!(
+                info!(
                     "removing idle client: {}, exceeds_capacity: {}, idle_duration: {}s",
                     addr,
                     exceeds_capacity,
@@ -273,15 +267,10 @@ impl Downloader for GRPCDownloader {
         host_id: &str,
         task_id: &str,
     ) -> Result<(Vec<u8>, u64, String)> {
-        let client = self.client(addr).await?;
-
-        let entry = self
-            .get_client_entry(addr)
-            .await
-            .ok_or(Error::UnexpectedResponse)?;
+        let entry = self.client_entry(addr).await?;
         let request_guard = RequestGuard::new(entry.active_requests.clone());
-
-        let response = match client
+        let response = match entry
+            .client
             .download_piece(
                 DownloadPieceRequest {
                     host_id: host_id.to_string(),
@@ -345,15 +334,10 @@ impl Downloader for GRPCDownloader {
         host_id: &str,
         task_id: &str,
     ) -> Result<(Vec<u8>, u64, String)> {
-        let client = self.client(addr).await?;
-
-        let entry = self
-            .get_client_entry(addr)
-            .await
-            .ok_or(Error::UnexpectedResponse)?;
+        let entry = self.client_entry(addr).await?;
         let request_guard = RequestGuard::new(entry.active_requests.clone());
-
-        let response = match client
+        let response = match entry
+            .client
             .download_persistent_cache_piece(
                 DownloadPersistentCachePieceRequest {
                     host_id: host_id.to_string(),
