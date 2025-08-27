@@ -50,7 +50,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom, BufWriter, AsyncWriteExt};
 use tokio::sync::{
@@ -486,7 +486,7 @@ impl PersistentCacheTask {
         
         // When enable encryption, copy encrypted file instead of create hard-link to source file
         if self.config.storage.encryption.enable {
-            info!("Omit HARD-LINK when encryption is enabled");
+            info!("omit HARD-LINK when encryption is enabled");
             return Ok(task);
         }
 
@@ -1450,72 +1450,95 @@ impl PersistentCacheTask {
         self.storage.delete_persistent_cache_task(task_id).await
     }
     
-    /// export encryption file to path
-    pub async fn export_encryption_file(&self, task_id: &str, to: &Path) -> ClientResult<()> {
-        let task = self.storage.get_persistent_cache_task(task_id)?
-            .ok_or_else(|| Error::TaskNotFound(task_id.to_string()))?;
+    // /// export encryption file to path
+    // pub async fn export_encryption_file(&self, task_id: &str, to: &Path) -> ClientResult<()> {
+    //     todo!();
+    //     let task = self.storage.get_persistent_cache_task(task_id)?
+    //         .ok_or_else(|| Error::TaskNotFound(task_id.to_string()))?;
 
-        if !task.is_finished() {
-            // TODO errors
-            return Err(Error::Unknown(format!("Task {} is not finished", task_id)));
-        }
+    //     if !task.is_finished() {
+    //         // TODO errors
+    //         return Err(Error::Unknown(format!("Task {} is not finished", task_id)));
+    //     }
 
-        // get all pieces
-        let mut pieces = self.storage.get_persistent_cache_pieces(task_id)?;
-        // TODO: need sort?
-        pieces.sort_by_key(|p| p.number);
+    //     // get all pieces
+    //     let mut pieces = self.storage.get_persistent_cache_pieces(task_id)?;
+    //     // TODO: need sort?
+    //     pieces.sort_by_key(|p| p.number);
 
-        if pieces.is_empty() {
-            return Err(Error::Unknown(format!("No pieces found for task {}", task_id)));
-        }
+    //     if pieces.is_empty() {
+    //         return Err(Error::Unknown(format!("No pieces found for task {}", task_id)));
+    //     }
 
-        info!("Exporting encrypted file for task {} with {} pieces to {:?}", 
-              task_id, pieces.len(), to);
+    //     info!("Exporting encrypted file for task {} with {} pieces to {:?}", 
+    //           task_id, pieces.len(), to);
 
-        let output_file = tokio::fs::File::create(to).await
-            // .or_err(ErrorType::StorageError)?;
-            .map_err(|e| Error::Unknown(format!("Failed to create output file: {}", e)))?;
-        let mut writer = BufWriter::new(output_file);
+    //     let output_file = tokio::fs::File::create(to).await
+    //         // .or_err(ErrorType::StorageError)?;
+    //         .map_err(|e| Error::Unknown(format!("Failed to create output file: {}", e)))?;
+    //     let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, output_file);
 
-        // process every piece
-        for piece in pieces {
-            if !piece.is_finished() {
-                // warn!("Piece {} is not finished, skipping", piece.number);
-                // continue;
-                panic!("Piece {} is not finished", piece.number);
-            }
+    //     let total_start_time = Instant::now();
+    //     let mut total_copy_time = std::time::Duration::ZERO;
+    //     let mut res = Vec::with_capacity(pieces.len());
 
-            debug!("Processing piece {} (offset: {}, length: {})", 
-                  piece.number, piece.offset, piece.length);
+    //     // process every piece
+    //     for piece in pieces {
+    //         if !piece.is_finished() {
+    //             // warn!("Piece {} is not finished, skipping", piece.number);
+    //             // continue;
+    //             panic!("Piece {} is not finished", piece.number);
+    //         }
 
-            // read and decrypt piece
-            let piece_id = self.piece.persistent_cache_id(task_id, piece.number);
-            let mut reader = self.storage.upload_persistent_cache_piece(
-                piece_id.as_str(),
-                task_id,
-                None, // read whole piece
-            ).await?;
+    //         debug!("Processing piece {} (offset: {}, length: {})", 
+    //               piece.number, piece.offset, piece.length);
 
-            // write decrypted content to file
-            let bytes_copied = tokio::io::copy(&mut reader, &mut writer).await
-                // .or_err(ErrorType::StorageError)?;
-                .map_err(|e| Error::Unknown(format!("Failed to copy piece {}: {}", piece.number, e)))?;
+    //         // read and decrypt piece
+    //         let piece_id = self.piece.persistent_cache_id(task_id, piece.number);
+    //         let mut reader = self.storage.upload_persistent_cache_piece(
+    //             piece_id.as_str(),
+    //             task_id,
+    //             None, // read whole piece
+    //         ).await?;
 
-            if bytes_copied != piece.length {
-                return Err(Error::Unknown(format!(
-                    "Piece {} length mismatch: expected {}, got {}", 
-                    piece.number, piece.length, bytes_copied
-                )));
-            }
+    //         // write decrypted content to file
+    //         let copy_start_time = Instant::now();
+    //         let bytes_copied = tokio::io::copy(&mut reader, &mut writer).await
+    //             // .or_err(ErrorType::StorageError)?;
+    //             .map_err(|e| Error::Unknown(format!("Failed to copy piece {}: {}", piece.number, e)))?;
+            
+    //         let copy_time = copy_start_time.elapsed();
+    //         total_copy_time += copy_time;
+    //         assert!(res.len() == piece.number as usize);
+    //         res.push(copy_time);
 
-            debug!("Successfully processed piece {} ({} bytes)", piece.number, bytes_copied);
-        }
+    //         if bytes_copied != piece.length {
+    //             return Err(Error::Unknown(format!(
+    //                 "Piece {} length mismatch: expected {}, got {}", 
+    //                 piece.number, piece.length, bytes_copied
+    //             )));
+    //         }
 
-        writer.flush().await
-            // .or_err(ErrorType::StorageError)?;
-            .map_err(|e| Error::Unknown(format!("Failed to flush output file: {}", e)))?;
+    //         debug!("Successfully processed piece {} ({} bytes)", piece.number, bytes_copied);
+    //     }
 
-        info!("Successfully exported encrypted file for task {} to {:?}", task_id, to);
-        Ok(())
-    }
+    //     writer.flush().await
+    //         // .or_err(ErrorType::StorageError)?;
+    //         .map_err(|e| Error::Unknown(format!("Failed to flush output file: {}", e)))?;
+
+
+    //     let total_time = total_start_time.elapsed();
+    //     let sum_time: Duration = res.iter().sum();
+    //     let avg_time = sum_time / res.len() as u32;
+    //     let max_time = res.iter().max().unwrap();
+    //     let min_time = res.iter().min().unwrap();
+    //     info!("Export completed: total_time={:?}, min_time = {:?}, max_time = {:?}, avg_time = {:?}", 
+    //         total_time, min_time, max_time, avg_time);
+    //     info!("RES:\n{:#?}", res);
+
+
+
+    //     info!("Successfully exported encrypted file for task {} to {:?}", task_id, to);
+    //     Ok(())
+    // }
 }

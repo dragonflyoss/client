@@ -2276,12 +2276,7 @@ encryption:
   enable: true
 "#;
 
-        println!("{}", yaml);
-
         let storage: Storage = serde_yaml::from_str(yaml).expect("Failed to deserialize");
-
-        println!("{:#?}", storage);
-
         assert_eq!(storage.encryption.enable, true);
     }
 

@@ -41,7 +41,7 @@ use std::time::Duration;
 use termion::{color, style};
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
-use tracing::{error, info, Level};
+use tracing::{debug, error, info, Level};
 use base64::{prelude::BASE64_STANDARD, Engine as _};
 
 #[cfg(not(target_env = "msvc"))]
@@ -477,11 +477,11 @@ async fn get_key_from_manager(config: &dfdaemon::Config, client: &ManagerClient)
             ip: config.host.ip.unwrap().to_string(),
         }
     ).await
-    .expect("Fail to get key from Manager");
+    .expect("fail to get key from Manager");
 
     let key_base64 = BASE64_STANDARD.encode(&key);
-
-    info!("Key response(base64): {} \n (hex): {:x?}", key_base64, key);
+    // TODO: avoid printing key
+    debug!("key response(base64): {} \n (hex): {:x?}", key_base64, key);
 
     key
 }
