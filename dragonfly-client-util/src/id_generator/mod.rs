@@ -162,12 +162,9 @@ impl IDGenerator {
         &self,
         parameter: PersistentCacheTaskIDParameter,
     ) -> Result<String> {
-        let mut hasher = crc32fast::Hasher::new();
-
         match parameter {
             PersistentCacheTaskIDParameter::Content(content) => {
-                hasher.update(content.as_bytes());
-                Ok(hasher.finalize().to_string())
+                Ok(hex::encode(Sha256::digest(content.as_bytes())))
             }
             PersistentCacheTaskIDParameter::FileContentBased {
                 path,
@@ -176,6 +173,8 @@ impl IDGenerator {
                 application,
             } => {
                 // Calculate the hash of the file.
+                let mut hasher = Sha256::new();
+
                 let f = std::fs::File::open(path)?;
                 let mut buffer = [0; 4096];
                 let mut reader = io::BufReader::with_capacity(buffer.len(), f);
@@ -205,8 +204,8 @@ impl IDGenerator {
 
                 hasher.update(TaskType::PersistentCache.as_str_name().as_bytes());
 
-                // Generate the task id by crc32.
-                Ok(hasher.finalize().to_string())
+                // Generate the task id by sha256.
+                Ok(hex::encode(hasher.finalize()))
             }
         }
     }
@@ -360,7 +359,7 @@ mod tests {
                     tag: Some("tag1".to_string()),
                     application: Some("app1".to_string()),
                 },
-                "3490958009",
+                "7160a071a9acea5ac341e770c14d0211c38a4b15b3bbe2c5f848a706fd47419e",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
@@ -370,7 +369,7 @@ mod tests {
                     tag: None,
                     application: Some("app1".to_string()),
                 },
-                "735741469",
+                "0d0f8536f51227fda07141308f5ae8149b561b51b61c6517125f25dfa27acf5b",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
@@ -380,7 +379,7 @@ mod tests {
                     tag: Some("tag1".to_string()),
                     application: None,
                 },
-                "3954905097",
+                "a98b76813681e30cf83733fe055792b86393bba6f18e3d89fd8c18253922d992",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
@@ -390,12 +389,12 @@ mod tests {
                     tag: None,
                     application: None,
                 },
-                "4162557545",
+                "e894374a39e39cfa78c409cac02f2cdbb5605a24f5ff55c7bc2b624877556c03",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
                 PersistentCacheTaskIDParameter::Content("This is a test file".to_string()),
-                "107352521",
+                "e2d0fe1585a63ec6009c8016ff8dda8b17719a637405a4e23c0ff81339148249",
             ),
         ];
 
