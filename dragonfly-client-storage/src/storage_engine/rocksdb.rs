@@ -101,6 +101,7 @@ impl RocksdbStorageEngine {
 
         // Initialize column family options.
         let mut cf_options = rocksdb::Options::default();
+        // TODO
         cf_options.set_prefix_extractor(rocksdb::SliceTransform::create_fixed_prefix(64));
         cf_options.set_memtable_prefix_bloom_ratio(0.25);
         cf_options.optimize_level_style_compaction(Self::DEFAULT_MEMTABLE_MEMORY_BUDGET);
@@ -213,6 +214,8 @@ impl Operations for RocksdbStorageEngine {
         prefix: &[u8],
     ) -> Result<impl Iterator<Item = Result<(Box<[u8]>, Box<[u8]>)>>> {
         let cf = cf_handle::<O>(self)?;
+        // prefix should not shorter than `set_prefix_extractor`
+        // assert!(prefix.len() >= 64);
         Ok(self.prefix_iterator_cf(cf, prefix).map(|ele| {
             let (key, value) = ele.or_err(ErrorType::StorageError)?;
             Ok((key, value))
@@ -641,5 +644,126 @@ mod tests {
         if let Err(err) = result {
             assert!(format!("{:?}", err).contains("ColumnFamilyNotFound"));
         }
+    }
+
+    #[test]
+    /// copied from `test_prefix_iter_raw`
+    fn test_prefix_iter_raw_shorter_key_should_fail() {
+        let engine = create_test_engine();
+
+        // RocksDB prefix extractor is configured with fixed_prefix(64) in the open method.
+        let prefix_a = [b'a'; 64];
+        let prefix_b = [b'b'; 64];
+
+
+        // ADD shorter key test
+        let prefix_a_shorter: [u8; 10] = prefix_a[..10].try_into().unwrap();
+
+        println!("prefix_a address: {:p}", &prefix_a);
+        println!("prefix_a_shorter address: {:p}", &prefix_a_shorter);
+        println!("shoter(len: {}): {:#?}",prefix_a_shorter.len(), prefix_a_shorter);
+        // ADD shorter key test
+
+        // Create test keys with 64-byte identical prefixes.
+        let key_a1 = [&prefix_a[..], b"_raw_suffix1"].concat();
+        let key_a2 = [&prefix_a[..], b"_raw_suffix2"].concat();
+
+        let key_b1 = [&prefix_b[..], b"_raw_suffix1"].concat();
+        let key_b2 = [&prefix_b[..], b"_raw_suffix2"].concat();
+
+        let objects_with_prefix_a = vec![
+            (
+                key_a1.clone(),
+                Object {
+                    id: "raw_prefix_id_a1".to_string(),
+                    value: 100,
+                },
+            ),
+            (
+                key_a2.clone(),
+                Object {
+                    id: "raw_prefix_id_a2".to_string(),
+                    value: 200,
+                },
+            ),
+        ];
+
+        let objects_with_prefix_b = vec![
+            (
+                key_b1.clone(),
+                Object {
+                    id: "raw_prefix_id_b1".to_string(),
+                    value: 300,
+                },
+            ),
+            (
+                key_b2.clone(),
+                Object {
+                    id: "raw_prefix_id_b2".to_string(),
+                    value: 400,
+                },
+            ),
+        ];
+
+        for (key, obj) in &objects_with_prefix_a {
+            engine.put::<Object>(key, obj).unwrap();
+        }
+
+        for (key, obj) in &objects_with_prefix_b {
+            engine.put::<Object>(key, obj).unwrap();
+        }
+
+        let retrieved_objects = engine
+            // .prefix_iter_raw::<Object>(&prefix_a[..10])
+            // .prefix_iter_raw::<Object>(&prefix_a)
+            .prefix_iter_raw::<Object>(&prefix_a_shorter)
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+
+        // Can not seek value
+        assert_eq!(
+            retrieved_objects.len(),
+            objects_with_prefix_a.len(),
+            "expected {} raw objects with prefix 'a', but got {}",
+            objects_with_prefix_a.len(),
+            retrieved_objects.len()
+        );
+
+        // println!("Retrieved objects count: {}", retrieved_objects.len());
+        // for (i, (key, value)) in retrieved_objects.iter().enumerate() {
+        //     println!("Object {}: key={:?}, value_len={}", i, key, value.len());
+        //     if let Ok(obj) = Object::deserialize_from(value) {
+        //         println!("  -> deserialized: id={}, value={}", obj.id, obj.value);
+        //     } else {
+        //         println!("  -> failed to deserialize");
+        //     }
+        // }
+
+        // // Verify each object with prefix can be deserialized from raw bytes.
+        // for (_, object) in &objects_with_prefix_a {
+        //     let found = retrieved_objects
+        //         .iter()
+        //         .any(|(_, v)| match Object::deserialize_from(v) {
+        //             Ok(deserialized) => {
+        //                 deserialized.id == object.id && deserialized.value == object.value
+        //             }
+        //             Err(_) => false,
+        //         });
+
+        //     assert!(
+        //         found,
+        //         "could not find or deserialize object with key {:?}",
+        //         object.id
+        //     );
+        // }
+
+        // // Verify objects with different prefix are not retrieved.
+        // for (key, _) in &objects_with_prefix_b {
+        //     let found = retrieved_objects
+        //         .iter()
+        //         .any(|(k, _)| k.as_ref() == key.as_slice());
+        //     assert!(!found, "found object with different prefix: {:?}", key);
+        // }
     }
 }

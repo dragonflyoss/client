@@ -167,7 +167,9 @@ impl IDGenerator {
         match parameter {
             PersistentCacheTaskIDParameter::Content(content) => {
                 hasher.update(content.as_bytes());
-                Ok(hasher.finalize().to_string())
+                // TODO: `rocksdb::set_prefix_extractor` is set to 64 bytes, but CRC32 <= 10 bytes
+                // Repeat to fill 64 bytes, this is temporary
+                Ok(hasher.finalize().to_string().repeat(8))
             }
             PersistentCacheTaskIDParameter::FileContentBased {
                 path,
@@ -206,7 +208,8 @@ impl IDGenerator {
                 hasher.update(TaskType::PersistentCache.as_str_name().as_bytes());
 
                 // Generate the task id by crc32.
-                Ok(hasher.finalize().to_string())
+                // TODO
+                Ok(hasher.finalize().to_string().repeat(8))
             }
         }
     }
@@ -229,6 +232,7 @@ impl IDGenerator {
 
     /// task_type generates the task type by the task id.
     pub fn task_type(&self, id: &str) -> TaskType {
+        // TODO: useless?
         if id.ends_with(PERSISTENT_CACHE_TASK_SUFFIX) {
             return TaskType::PersistentCache;
         }

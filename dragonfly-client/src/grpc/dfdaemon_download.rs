@@ -442,6 +442,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
         }
 
+
+        // clone config for async
+        let config_clone = self.config.clone();
+
         tokio::spawn(
             async move {
                 match task_manager_clone
@@ -480,6 +484,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                 handle_error(&out_stream_tx, err).await;
                                 return;
                             }
+
+                            // TODO: encryption is not compatible with hardlink
+                            let encryption_enable = config_clone.storage.encryption.enable;
+                            assert!(!encryption_enable || !download_clone.force_hard_link);
 
                             if let Some(output_path) = &download_clone.output_path {
                                 if !download_clone.force_hard_link {
@@ -1013,6 +1021,9 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
         }
 
+        // clone config for async
+        let config_clone = self.config.clone();
+
         tokio::spawn(
             async move {
                 match task_manager_clone
@@ -1050,6 +1061,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             handle_error(&out_stream_tx, err).await;
                             return;
                         }
+
+                        // TODO: encryption is not compatible with hardlink
+                        let encryption_enable = config_clone.storage.encryption.enable;
+                        assert!(!encryption_enable || !request_clone.force_hard_link);
 
                         if let Some(output_path) = &request_clone.output_path {
                             if !request_clone.force_hard_link {
@@ -1091,6 +1106,8 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                     return;
                                 }
                             }
+
+                            // TODO: need to be decrypt first when calculate the digest of a encrypted file
 
                             // Verify the file digest if it is provided.
                             if let Some(raw_digest) = &request_clone.digest {

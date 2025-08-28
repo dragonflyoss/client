@@ -55,8 +55,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
-use std::time::Instant;
-use tokio::io::AsyncReadExt;
+use std::time::{Duration, Instant};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::sync::{
     mpsc::{self, Sender},
     Semaphore,
@@ -133,6 +133,12 @@ impl Task {
         let task = self.storage.prepare_download_task_started(id).await?;
 
         if task.content_length.is_some() && task.piece_length.is_some() {
+            // Omit HARD-LINK when use encryption
+            if self.config.storage.encryption.enable {
+                info!("omit HARD-LINK when encryption is enabled");
+                return Ok(task);
+            }
+
             // Attempt to create a hard link from the task file to the output path.
             //
             // Behavior based on force_hard_link setting:
@@ -250,6 +256,12 @@ impl Task {
             .storage
             .download_task_started(id, piece_length, content_length, response.http_header)
             .await;
+
+        // Omit HARD-LINK when use encryption
+        if self.config.storage.encryption.enable {
+            info!("omit HARD-LINK when encryption is enabled");
+            return task;
+        }
 
         // Attempt to create a hard link from the task file to the output path.
         //
@@ -1980,10 +1992,12 @@ mod tests {
         let config = Arc::new(config);
 
         // Create storage.
-        let storage = Storage::new(config.clone(), temp_dir.path(), log_dir)
+        let storage = Storage::new(config.clone(), temp_dir.path(), log_dir, None)
             .await
             .unwrap();
         let storage = Arc::new(storage);
+
+        // TODO bad id < 64 bytes?
 
         // Test Storage.get_task and Error::TaskNotFound.
         let task_id = "non-existent-task-id";
