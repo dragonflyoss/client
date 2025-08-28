@@ -1136,8 +1136,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                     handle_error(&out_stream_tx, err).await;
                                     return;
                                 }
-                            } else {
-                                panic!("should not reach here")
                             }
 
                             // TODO: need to be decrypt first when calculate the digest of a encrypted file
