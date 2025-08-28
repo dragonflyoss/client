@@ -979,8 +979,8 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.1.55"
-source = "git+file:///codes/dragonflyoss/api_fork?branch=for_client#9f2715c0d6bfe719c6f4c36d461d4097b0a3bced"
+version = "2.1.59"
+source = "git+file:///codes/dragonflyoss/api_fork?branch=for_client#4abcd9deeb97b6617b821be6ef7cd47b2402dbb7"
 dependencies = [
  "prost 0.13.5",
  "prost-types 0.14.1",
@@ -1744,6 +1744,15 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "hkdf"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
+dependencies = [
+ "hmac",
 ]
 
 [[package]]
