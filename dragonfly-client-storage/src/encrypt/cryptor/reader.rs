@@ -2,23 +2,14 @@ use tokio::io::AsyncRead;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::ReadBuf;
+use cipher::StreamCipherSeek;
+use generic_array::GenericArray;
 
 use crate::encrypt::{EncryptionAlgorithm, Aes256Ctr};
 
 pub struct EncryptReader<R: AsyncRead, A: EncryptionAlgorithm> {
     inner: R,
     cipher: A,
-}
-
-/// parse_piece_id parses piece_id and returns (task_id, number).
-fn parse_piece_id(piece_id: &str) -> Option<(&str, u32)> {
-    piece_id
-        .rsplit_once('-')
-        .and_then(|(task_id, number_str)| {
-            number_str.parse::<u32>().ok().map(|number| {
-                (task_id, number)
-            })
-        })
 }
 
 // impl<R, A: EncryptionAlgorithm> EncryptReader<R, A> {
@@ -35,12 +26,13 @@ fn parse_piece_id(piece_id: &str) -> Option<(&str, u32)> {
 
 impl<R: AsyncRead> EncryptReader<R, Aes256Ctr> {
     /// default for Aes256Ctr
-    pub fn new(inner: R, key: &[u8], piece_id: &str) -> Self {
-        let (task_id, piece_num) = parse_piece_id(piece_id)
-            .expect("should have task_id and piece_num");
+    pub fn new(inner: R, key: &[u8], task_id: &str, offset: u64) -> Self {
+        let key = <Aes256Ctr as EncryptionAlgorithm>::derive_key(key, task_id);
+        // let nonce = [0u8; <Aes256Ctr as EncryptionAlgorithm>::NONCE_SIZE];
+        let zero_nonce = GenericArray::<u8, <Aes256Ctr as EncryptionAlgorithm>::NonceSize>::default();
 
-        let nonce = Aes256Ctr::build_nonce(task_id, piece_num);
-        let cipher = <Aes256Ctr as EncryptionAlgorithm>::new(key, &nonce);
+        let mut cipher = <Aes256Ctr as EncryptionAlgorithm>::new_from_array(&key, &zero_nonce);
+        cipher.seek(offset);
 
         Self { inner, cipher }
     }
@@ -76,6 +68,7 @@ mod tests {
 
     const TEST_DATA: &[u8] = b"The quick brown fox jumps over the lazy dog";
     const PIECE_ID: &str = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c-0";
+    const TASK_ID: &str = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
 
     fn generate_key() -> [u8; 32] {
         let mut key = [0u8; 32];
@@ -92,7 +85,7 @@ mod tests {
         let input = Cursor::new(TEST_DATA);
 
         // Encrypt
-        let mut encrypt_reader = EncryptReader::<_, Aes256Ctr>::new(input, &key, PIECE_ID);
+        let mut encrypt_reader = EncryptReader::<_, Aes256Ctr>::new(input, &key, TASK_ID, 0);
         let mut encrypted = Vec::new();
         encrypt_reader.read_to_end(&mut encrypted).await.unwrap();
 
@@ -100,7 +93,7 @@ mod tests {
 
         // Decrypt
         let encrypted_cursor = Cursor::new(encrypted);
-        let mut decrypt_reader = DecryptReader::<_, Aes256Ctr>::new(encrypted_cursor, &key, PIECE_ID);
+        let mut decrypt_reader = DecryptReader::<_, Aes256Ctr>::new(encrypted_cursor, &key, TASK_ID, 0);
         let mut decrypted = Vec::new();
         decrypt_reader.read_to_end(&mut decrypted).await.unwrap();
 
@@ -116,12 +109,12 @@ mod tests {
         let input = Cursor::new(TEST_DATA);
 
         // default A: Aes256Ctr EncryptReader::new
-        let mut encrypt_reader = EncryptReader::new(input, &key, PIECE_ID);
+        let mut encrypt_reader = EncryptReader::new(input, &key, TASK_ID, 0);
         let mut encrypted = Vec::new();
         encrypt_reader.read_to_end(&mut encrypted).await.unwrap();
 
         let encrypted_cursor = Cursor::new(encrypted);
-        let mut decrypt_reader = DecryptReader::new(encrypted_cursor, &key, PIECE_ID);
+        let mut decrypt_reader = DecryptReader::new(encrypted_cursor, &key, TASK_ID, 0);
         let mut decrypted = Vec::new();
         decrypt_reader.read_to_end(&mut decrypted).await.unwrap();
 
@@ -137,7 +130,7 @@ mod tests {
         let input = Cursor::new(TEST_DATA);
 
         // Encrypt
-        let mut encrypt_reader = EncryptReader::<_, Aes256Ctr>::new(input, &key, PIECE_ID);
+        let mut encrypt_reader = EncryptReader::<_, Aes256Ctr>::new(input, &key, TASK_ID, 0);
         let mut encrypted = Vec::new();
         encrypt_reader.read_to_end(&mut encrypted).await.unwrap();
 
@@ -146,7 +139,7 @@ mod tests {
         // Decrypt
         key[0] += 1;
         let encrypted_cursor = Cursor::new(encrypted);
-        let mut decrypt_reader = DecryptReader::<_, Aes256Ctr>::new(encrypted_cursor, &key, PIECE_ID);
+        let mut decrypt_reader = DecryptReader::<_, Aes256Ctr>::new(encrypted_cursor, &key, TASK_ID, 0);
         let mut decrypted = Vec::new();
         let _ = decrypt_reader.read_to_end(&mut decrypted).await.unwrap();
         
@@ -156,8 +149,3 @@ mod tests {
         assert_ne!(decrypted, TEST_DATA);
     }
 }
-
-// cargo test --package dragonfly-client-storage --lib 
-// \ -- encrypt::cryptor::reader::tests::test_encrypt_decrypt_cycle --exact --show-output
-
-// cargo test --package dragonfly-client-storage --lib -- encrypt::cryptor::reader::tests --show-output

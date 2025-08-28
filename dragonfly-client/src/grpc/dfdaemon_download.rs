@@ -492,20 +492,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             assert!(!encryption_enable || !download_clone.force_hard_link);
 
                             if let Some(output_path) = &download_clone.output_path {
-                                // if encryption is enabled, copy to path instead of hard link
-                                if encryption_enable {
-                                    let output_path = Path::new(output_path.as_str());
-                                    if output_path.exists() {
-                                        return;
-                                    }
-                                    let _res = task_manager_clone.export_encryption_file(
-                                        task_clone.id.as_ref(),
-                                        output_path
-                                    )
-                                    .await
-                                    .map_err(|e| {error!("export encryption file: {}", e); return;})
-                                    .expect("export should success");
-                                } else if !download_clone.force_hard_link {
+                                if !download_clone.force_hard_link {
                                     let output_path = Path::new(output_path.as_str());
                                     if output_path.exists() {
                                         match task_manager_clone
@@ -1098,20 +1085,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         assert!(!encryption_enable || !request_clone.force_hard_link);
 
                         if let Some(output_path) = &request_clone.output_path {
-                            // if encryption is enabled, copy to path instead of hard link
-                            if encryption_enable {
-                                let output_path = Path::new(output_path.as_str());
-                                if output_path.exists() {
-                                    return;
-                                }
-                                let _res = task_manager_clone.export_encryption_file(
-                                    task_clone.id.as_ref(),
-                                    output_path
-                                )
-                                .await
-                                .map_err(|e| {error!("export encryption file: {}", e); return;})
-                                .expect("export should success");
-                            } else if !request_clone.force_hard_link {
+                            if !request_clone.force_hard_link {
                                 let output_path = Path::new(output_path.as_str());
                                 if output_path.exists() {
                                     match task_manager_clone

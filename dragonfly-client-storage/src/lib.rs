@@ -487,7 +487,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_persistent_cache_piece(task_id, offset, length, reader, piece_id)
+            .write_persistent_cache_piece(task_id, offset, length, reader)
             .await?;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
 
@@ -550,7 +550,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_piece(task_id, offset, length, reader, piece_id)
+            .write_piece(task_id, offset, length, reader)
             .await?;
 
         let digest = Digest::new(Algorithm::Crc32, response.hash);
@@ -602,7 +602,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_piece(task_id, offset, length, reader, piece_id)
+            .write_piece(task_id, offset, length, reader)
             .await?;
 
         let length = response.length;
@@ -669,7 +669,7 @@ impl Storage {
 
                 match self
                     .content
-                    .read_piece(task_id, piece.offset, piece.length, range, piece_id)
+                    .read_piece(task_id, piece.offset, piece.length, range)
                     .await
                 {
                     Ok(reader) => {
@@ -756,7 +756,7 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_persistent_cache_piece(task_id, offset, length, reader, piece_id)
+            .write_persistent_cache_piece(task_id, offset, length, reader)
             .await?;
 
         let length = response.length;
@@ -807,7 +807,7 @@ impl Storage {
             Ok(Some(piece)) => {
                 match self
                     .content
-                    .read_persistent_cache_piece(task_id, piece.offset, piece.length, range, piece_id)
+                    .read_persistent_cache_piece(task_id, piece.offset, piece.length, range)
                     .await
                 {
                     Ok(reader) => {

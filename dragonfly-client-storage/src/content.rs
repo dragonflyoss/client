@@ -24,9 +24,10 @@ use tokio_util::either::Either;
 use std::cmp::{max, min};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{
-    self, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter, SeekFrom,
+    self, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter, SeekFrom
 };
 use tokio_util::io::InspectReader;
 use tracing::{error, info, instrument, warn};
@@ -241,7 +242,11 @@ impl Content {
     /// copy_task copies the task content to the destination.
     #[instrument(skip_all)]
     pub async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        fs::copy(self.get_task_path(task_id), to).await?;
+        if self.config.storage.encryption.enable {
+            self.export_encrypted_file_by_range(task_id, to, true, None).await?;
+        } else {
+            fs::copy(self.get_task_path(task_id), to).await?;
+        }
         info!("copy to {:?} success", to);
         Ok(())
     }
@@ -249,6 +254,10 @@ impl Content {
     /// copy_task_by_range copies the task content to the destination by range.
     #[instrument(skip_all)]
     async fn copy_task_by_range(&self, task_id: &str, to: &Path, range: Range) -> Result<()> {
+        if self.config.storage.encryption.enable {
+            self.export_encrypted_file_by_range(task_id, to, true, Some(range)).await?;
+            return Ok(());
+        }
         // Ensure the parent directory of the destination exists.
         if let Some(parent) = to.parent() {
             if !parent.exists() {
@@ -297,8 +306,6 @@ impl Content {
         offset: u64,
         length: u64,
         range: Option<Range>,
-        // Added
-        piece_id: &str,
     ) -> Result<impl AsyncRead> {
         let task_path = self.get_task_path(task_id);
 
@@ -324,7 +331,8 @@ impl Content {
             let decrypt_reader = DecryptReader::new(
                 limited_reader, 
                 key, 
-                piece_id
+                task_id,
+                target_offset,
             );
             Ok(Either::Left(decrypt_reader))
         } else {
@@ -342,6 +350,8 @@ impl Content {
         length: u64,
         range: Option<Range>,
     ) -> Result<(impl AsyncRead, impl AsyncRead)> {
+        // TODO: encryption
+        todo!("encryption");
         let task_path = self.get_task_path(task_id);
 
         // Calculate the target offset and length based on the range.
@@ -385,8 +395,6 @@ impl Content {
         offset: u64,
         expected_length: u64,
         reader: &mut R,
-        // ADDED
-        piece_id: &str,
     ) -> Result<WritePieceResponse> {
         // Open the file and seek to the offset.
         let task_path = self.get_task_path(task_id);
@@ -418,7 +426,8 @@ impl Content {
             let encrypt_reader = EncryptReader::new(
                 tee, 
                 key, 
-                piece_id
+                task_id,
+                offset,
             );
             Either::Left(encrypt_reader)
         } else {
@@ -534,7 +543,11 @@ impl Content {
     /// copy_persistent_cache_task copies the persistent cache task content to the destination.
     #[instrument(skip_all)]
     pub async fn copy_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        fs::copy(self.get_persistent_cache_task_path(task_id), to).await?;
+        if self.config.storage.encryption.enable {
+            self.export_encrypted_file_by_range(task_id, to, false, None).await?;
+        } else {
+            fs::copy(self.get_persistent_cache_task_path(task_id), to).await?;
+        }
         info!("copy to {:?} success", to);
         Ok(())
     }
@@ -547,9 +560,6 @@ impl Content {
         offset: u64,
         length: u64,
         range: Option<Range>,
-        // ADDED
-        // encrypt: bool,
-        piece_id: &str,
     ) -> Result<impl AsyncRead> {
         let task_path = self.get_persistent_cache_task_path(task_id);
 
@@ -576,7 +586,8 @@ impl Content {
             let decrypt_reader = DecryptReader::new(
                 limited_reader, 
                 key, 
-                piece_id
+                task_id,
+                target_offset,
             );
 
             return Ok(Either::Left(decrypt_reader));
@@ -585,7 +596,6 @@ impl Content {
         Ok(Either::Right(limited_reader))
     }
 
-    // TODO encryption?
     /// read_persistent_cache_piece_with_dual_read return two readers, one is the range reader, and the other is the
     /// full reader of the persistent cache piece. It is used for cache the piece content to the proxy cache.
     #[instrument(skip_all)]
@@ -596,6 +606,8 @@ impl Content {
         length: u64,
         range: Option<Range>,
     ) -> Result<(impl AsyncRead, impl AsyncRead)> {
+        // TODO: encryption
+        todo!("encryption");
         let task_path = self.get_persistent_cache_task_path(task_id);
 
         // Calculate the target offset and length based on the range.
@@ -640,9 +652,6 @@ impl Content {
         offset: u64,
         expected_length: u64,
         reader: &mut R,
-        // ADDED
-        // encrypt: bool,
-        piece_id: &str,
     ) -> Result<WritePieceResponse> {
         // Open the file and seek to the offset.
         let task_path = self.get_persistent_cache_task_path(task_id);
@@ -674,7 +683,8 @@ impl Content {
             let encrypt_reader = EncryptReader::new(
                 tee, 
                 key, 
-                piece_id
+                task_id,
+                offset,
             );
             Either::Left(encrypt_reader)
         } else {
@@ -724,6 +734,84 @@ impl Content {
             .join(&task_id[..3])
             .join(task_id)
     }
+
+    /// TODO: copy encrypt file
+    async fn export_encrypted_file_by_range(&self, task_id: &str, to: &Path, is_task: bool, range: Option<Range>) -> Result<()> {
+        let task_path = if is_task {
+            self.get_task_path(task_id)
+        } else {
+            self.get_persistent_cache_task_path(task_id)
+        };
+
+        // source file
+        // TODO: difference with OpenOption?
+        let mut src_file = File::open(task_path.as_path()).await.inspect_err(|err| {
+            error!("open {:?} failed: {}", task_path, err);
+        })?;
+
+        // handle range
+        let (src_file, offset) = if let Some(range) = range{
+            src_file.seek(SeekFrom::Start(range.start)).await?;
+            let range_reader = src_file.take(range.length);
+            (Either::Left(range_reader), range.start)
+        } else {
+            (Either::Right(src_file), 0)
+        };
+        
+        // TODO: need buf?
+        let src_buf_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, src_file);
+        let key = self.key.as_ref().expect("should have key when encryption enabled");
+        let decrypt_reader = DecryptReader::new(
+            src_buf_reader, 
+            key, 
+            task_id,
+            offset,
+        );
+
+        // destination file
+        let dest_file = OpenOptions::new()
+            .truncate(false)
+            .write(true)
+            .create(true)
+            .open(to)
+            .await
+            .inspect_err(|err| {
+                error!("open {:?} failed: {}", to, err);
+            })?;
+
+        // ALT
+        // TODO: need buf?
+        let mut reader = decrypt_reader;
+        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, dest_file);
+
+        let start = Instant::now();
+
+        let length = io::copy(&mut reader, &mut writer).await.inspect_err(|err| {
+            error!("copy {:?} failed: {}", task_path, err);
+        })?;
+
+        writer.flush().await.inspect_err(|err| {
+            error!("flush {:?} failed: {}", task_path, err);
+        })?;
+
+        let duration = start.elapsed();
+
+        let task_type = if is_task {
+            "Task"
+        } else {
+            "PersistentCacheTask"
+        };
+        info!(
+            "{} copy decrypted {} B = {} KB = {} MB to {:?}, costing {:?}", 
+            task_type, length, length / 1024, length / 1024 / 1024, to, duration
+        );
+
+        // ALT
+        // let writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, dest_file);
+        // let _len = file_copy(decrypt_reader, writer, self.config.storage.write_buffer_size).await?;
+
+        Ok(())
+    }
 }
 
 /// calculate_piece_range calculates the target offset and length based on the piece range and
@@ -737,6 +825,39 @@ pub fn calculate_piece_range(offset: u64, length: u64, range: Option<Range>) -> 
     } else {
         (offset, length)
     }
+}
+
+// TODO: better then tokio::io::copy?
+pub async fn file_copy<R, W>(mut reader: R, mut writer: W, buf_size: usize) -> Result<u64>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let start = Instant::now();
+    // const BUF_SIZE: usize = 8;
+    // let mut buf = vec![0u8; BUF_SIZE * 1024 * 1024];
+    let mut buf = vec![0u8; buf_size];
+    let mut total = 0;
+    
+    loop {
+        let n = reader.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        writer.write_all(&buf[..n]).await?;
+        total += n as u64;
+    }
+
+    writer.flush().await.unwrap();
+
+    let elapsed = start.elapsed();
+    
+    let total_kb = total / 1024;
+    let total_mb = total / 1024 / 1024;
+    // let total_mb = total as f64 / (1024.0 * 1024.0);
+    info!("diy file copy {}B = {}KB = {}MB, costing {:?}", total, total_kb, total_mb, elapsed);
+
+    Ok(total)
 }
 
 #[cfg(test)]
@@ -820,11 +941,11 @@ mod tests {
         let data = b"hello, world!";
         let mut reader = Cursor::new(data);
         content
-            .write_piece(task_id, 0, 13, &mut reader, "")
+            .write_piece(task_id, 0, 13, &mut reader)
             .await
             .unwrap();
 
-        let mut reader = content.read_piece(task_id, 0, 13, None, "").await.unwrap();
+        let mut reader = content.read_piece(task_id, 0, 13, None).await.unwrap();
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await.unwrap();
         assert_eq!(buffer, data);
@@ -838,7 +959,6 @@ mod tests {
                     start: 0,
                     length: 5,
                 }),
-                "",
             )
             .await
             .unwrap();
@@ -859,7 +979,7 @@ mod tests {
         let data = b"test";
         let mut reader = Cursor::new(data);
         let response = content
-            .write_piece(task_id, 0, 4, &mut reader, "")
+            .write_piece(task_id, 0, 4, &mut reader)
             .await
             .unwrap();
         assert_eq!(response.length, 4);
@@ -968,12 +1088,12 @@ mod tests {
         let data = b"hello, world!";
         let mut reader = Cursor::new(data);
         content
-            .write_persistent_cache_piece(task_id, 0, 13, &mut reader, "")
+            .write_persistent_cache_piece(task_id, 0, 13, &mut reader)
             .await
             .unwrap();
 
         let mut reader = content
-            .read_persistent_cache_piece(task_id, 0, 13, None, "")
+            .read_persistent_cache_piece(task_id, 0, 13, None)
             .await
             .unwrap();
         let mut buffer = Vec::new();
@@ -989,7 +1109,6 @@ mod tests {
                     start: 0,
                     length: 5,
                 }),
-                "",
             )
             .await
             .unwrap();
@@ -1013,7 +1132,7 @@ mod tests {
         let data = b"test";
         let mut reader = Cursor::new(data);
         let response = content
-            .write_persistent_cache_piece(task_id, 0, 4, &mut reader, "")
+            .write_persistent_cache_piece(task_id, 0, 4, &mut reader)
             .await
             .unwrap();
         assert_eq!(response.length, 4);
@@ -1131,8 +1250,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_encryption_write_read_persistent_cache_piece() {
-        // cargo test --package dragonfly-client-storage --lib 
-        // \ -- content::tests::test_encrypt_write_persistent_cache_piece --exact --show-output
         use base64;
 
         let temp_dir = tempdir().unwrap();
@@ -1164,7 +1281,7 @@ mod tests {
         // encrypted write
         let mut reader = Cursor::new(data);
         let response = content
-            .write_persistent_cache_piece(task_id, 0, data.len() as u64, &mut reader, piece_id)
+            .write_persistent_cache_piece(task_id, 0, data.len() as u64, &mut reader)
             .await
             .unwrap();
 
@@ -1177,7 +1294,7 @@ mod tests {
         
         // decrypted read
         let mut decrypted_reader = content
-            .read_persistent_cache_piece(task_id, 0, data.len() as u64, None, piece_id)
+            .read_persistent_cache_piece(task_id, 0, data.len() as u64, None)
             .await
             .unwrap();
         
