@@ -16,9 +16,14 @@
 
 pub mod errors;
 pub mod message;
+pub mod enhanced;
+pub mod extensions;
 
 pub use errors::ErrorType;
 pub use errors::ExternalError;
+
+pub use enhanced::{EnhancedError, ErrorBuilder, ErrorCode, ErrorDomain, ErrorSeverity};
+pub use extensions::{DFErrorExt, ErrorHelpers};
 
 pub use errors::OrErr;
 pub use errors::{BackendError, DownloadFromParentFailed};
@@ -39,7 +44,7 @@ pub enum DFError {
     SendTimeout,
 
     /// HashRing is the error for hashring.
-    #[error{"hashring {0} is failed"}]
+    #[error("hashring {0} is failed")]
     HashRing(String),
 
     /// NoSpace is the error when there is no space left on device.
@@ -47,35 +52,35 @@ pub enum DFError {
     NoSpace(String),
 
     /// HostNotFound is the error when the host is not found.
-    #[error{"host {0} not found"}]
+    #[error("host {0} not found")]
     HostNotFound(String),
 
     /// TaskNotFound is the error when the task is not found.
-    #[error{"task {0} not found"}]
+    #[error("task {0} not found")]
     TaskNotFound(String),
 
     /// PieceNotFound is the error when the piece is not found.
-    #[error{"piece {0} not found"}]
+    #[error("piece {0} not found")]
     PieceNotFound(String),
 
     /// PieceStateIsFailed is the error when the piece state is failed.
-    #[error{"piece {0} state is failed"}]
+    #[error("piece {0} state is failed")]
     PieceStateIsFailed(String),
 
     /// DownloadPieceFinished is the error when the download piece finished timeout.
-    #[error{"download piece {0} finished timeout"}]
+    #[error("download piece {0} finished timeout")]
     DownloadPieceFinished(String),
 
     /// WaitForPieceFinishedTimeout is the error when the wait for piece finished timeout.
-    #[error{"wait for piece {0} finished timeout"}]
+    #[error("wait for piece {0} finished timeout")]
     WaitForPieceFinishedTimeout(String),
 
     /// AvailableManagerNotFound is the error when the available manager is not found.
-    #[error{"available manager not found"}]
+    #[error("available manager not found")]
     AvailableManagerNotFound,
 
     /// AvailableSchedulersNotFound is the error when the available schedulers is not found.
-    #[error{"available schedulers not found"}]
+    #[error("available schedulers not found")]
     AvailableSchedulersNotFound,
 
     /// DownloadFromParentFailed is the error when the download from parent is failed.
@@ -83,15 +88,15 @@ pub enum DFError {
     DownloadFromParentFailed(DownloadFromParentFailed),
 
     /// ColumnFamilyNotFound is the error when the column family is not found.
-    #[error{"column family {0} not found"}]
+    #[error("column family {0} not found")]
     ColumnFamilyNotFound(String),
 
     /// InvalidStateTransition is the error when the state transition is invalid.
-    #[error{"can not transit from {0} to {1}"}]
+    #[error("can not transit from {0} to {1}")]
     InvalidStateTransition(String, String),
 
     /// InvalidState is the error when the state is invalid.
-    #[error{"invalid state {0}"}]
+    #[error("invalid state {0}")]
     InvalidState(String),
 
     /// InvalidURI is the error when the uri is invalid.
@@ -103,15 +108,15 @@ pub enum DFError {
     InvalidPeer(String),
 
     /// SchedulerClientNotFound is the error when the scheduler client is not found.
-    #[error{"scheduler client not found"}]
+    #[error("scheduler client not found")]
     SchedulerClientNotFound,
 
     /// UnexpectedResponse is the error when the response is unexpected.
-    #[error{"unexpected response"}]
+    #[error("unexpected response")]
     UnexpectedResponse,
 
     /// DigestMismatch is the error when the digest is mismatch.
-    #[error{"digest mismatch expected: {0}, actual: {1}"}]
+    #[error("digest mismatch expected: {0}, actual: {1}")]
     DigestMismatch(String, String),
 
     /// ContentLengthMismatch is the error when the content length is mismatch.
@@ -147,15 +152,15 @@ pub enum DFError {
     Unknown(String),
 
     /// Unimplemented is the error when the feature is not implemented.
-    #[error{"unimplemented"}]
+    #[error("unimplemented")]
     Unimplemented,
 
     /// EmptyHTTPRangeError is the error when the range fallback error is empty.
-    #[error{"RangeUnsatisfiable: Failed to parse range fallback error, please file an issue"}]
+    #[error("RangeUnsatisfiable: Failed to parse range fallback error, please file an issue")]
     EmptyHTTPRangeError,
 
     /// Unauthorized is the error for unauthorized.
-    #[error{"unauthorized"}]
+    #[error("unauthorized")]
     Unauthorized,
 
     /// TonicStatus is the error for tonic status.
