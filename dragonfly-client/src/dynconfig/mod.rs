@@ -185,7 +185,7 @@ impl Dynconfig {
             let domain_name = Url::parse(addr.as_str())?
                 .host_str()
                 .ok_or(Error::InvalidParameter)
-                .inspect(|_err| {
+                .inspect_err(|_err| {
                     error!("invalid address: {}", addr);
                 })?
                 .to_string();
