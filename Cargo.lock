@@ -1175,6 +1175,7 @@ dependencies = [
  "dragonfly-client-core",
  "dragonfly-client-util",
  "fs2",
+ "leaky-bucket",
  "num_cpus",
  "prost-wkt-types",
  "reqwest",
@@ -1184,6 +1185,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "vortex-protocol",
  "walkdir",
 ]
 
@@ -5564,6 +5566,18 @@ name = "version_check"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
+
+[[package]]
+name = "vortex-protocol"
+version = "0.1.0"
+source = "git+https://github.com/dragonflyoss/vortex-protocol.git?branch=main#af16e18b45c0c7c08e0abd5e2e5eeb6736652894"
+dependencies = [
+ "bytes",
+ "chrono",
+ "rand 0.8.5",
+ "serde",
+ "thiserror 2.0.16",
+]
 
 [[package]]
 name = "walkdir"

@@ -26,9 +26,11 @@ crc32fast.workspace = true
 fs2.workspace = true
 bytes.workspace = true
 bytesize.workspace = true
+leaky-bucket.workspace = true
 num_cpus = "1.17"
 bincode = "1.3.3"
 walkdir = "2.5.0"
+vortex-protocol = { git = "https://github.com/dragonflyoss/vortex-protocol.git", branch = "main" }
 
 [dev-dependencies]
 tempfile.workspace = true
