@@ -182,6 +182,9 @@ pub struct ObjectStorage {
 impl ObjectStorage {
     /// Returns ObjectStorage that implements the Backend trait.
     pub fn new(scheme: Scheme) -> ClientResult<ObjectStorage> {
+        // Initialize the ring as the default TLS provider.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
         // Initialize the reqwest client.
         let client = reqwest::Client::builder()
             .gzip(true)
@@ -356,42 +359,57 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // OSS requires the access key id, access key secret, and endpoint.
-        let (Some(access_key_id), Some(access_key_secret), Some(security_token), Some(endpoint)) = (
+        if let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
             &object_storage.access_key_id,
             &object_storage.access_key_secret,
-            &object_storage.security_token,
             &object_storage.endpoint,
-        ) else {
-            return Err(ClientError::BackendError(Box::new(BackendError {
-                message: format!(
-                    "{} {}",
-                    self.scheme,
-                    make_need_fields_message!(object_storage {
-                        access_key_id,
-                        access_key_secret,
-                        endpoint
-                    })
-                ),
-                status_code: None,
-                header: None,
-            })));
-        };
+        ) {
+            // Initialize the OSS operator with the object storage.
+            let mut builder = opendal::services::Oss::default();
+            builder = builder
+                .access_key_id(access_key_id)
+                .access_key_secret(access_key_secret)
+                .endpoint(endpoint)
+                .root("/")
+                .bucket(&parsed_url.bucket);
 
-        // Initialize the OSS operator with the object storage.
-        let mut builder = opendal::services::Oss::default();
-        builder = builder
-            .access_key_id(access_key_id)
-            .access_key_secret(access_key_secret)
-            .security_token(security_token)
-            .endpoint(endpoint)
-            .root("/")
-            .bucket(&parsed_url.bucket);
+            return Ok(Operator::new(builder)?
+                .finish()
+                .layer(HttpClientLayer::new(HttpClient::with(self.client.clone())))
+                .layer(TimeoutLayer::new().with_timeout(timeout)));
+        }
 
-        Ok(Operator::new(builder)?
-            .finish()
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone())))
-            .layer(TimeoutLayer::new().with_timeout(timeout)))
+        if let (Some(security_token), Some(endpoint)) =
+            (&object_storage.security_token, &object_storage.endpoint)
+        {
+            // Initialize the OSS operator with the object storage.
+            let mut builder = opendal::services::Oss::default();
+            builder = builder
+                .security_token(security_token)
+                .endpoint(endpoint)
+                .root("/")
+                .bucket(&parsed_url.bucket);
+
+            return Ok(Operator::new(builder)?
+                .finish()
+                .layer(HttpClientLayer::new(HttpClient::with(self.client.clone())))
+                .layer(TimeoutLayer::new().with_timeout(timeout)));
+        }
+
+        Err(ClientError::BackendError(Box::new(BackendError {
+            message: format!(
+                "{} {}",
+                self.scheme,
+                make_need_fields_message!(object_storage {
+                    access_key_id,
+                    access_key_secret,
+                    security_token,
+                    endpoint
+                })
+            ),
+            status_code: None,
+            header: None,
+        })))
     }
 
     /// obs_operator initializes the OBS operator with the parsed URL and object storage.
@@ -758,8 +776,17 @@ mod tests {
                 },
             ),
             (Scheme::GCS, ObjectStorageInfo::default()),
+            // (
+            // Scheme::ABS,
+            // ObjectStorageInfo {
+            // endpoint: Some("test-endpoint.local".into()),
+            // access_key_id: Some("access-key-id".into()),
+            // access_key_secret: Some("access-key-secret".into()),
+            // ..Default::default()
+            // },
+            // ),
             (
-                Scheme::ABS,
+                Scheme::OSS,
                 ObjectStorageInfo {
                     endpoint: Some("test-endpoint.local".into()),
                     access_key_id: Some("access-key-id".into()),
@@ -771,8 +798,7 @@ mod tests {
                 Scheme::OSS,
                 ObjectStorageInfo {
                     endpoint: Some("test-endpoint.local".into()),
-                    access_key_id: Some("access-key-id".into()),
-                    access_key_secret: Some("access-key-secret".into()),
+                    security_token: Some("security-token".into()),
                     ..Default::default()
                 },
             ),
@@ -1074,28 +1100,28 @@ mod tests {
         let test_cases = vec![
             (
                 ObjectStorageInfo::default(),
-                "backend error oss need access_key_id, access_key_secret, endpoint",
+                "backend error oss need access_key_id, access_key_secret, security_token, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     access_key_id: Some("access_key_id".into()),
                     ..Default::default()
                 },
-                "backend error oss need access_key_secret, endpoint",
+                "backend error oss need access_key_secret, security_token, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
-                "backend error oss need access_key_id, endpoint",
+                "backend error oss need access_key_id, security_token, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error oss need access_key_id, access_key_secret",
+                "backend error oss need access_key_id, access_key_secret, security_token",
             ),
             (
                 ObjectStorageInfo {
@@ -1103,7 +1129,7 @@ mod tests {
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
-                "backend error oss need endpoint",
+                "backend error oss need security_token, endpoint",
             ),
             (
                 ObjectStorageInfo {
@@ -1111,7 +1137,7 @@ mod tests {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error oss need access_key_secret",
+                "backend error oss need access_key_secret, security_token",
             ),
             (
                 ObjectStorageInfo {
@@ -1119,7 +1145,7 @@ mod tests {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error oss need access_key_id",
+                "backend error oss need access_key_id, security_token",
             ),
         ];
 

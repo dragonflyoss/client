@@ -53,11 +53,11 @@ hyper-util = { version = "0.1.16", features = [
     "http1",
     "http2",
 ] }
-hyper-rustls = { version = "0.27.7", features = ["http1", "http2", "logging", "aws-lc-rs"] }
+hyper-rustls = { version = "0.27.7", features = ["http1", "http2", "logging", "ring"] }
 http-range-header = "0.4.2"
 tracing = "0.1"
 url = "2.5.4"
-rustls = { version = "0.23.31", features = ["tls12", "aws-lc-rs"] }
+rustls = { version = "0.23.31", features = ["tls12", "ring"] }
 rustls-pki-types = "1.12.0"
 rustls-pemfile = "2.2.0"
 sha2 = "0.10"
@@ -76,7 +76,7 @@ tokio-stream = "0.1.17"
 validator = { version = "0.16", features = ["derive"] }
 warp = "0.3.5"
 headers = "0.4.1"
-regex = "1.11.1"
+regex = "1.11.2"
 humantime = "2.1.0"
 prost-wkt-types = "0.6"
 chrono = { version = "0.4.41", features = ["serde", "clock"] }
@@ -99,9 +99,9 @@ bytesize-serde = "0.2.1"
 percent-encoding = "2.3.2"
 tempfile = "3.20.0"
 tokio-rustls = { version = "0.26.2", default-features = false, features = [
-  "aws-lc-rs",
+  "ring",
 ] }
-serde_json = "1.0.142"
+serde_json = "1.0.143"
 lru = "0.12.5"
 fs2 = "0.4.3"
 lazy_static = "1.5"
