@@ -475,6 +475,12 @@ impl PersistentCacheTask {
                 created_at.naive_utc(),
             )
             .await?;
+        
+        // When enable encryption, copy encrypted file instead of create hard-link to source file
+        if self.config.storage.encryption.enable {
+            info!("omit hard link when encryption is enabled");
+            return Ok(task);
+        }
 
         // Attempt to create a hard link from the task file to the output path.
         //
