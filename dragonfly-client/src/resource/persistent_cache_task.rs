@@ -50,9 +50,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom, BufWriter, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom};
 use tokio::sync::{
     mpsc::{self, Sender},
     Semaphore,
@@ -486,7 +486,7 @@ impl PersistentCacheTask {
         
         // When enable encryption, copy encrypted file instead of create hard-link to source file
         if self.config.storage.encryption.enable {
-            info!("omit HARD-LINK when encryption is enabled");
+            info!("omit hard link when encryption is enabled");
             return Ok(task);
         }
 

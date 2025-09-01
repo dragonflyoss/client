@@ -228,7 +228,6 @@ impl IDGenerator {
 
     /// task_type generates the task type by the task id.
     pub fn task_type(&self, id: &str) -> TaskType {
-        // TODO: useless?
         if id.ends_with(PERSISTENT_CACHE_TASK_SUFFIX) {
             return TaskType::PersistentCache;
         }

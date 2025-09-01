@@ -56,8 +56,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
-use std::time::{Duration, Instant};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
+use std::time::Instant;
+use tokio::io::AsyncReadExt;
 use tokio::sync::{
     mpsc::{self, Sender},
     Semaphore,
@@ -143,7 +143,7 @@ impl Task {
         if task.content_length.is_some() && task.piece_length.is_some() {
             // Omit HARD-LINK when use encryption
             if self.config.storage.encryption.enable {
-                info!("omit HARD-LINK when encryption is enabled");
+                info!("omit hardlink when encryption is enabled");
                 return Ok(task);
             }
 
@@ -267,7 +267,7 @@ impl Task {
 
         // Omit HARD-LINK when use encryption
         if self.config.storage.encryption.enable {
-            info!("omit HARD-LINK when encryption is enabled");
+            info!("omit hard link when encryption is enabled");
             return task;
         }
 
