@@ -68,7 +68,7 @@ use tonic::{
     Code, Request, Response, Status,
 };
 use tower::{service_fn, ServiceBuilder};
-use tracing::{error, info, instrument, Instrument, Span};
+use tracing::{error, info, instrument, warn, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
@@ -485,12 +485,14 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                 return;
                             }
 
-                            // TODO: encryption is not compatible with hardlink
+                            // encryption is not compatible with hardlink
                             let encryption_enable = config_clone.storage.encryption.enable;
-                            assert!(!encryption_enable || !download_clone.force_hard_link);
+                            if encryption_enable && download_clone.force_hard_link {
+                                warn!("omit force hard link because encryption is enabled");
+                            }
 
                             if let Some(output_path) = &download_clone.output_path {
-                                if !download_clone.force_hard_link {
+                                if !download_clone.force_hard_link || encryption_enable {
                                     let output_path = Path::new(output_path.as_str());
                                     if output_path.exists() {
                                         match task_manager_clone
@@ -1062,12 +1064,14 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             return;
                         }
 
-                        // TODO: encryption is not compatible with hardlink
+                        // encryption is not compatible with hardlink
                         let encryption_enable = config_clone.storage.encryption.enable;
-                        assert!(!encryption_enable || !request_clone.force_hard_link);
+                        if encryption_enable && request_clone.force_hard_link {
+                            warn!("omit force hard link because encryption is enabled");
+                        }
 
                         if let Some(output_path) = &request_clone.output_path {
-                            if !request_clone.force_hard_link {
+                            if !request_clone.force_hard_link || encryption_enable {
                                 let output_path = Path::new(output_path.as_str());
                                 if output_path.exists() {
                                     match task_manager_clone
@@ -1106,8 +1110,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                     return;
                                 }
                             }
-
-                            // TODO: need to be decrypt first when calculate the digest of a encrypted file
 
                             // Verify the file digest if it is provided.
                             if let Some(raw_digest) = &request_clone.digest {
