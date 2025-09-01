@@ -37,15 +37,11 @@ use dragonfly_client_util::{
 use futures::TryStreamExt;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, StreamBody};
 use hyper::body::Frame;
-use hyper::client::conn::http1::Builder as ClientBuilder;
 use hyper::server::conn::http1::Builder as ServerBuilder;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{Method, Request};
-use hyper_util::{
-    client::legacy::Client,
-    rt::{tokio::TokioIo, TokioExecutor},
-};
+use reqwest::Client;
 use lazy_static::lazy_static;
 use rcgen::Certificate;
 use rustls::{RootCertStore, ServerConfig};
@@ -987,32 +983,50 @@ async fn proxy_via_dfdaemon(
 /// proxy_via_http proxies the HTTP request directly to the remote server.
 #[instrument(skip_all)]
 async fn proxy_via_http(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
-    let Some(host) = request.uri().host() else {
-        error!("CONNECT host is not socket addr: {:?}", request.uri());
-        return Ok(make_error_response(
-            header::ErrorType::Proxy,
-            http::StatusCode::BAD_REQUEST,
-            None,
-        ));
-    };
-    let port = request.uri().port_u16().unwrap_or(80);
-
-    let stream = TcpStream::connect((host, port)).await?;
-    let io = TokioIo::new(stream);
-    let (mut client, conn) = ClientBuilder::new()
-        .preserve_header_case(true)
-        .title_case_headers(true)
-        .handshake(io)
-        .await?;
-
-    tokio::task::spawn(async move {
-        if let Err(err) = conn.await {
-            error!("connection failed: {:?}", err);
-        }
-    });
-
-    let response = client.send_request(request).await?;
-    Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
+    // Create a reqwest client with default configuration
+    let client = Client::new();
+    
+    // Convert the hyper request to a reqwest request
+    let mut reqwest_builder = client.request(
+        request.method().clone(),
+        request.uri().to_string()
+    );
+    
+    // Copy headers from the original request
+    for (name, value) in request.headers() {
+        reqwest_builder = reqwest_builder.header(name, value);
+    }
+    
+    // Get the request body
+    let body_bytes = hyper::body::to_bytes(request.into_body()).await?;
+    
+    // Send the request
+    let response = reqwest_builder
+        .body(body_bytes)
+        .send()
+        .await
+        .map_err(|e| {
+            error!("HTTP request failed: {:?}", e);
+            ClientError::Unknown(e.to_string())
+        })?;
+    
+    // Convert the reqwest response to a hyper response
+    let status = response.status();
+    let mut headers = http::HeaderMap::new();
+    for (name, value) in response.headers() {
+        headers.insert(name, value.clone());
+    }
+    
+    let body_bytes = response.bytes().await?;
+    let body_stream = futures::stream::once(async { Ok::<_, ClientError>(body_bytes) });
+    let body = StreamBody::new(body_stream.map_ok(Frame::data).map_err(|_| ClientError::Unknown("Stream error".to_string())));
+    let boxed_body = body.boxed();
+    
+    let mut response = Response::new(boxed_body);
+    *response.status_mut() = status;
+    *response.headers_mut() = headers;
+    
+    Ok(response)
 }
 
 /// proxy_via_https proxies the HTTPS request directly to the remote server.
@@ -1021,35 +1035,83 @@ async fn proxy_via_https(
     request: Request<hyper::body::Incoming>,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
-    let client_config_builder = match registry_cert.as_ref() {
+    // Create a reqwest client with TLS configuration
+    let client = match registry_cert.as_ref() {
         Some(registry_cert) => {
             let mut root_cert_store = RootCertStore::empty();
             root_cert_store.add_parsable_certificates(registry_cert.to_owned());
 
             // TLS client config using the custom CA store for lookups.
-            rustls::ClientConfig::builder()
+            let client_config = rustls::ClientConfig::builder()
                 .with_root_certificates(root_cert_store)
-                .with_no_client_auth()
+                .with_no_client_auth();
+
+            Client::builder()
+                .use_preconfigured_tls(client_config)
+                .build()
+                .map_err(|e| {
+                    error!("Failed to create HTTPS client: {:?}", e);
+                    ClientError::Unknown(e.to_string())
+                })?
         }
-        // Default TLS client config with native roots.
-        None => rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(NoVerifier::new())
-            .with_no_client_auth(),
+        // Default TLS client config with no verification
+        None => {
+            let client_config = rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(NoVerifier::new())
+                .with_no_client_auth();
+
+            Client::builder()
+                .use_preconfigured_tls(client_config)
+                .build()
+                .map_err(|e| {
+                    error!("Failed to create HTTPS client: {:?}", e);
+                    ClientError::Unknown(e.to_string())
+                })?
+        }
     };
 
-    let https = hyper_rustls::HttpsConnectorBuilder::new()
-        .with_tls_config(client_config_builder)
-        .https_or_http()
-        .enable_http1()
-        .build();
-
-    let client = Client::builder(TokioExecutor::new()).build(https);
-    let response = client.request(request).await.inspect_err(|err| {
-        error!("request failed: {:?}", err);
-    })?;
-
-    Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
+    // Convert the hyper request to a reqwest request
+    let mut reqwest_builder = client.request(
+        request.method().clone(),
+        request.uri().to_string()
+    );
+    
+    // Copy headers from the original request
+    for (name, value) in request.headers() {
+        reqwest_builder = reqwest_builder.header(name, value);
+    }
+    
+    // Get the request body
+    let body_bytes = hyper::body::to_bytes(request.into_body()).await?;
+    
+    // Send the request
+    let response = reqwest_builder
+        .body(body_bytes)
+        .send()
+        .await
+        .map_err(|e| {
+            error!("HTTPS request failed: {:?}", e);
+            ClientError::Unknown(e.to_string())
+        })?;
+    
+    // Convert the reqwest response to a hyper response
+    let status = response.status();
+    let mut headers = http::HeaderMap::new();
+    for (name, value) in response.headers() {
+        headers.insert(name, value.clone());
+    }
+    
+    let body_bytes = response.bytes().await?;
+    let body_stream = futures::stream::once(async { Ok::<_, ClientError>(body_bytes) });
+    let body = StreamBody::new(body_stream.map_ok(Frame::data).map_err(|_| ClientError::Unknown("Stream error".to_string())));
+    let boxed_body = body.boxed();
+    
+    let mut response = Response::new(boxed_body);
+    *response.status_mut() = status;
+    *response.headers_mut() = headers;
+    
+    Ok(response)
 }
 
 /// make_registry_mirror_request makes a registry mirror request by the request.
