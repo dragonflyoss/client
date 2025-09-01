@@ -17,7 +17,11 @@
 use dragonfly_api::common;
 use dragonfly_client_core::error::BackendError;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
-use opendal::{layers::TimeoutLayer, raw::HttpClient, Metakey, Operator};
+use opendal::{
+    layers::{HttpClientLayer, TimeoutLayer},
+    raw::HttpClient,
+    Operator,
+};
 use percent_encoding::percent_decode_str;
 use std::fmt;
 use std::result::Result;
@@ -254,7 +258,6 @@ impl ObjectStorage {
         builder = builder
             .access_key_id(access_key_id)
             .secret_access_key(access_key_secret)
-            .http_client(HttpClient::with(self.client.clone()))
             .bucket(&parsed_url.bucket)
             .region(region);
 
@@ -270,6 +273,7 @@ impl ObjectStorage {
 
         Ok(Operator::new(builder)?
             .finish()
+            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone())))
             .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 
@@ -282,9 +286,7 @@ impl ObjectStorage {
     ) -> ClientResult<Operator> {
         // Initialize the GCS operator with the object storage.
         let mut builder = opendal::services::Gcs::default();
-        builder = builder
-            .http_client(HttpClient::with(self.client.clone()))
-            .bucket(&parsed_url.bucket);
+        builder = builder.bucket(&parsed_url.bucket);
 
         // Configure the credentials using the local path to the credential file if provided.
         // Otherwise, configure using the Application Default Credentials (ADC).
@@ -304,6 +306,7 @@ impl ObjectStorage {
 
         Ok(Operator::new(builder)?
             .finish()
+            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone())))
             .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 
@@ -340,12 +343,12 @@ impl ObjectStorage {
         builder = builder
             .account_name(access_key_id)
             .account_key(access_key_secret)
-            .http_client(HttpClient::with(self.client.clone()))
             .container(&parsed_url.bucket)
             .endpoint(endpoint);
 
         Ok(Operator::new(builder)?
             .finish()
+            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone())))
             .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 
@@ -357,9 +360,10 @@ impl ObjectStorage {
         timeout: Duration,
     ) -> ClientResult<Operator> {
         // OSS requires the access key id, access key secret, and endpoint.
-        let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
+        let (Some(access_key_id), Some(access_key_secret), Some(security_token), Some(endpoint)) = (
             &object_storage.access_key_id,
             &object_storage.access_key_secret,
+            &object_storage.security_token,
             &object_storage.endpoint,
         ) else {
             return Err(ClientError::BackendError(Box::new(BackendError {
@@ -382,13 +386,14 @@ impl ObjectStorage {
         builder = builder
             .access_key_id(access_key_id)
             .access_key_secret(access_key_secret)
+            .security_token(security_token)
             .endpoint(endpoint)
-            .http_client(HttpClient::with(self.client.clone()))
             .root("/")
             .bucket(&parsed_url.bucket);
 
         Ok(Operator::new(builder)?
             .finish()
+            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone())))
             .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 
@@ -426,11 +431,11 @@ impl ObjectStorage {
             .access_key_id(access_key_id)
             .secret_access_key(access_key_secret)
             .endpoint(endpoint)
-            .http_client(HttpClient::with(self.client.clone()))
             .bucket(&parsed_url.bucket);
 
         Ok(Operator::new(builder)?
             .finish()
+            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone())))
             .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 
@@ -468,11 +473,11 @@ impl ObjectStorage {
             .secret_id(access_key_id)
             .secret_key(access_key_secret)
             .endpoint(endpoint)
-            .http_client(HttpClient::with(self.client.clone()))
             .bucket(&parsed_url.bucket);
 
         Ok(Operator::new(builder)?
             .finish()
+            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone())))
             .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 }
@@ -513,7 +518,6 @@ impl crate::Backend for ObjectStorage {
             operator
                 .list_with(&parsed_url.key)
                 .recursive(true)
-                .metakey(Metakey::ContentLength | Metakey::Mode)
                 .await // Do the list op here.
                 .map_err(|err| {
                     error!(

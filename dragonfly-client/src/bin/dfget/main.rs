@@ -250,6 +250,12 @@ struct Args {
 
     #[arg(
         long,
+        help = "Specify the temporary STS security token for accessing Object Storage Service(OSS)"
+    )]
+    storage_security_token: Option<String>,
+
+    #[arg(
+        long,
         help = "Specify the delegation token for Hadoop Distributed File System(HDFS)"
     )]
     hdfs_delegation_token: Option<String>,
@@ -651,6 +657,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         access_key_id: args.storage_access_key_id.clone(),
         access_key_secret: args.storage_access_key_secret.clone(),
         session_token: args.storage_session_token.clone(),
+        security_token: args.storage_security_token.clone(),
         region: args.storage_region.clone(),
         endpoint: args.storage_endpoint.clone(),
         credential_path: args.storage_credential_path.clone(),
@@ -761,6 +768,7 @@ async fn download(
             access_key_id: args.storage_access_key_id.clone(),
             access_key_secret: args.storage_access_key_secret.clone(),
             session_token: args.storage_session_token.clone(),
+            security_token: args.storage_security_token.clone(),
             region: args.storage_region.clone(),
             endpoint: args.storage_endpoint.clone(),
             credential_path: args.storage_credential_path.clone(),

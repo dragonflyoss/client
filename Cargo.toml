@@ -29,10 +29,10 @@ dragonfly-client-storage = { path = "dragonfly-client-storage", version = "1.0.1
 dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.0.15" }
 dragonfly-client-util = { path = "dragonfly-client-util", version = "1.0.15" }
 dragonfly-client-init = { path = "dragonfly-client-init", version = "1.0.15" }
-dragonfly-api = "2.1.59"
+dragonfly-api = "2.1.61"
 thiserror = "2.0"
 futures = "0.3.31"
-reqwest = { version = "0.12.4", features = [
+reqwest = { version = "0.12.22", features = [
     "stream",
     "native-tls",
     "default-tls",
@@ -83,7 +83,7 @@ humantime = "2.1.0"
 prost-wkt-types = "0.6"
 chrono = { version = "0.4.41", features = ["serde", "clock"] }
 openssl = { version = "0.10", features = ["vendored"] }
-opendal = { version = "0.48.0", features = [
+opendal = { git = "https://github.com/apache/opendal.git", rev = "7c9c505b4880cad14824b2a22090723ef68ecce5", features = [
     "services-s3",
     "services-azblob",
     "services-gcs",
