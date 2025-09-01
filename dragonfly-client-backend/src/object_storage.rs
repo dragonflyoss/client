@@ -191,9 +191,6 @@ impl ObjectStorage {
             .hickory_dns(true)
             .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
             .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
-            .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
-            .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
-            .http2_keep_alive_while_idle(true)
             .build()?;
 
         Ok(Self { scheme, client })

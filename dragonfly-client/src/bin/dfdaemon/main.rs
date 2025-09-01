@@ -33,6 +33,7 @@ use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::{dfdaemon, VersionValueParser};
 use dragonfly_client_storage::Storage;
 use dragonfly_client_util::{id_generator::IDGenerator, net::Interface};
+use rustls::crypto::aws_lc_rs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -107,6 +108,11 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
+    // Initialize the AWS-LC-RS as the default TLS provider.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .unwrap();
+
     // Parse command line arguments.
     let args = Args::parse();
 
