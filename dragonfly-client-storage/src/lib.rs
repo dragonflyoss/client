@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use bytes::{Bytes, BytesMut};
 use chrono::NaiveDateTime;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
@@ -25,6 +26,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
+use tokio::io::AsyncReadExt;
 use tokio::time::sleep;
 use tokio_util::either::Either;
 use tokio_util::io::InspectReader;
@@ -958,30 +960,23 @@ impl Storage {
         length: u64,
         reader: &mut R,
     ) -> Result<metadata::Piece> {
-        let mut buffer = Vec::with_capacity(length as usize);
-        let mut writer = std::io::Cursor::new(&mut buffer);
         let mut hasher = crc32fast::Hasher::new();
-
+        let mut content = BytesMut::with_capacity(length as usize);
         let mut tee = InspectReader::new(reader, |bytes| {
             hasher.update(bytes);
         });
+        tee.read_buf(&mut content).await?;
 
-        tokio::io::copy(&mut tee, &mut writer).await?;
+        self.cache
+            .write_piece(task_id, piece_id, content.freeze())
+            .await?;
 
         let hash = hasher.finalize().to_string();
-        let content = bytes::Bytes::from(buffer);
-        let content_length = content.len() as u64;
-
-        self.cache.write_piece(task_id, piece_id, content).await?;
-
-        debug!("put piece to cache: {}", piece_id);
-
         let digest = Digest::new(Algorithm::Crc32, hash);
-
         self.metadata.download_piece_finished(
             piece_id,
             offset,
-            content_length,
+            length,
             digest.to_string().as_str(),
             None,
         )
@@ -1024,24 +1019,18 @@ impl Storage {
         parent_id: &str,
         reader: &mut R,
     ) -> Result<metadata::Piece> {
-        let mut buffer = Vec::with_capacity(length as usize);
-        let mut writer = std::io::Cursor::new(&mut buffer);
         let mut hasher = crc32fast::Hasher::new();
-
+        let mut content = BytesMut::with_capacity(length as usize);
         let mut tee = InspectReader::new(reader, |bytes| {
             hasher.update(bytes);
         });
+        tee.read_buf(&mut content).await?;
 
-        tokio::io::copy(&mut tee, &mut writer).await?;
+        self.cache
+            .write_piece(task_id, piece_id, content.freeze())
+            .await?;
 
         let hash = hasher.finalize().to_string();
-        let content = bytes::Bytes::from(buffer);
-        let content_length = content.len() as u64;
-
-        self.cache.write_piece(task_id, piece_id, content).await?;
-
-        debug!("put piece to cache: {}", piece_id);
-
         let digest = Digest::new(Algorithm::Crc32, hash);
 
         // Check the digest of the piece.
@@ -1055,7 +1044,7 @@ impl Storage {
         self.metadata.download_piece_finished(
             piece_id,
             offset,
-            content_length,
+            length,
             digest.to_string().as_str(),
             Some(parent_id.to_string()),
         )
