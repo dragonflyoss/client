@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use chrono::NaiveDateTime;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
