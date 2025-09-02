@@ -17,7 +17,7 @@
 use dragonfly_api::common;
 use dragonfly_client_core::error::BackendError;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
-use opendal::{layers::TimeoutLayer, Metakey, Operator};
+use opendal::{layers::TimeoutLayer, Operator};
 use percent_encoding::percent_decode_str;
 use std::time::Duration;
 use tokio_util::io::StreamReader;
@@ -110,7 +110,6 @@ impl super::Backend for Hdfs {
             operator
                 .list_with(decoded_path.as_str())
                 .recursive(true)
-                .metakey(Metakey::ContentLength | Metakey::Mode)
                 .await // Do the list op here.
                 .map_err(|err| {
                     error!(

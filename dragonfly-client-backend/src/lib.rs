@@ -39,12 +39,6 @@ const POOL_MAX_IDLE_PER_HOST: usize = 1024;
 /// KEEP_ALIVE_INTERVAL is the keep alive interval for TCP connection.
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(60);
 
-/// HTTP2_KEEP_ALIVE_INTERVAL is the interval for HTTP2 keep alive.
-const HTTP2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(300);
-
-/// HTTP2_KEEP_ALIVE_TIMEOUT is the timeout for HTTP2 keep alive.
-const HTTP2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
-
 /// MAX_RETRY_TIMES is the max retry times for the request.
 const MAX_RETRY_TIMES: u32 = 1;
 
