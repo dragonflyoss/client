@@ -218,6 +218,101 @@ impl PersistentCacheTask {
     }
 }
 
+/// CacheTask is the metadata of the cache task.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CacheTask {
+    /// id is the task id.
+    pub id: String,
+
+    /// piece_length is the length of the piece.
+    pub piece_length: Option<u64>,
+
+    /// content_length is the length of the content.
+    pub content_length: Option<u64>,
+
+    /// header is the header of the response.
+    pub response_header: HashMap<String, String>,
+
+    /// uploading_count is the count of the task being uploaded by other peers.
+    pub uploading_count: i64,
+
+    /// uploaded_count is the count of the task has been uploaded by other peers.
+    pub uploaded_count: u64,
+
+    /// updated_at is the time when the task metadata is updated. If the task is downloaded
+    /// by other peers, it will also update updated_at.
+    pub updated_at: NaiveDateTime,
+
+    /// created_at is the time when the task metadata is created.
+    pub created_at: NaiveDateTime,
+
+    /// prefetched_at is the time when the task prefetched.
+    pub prefetched_at: Option<NaiveDateTime>,
+
+    /// failed_at is the time when the task downloads failed.
+    pub failed_at: Option<NaiveDateTime>,
+
+    /// finished_at is the time when the task downloads finished.
+    pub finished_at: Option<NaiveDateTime>,
+}
+
+/// CacheTask implements the cache task database object.
+impl DatabaseObject for CacheTask {
+    /// NAMESPACE is the namespace of [CacheTask] objects.
+    const NAMESPACE: &'static str = "cache_task";
+}
+
+/// CacheTask implements the cache task metadata.
+impl CacheTask {
+    /// is_started returns whether the cache task downloads started.
+    pub fn is_started(&self) -> bool {
+        self.finished_at.is_none()
+    }
+
+    /// is_uploading returns whether the cache task is uploading.
+    pub fn is_uploading(&self) -> bool {
+        self.uploading_count > 0
+    }
+
+    /// is_expired returns whether the cache task is expired.
+    pub fn is_expired(&self, ttl: Duration) -> bool {
+        self.updated_at + ttl < Utc::now().naive_utc()
+    }
+
+    /// is_prefetched returns whether the cache task is prefetched.
+    pub fn is_prefetched(&self) -> bool {
+        self.prefetched_at.is_some()
+    }
+
+    /// is_failed returns whether the cache task downloads failed.
+    pub fn is_failed(&self) -> bool {
+        self.failed_at.is_some()
+    }
+
+    /// is_finished returns whether the cache task downloads finished.
+    pub fn is_finished(&self) -> bool {
+        self.finished_at.is_some()
+    }
+
+    /// is_empty returns whether the cache task is empty.
+    pub fn is_empty(&self) -> bool {
+        match self.content_length() {
+            Some(content_length) => content_length == 0,
+            None => false,
+        }
+    }
+
+    /// piece_length returns the piece length of the cache task.
+    pub fn piece_length(&self) -> Option<u64> {
+        self.piece_length
+    }
+
+    /// content_length returns the content length of the cache task.
+    pub fn content_length(&self) -> Option<u64> {
+        self.content_length
+    }
+}
+
 /// Piece is the metadata of the piece.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Piece {
@@ -753,6 +848,218 @@ impl<E: StorageEngineOwned> Metadata<E> {
         self.db.delete::<PersistentCacheTask>(id.as_bytes())
     }
 
+    /// download_cache_task_started updates the metadata of the cache task when the cache task downloads started.
+    #[instrument(skip_all)]
+    pub fn download_cache_task_started(
+        &self,
+        id: &str,
+        piece_length: Option<u64>,
+        content_length: Option<u64>,
+        response_header: Option<HeaderMap>,
+    ) -> Result<CacheTask> {
+        // Convert the response header to hashmap.
+        let response_header = response_header
+            .as_ref()
+            .map(headermap_to_hashmap)
+            .unwrap_or_default();
+
+        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                // If the task exists, update the task metadata.
+                task.updated_at = Utc::now().naive_utc();
+                task.failed_at = None;
+
+                // Protect content length to be overwritten by None.
+                if content_length.is_some() {
+                    task.content_length = content_length;
+                }
+
+                // Protect piece length to be overwritten by None.
+                if piece_length.is_some() {
+                    task.piece_length = piece_length;
+                }
+
+                // If the task has the response header, the response header
+                // will not be covered.
+                if task.response_header.is_empty() {
+                    task.response_header = response_header;
+                }
+
+                task
+            }
+            None => CacheTask {
+                id: id.to_string(),
+                piece_length,
+                content_length,
+                response_header,
+                updated_at: Utc::now().naive_utc(),
+                created_at: Utc::now().naive_utc(),
+                ..Default::default()
+            },
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// download_cache_task_finished updates the metadata of the cache task when the cache task downloads finished.
+    #[instrument(skip_all)]
+    pub fn download_cache_task_finished(&self, id: &str) -> Result<CacheTask> {
+        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.updated_at = Utc::now().naive_utc();
+                task.failed_at = None;
+                task.finished_at = Some(Utc::now().naive_utc());
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// download_cache_task_failed updates the metadata of the cache task when the cache task downloads failed.
+    #[instrument(skip_all)]
+    pub fn download_cache_task_failed(&self, id: &str) -> Result<CacheTask> {
+        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.updated_at = Utc::now().naive_utc();
+                task.failed_at = Some(Utc::now().naive_utc());
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// prefetch_cache_task_started updates the metadata of the cache task when the cache task prefetch started.
+    #[instrument(skip_all)]
+    pub fn prefetch_cache_task_started(&self, id: &str) -> Result<CacheTask> {
+        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                // If the task is prefetched, return an error.
+                if task.is_prefetched() {
+                    return Err(Error::InvalidState("prefetched".to_string()));
+                }
+
+                task.updated_at = Utc::now().naive_utc();
+                task.prefetched_at = Some(Utc::now().naive_utc());
+                task.failed_at = None;
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// prefetch_cache_task_failed updates the metadata of the cache task when the cache task prefetch failed.
+    #[instrument(skip_all)]
+    pub fn prefetch_cache_task_failed(&self, id: &str) -> Result<CacheTask> {
+        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.updated_at = Utc::now().naive_utc();
+                task.prefetched_at = None;
+                task.failed_at = Some(Utc::now().naive_utc());
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// upload_cache_task_started updates the metadata of the cache task when the cache task uploads started.
+    #[instrument(skip_all)]
+    pub fn upload_cache_task_started(&self, id: &str) -> Result<CacheTask> {
+        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.uploading_count += 1;
+                task.updated_at = Utc::now().naive_utc();
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// upload_cache_task_finished updates the metadata of the cache task when the cache task uploads finished.
+    #[instrument(skip_all)]
+    pub fn upload_cache_task_finished(&self, id: &str) -> Result<CacheTask> {
+        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.uploading_count -= 1;
+                task.uploaded_count += 1;
+                task.updated_at = Utc::now().naive_utc();
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// upload_cache_task_failed updates the metadata of the cache task when the cache task uploads failed.
+    #[instrument(skip_all)]
+    pub fn upload_cache_task_failed(&self, id: &str) -> Result<CacheTask> {
+        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.uploading_count -= 1;
+                task.updated_at = Utc::now().naive_utc();
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// get_cache_task gets the cache task metadata.
+    #[instrument(skip_all)]
+    pub fn get_cache_task(&self, id: &str) -> Result<Option<CacheTask>> {
+        self.db.get(id.as_bytes())
+    }
+
+    /// is_cache_task_exists checks if the cache task exists.
+    #[instrument(skip_all)]
+    pub fn is_cache_task_exists(&self, id: &str) -> Result<bool> {
+        self.db.is_exist::<CacheTask>(id.as_bytes())
+    }
+
+    /// get_cache_tasks gets the cache task metadatas.
+    #[instrument(skip_all)]
+    pub fn get_cache_tasks(&self) -> Result<Vec<CacheTask>> {
+        let tasks = self
+            .db
+            .iter_raw::<CacheTask>()?
+            .map(|ele| {
+                let (_, value) = ele?;
+                Ok(value)
+            })
+            .collect::<Result<Vec<Box<[u8]>>>>()?;
+
+        tasks
+            .iter()
+            .map(|task| CacheTask::deserialize_from(task))
+            .collect()
+    }
+
+    /// delete_cache_task deletes the cache task metadata.
+    #[instrument(skip_all)]
+    pub fn delete_cache_task(&self, id: &str) -> Result<()> {
+        info!("delete cache task metadata {}", id);
+        self.db.delete::<CacheTask>(id.as_bytes())
+    }
+
     /// create_persistent_cache_piece creates a new persistent cache piece, which is imported by
     /// local.
     #[instrument(skip_all)]
@@ -927,6 +1234,7 @@ impl Metadata<RocksdbStorageEngine> {
                 Task::NAMESPACE,
                 Piece::NAMESPACE,
                 PersistentCacheTask::NAMESPACE,
+                CacheTask::NAMESPACE,
             ],
             config.storage.keep,
         )?;
@@ -1023,6 +1331,66 @@ mod tests {
         // Test delete_task.
         metadata.delete_task(task_id).unwrap();
         let task = metadata.get_task(task_id).unwrap();
+        assert!(task.is_none());
+    }
+
+    #[test]
+    fn test_cache_task_lifecycle() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join("log");
+        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
+        let task_id = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
+
+        // Test download_task_started.
+        metadata
+            .download_cache_task_started(task_id, Some(1024), Some(1024), None)
+            .unwrap();
+        let task = metadata
+            .get_cache_task(task_id)
+            .unwrap()
+            .expect("task should exist after download_cache_task_started");
+        assert_eq!(task.id, task_id);
+        assert_eq!(task.piece_length, Some(1024));
+        assert_eq!(task.content_length, Some(1024));
+        assert!(task.response_header.is_empty());
+        assert_eq!(task.uploading_count, 0);
+        assert_eq!(task.uploaded_count, 0);
+        assert!(!task.is_finished());
+
+        // Test download_cache_task_finished.
+        metadata.download_cache_task_finished(task_id).unwrap();
+        let task = metadata.get_cache_task(task_id).unwrap().unwrap();
+        assert!(task.is_finished());
+
+        // Test upload_cache_task_started.
+        metadata.upload_cache_task_started(task_id).unwrap();
+        let task = metadata.get_cache_task(task_id).unwrap().unwrap();
+        assert_eq!(task.uploading_count, 1);
+
+        // Test upload_cache_task_finished.
+        metadata.upload_cache_task_finished(task_id).unwrap();
+        let task = metadata.get_cache_task(task_id).unwrap().unwrap();
+        assert_eq!(task.uploading_count, 0);
+        assert_eq!(task.uploaded_count, 1);
+
+        // Test upload_cache_task_failed.
+        let task = metadata.upload_cache_task_started(task_id).unwrap();
+        assert_eq!(task.uploading_count, 1);
+        let task = metadata.upload_cache_task_failed(task_id).unwrap();
+        assert_eq!(task.uploading_count, 0);
+        assert_eq!(task.uploaded_count, 1);
+
+        // Test get_cache_tasks.
+        let task_id = "a535b115f18d96870f0422ac891f91dd162f2f391e4778fb84279701fcd02dd1";
+        metadata
+            .download_cache_task_started(task_id, Some(1024), None, None)
+            .unwrap();
+        let tasks = metadata.get_cache_tasks().unwrap();
+        assert_eq!(tasks.len(), 2);
+
+        // Test delete_cache_task.
+        metadata.delete_cache_task(task_id).unwrap();
+        let task = metadata.get_cache_task(task_id).unwrap();
         assert!(task.is_none());
     }
 
