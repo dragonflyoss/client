@@ -359,9 +359,15 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        if let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
+        if let (
+            Some(access_key_id),
+            Some(access_key_secret),
+            Some(security_token),
+            Some(endpoint),
+        ) = (
             &object_storage.access_key_id,
             &object_storage.access_key_secret,
+            &object_storage.security_token,
             &object_storage.endpoint,
         ) {
             // Initialize the OSS operator with the object storage.
@@ -369,6 +375,7 @@ impl ObjectStorage {
             builder = builder
                 .access_key_id(access_key_id)
                 .access_key_secret(access_key_secret)
+                .security_token(security_token)
                 .endpoint(endpoint)
                 .root("/")
                 .bucket(&parsed_url.bucket);
@@ -379,13 +386,16 @@ impl ObjectStorage {
                 .layer(TimeoutLayer::new().with_timeout(timeout)));
         }
 
-        if let (Some(security_token), Some(endpoint)) =
-            (&object_storage.security_token, &object_storage.endpoint)
-        {
+        if let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
+            &object_storage.access_key_id,
+            &object_storage.access_key_secret,
+            &object_storage.endpoint,
+        ) {
             // Initialize the OSS operator with the object storage.
             let mut builder = opendal::services::Oss::default();
             builder = builder
-                .security_token(security_token)
+                .access_key_id(access_key_id)
+                .access_key_secret(access_key_secret)
                 .endpoint(endpoint)
                 .root("/")
                 .bucket(&parsed_url.bucket);
@@ -798,6 +808,8 @@ mod tests {
                 Scheme::OSS,
                 ObjectStorageInfo {
                     endpoint: Some("test-endpoint.local".into()),
+                    access_key_id: Some("access-key-id".into()),
+                    access_key_secret: Some("access-key-secret".into()),
                     security_token: Some("security-token".into()),
                     ..Default::default()
                 },
