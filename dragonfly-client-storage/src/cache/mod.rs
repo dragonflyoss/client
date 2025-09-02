@@ -120,15 +120,6 @@ pub struct Cache {
     tasks: Arc<RwLock<LruCache<String, Task>>>,
 }
 
-/// WriteCachePieceResponse is the response of writing a cache piece.
-pub struct WriteCachePieceResponse {
-    /// length is the length of the cache piece.
-    pub length: u64,
-
-    /// hash is the hash of the cache piece.
-    pub hash: String,
-}
-
 /// Cache implements the cache for storing piece content by LRU algorithm.
 impl Cache {
     /// new creates a new cache with the specified capacity.
