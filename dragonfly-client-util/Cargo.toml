@@ -12,7 +12,6 @@ edition.workspace = true
 [dependencies]
 dragonfly-client-core.workspace = true
 dragonfly-api.workspace = true
-reqwest.workspace = true
 http-range-header.workspace = true
 http.workspace = true
 tracing.workspace = true
@@ -31,9 +30,24 @@ lazy_static.workspace = true
 bytesize.workspace = true
 lru.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
+tonic.workspace = true
+reqwest.workspace = true
+reqwest-middleware.workspace = true
+futures.workspace = true
+thiserror.workspace = true
 rustix = { version = "1.0.8", features = ["fs"] }
 base64 = "0.22.1"
 pnet = "0.35.0"
+bytes = "1.0.0"
+protobuf = "3.7.2"
+hashring = "0.3.6"
+tonic-health = "0.12.3"
+local-ip-address = "0.6.5"
+hostname = "^0.4"
+dashmap = "6.1.0"
 
 [dev-dependencies]
 tempfile.workspace = true
+mockito = "1.0"
+mocktail = "0.3.0"
