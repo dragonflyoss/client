@@ -19,4 +19,6 @@ pub mod fs;
 pub mod http;
 pub mod id_generator;
 pub mod net;
+pub mod request;
+pub mod selector;
 pub mod tls;
