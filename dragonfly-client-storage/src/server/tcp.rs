@@ -15,25 +15,28 @@
  */
 
 use crate::Storage;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use chrono::Utc;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_util::{id_generator::IDGenerator, shutdown};
 use leaky_bucket::RateLimiter;
-use vortex_protocol::tlv::piece_content::PieceContent;
 use std::net::SocketAddr;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, copy};
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
 use tokio::sync::{mpsc, Barrier};
 use tracing::{error, info, Span};
 use vortex_protocol::{
-    Header,
-    HEADER_SIZE,
-    tlv::{download_piece::DownloadPiece, Tag},
+    Header, HEADER_SIZE,
+    tlv::{
+        download_persistent_cache_piece::DownloadPersistentCachePiece, download_piece::DownloadPiece,
+        error::{Error, Code},
+        persistent_cache_piece_content::PersistentCachePieceContent, piece_content::PieceContent,
+        Tag,
+    },
     Vortex,
 };
 
@@ -74,6 +77,8 @@ impl TCPServer {
                     .fair(false)
                     .build(),
             ),
+            read_buffer_size: config.storage.read_buffer_size,
+            write_buffer_size: config.storage.write_buffer_size,
         };
 
         Self {
@@ -150,63 +155,141 @@ pub struct TCPServerHandler {
 
     /// upload_rate_limiter is the rate limiter of the upload speed in bps(bytes per second).
     upload_rate_limiter: Arc<RateLimiter>,
+
+    /// read_buffer_size is the buffer size for reading piece to stream, default is 128KB.
+    pub read_buffer_size: usize,
+
+    /// write_buffer_size is the buffer size for writing piece to stream, default is 128KB.
+    pub write_buffer_size: usize,
 }
 
 impl TCPServerHandler {
     /// Handles a single TCP connection.
     async fn handle_connection(
         &self,
-        mut stream: TokioTcpStream,
+        stream: TokioTcpStream,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Read header
-        info!("Read header");
-        let mut header_buf = [0u8; HEADER_SIZE];
-        stream.read_exact(&mut header_buf).await?;
+        let (s_reader, s_writer) = stream.into_split();
+        let mut reader = BufReader::with_capacity(self.read_buffer_size, s_reader);
+        let mut writer = BufWriter::with_capacity(self.write_buffer_size, s_writer);
 
-        let length = u32::from_be_bytes(
-            header_buf[2..HEADER_SIZE]
-                .try_into()
-                .expect("Failed to read value length"),
-        ) as usize;
+        let mut header_bytes = BytesMut::with_capacity(HEADER_SIZE);
+        header_bytes.resize(HEADER_SIZE, 0);
+        reader.read_exact(&mut header_bytes).await.unwrap();
+        let header: Header = header_bytes.freeze().try_into().unwrap();
+        info!("received header: {:?}", header);
+        
+        match header.tag() {
+            Tag::DownloadPiece => {
+                // ------------------------------
+                // Recieve DownloadPiece request.
+                // ------------------------------
+                let mut download_piece_bytes =
+                    BytesMut::with_capacity(header.length() as usize);
+                download_piece_bytes.resize(header.length() as usize, 0);
+                reader.read_exact(&mut download_piece_bytes).await.unwrap();
 
-        // Read request data
-        info!("Read request data");
-        let mut request_data = vec![0u8; length];
-        stream.read_exact(&mut request_data).await?;
+                let download_piece: DownloadPiece =
+                    download_piece_bytes.freeze().try_into().unwrap();
+                info!("received DownloadPiece request: {:?}", download_piece);
 
-        let mut complete_data = Vec::with_capacity(header_buf.len() + request_data.len());
-        complete_data.extend_from_slice(&header_buf);
-        complete_data.extend_from_slice(&request_data);
-
-        // Process request based on message type
-        match Bytes::from(complete_data).try_into()? {
-            Vortex::DownloadPiece(_, download_piece) => {
+                // ---------------------------
+                // Send PieceContent response.
+                // ---------------------------
                 match self.handle_piece(&download_piece).await {
-                    Ok((piece_content, mut reader)) => {
-                        let piece_content_bytes: Bytes = piece_content.into();
-                        let header_bytes: Bytes = Header::new(
-                            Tag::PieceContent,
+                    Ok((piece_content, mut content_reader)) => {
+                        let piece_content_bytes: Bytes = piece_content.clone().into();
+                        let header = Header::new_piece_content(
                             piece_content_bytes.len() as u32,
-                        ).into();
-                        stream.write_all(&header_bytes).await?;
-                        stream.write_all(&piece_content_bytes).await?;
+                        );
+                        let header_bytes: Bytes = header.clone().into();
 
-                        tokio::io::copy(&mut reader, &mut stream).await?;
+                        let mut request = BytesMut::with_capacity(HEADER_SIZE + piece_content_bytes.len());
+                        request.extend_from_slice(&header_bytes);
+                        request.extend_from_slice(&piece_content_bytes);
+
+
+                        // Write header and piece_content.
+                        writer.write_all(&request).await.unwrap();
+                        writer.flush().await.unwrap();
+                        info!("sent PieceContent: {:?}", piece_content);
+
+                        // Write content.
+                        copy(&mut content_reader, &mut writer).await.inspect_err(|err| {
+                            error!("copy failed: {}", err);
+                        })?;
+                        
+                        writer.flush().await.inspect_err(|err| {
+                            error!("flush failed: {}", err);
+                        })?;
                     }
-                    Err(error_message) => {
-                        error!(error_message);
-                        let packet = Vortex::new(Tag::Error, error_message.into()).unwrap();
-                        let error_response: Bytes = packet.into();
-                        stream.write_all(&error_response).await?;
+                    Err(err) => {
+                        let error_response: Bytes = Vortex::Error(
+                            Header::new_error(err.len() as u32),
+                            err,
+                        )
+                        .into();
+                        writer.write_all(&error_response).await.unwrap();
+                        writer.flush().await.unwrap();
+                    }
+                }
+            }
+            Tag::DownloadPersistentCachePiece => {
+                // ------------------------------
+                // Recieve DownloadPersistentCachePiece request.
+                // ------------------------------
+                let mut download_persistent_cache_piece_bytes =
+                    BytesMut::with_capacity(header.length() as usize);
+                download_persistent_cache_piece_bytes.resize(header.length() as usize, 0);
+                reader.read_exact(&mut download_persistent_cache_piece_bytes).await.unwrap();
+
+                let download_persistent_cache_piece: DownloadPersistentCachePiece =
+                    download_persistent_cache_piece_bytes.freeze().try_into().unwrap();
+                info!("received DownloadPersistentCachePiece request: {:?}", download_persistent_cache_piece);
+
+                // ---------------------------
+                // Send PersistentCachePieceContent response.
+                // ---------------------------
+                match self.handle_persistent_cache_piece(&download_persistent_cache_piece).await {
+                    Ok((persistent_cache_piece_content, mut content_reader)) => {
+                        let persistent_cache_piece_content_bytes: Bytes = persistent_cache_piece_content.clone().into();
+                        let header = Header::new_persistent_cache_piece_content(
+                            persistent_cache_piece_content_bytes.len() as u32,
+                        );
+                        let header_bytes: Bytes = header.clone().into();
+
+                        let mut request = BytesMut::with_capacity(HEADER_SIZE + persistent_cache_piece_content_bytes.len());
+                        request.extend_from_slice(&header_bytes);
+                        request.extend_from_slice(&persistent_cache_piece_content_bytes);
+
+
+                        // Write header and persistent_cache_piece_content.
+                        writer.write_all(&request).await.unwrap();
+                        writer.flush().await.unwrap();
+                        info!("sent PersistentCachePieceContent: {:?}", persistent_cache_piece_content);
+
+                        // Write content.
+                        copy(&mut content_reader, &mut writer).await.inspect_err(|err| {
+                            error!("copy failed: {}", err);
+                        })?;
+                        
+                        writer.flush().await.inspect_err(|err| {
+                            error!("flush failed: {}", err);
+                        })?;
+                    }
+                    Err(err) => {
+                        let error_response: Bytes = Vortex::Error(
+                            Header::new_error(err.len() as u32),
+                            err,
+                        )
+                        .into();
+                        writer.write_all(&error_response).await.unwrap();
+                        writer.flush().await.unwrap();
                     }
                 }
             }
             _ => {
-                let error_message = "Unsupported message type".to_string();
-                error!(error_message);
-                let packet = Vortex::new(Tag::Error, error_message.into()).unwrap();
-                let error_response: Bytes = packet.into();
-                stream.write_all(&error_response).await?;
+                panic!("unexpected tag: {:?}", header.tag());
             }
         }
 
@@ -214,7 +297,7 @@ impl TCPServerHandler {
     }
 
     /// Handles download piece request.
-    async fn handle_piece(&self, request: &DownloadPiece) -> Result<(PieceContent, impl AsyncRead), String> {
+    async fn handle_piece(&self, request: &DownloadPiece) -> Result<(PieceContent, impl AsyncRead), Error> {
         // Generate the host id.
         let host_id = self.id_generator.host_id();
 
@@ -237,8 +320,11 @@ impl TCPServerHandler {
         let piece = self
             .storage
             .get_piece(piece_id.as_str())
-            .map_err(|err| format!("Failed to get piece metadata: {}", err))?
-            .ok_or_else(|| "Piece metadata not found".to_string())?;
+            .map_err(|err| Error::new(Code::InvalidArgument, format!("Failed to get piece metadata: {}", err)))?
+            .ok_or_else(|| {
+                error!("Piece metadata not found");
+                Error::new(Code::NotFound, piece_id.clone())
+            })?;
 
         info!("start upload piece content");
 
@@ -256,7 +342,10 @@ impl TCPServerHandler {
             .storage
             .upload_piece(piece_id.as_str(), task_id, None)
             .await
-            .map_err(|err| format!("Failed to get piece content: {}", err))?;
+            .map_err(|err| {
+                error!("Failed to get piece content: {}", err);
+                Error::new(Code::Internal, piece_id)
+            })?;
         info!("finished upload piece content");
 
         // Create response
@@ -277,8 +366,8 @@ impl TCPServerHandler {
     /// Handles download piece request.
     async fn handle_persistent_cache_piece(
         &self,
-        request: &DownloadPiece,
-    ) -> Result<(PieceContent, impl AsyncRead), String> {
+        request: &DownloadPersistentCachePiece,
+    ) -> Result<(PersistentCachePieceContent, impl AsyncRead), Error> {
         // Generate the host id.
         let host_id = self.id_generator.host_id();
 
@@ -295,14 +384,17 @@ impl TCPServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id);
         Span::current().record("piece_id", piece_id.as_str());
-        info!("download piece content in TCP upload server");
+        info!("download persistent cache piece content in TCP upload server");
 
         // Get the piece metadata from the local storage.
         let piece = self
             .storage
             .get_persistent_cache_piece(piece_id.as_str())
-            .map_err(|err| format!("Failed to get persistent cache piece metadata: {}", err))?
-            .ok_or_else(|| "Persistent cache piece metadata not found".to_string())?;
+            .map_err(|err| Error::new(Code::InvalidArgument, format!("Failed to get persistent cache piece metadata: {}", err)))?
+            .ok_or_else(|| {
+                error!("Persistent cache piece metadata not found");
+                Error::new(Code::NotFound, piece_id.clone())
+            })?;
 
         info!("start upload persistent cache piece content");
 
@@ -320,11 +412,14 @@ impl TCPServerHandler {
             .storage
             .upload_persistent_cache_piece(piece_id.as_str(), task_id, None)
             .await
-            .map_err(|err| format!("Failed to get persistent cache piece content: {}", err))?;
-        info!("finished persistent cache upload piece content");
+            .map_err(|err| {
+                error!("Failed to get persistent cache piece content: {}", err);
+                Error::new(Code::Internal, piece_id)
+            })?;
+        info!("finished upload persistent cache piece content");
 
         // Create response
-        let piece_content = PieceContent::new(
+        let persistent_cache_piece_content = PersistentCachePieceContent::new(
             piece_number,
             piece.offset,
             piece.length,
@@ -335,6 +430,6 @@ impl TCPServerHandler {
             Utc::now().naive_utc(),
         );
 
-        Ok((piece_content, reader))
+        Ok((persistent_cache_piece_content, reader))
     }
 }
