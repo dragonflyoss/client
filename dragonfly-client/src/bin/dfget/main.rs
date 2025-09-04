@@ -36,7 +36,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
 use local_ip_address::local_ip;
 use path_absolutize::*;
 use percent_encoding::percent_decode_str;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -198,9 +198,10 @@ struct Args {
     filtered_query_params: Option<Vec<String>>,
 
     #[arg(
+        short = 'I',
         long = "include-files",
         required = false,
-        help = "Filter files to download in a directory using glob patterns relative to the root URL's path. Examples: --include-files='*.txt' --include-files='subdir/file.txt'"
+        help = "Filter files to download in a directory using glob patterns relative to the root URL's path. Examples: --include-files='file.txt' --include-files='subdir/file.txt' --include-files='subdir/dir/'"
     )]
     include_files: Option<Vec<String>>,
 
@@ -661,11 +662,16 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         delegation_token: args.hdfs_delegation_token.clone(),
     });
 
-    // Get all entries in the directory.
-    let mut entries = get_entries(&args, object_storage, hdfs, download_client.clone()).await?;
-    if let Some(ref include_files) = args.include_files {
-        entries = filter_entries(&args.url, entries, include_files)?;
-    }
+    // Get all entries in the directory with include files filter.
+    let entries: Vec<DirEntry> = get_all_entries(
+        &args.url,
+        args.header.clone(),
+        args.include_files.clone(),
+        object_storage,
+        hdfs,
+        download_client.clone(),
+    )
+    .await?;
 
     // If the entries is empty, then return directly.
     if entries.is_empty() {
@@ -741,6 +747,98 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
     }
 
     Ok(())
+}
+
+/// Get all entries in the directory with include files filter.
+async fn get_all_entries(
+    url: &Url,
+    header: Option<Vec<String>>,
+    include_files: Option<Vec<String>>,
+    object_storage: Option<ObjectStorage>,
+    hdfs: Option<Hdfs>,
+    download_client: DfdaemonDownloadClient,
+) -> Result<Vec<DirEntry>> {
+    let urls: HashSet<Url> = match include_files {
+        Some(files) => {
+            let mut urls = HashSet::with_capacity(files.len());
+            for file in files {
+                let url = url.join(&file).or_err(ErrorType::ParseError)?;
+                urls.insert(url);
+            }
+
+            urls
+        }
+        None => {
+            let mut urls = HashSet::with_capacity(1);
+            urls.insert(url.clone());
+            urls
+        }
+    };
+    info!(
+        "make urls by args: {:?}",
+        urls.iter().map(|u| u.as_str()).collect::<Vec<&str>>()
+    );
+
+    let mut entries = HashSet::new();
+    for url in &urls {
+        if !url.to_string().ends_with('/') {
+            entries.insert(DirEntry {
+                url: url.to_string(),
+                content_length: 0,
+                is_dir: false,
+            });
+
+            let parent = url.join(".").or_err(ErrorType::ParseError)?;
+            if parent.path() != "/" {
+                entries.insert(DirEntry {
+                    url: parent.to_string(),
+                    content_length: 0,
+                    is_dir: true,
+                });
+            }
+
+            info!("add entries {:?} by url: {}", entries, url);
+            continue;
+        };
+
+        let mut dir_entries = get_entries(
+            url,
+            header.clone(),
+            object_storage.clone(),
+            hdfs.clone(),
+            download_client.clone(),
+        )
+        .await
+        .inspect_err(|err| {
+            error!("get dir entries for {} failed: {}", url, err);
+        })?;
+
+        for dir_entry in dir_entries.clone() {
+            if dir_entry.is_dir {
+                continue;
+            }
+
+            let parent = Url::parse(&dir_entry.url)
+                .or_err(ErrorType::ParseError)?
+                .join(".")
+                .or_err(ErrorType::ParseError)?;
+
+            if parent.path() != "/" {
+                dir_entries.push(DirEntry {
+                    url: parent.to_string(),
+                    content_length: 0,
+                    is_dir: true,
+                });
+            }
+        }
+
+        let mut seen = HashSet::new();
+        entries.retain(|entry| seen.insert(entry.clone()));
+        entries.extend(dir_entries.clone());
+        info!("add entries {:?} by dir url: {}", dir_entries, url);
+    }
+
+    Ok(entries.into_iter().collect())
 }
 
 /// Downloads a single file from various storage backends using the dfdaemon service.
@@ -941,18 +1039,19 @@ async fn download(
 /// the appropriate credentials and configuration. The function converts
 /// the gRPC response into a local `DirEntry` format for further processing.
 async fn get_entries(
-    args: &Args,
+    url: &Url,
+    header: Option<Vec<String>>,
     object_storage: Option<ObjectStorage>,
     hdfs: Option<Hdfs>,
     download_client: DfdaemonDownloadClient,
 ) -> Result<Vec<DirEntry>> {
-    info!("list task entries: {:?}", args.url);
+    info!("list task entries: {:?}", url);
     // List task entries.
     let response = download_client
         .list_task_entries(ListTaskEntriesRequest {
             task_id: Uuid::new_v4().to_string(),
-            url: args.url.to_string(),
-            request_header: header_vec_to_hashmap(args.header.clone().unwrap_or_default())?,
+            url: url.to_string(),
+            request_header: header_vec_to_hashmap(header.clone().unwrap_or_default())?,
             timeout: None,
             certificate_chain: Vec::new(),
             object_storage,
@@ -973,68 +1072,6 @@ async fn get_entries(
             is_dir: entry.is_dir,
         })
         .collect())
-}
-
-/// Filters directory entries based on include patterns and validates their URLs.
-///
-/// This function takes a collection of directory entries and filters them based on
-/// glob patterns specified in `include_files`. It performs URL validation to ensure
-/// all entries have valid URLs and that their paths fall within the scope of the
-/// root URL. When an entry matches a pattern, both the entry and its parent
-/// directory (if it exists) are included in the result.
-fn filter_entries(
-    url: &Url,
-    entries: Vec<DirEntry>,
-    include_files: &[String],
-) -> Result<Vec<DirEntry>> {
-    let patterns: Vec<Pattern> = include_files
-        .iter()
-        .filter_map(|include_file| Pattern::new(include_file).ok())
-        .collect();
-
-    // Build a HashMap of DirEntry objects keyed by relative paths for filtering and
-    // validates URLs and ensures paths are within the root URL's scope.
-    let mut entries_by_relative_path = HashMap::with_capacity(entries.len());
-    for entry in entries {
-        let entry_url = Url::parse(&entry.url).map_err(|err| {
-            error!("failed to parse entry URL '{}': {}", entry.url, err);
-            Error::ValidationError(format!("invalid URL: {}", entry.url))
-        })?;
-
-        let entry_path = entry_url.path();
-        match entry_path.strip_prefix(url.path()) {
-            Some(relative_path) => entries_by_relative_path
-                .insert(relative_path.trim_start_matches('/').to_string(), entry),
-            None => {
-                error!(
-                    "entry path '{}' does not belong to the root path",
-                    entry_path
-                );
-                return Err(Error::ValidationError(format!(
-                    "path '{}' is outside the expected scope",
-                    entry_path
-                )));
-            }
-        };
-    }
-
-    // Filter entries by matching relative paths against patterns, including
-    // parent directories for matches.
-    let mut filtered_entries = HashSet::new();
-    for (relative_path, entry) in &entries_by_relative_path {
-        if patterns.iter().any(|pat| pat.matches(relative_path)) {
-            filtered_entries.insert(entry.clone());
-            if let Some(parent) = std::path::Path::new(relative_path).parent() {
-                if let Some(parent_entry) =
-                    entries_by_relative_path.get(&parent.join("").to_string_lossy().to_string())
-                {
-                    filtered_entries.insert(parent_entry.clone());
-                }
-            }
-        }
-    }
-
-    Ok(filtered_entries.into_iter().collect())
 }
 
 /// Constructs the local output path for a directory entry based on its remote URL.
@@ -1400,347 +1437,5 @@ mod tests {
 
         let result = make_output_by_entry(url, output, entry);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn should_filter_entries() {
-        let test_cases = vec![
-            (
-                Url::parse("http://example.com/root/").unwrap(),
-                vec![
-                    DirEntry {
-                        url: "http://example.com/root/dir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/file.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/file2.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/file3.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/file4.png".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                ],
-                vec!["dir/file.txt".to_string()],
-                vec![
-                    DirEntry {
-                        url: "http://example.com/root/dir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/file.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                ],
-            ),
-            (
-                Url::parse("http://example.com/root/").unwrap(),
-                vec![
-                    DirEntry {
-                        url: "http://example.com/root/dir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/file.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/file2.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/file3.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/file4.png".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                ],
-                vec![
-                    "dir/file.txt".to_string(),
-                    "dir/subdir/file4.png".to_string(),
-                ],
-                vec![
-                    DirEntry {
-                        url: "http://example.com/root/dir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/file.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/file4.png".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                ],
-            ),
-            (
-                Url::parse("http://example.com/root/").unwrap(),
-                vec![
-                    DirEntry {
-                        url: "http://example.com/root/dir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/file.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/file2.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/file3.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/file4.png".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                ],
-                vec!["dir/subdir/*.png".to_string()],
-                vec![
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/file4.png".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                ],
-            ),
-            (
-                Url::parse("http://example.com/root/").unwrap(),
-                vec![
-                    DirEntry {
-                        url: "http://example.com/root/dir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/file.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/file2.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/file3.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/file4.png".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                ],
-                vec!["dir/*".to_string()],
-                vec![
-                    DirEntry {
-                        url: "http://example.com/root/dir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/file.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/file2.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/file3.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/file4.png".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                ],
-            ),
-            (
-                Url::parse("http://example.com/root/").unwrap(),
-                vec![
-                    DirEntry {
-                        url: "http://example.com/root/dir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/file.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/file2.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/file3.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/file4.png".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                ],
-                vec!["dir/".to_string()],
-                vec![DirEntry {
-                    url: "http://example.com/root/dir/".to_string(),
-                    content_length: 10,
-                    is_dir: true,
-                }],
-            ),
-            (
-                Url::parse("http://example.com/root/").unwrap(),
-                vec![
-                    DirEntry {
-                        url: "http://example.com/root/dir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/file.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/file2.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/".to_string(),
-                        content_length: 10,
-                        is_dir: true,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/file3.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: "http://example.com/root/dir/subdir/file4.png".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                ],
-                vec!["test".to_string()],
-                vec![],
-            ),
-            (
-                Url::parse("http://example.com/root/").unwrap(),
-                vec![
-                    DirEntry {
-                        url: "http://example.com/root/dir/file.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    DirEntry {
-                        url: " ".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                ],
-                vec!["dir/file.txt".to_string()],
-                vec![],
-            ),
-        ];
-
-        for (url, entries, include_files, expected_entries) in test_cases {
-            let result = filter_entries(&url, entries, &include_files);
-            if result.is_err() {
-                assert!(matches!(result, Err(Error::ValidationError(_))));
-            } else {
-                let filtered_entries = result.unwrap();
-                assert_eq!(filtered_entries.len(), expected_entries.len());
-
-                for filtered_entry in &filtered_entries {
-                    assert!(expected_entries
-                        .iter()
-                        .any(|expected_entry| { expected_entry.url == filtered_entry.url }));
-                }
-            }
-        }
     }
 }
