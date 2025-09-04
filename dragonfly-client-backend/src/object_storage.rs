@@ -17,11 +17,7 @@
 use dragonfly_api::common;
 use dragonfly_client_core::error::BackendError;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
-use opendal::{
-    layers::{HttpClientLayer, TimeoutLayer},
-    raw::HttpClient,
-    Operator,
-};
+use opendal::{layers::TimeoutLayer, raw::HttpClient, Metakey, Operator};
 use percent_encoding::percent_decode_str;
 use std::fmt;
 use std::result::Result;
@@ -182,9 +178,6 @@ pub struct ObjectStorage {
 impl ObjectStorage {
     /// Returns ObjectStorage that implements the Backend trait.
     pub fn new(scheme: Scheme) -> ClientResult<ObjectStorage> {
-        // Initialize the ring as the default TLS provider.
-        let _ = rustls::crypto::ring::default_provider().install_default();
-
         // Initialize the reqwest client.
         let client = reqwest::Client::builder()
             .gzip(true)
@@ -194,6 +187,9 @@ impl ObjectStorage {
             .hickory_dns(true)
             .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
             .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
+            .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+            .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+            .http2_keep_alive_while_idle(true)
             .build()?;
 
         Ok(Self { scheme, client })
@@ -258,6 +254,7 @@ impl ObjectStorage {
         builder = builder
             .access_key_id(access_key_id)
             .secret_access_key(access_key_secret)
+            .http_client(HttpClient::with(self.client.clone()))
             .bucket(&parsed_url.bucket)
             .region(region);
 
@@ -273,7 +270,6 @@ impl ObjectStorage {
 
         Ok(Operator::new(builder)?
             .finish()
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone())))
             .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 
@@ -286,7 +282,9 @@ impl ObjectStorage {
     ) -> ClientResult<Operator> {
         // Initialize the GCS operator with the object storage.
         let mut builder = opendal::services::Gcs::default();
-        builder = builder.bucket(&parsed_url.bucket);
+        builder = builder
+            .http_client(HttpClient::with(self.client.clone()))
+            .bucket(&parsed_url.bucket);
 
         // Configure the credentials using the local path to the credential file if provided.
         // Otherwise, configure using the Application Default Credentials (ADC).
@@ -306,7 +304,6 @@ impl ObjectStorage {
 
         Ok(Operator::new(builder)?
             .finish()
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone())))
             .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 
@@ -343,12 +340,12 @@ impl ObjectStorage {
         builder = builder
             .account_name(access_key_id)
             .account_key(access_key_secret)
+            .http_client(HttpClient::with(self.client.clone()))
             .container(&parsed_url.bucket)
             .endpoint(endpoint);
 
         Ok(Operator::new(builder)?
             .finish()
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone())))
             .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 
@@ -359,67 +356,40 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        if let (
-            Some(access_key_id),
-            Some(access_key_secret),
-            Some(security_token),
-            Some(endpoint),
-        ) = (
-            &object_storage.access_key_id,
-            &object_storage.access_key_secret,
-            &object_storage.security_token,
-            &object_storage.endpoint,
-        ) {
-            // Initialize the OSS operator with the object storage.
-            let mut builder = opendal::services::Oss::default();
-            builder = builder
-                .access_key_id(access_key_id)
-                .access_key_secret(access_key_secret)
-                .security_token(security_token)
-                .endpoint(endpoint)
-                .root("/")
-                .bucket(&parsed_url.bucket);
-
-            return Ok(Operator::new(builder)?
-                .finish()
-                .layer(HttpClientLayer::new(HttpClient::with(self.client.clone())))
-                .layer(TimeoutLayer::new().with_timeout(timeout)));
-        }
-
-        if let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
+        // OSS requires the access key id, access key secret, and endpoint.
+        let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
             &object_storage.access_key_id,
             &object_storage.access_key_secret,
             &object_storage.endpoint,
-        ) {
-            // Initialize the OSS operator with the object storage.
-            let mut builder = opendal::services::Oss::default();
-            builder = builder
-                .access_key_id(access_key_id)
-                .access_key_secret(access_key_secret)
-                .endpoint(endpoint)
-                .root("/")
-                .bucket(&parsed_url.bucket);
+        ) else {
+            return Err(ClientError::BackendError(Box::new(BackendError {
+                message: format!(
+                    "{} {}",
+                    self.scheme,
+                    make_need_fields_message!(object_storage {
+                        access_key_id,
+                        access_key_secret,
+                        endpoint
+                    })
+                ),
+                status_code: None,
+                header: None,
+            })));
+        };
 
-            return Ok(Operator::new(builder)?
-                .finish()
-                .layer(HttpClientLayer::new(HttpClient::with(self.client.clone())))
-                .layer(TimeoutLayer::new().with_timeout(timeout)));
-        }
+        // Initialize the OSS operator with the object storage.
+        let mut builder = opendal::services::Oss::default();
+        builder = builder
+            .access_key_id(access_key_id)
+            .access_key_secret(access_key_secret)
+            .endpoint(endpoint)
+            .http_client(HttpClient::with(self.client.clone()))
+            .root("/")
+            .bucket(&parsed_url.bucket);
 
-        Err(ClientError::BackendError(Box::new(BackendError {
-            message: format!(
-                "{} {}",
-                self.scheme,
-                make_need_fields_message!(object_storage {
-                    access_key_id,
-                    access_key_secret,
-                    security_token,
-                    endpoint
-                })
-            ),
-            status_code: None,
-            header: None,
-        })))
+        Ok(Operator::new(builder)?
+            .finish()
+            .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 
     /// obs_operator initializes the OBS operator with the parsed URL and object storage.
@@ -456,11 +426,11 @@ impl ObjectStorage {
             .access_key_id(access_key_id)
             .secret_access_key(access_key_secret)
             .endpoint(endpoint)
+            .http_client(HttpClient::with(self.client.clone()))
             .bucket(&parsed_url.bucket);
 
         Ok(Operator::new(builder)?
             .finish()
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone())))
             .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 
@@ -498,11 +468,11 @@ impl ObjectStorage {
             .secret_id(access_key_id)
             .secret_key(access_key_secret)
             .endpoint(endpoint)
+            .http_client(HttpClient::with(self.client.clone()))
             .bucket(&parsed_url.bucket);
 
         Ok(Operator::new(builder)?
             .finish()
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone())))
             .layer(TimeoutLayer::new().with_timeout(timeout)))
     }
 }
@@ -543,6 +513,7 @@ impl crate::Backend for ObjectStorage {
             operator
                 .list_with(&parsed_url.key)
                 .recursive(true)
+                .metakey(Metakey::ContentLength | Metakey::Mode)
                 .await // Do the list op here.
                 .map_err(|err| {
                     error!(
@@ -786,17 +757,8 @@ mod tests {
                 },
             ),
             (Scheme::GCS, ObjectStorageInfo::default()),
-            // (
-            // Scheme::ABS,
-            // ObjectStorageInfo {
-            // endpoint: Some("test-endpoint.local".into()),
-            // access_key_id: Some("access-key-id".into()),
-            // access_key_secret: Some("access-key-secret".into()),
-            // ..Default::default()
-            // },
-            // ),
             (
-                Scheme::OSS,
+                Scheme::ABS,
                 ObjectStorageInfo {
                     endpoint: Some("test-endpoint.local".into()),
                     access_key_id: Some("access-key-id".into()),
@@ -810,7 +772,6 @@ mod tests {
                     endpoint: Some("test-endpoint.local".into()),
                     access_key_id: Some("access-key-id".into()),
                     access_key_secret: Some("access-key-secret".into()),
-                    security_token: Some("security-token".into()),
                     ..Default::default()
                 },
             ),
@@ -1112,28 +1073,28 @@ mod tests {
         let test_cases = vec![
             (
                 ObjectStorageInfo::default(),
-                "backend error oss need access_key_id, access_key_secret, security_token, endpoint",
+                "backend error oss need access_key_id, access_key_secret, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     access_key_id: Some("access_key_id".into()),
                     ..Default::default()
                 },
-                "backend error oss need access_key_secret, security_token, endpoint",
+                "backend error oss need access_key_secret, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
-                "backend error oss need access_key_id, security_token, endpoint",
+                "backend error oss need access_key_id, endpoint",
             ),
             (
                 ObjectStorageInfo {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error oss need access_key_id, access_key_secret, security_token",
+                "backend error oss need access_key_id, access_key_secret",
             ),
             (
                 ObjectStorageInfo {
@@ -1141,7 +1102,7 @@ mod tests {
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
-                "backend error oss need security_token, endpoint",
+                "backend error oss need endpoint",
             ),
             (
                 ObjectStorageInfo {
@@ -1149,7 +1110,7 @@ mod tests {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error oss need access_key_secret, security_token",
+                "backend error oss need access_key_secret",
             ),
             (
                 ObjectStorageInfo {
@@ -1157,7 +1118,7 @@ mod tests {
                     endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error oss need access_key_id, security_token",
+                "backend error oss need access_key_id",
             ),
         ];
 
