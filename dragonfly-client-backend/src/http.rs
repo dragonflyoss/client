@@ -44,9 +44,6 @@ pub struct HTTP {
 impl HTTP {
     /// new returns a new HTTP.
     pub fn new(scheme: &str) -> Result<HTTP> {
-        // Initialize the ring as the default TLS provider.
-        let _ = rustls::crypto::ring::default_provider().install_default();
-
         // Default TLS client config with no validation.
         let client_config_builder = rustls::ClientConfig::builder()
             .dangerous()
@@ -411,8 +408,6 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
 
     /// Start a https server with given public key and private key.
     async fn start_https_server(cert_pem: &str, key_pem: &str) -> String {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-
         let server_certs = load_certs_from_pem(cert_pem).unwrap();
         let server_key = load_key_from_pem(key_pem).unwrap();
 
