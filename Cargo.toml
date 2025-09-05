@@ -113,7 +113,8 @@ sysinfo = { version = "0.32.1", default-features = false, features = ["component
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-panic = "abort"
+# panic = "abort"
+panic = "unwind"
 strip = "symbols"
 
 [profile.dev]

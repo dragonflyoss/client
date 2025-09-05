@@ -41,9 +41,9 @@ use tokio::sync::mpsc;
 use tokio::sync::Barrier;
 use tracing::{error, info, Level};
 
-#[cfg(not(target_env = "msvc"))]
-#[global_allocator]
-static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+// #[cfg(not(target_env = "msvc"))]
+// #[global_allocator]
+// static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[allow(non_upper_case_globals)]
 #[export_name = "malloc_conf"]

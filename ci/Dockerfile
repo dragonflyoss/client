@@ -36,10 +36,7 @@ COPY dragonfly-client-init/Cargo.toml ./dragonfly-client-init/Cargo.toml
 COPY dragonfly-client-init/src ./dragonfly-client-init/src
 
 ARG TARGETPLATFORM
-RUN case "${TARGETPLATFORM}" in \
-  "linux/arm64") export JEMALLOC_SYS_WITH_LG_PAGE=16;; \
-  esac && \
-  cargo build --release --verbose --bin dfget --bin dfdaemon --bin dfcache
+RUN export ASAN_OPTIONS="halt_on_error=1:detect_stack_use_after_return=1" && cargo +nightly build --bin dfget --bin dfdaemon --bin dfcache --release --verbose --target x86_64-unknown-linux-gnu
 
 RUN cargo install tokio-console --version 0.1.13 --locked --root /usr/local
 
@@ -68,9 +65,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends iperf3 linux-li
     dnsutils iputils-ping llvm graphviz lsof strace dstat net-tools bpftrace \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/client/target/release/dfget /usr/local/bin/dfget
-COPY --from=builder /app/client/target/release/dfdaemon /usr/local/bin/dfdaemon
-COPY --from=builder /app/client/target/release/dfcache /usr/local/bin/dfcache
+COPY --from=builder /app/client/target/x86_64-unknown-linux-gnu/release/dfget /usr/local/bin/dfget
+COPY --from=builder /app/client/target/x86_64-unknown-linux-gnu/release/dfdaemon /usr/local/bin/dfdaemon
+COPY --from=builder /app/client/target/x86_64-unknown-linux-gnu/release/dfcache /usr/local/bin/dfcache
 COPY --from=builder /usr/local/bin/tokio-console /usr/local/bin/
 COPY --from=pprof /go/bin/pprof /bin/pprof
 COPY --from=pprof /go/bin/grpcurl /bin/grpcurl
