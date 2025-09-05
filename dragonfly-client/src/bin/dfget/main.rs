@@ -18,7 +18,8 @@ use bytesize::ByteSize;
 use clap::Parser;
 use dragonfly_api::common::v2::{Download, Hdfs, ObjectStorage, TaskType};
 use dragonfly_api::dfdaemon::v2::{
-    download_task_response, DownloadTaskRequest, ListTaskEntriesRequest,
+    download_cache_task_response, download_task_response, DownloadCacheTaskRequest,
+    DownloadTaskRequest, ListTaskEntriesRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
@@ -303,6 +304,13 @@ struct Args {
         value_parser = VersionValueParser
     )]
     version: bool,
+
+    #[arg(
+        long = "cache",
+        default_value_t = false,
+        help = "Use cache task for download"
+    )]
+    cache: bool,
 }
 
 #[tokio::main]
@@ -889,15 +897,29 @@ async fn download(
         (Some(args.output.to_string_lossy().to_string()), false)
     };
 
+    // Get actual path rather than percentage encoded path as download path.
+    let download_path = percent_decode_str(args.url.path()).decode_utf8_lossy();
+    progress_bar.set_style(
+        ProgressStyle::with_template(
+            "{msg:.bold}\n[{elapsed_precise}] [{bar:60.green/red}] {percent:3}% ({bytes_per_sec:.red}, {eta:.cyan})",
+        )
+        .or_err(ErrorType::ParseError)?
+        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
+            write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+        })
+        .progress_chars("=>-"),
+    );
+    progress_bar.set_message(download_path.to_string());
+
     // Create dfdaemon client.
-    let response = download_client
-        .download_task(DownloadTaskRequest {
-            download: Some(Download {
+    if args.cache {
+        let response = download_client
+            .download_cache_task(DownloadCacheTaskRequest {
                 url: args.url.to_string(),
                 digest: args.digest,
                 // NOTE: Dfget does not support range download.
                 range: None,
-                r#type: TaskType::Standard as i32,
+                r#type: TaskType::Cache as i32,
                 tag: Some(args.tag),
                 application: Some(args.application),
                 priority: args.priority,
@@ -917,113 +939,170 @@ async fn download(
                 need_piece_content,
                 object_storage,
                 hdfs,
-                force_hard_link: args.force_hard_link,
                 content_for_calculating_task_id: args.content_for_calculating_task_id,
                 remote_ip: Some(local_ip().unwrap().to_string()),
-            }),
-        })
-        .await
-        .inspect_err(|err| {
-            error!("download task failed: {}", err);
-        })?;
-
-    // If transfer_from_dfdaemon is true, then dfget needs to create the output file and write the
-    // piece content to the output file.
-    let mut f = if args.transfer_from_dfdaemon {
-        if let Some(parent) = args.output.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).await.inspect_err(|err| {
-                    error!("failed to create directory {:?}: {}", parent, err);
-                })?;
-            }
-        }
-
-        let f = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(dfget::DEFAULT_OUTPUT_FILE_MODE)
-            .open(&args.output)
+            })
             .await
             .inspect_err(|err| {
-                error!("open file {:?} failed: {}", args.output, err);
+                error!("download task failed: {}", err);
             })?;
 
-        Some(f)
-    } else {
-        None
-    };
-
-    // Get actual path rather than percentage encoded path as download path.
-    let download_path = percent_decode_str(args.url.path()).decode_utf8_lossy();
-    progress_bar.set_style(
-        ProgressStyle::with_template(
-            "{msg:.bold}\n[{elapsed_precise}] [{bar:60.green/red}] {percent:3}% ({bytes_per_sec:.red}, {eta:.cyan})",
-        )
-        .or_err(ErrorType::ParseError)?
-        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
-            write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
-        })
-        .progress_chars("=>-"),
-    );
-    progress_bar.set_message(download_path.to_string());
-
-    // Download file.
-    let mut downloaded = 0;
-    let mut out_stream = response.into_inner();
-    while let Some(message) = out_stream.message().await.inspect_err(|err| {
-        error!("get message failed: {}", err);
-    })? {
-        match message.response {
-            Some(download_task_response::Response::DownloadTaskStartedResponse(response)) => {
-                if let Some(f) = &f {
-                    fallocate(f, response.content_length)
-                        .await
-                        .inspect_err(|err| {
-                            error!("fallocate {:?} failed: {}", args.output, err);
-                        })?;
+        // Download file.
+        let mut downloaded = 0;
+        let mut out_stream = response.into_inner();
+        while let Some(message) = out_stream.message().await.inspect_err(|err| {
+            error!("get message failed: {}", err);
+        })? {
+            match message.response {
+                Some(download_cache_task_response::Response::DownloadCacheTaskStartedResponse(
+                    response,
+                )) => {
+                    progress_bar.set_length(response.content_length);
                 }
-
-                progress_bar.set_length(response.content_length);
-            }
-            Some(download_task_response::Response::DownloadPieceFinishedResponse(response)) => {
-                let piece = response
-                    .piece
-                    .ok_or(Error::InvalidParameter)
-                    .inspect_err(|_err| {
-                        error!("response piece is missing");
-                    })?;
-
-                // Dfget needs to write the piece content to the output file.
-                if let Some(f) = &mut f {
-                    f.seek(SeekFrom::Start(piece.offset))
-                        .await
-                        .inspect_err(|err| {
-                            error!("seek {:?} failed: {}", args.output, err);
-                        })?;
-
-                    let content =
-                        piece
-                            .content
+                Some(download_cache_task_response::Response::DownloadPieceFinishedResponse(
+                    response,
+                )) => {
+                    let piece =
+                        response
+                            .piece
                             .ok_or(Error::InvalidParameter)
                             .inspect_err(|_err| {
-                                error!("piece content is missing");
+                                error!("response piece is missing");
                             })?;
 
-                    f.write_all(&content).await.inspect_err(|err| {
-                        error!("write {:?} failed: {}", args.output, err);
-                    })?;
-
-                    debug!("copy piece {} to {:?} success", piece.number, args.output);
+                    downloaded += piece.length;
+                    let position = min(
+                        downloaded + piece.length,
+                        progress_bar.length().unwrap_or(0),
+                    );
+                    progress_bar.set_position(position);
                 }
-
-                downloaded += piece.length;
-                let position = min(
-                    downloaded + piece.length,
-                    progress_bar.length().unwrap_or(0),
-                );
-                progress_bar.set_position(position);
+                None => {}
             }
-            None => {}
+        }
+    } else {
+        let response = download_client
+            .download_task(DownloadTaskRequest {
+                download: Some(Download {
+                    url: args.url.to_string(),
+                    digest: args.digest,
+                    // NOTE: Dfget does not support range download.
+                    range: None,
+                    r#type: TaskType::Standard as i32,
+                    tag: Some(args.tag),
+                    application: Some(args.application),
+                    priority: args.priority,
+                    filtered_query_params,
+                    request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
+                    piece_length: args.piece_length.map(|piece_length| piece_length.as_u64()),
+                    output_path,
+                    timeout: Some(
+                        prost_wkt_types::Duration::try_from(args.timeout)
+                            .or_err(ErrorType::ParseError)?,
+                    ),
+                    need_back_to_source: false,
+                    disable_back_to_source: args.disable_back_to_source,
+                    certificate_chain: Vec::new(),
+                    prefetch: false,
+                    is_prefetch: false,
+                    need_piece_content,
+                    object_storage,
+                    hdfs,
+                    force_hard_link: args.force_hard_link,
+                    content_for_calculating_task_id: args.content_for_calculating_task_id,
+                    remote_ip: Some(local_ip().unwrap().to_string()),
+                }),
+            })
+            .await
+            .inspect_err(|err| {
+                error!("download task failed: {}", err);
+            })?;
+
+        // If transfer_from_dfdaemon is true, then dfget needs to create the output file and write the
+        // piece content to the output file.
+        let mut f = if args.transfer_from_dfdaemon {
+            if let Some(parent) = args.output.parent() {
+                if !parent.exists() {
+                    fs::create_dir_all(parent).await.inspect_err(|err| {
+                        error!("failed to create directory {:?}: {}", parent, err);
+                    })?;
+                }
+            }
+
+            let f = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(dfget::DEFAULT_OUTPUT_FILE_MODE)
+                .open(&args.output)
+                .await
+                .inspect_err(|err| {
+                    error!("open file {:?} failed: {}", args.output, err);
+                })?;
+
+            Some(f)
+        } else {
+            None
+        };
+
+        // Download file.
+        let mut downloaded = 0;
+        let mut out_stream = response.into_inner();
+        while let Some(message) = out_stream.message().await.inspect_err(|err| {
+            error!("get message failed: {}", err);
+        })? {
+            match message.response {
+                Some(download_task_response::Response::DownloadTaskStartedResponse(response)) => {
+                    if let Some(f) = &f {
+                        fallocate(f, response.content_length)
+                            .await
+                            .inspect_err(|err| {
+                                error!("fallocate {:?} failed: {}", args.output, err);
+                            })?;
+                    }
+
+                    progress_bar.set_length(response.content_length);
+                }
+                Some(download_task_response::Response::DownloadPieceFinishedResponse(response)) => {
+                    let piece =
+                        response
+                            .piece
+                            .ok_or(Error::InvalidParameter)
+                            .inspect_err(|_err| {
+                                error!("response piece is missing");
+                            })?;
+
+                    // Dfget needs to write the piece content to the output file.
+                    if let Some(f) = &mut f {
+                        f.seek(SeekFrom::Start(piece.offset))
+                            .await
+                            .inspect_err(|err| {
+                                error!("seek {:?} failed: {}", args.output, err);
+                            })?;
+
+                        let content =
+                            piece
+                                .content
+                                .ok_or(Error::InvalidParameter)
+                                .inspect_err(|_err| {
+                                    error!("piece content is missing");
+                                })?;
+
+                        f.write_all(&content).await.inspect_err(|err| {
+                            error!("write {:?} failed: {}", args.output, err);
+                        })?;
+
+                        debug!("copy piece {} to {:?} success", piece.number, args.output);
+                    }
+
+                    downloaded += piece.length;
+                    let position = min(
+                        downloaded + piece.length,
+                        progress_bar.length().unwrap_or(0),
+                    );
+                    progress_bar.set_position(position);
+                }
+                None => {}
+            }
         }
     }
 
