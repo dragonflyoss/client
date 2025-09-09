@@ -16,6 +16,8 @@
 
 use dragonfly_client_core::Result;
 use tokio::fs;
+
+#[cfg(target_os = "linux")]
 use tracing::warn;
 
 /// fallocate allocates the space for the file and fills it with zero, only on Linux.

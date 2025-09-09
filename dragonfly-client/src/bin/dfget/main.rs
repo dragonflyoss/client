@@ -201,7 +201,7 @@ struct Args {
         short = 'I',
         long = "include-files",
         required = false,
-        help = "Filter files to download in a directory using glob patterns relative to the root URL's path. Examples: --include-files='file.txt' --include-files='subdir/file.txt' --include-files='subdir/dir/'"
+        help = "Filter files to download in a directory using glob patterns relative to the root URL's path. Examples: --include-files file.txt --include-files subdir/file.txt --include-files subdir/dir/"
     )]
     include_files: Option<Vec<String>>,
 
@@ -264,7 +264,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value_t = 5,
+        default_value_t = 1,
         help = "Specify the max count of concurrent download files when downloading a directory"
     )]
     max_concurrent_requests: usize,
@@ -709,23 +709,12 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
             entry_args.url = entry_url;
 
             let progress_bar = multi_progress_bar.add(ProgressBar::new(0));
-            async fn download_entry(
-                args: Args,
-                progress_bar: ProgressBar,
-                download_client: DfdaemonDownloadClient,
-                semaphore: Arc<Semaphore>,
-            ) -> Result<()> {
-                // Limit the concurrent download tasks.
-                let _permit = semaphore.acquire().await.unwrap();
-                download(args, progress_bar, download_client).await
-            }
-
-            join_set.spawn(download_entry(
-                entry_args,
-                progress_bar,
-                download_client.clone(),
-                semaphore.clone(),
-            ));
+            let download_client = download_client.clone();
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            join_set.spawn(async move {
+                let _permit = permit;
+                download(entry_args, progress_bar, download_client).await
+            });
         }
     }
 
@@ -740,7 +729,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
             Ok(_) => continue,
             Err(err) => {
                 error!("download entry failed: {}", err);
-                join_set.abort_all();
+                join_set.shutdown().await;
                 return Err(err);
             }
         }
