@@ -42,6 +42,12 @@ pub async fn fallocate(f: &fs::File, length: u64) -> Result<()> {
             match fallocate(fd, flags, offset, length) {
                 Ok(_) => return Ok(()),
                 Err(rustix::io::Errno::INTR) => continue,
+                Err(err)
+                    if err == rustix::io::Errno::NOTSUP || err == rustix::io::Errno::OPNOTSUP =>
+                {
+                    log::warn!("fallocate not supported, skipping preallocation");
+                    return Ok(());
+                }
                 Err(err) => {
                     return Err(Error::IO(io::Error::from_raw_os_error(err.raw_os_error())))
                 }
