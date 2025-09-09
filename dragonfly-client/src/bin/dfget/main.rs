@@ -308,9 +308,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Parse command line arguments.
-    let args = Args::parse();
-
-    let args = convert_args(args);
+    let args = convert_args(Args::parse());
 
     // Initialize tracing.
     let _guards = init_tracing(
