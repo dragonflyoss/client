@@ -16,6 +16,7 @@
 
 use dragonfly_client_core::Result;
 use tokio::fs;
+use tracing::warn;
 
 /// fallocate allocates the space for the file and fills it with zero, only on Linux.
 #[allow(unused_variables)]
@@ -43,9 +44,9 @@ pub async fn fallocate(f: &fs::File, length: u64) -> Result<()> {
                 Ok(_) => return Ok(()),
                 Err(rustix::io::Errno::INTR) => continue,
                 Err(err)
-                    if err == rustix::io::Errno::NOTSUP || err == rustix::io::Errno::OPNOTSUP =>
+                    if err == rustix::io::Errno::NOTSUP || err == rustix::io::Errno::OPNOTSUPP =>
                 {
-                    log::warn!("fallocate not supported, skipping preallocation");
+                    warn!("fallocate not supported, skipping preallocation");
                     return Ok(());
                 }
                 Err(err) => {
