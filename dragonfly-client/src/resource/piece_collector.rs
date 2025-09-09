@@ -290,7 +290,7 @@ impl PieceCollector {
                     // If all pieces are collected, abort all tasks.
                     if collected_pieces.is_empty() {
                         info!("all pieces are collected, abort all tasks");
-                        join_set.abort_all();
+                        join_set.shutdown().await;
                     }
                 }
                 Ok(Err(err)) => {
@@ -550,7 +550,7 @@ impl PersistentCachePieceCollector {
                     // If all pieces are collected, abort all tasks.
                     if collected_pieces.is_empty() {
                         info!("all persistent cache pieces are collected, abort all tasks");
-                        join_set.abort_all();
+                        join_set.shutdown().await;
                     }
                 }
                 Ok(Err(err)) => {
