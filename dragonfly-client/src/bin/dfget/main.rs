@@ -264,7 +264,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value_t = 5,
+        default_value_t = 1,
         help = "Specify the max count of concurrent download files when downloading a directory"
     )]
     max_concurrent_requests: usize,
