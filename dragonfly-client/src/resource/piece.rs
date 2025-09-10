@@ -393,6 +393,69 @@ impl Piece {
         self.storage.upload_piece(piece_id, task_id, range).await
     }
 
+    /// upload_cache_from_local_into_async_read uploads a single cache piece from local cache.
+    #[instrument(skip_all, fields(piece_id))]
+    pub async fn upload_cache_from_local_into_async_read(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        length: u64,
+        range: Option<Range>,
+        disable_rate_limit: bool,
+    ) -> Result<impl AsyncRead> {
+        // Span record the piece_id.
+        Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
+
+        // Acquire the upload rate limiter.
+        if !disable_rate_limit {
+            self.upload_rate_limiter.acquire(length as usize).await;
+        }
+
+        // Upload the cache piece content.
+        self.storage
+            .upload_cache_piece(piece_id, task_id, range)
+            .await
+            .inspect(|_| {
+                collect_upload_piece_traffic_metrics(
+                    self.id_generator.task_type(task_id) as i32,
+                    length,
+                );
+            })
+    }
+
+    /// download_cache_from_local_into_async_read downloads a single piece from local cache.
+    #[instrument(skip_all, fields(piece_id))]
+    pub async fn download_cache_from_local_into_async_read(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        length: u64,
+        range: Option<Range>,
+        disable_rate_limit: bool,
+        is_prefetch: bool,
+    ) -> Result<impl AsyncRead> {
+        // Span record the piece_id.
+        Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
+
+        // Acquire the download rate limiter.
+        if !disable_rate_limit {
+            if is_prefetch {
+                // Acquire the prefetch rate limiter.
+                self.prefetch_rate_limiter.acquire(length as usize).await;
+            } else {
+                // Acquire the download rate limiter.
+                self.download_rate_limiter.acquire(length as usize).await;
+            }
+        }
+
+        // Upload the piece content.
+        self.storage
+            .upload_cache_piece(piece_id, task_id, range)
+            .await
+    }
+
     /// download_from_local downloads a single piece from local cache. Fake the download piece
     /// from the local cache, just collect the metrics.
     #[instrument(skip_all)]
@@ -664,6 +727,290 @@ impl Piece {
                 Err(err)
             }
         }
+    }
+
+    /// id generates a new cache piece id.
+    #[inline]
+    pub fn cache_id(&self, task_id: &str, number: u32) -> String {
+        self.storage.cache_piece_id(task_id, number)
+    }
+
+    /// get_cache gets a cache piece from the local storage.
+    pub fn get_cache(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
+        self.storage.get_cache_piece(piece_id)
+    }
+
+    /// download_cache_from_parent downloads a single piece from a parent.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all, fields(piece_id))]
+    pub async fn download_cache_from_parent(
+        &self,
+        piece_id: &str,
+        host_id: &str,
+        task_id: &str,
+        number: u32,
+        length: u64,
+        parent: piece_collector::CollectedParent,
+        is_prefetch: bool,
+    ) -> Result<metadata::Piece> {
+        // Span record the piece_id.
+        Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
+
+        // Record the start of downloading piece.
+        let piece = self
+            .storage
+            .download_cache_piece_started(piece_id, number)
+            .await?;
+
+        // If the piece is downloaded by the other thread,
+        // return the piece directly.
+        if piece.is_finished() {
+            info!("finished piece {} from local", piece_id);
+            return Ok(piece);
+        }
+
+        if is_prefetch {
+            // Acquire the prefetch rate limiter.
+            self.prefetch_rate_limiter.acquire(length as usize).await;
+        } else {
+            // Acquire the download rate limiter.
+            self.download_rate_limiter.acquire(length as usize).await;
+        }
+
+        // Create a dfdaemon client.
+        let host = parent.host.clone().ok_or_else(|| {
+            error!("peer host is empty");
+            if let Some(err) = self.storage.download_cache_piece_failed(piece_id).err() {
+                error!("set piece metadata failed: {}", err)
+            };
+
+            Error::InvalidPeer(parent.id.clone())
+        })?;
+
+        let (content, offset, digest) = self
+            .downloader
+            .download_cache_piece(
+                format!("{}:{}", host.ip, host.port).as_str(),
+                number,
+                host_id,
+                task_id,
+            )
+            .await
+            .inspect_err(|err| {
+                error!("download piece failed: {}", err);
+                if let Some(err) = self.storage.download_cache_piece_failed(piece_id).err() {
+                    error!("set piece metadata failed: {}", err)
+                };
+            })?;
+        let mut reader = Cursor::new(content);
+
+        // Record the finish of downloading piece.
+        match self
+            .storage
+            .download_cache_piece_from_parent_finished(
+                piece_id,
+                task_id,
+                offset,
+                length,
+                digest.as_str(),
+                parent.id.as_str(),
+                &mut reader,
+                self.config.storage.write_piece_timeout,
+            )
+            .await
+        {
+            Ok(piece) => {
+                collect_download_piece_traffic_metrics(
+                    &TrafficType::RemotePeer,
+                    self.id_generator.task_type(task_id) as i32,
+                    length,
+                );
+
+                Ok(piece)
+            }
+            Err(err) => {
+                error!("download cache piece finished: {}", err);
+                if let Some(err) = self.storage.download_cache_piece_failed(piece_id).err() {
+                    error!("set cache piece metadata failed: {}", err)
+                };
+
+                Err(err)
+            }
+        }
+    }
+
+    /// download_cache_from_source downloads a single piece from the source.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all, fields(piece_id))]
+    pub async fn download_cache_from_source(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        number: u32,
+        url: &str,
+        offset: u64,
+        length: u64,
+        request_header: HeaderMap,
+        is_prefetch: bool,
+        object_storage: Option<ObjectStorage>,
+        hdfs: Option<Hdfs>,
+    ) -> Result<metadata::Piece> {
+        // Span record the piece_id.
+        Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
+
+        // Record the start of downloading piece.
+        let piece = self
+            .storage
+            .download_cache_piece_started(piece_id, number)
+            .await?;
+
+        // If the piece is downloaded by the other thread,
+        // return the piece directly.
+        if piece.is_finished() {
+            info!("finished piece {} from local", piece_id);
+            return Ok(piece);
+        }
+
+        if is_prefetch {
+            // Acquire the prefetch rate limiter.
+            self.prefetch_rate_limiter.acquire(length as usize).await;
+        } else {
+            // Acquire the download rate limiter.
+            self.download_rate_limiter.acquire(length as usize).await;
+        }
+
+        // Add range header to the request by offset and length.
+        let mut request_header = request_header.clone();
+        request_header.insert(
+            header::RANGE,
+            format!("bytes={}-{}", offset, offset + length - 1)
+                .parse()
+                .unwrap(),
+        );
+
+        // Download the piece from the source.
+        let backend = self.backend_factory.build(url).inspect_err(|err| {
+            error!("build backend failed: {}", err);
+            if let Some(err) = self.storage.download_cache_piece_failed(piece_id).err() {
+                error!("set piece metadata failed: {}", err)
+            };
+        })?;
+
+        // Record the start time.
+        let start_time = Instant::now();
+
+        // Collect the backend request started metrics.
+        collect_backend_request_started_metrics(
+            backend.scheme().as_str(),
+            http::Method::GET.as_str(),
+        );
+        let mut response = backend
+            .get(GetRequest {
+                task_id: task_id.to_string(),
+                piece_id: piece_id.to_string(),
+                url: url.to_string(),
+                range: Some(Range {
+                    start: offset,
+                    length,
+                }),
+                http_header: Some(request_header),
+                timeout: self.config.download.piece_timeout,
+                client_cert: None,
+                object_storage,
+                hdfs,
+            })
+            .await
+            .inspect_err(|err| {
+                // Collect the backend request failure metrics.
+                collect_backend_request_failure_metrics(
+                    backend.scheme().as_str(),
+                    http::Method::GET.as_str(),
+                );
+
+                // if the request is failed.
+                error!("backend get failed: {}", err);
+                if let Some(err) = self.storage.download_cache_piece_failed(piece_id).err() {
+                    error!("set cache piece metadata failed: {}", err)
+                };
+            })?;
+
+        if !response.success {
+            // Collect the backend request failure metrics.
+            collect_backend_request_failure_metrics(
+                backend.scheme().as_str(),
+                http::Method::GET.as_str(),
+            );
+
+            // if the status code is not OK.
+            let mut buffer = String::new();
+            response
+                .reader
+                .read_to_string(&mut buffer)
+                .await
+                .unwrap_or_default();
+
+            let error_message = response.error_message.unwrap_or_default();
+            error!("backend get failed: {} {}", error_message, buffer.as_str());
+
+            self.storage.download_cache_piece_failed(piece_id)?;
+            return Err(Error::BackendError(Box::new(BackendError {
+                message: error_message,
+                status_code: Some(response.http_status_code.unwrap_or_default()),
+                header: Some(response.http_header.unwrap_or_default()),
+            })));
+        }
+
+        // Collect the backend request finished metrics.
+        collect_backend_request_finished_metrics(
+            backend.scheme().as_str(),
+            http::Method::GET.as_str(),
+            start_time.elapsed(),
+        );
+
+        // Record the finish of downloading piece.
+        match self
+            .storage
+            .download_cache_piece_from_source_finished(
+                piece_id,
+                task_id,
+                offset,
+                length,
+                &mut response.reader,
+                self.config.storage.write_piece_timeout,
+            )
+            .await
+        {
+            Ok(piece) => {
+                collect_download_piece_traffic_metrics(
+                    &TrafficType::BackToSource,
+                    self.id_generator.task_type(task_id) as i32,
+                    length,
+                );
+
+                Ok(piece)
+            }
+            Err(err) => {
+                error!("download cache piece finished: {}", err);
+                if let Some(err) = self.storage.download_cache_piece_failed(piece_id).err() {
+                    error!("set cache piece metadata failed: {}", err)
+                };
+
+                Err(err)
+            }
+        }
+    }
+
+    /// download_cache_from_local downloads a single piece from local cache. Fake the download piece
+    /// from the local cache, just collect the metrics.
+    #[instrument(skip_all)]
+    pub fn download_cache_from_local(&self, task_id: &str, length: u64) {
+        collect_download_piece_traffic_metrics(
+            &TrafficType::LocalPeer,
+            self.id_generator.task_type(task_id) as i32,
+            length,
+        );
     }
 
     /// persistent_cache_id generates a new persistent cache piece id.

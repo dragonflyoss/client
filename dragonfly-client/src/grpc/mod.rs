@@ -17,7 +17,7 @@
 use crate::metrics::{
     collect_prefetch_task_failure_metrics, collect_prefetch_task_started_metrics,
 };
-use dragonfly_api::dfdaemon::v2::DownloadTaskRequest;
+use dragonfly_api::dfdaemon::v2::{DownloadCacheTaskRequest, DownloadTaskRequest};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -133,6 +133,87 @@ pub async fn prefetch_task(
                         );
 
                         error!("prefetch piece failed: {}", err);
+                        return;
+                    }
+                }
+            }
+        }
+        .in_current_span(),
+    );
+
+    Ok(())
+}
+
+/// prefetch_cache_task prefetches the cache task if prefetch flag is true.
+#[instrument(skip_all)]
+pub async fn prefetch_cache_task(
+    socket_path: PathBuf,
+    request: Request<DownloadCacheTaskRequest>,
+) -> ClientResult<()> {
+    // Initialize the dfdaemon download client.
+    let dfdaemon_download_client =
+        dfdaemon_download::DfdaemonDownloadClient::new_unix(socket_path.clone()).await?;
+
+    // Make the prefetch request.
+    let mut request = request.into_inner();
+
+    // Remove the range flag for download full task.
+    request.range = None;
+
+    // Remove the prefetch flag for prevent the infinite loop.
+    request.prefetch = false;
+
+    // Mark the is_prefetch flag as true to represents it is a prefetch request.
+    request.is_prefetch = true;
+
+    // Remove the range header for download full cache task.
+    request
+        .request_header
+        .remove(reqwest::header::RANGE.as_str());
+
+    // Get the fields from the download cache task.
+    let task_type = request.r#type;
+    let tag = request.tag.clone();
+    let application = request.application.clone();
+    let priority = request.priority;
+
+    // Download cache task by dfdaemon download client.
+    let response = dfdaemon_download_client
+        .download_cache_task(request)
+        .await
+        .inspect_err(|err| {
+            error!("prefetch cache task failed: {}", err);
+        })?;
+
+    // Collect the prefetch task started metrics.
+    collect_prefetch_task_started_metrics(
+        task_type,
+        tag.clone().unwrap_or_default().as_str(),
+        application.clone().unwrap_or_default().as_str(),
+        priority.to_string().as_str(),
+    );
+
+    // Spawn to handle the download cache task.
+    tokio::spawn(
+        async move {
+            let mut out_stream = response.into_inner();
+            loop {
+                match out_stream.message().await {
+                    Ok(Some(_)) => info!("prefetch piece finished"),
+                    Ok(None) => {
+                        info!("prefetch cache task finished");
+                        return;
+                    }
+                    Err(err) => {
+                        // Collect the prefetch task failure metrics.
+                        collect_prefetch_task_failure_metrics(
+                            task_type,
+                            tag.clone().unwrap_or_default().as_str(),
+                            application.clone().unwrap_or_default().as_str(),
+                            priority.to_string().as_str(),
+                        );
+
+                        error!("prefetch cache piece failed: {}", err);
                         return;
                     }
                 }
