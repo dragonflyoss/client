@@ -1066,10 +1066,6 @@ pub struct Storage {
     ///```   
     #[serde(with = "bytesize_serde", default = "default_storage_cache_capacity")]
     pub cache_capacity: ByteSize,
-
-    /// encrtption is the encryption configuration for the storage.
-    #[serde(default = "default_storage_encryption")] 
-    pub encryption: Encryption,
 }
 
 /// Storage implements Default.
@@ -1083,7 +1079,6 @@ impl Default for Storage {
             write_buffer_size: default_storage_write_buffer_size(),
             read_buffer_size: default_storage_read_buffer_size(),
             cache_capacity: default_storage_cache_capacity(),
-            encryption: default_storage_encryption(),
         }
     }
 }
@@ -2266,24 +2261,5 @@ key: /etc/ssl/private/client.pem
             metrics.server.ip,
             Some("127.0.0.1".parse::<IpAddr>().unwrap())
         );
-    }
-
-    #[test]
-    fn deserialize_storage_encryption_yaml() {
-        let yaml = 
-r#"
-encryption:
-  enable: true
-"#;
-
-        let storage: Storage = serde_yaml::from_str(yaml).expect("Failed to deserialize");
-        assert_eq!(storage.encryption.enable, true);
-    }
-
-    #[test]
-    fn deserialize_storage_encryption_default() {
-        let yaml = r#""#;
-        let storage: Storage = serde_yaml::from_str(yaml).expect("Failed to deserialize");
-        assert_eq!(storage.encryption.enable, false);
     }
 }

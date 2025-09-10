@@ -96,6 +96,9 @@ pub struct DfdaemonUploadServer {
 
     /// _shutdown_complete is used to notify the grpc server is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
+
+    // manager key is the primary key fron manager, it is None when encryption disabled
+    primary_key: Option<Vec<u8>>,
 }
 
 /// DfdaemonUploadServer implements the grpc server of the upload.
@@ -109,6 +112,7 @@ impl DfdaemonUploadServer {
         interface: Arc<Interface>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
+        primary_key: Option<Vec<u8>>,
     ) -> Self {
         Self {
             config,
@@ -118,6 +122,7 @@ impl DfdaemonUploadServer {
             persistent_cache_task,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
+            primary_key,
         }
     }
 
@@ -130,6 +135,7 @@ impl DfdaemonUploadServer {
                 task: self.task.clone(),
                 persistent_cache_task: self.persistent_cache_task.clone(),
                 interface: self.interface.clone(),
+                primary_key: self.primary_key.clone(),
             },
             ExtractTracingInterceptor,
         );
@@ -219,6 +225,9 @@ pub struct DfdaemonUploadServerHandler {
 
     /// interface is the network interface.
     interface: Arc<Interface>,
+
+    // manager key is the primary key fron manager, it is None when encryption disabled
+    primary_key: Option<Vec<u8>>,
 }
 
 /// DfdaemonUploadServerHandler implements the dfdaemon upload grpc service.
@@ -259,13 +268,17 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             .task
             .id_generator
             .task_id(match download.content_for_calculating_task_id.clone() {
-                Some(content) => TaskIDParameter::Content(content),
+                Some(content) => TaskIDParameter::Content { 
+                    data:content,
+                    key: self.primary_key.as_deref(),
+                },
                 None => TaskIDParameter::URLBased {
                     url: download.url.clone(),
                     piece_length: download.piece_length,
                     tag: download.tag.clone(),
                     application: download.application.clone(),
                     filtered_query_params: download.filtered_query_params.clone(),
+                    key: self.primary_key.as_deref(),
                 },
             })
             .map_err(|e| {

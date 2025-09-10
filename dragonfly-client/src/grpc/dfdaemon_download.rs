@@ -93,6 +93,9 @@ pub struct DfdaemonDownloadServer {
 
     /// _shutdown_complete is used to notify the grpc server is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
+
+    // manager key is the primary key fron manager, it is None when encryption disabled
+    primary_key: Option<Vec<u8>>,
 }
 
 /// DfdaemonDownloadServer implements the grpc server of the download.
@@ -105,6 +108,7 @@ impl DfdaemonDownloadServer {
         persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
+        primary_key: Option<Vec<u8>>,
     ) -> Self {
         Self {
             config,
@@ -113,6 +117,7 @@ impl DfdaemonDownloadServer {
             persistent_cache_task,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
+            primary_key,
         }
     }
 
@@ -125,6 +130,7 @@ impl DfdaemonDownloadServer {
                 socket_path: self.socket_path.clone(),
                 task: self.task.clone(),
                 persistent_cache_task: self.persistent_cache_task.clone(),
+                primary_key: self.primary_key.clone(),
             },
             ExtractTracingInterceptor,
         );
@@ -223,6 +229,8 @@ pub struct DfdaemonDownloadServerHandler {
 
     /// persistent_cache_task is the persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
+
+    primary_key: Option<Vec<u8>>,
 }
 
 /// DfdaemonDownloadServerHandler implements the dfdaemon download grpc service.
@@ -263,13 +271,17 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             .task
             .id_generator
             .task_id(match download.content_for_calculating_task_id.clone() {
-                Some(content) => TaskIDParameter::Content(content),
+                Some(content) => TaskIDParameter::Content {
+                    data: content,
+                    key: self.primary_key.as_deref(),
+                },
                 None => TaskIDParameter::URLBased {
                     url: download.url.clone(),
                     piece_length: download.piece_length,
                     tag: download.tag.clone(),
                     application: download.application.clone(),
                     filtered_query_params: download.filtered_query_params.clone(),
+                    key: self.primary_key.as_deref(),
                 },
             })
             .map_err(|e| {
@@ -445,8 +457,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         }
 
 
-        // clone config for async
-        let config_clone = self.config.clone();
+        let encryption_enabled = self.primary_key.is_some();
 
         tokio::spawn(
             async move {
@@ -488,13 +499,12 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             }
 
                             // encryption is not compatible with hardlink
-                            let encryption_enable = config_clone.storage.encryption.enable;
-                            if encryption_enable && download_clone.force_hard_link {
+                            if encryption_enabled && download_clone.force_hard_link {
                                 warn!("omit force hard link because encryption is enabled");
                             }
 
                             if let Some(output_path) = &download_clone.output_path {
-                                if !download_clone.force_hard_link || encryption_enable {
+                                if !download_clone.force_hard_link || encryption_enabled {
                                     let output_path = Path::new(output_path.as_str());
                                     if output_path.exists() {
                                         match task_manager_clone
@@ -1041,8 +1051,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
         }
 
-        // clone config for async
-        let config_clone = self.config.clone();
+        let encryption_enabled = self.primary_key.is_some();
 
         tokio::spawn(
             async move {
@@ -1083,13 +1092,12 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         }
 
                         // encryption is not compatible with hardlink
-                        let encryption_enable = config_clone.storage.encryption.enable;
-                        if encryption_enable && request_clone.force_hard_link {
+                        if encryption_enabled && request_clone.force_hard_link {
                             warn!("omit force hard link because encryption is enabled");
                         }
 
                         if let Some(output_path) = &request_clone.output_path {
-                            if !request_clone.force_hard_link || encryption_enable {
+                            if !request_clone.force_hard_link || encryption_enabled {
                                 let output_path = Path::new(output_path.as_str());
                                 if output_path.exists() {
                                     match task_manager_clone
@@ -1225,12 +1233,16 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             .task
             .id_generator
             .persistent_cache_task_id(match request.content_for_calculating_task_id.clone() {
-                Some(content) => PersistentCacheTaskIDParameter::Content(content),
+                Some(content) => PersistentCacheTaskIDParameter::Content { 
+                    data: content,
+                    key: self.primary_key.as_deref(),
+                },
                 None => PersistentCacheTaskIDParameter::FileContentBased {
                     path: path.to_path_buf(),
                     piece_length: request.piece_length,
                     tag: request.tag.clone(),
                     application: request.application.clone(),
+                    key: self.primary_key.as_deref(),
                 },
             })
             .map_err(|err| {

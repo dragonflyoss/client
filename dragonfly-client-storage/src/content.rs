@@ -50,8 +50,8 @@ pub struct Content {
     /// dir is the directory to store content.
     dir: PathBuf,
 
-    /// key is the encryption key
-    key: Option<Vec<u8>>,
+    /// key is the primary key get from manager
+    primary_key: Option<Vec<u8>>,
 }
 
 /// WritePieceResponse is the response of writing a piece.
@@ -75,7 +75,7 @@ pub struct WritePersistentCacheTaskResponse {
 /// Content implements the content storage.
 impl Content {
     /// new returns a new content.
-    pub async fn new(config: Arc<Config>, dir: &Path, key: Option<Vec<u8>>) -> Result<Content> {
+    pub async fn new(config: Arc<Config>, dir: &Path, primary_key: Option<Vec<u8>>) -> Result<Content> {
         let dir = dir.join(DEFAULT_CONTENT_DIR);
 
         // If the storage is not kept, remove the directory.
@@ -88,7 +88,7 @@ impl Content {
         fs::create_dir_all(&dir.join(DEFAULT_TASK_DIR)).await?;
         fs::create_dir_all(&dir.join(DEFAULT_PERSISTENT_CACHE_TASK_DIR)).await?;
         info!("content initialized directory: {:?}", dir);
-        Ok(Content { config, dir, key })
+        Ok(Content { config, dir, primary_key })
     }
 
     /// available_space returns the available space of the disk.
@@ -218,8 +218,12 @@ impl Content {
     #[instrument(skip_all)]
     pub async fn hard_link_task(&self, task_id: &str, to: &Path) -> Result<()> {
         // check
-        if self.config.storage.encryption.enable {
-            panic!("HARD LINK is not compatible with encryption");
+        if self.primary_key.is_some() {
+            error!("HARD LINK is not compatible with encryption");
+            return Err(Error::IO(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "HARD LINK is not compatible with encryption",
+            )))
         }
 
         let task_path = self.get_task_path(task_id);
@@ -242,7 +246,7 @@ impl Content {
     /// copy_task copies the task content to the destination.
     #[instrument(skip_all)]
     pub async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        if self.config.storage.encryption.enable {
+        if self.primary_key.is_some() {
             let task_path = self.get_task_path(task_id);
             self.export_encrypted_file(task_id, task_path.as_path(), to, None).await?;
         } else {
@@ -255,7 +259,7 @@ impl Content {
     /// copy_task_by_range copies the task content to the destination by range.
     #[instrument(skip_all)]
     async fn copy_task_by_range(&self, task_id: &str, to: &Path, range: Range) -> Result<()> {
-        if self.config.storage.encryption.enable {
+        if self.primary_key.is_some() {
             let task_path = self.get_task_path(task_id);
             self.export_encrypted_file(task_id, task_path.as_path(), to, Some(range)).await?;
             return Ok(());
@@ -328,8 +332,7 @@ impl Content {
 
         let limited_reader = f_reader.take(target_length);
 
-        if self.config.storage.encryption.enable {
-            let key = self.key.as_ref().expect("should have key when encryption enabled");
+        if let Some(key) = &self.primary_key {
             let decrypt_reader = DecryptReader::new(
                 limited_reader, 
                 key, 
@@ -372,8 +375,7 @@ impl Content {
         let range_reader = f_range_reader.take(target_length);
 
         // encryption
-        let range_reader = if self.config.storage.encryption.enable {
-            let key = self.key.as_ref().expect("should have key when encryption enabled");
+        let range_reader = if let Some(key) = &self.primary_key {
             let decrypt_reader = DecryptReader::new(
                 range_reader, 
                 key, 
@@ -401,8 +403,7 @@ impl Content {
         let reader = f_reader.take(length);
 
         // encryption
-        let reader = if self.config.storage.encryption.enable {
-            let key = self.key.as_ref().expect("should have key when encryption enabled");
+        let reader = if let Some(key) = &self.primary_key {
             let decrypt_reader = DecryptReader::new(
                 reader, 
                 key, 
@@ -451,9 +452,7 @@ impl Content {
             hasher.update(bytes);
         });
 
-        let mut tee_wrapper = if self.config.storage.encryption.enable {
-            let key = self.key.as_ref().expect("should have key when encryption enabled");
-
+        let mut tee_wrapper = if let Some(key) = &self.primary_key {
             let encrypt_reader = EncryptReader::new(
                 tee, 
                 key, 
@@ -574,7 +573,7 @@ impl Content {
     /// copy_persistent_cache_task copies the persistent cache task content to the destination.
     #[instrument(skip_all)]
     pub async fn copy_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        if self.config.storage.encryption.enable {
+        if self.primary_key.is_some() {
             let task_path = self.get_persistent_cache_task_path(task_id);
             self.export_encrypted_file(task_id, task_path.as_path(), to, None).await?;
         } else {
@@ -612,9 +611,7 @@ impl Content {
     
         let limited_reader = f_reader.take(target_length);
         
-        if self.config.storage.encryption.enable {
-            let key = self.key.as_ref().expect("should have key when encryption enabled");
-                
+        if let Some(key) = &self.primary_key {
             let decrypt_reader = DecryptReader::new(
                 limited_reader, 
                 key, 
@@ -658,8 +655,7 @@ impl Content {
         let range_reader = f_range_reader.take(target_length);
 
         // encryption
-        let range_reader = if self.config.storage.encryption.enable {
-            let key = self.key.as_ref().expect("should have key when encryption enabled");
+        let range_reader = if let Some(key) = &self.primary_key {
             let decrypt_reader = DecryptReader::new(
                 range_reader, 
                 key, 
@@ -687,8 +683,7 @@ impl Content {
         let reader = f_reader.take(length);
 
         // encryption
-        let reader = if self.config.storage.encryption.enable {
-            let key = self.key.as_ref().expect("should have key when encryption enabled");
+        let reader = if let Some(key) = &self.primary_key {
             let decrypt_reader = DecryptReader::new(
                 reader, 
                 key, 
@@ -738,9 +733,7 @@ impl Content {
             hasher.update(bytes);
         });
 
-        let mut tee_wrapper = if self.config.storage.encryption.enable {
-            let key = self.key.as_ref().expect("should have key when encryption enabled");
-
+        let mut tee_wrapper = if let Some(key) = &self.primary_key {
             let encrypt_reader = EncryptReader::new(
                 tee, 
                 key, 
@@ -813,7 +806,7 @@ impl Content {
         };
         
         let src_buf_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, src_file);
-        let key = self.key.as_ref().expect("should have key when encryption enabled");
+        let key = self.primary_key.as_ref().expect("should have key when encryption enabled");
         let decrypt_reader = DecryptReader::new(
             src_buf_reader, 
             key, 
@@ -1265,7 +1258,6 @@ mod tests {
 
         let temp_dir = tempdir().unwrap();
         let mut config = Config::default();
-        config.storage.encryption.enable = true;
         
         // base64 key
         let base64_key = "jqe8buWT8rsfBMYt8mpwSbnjy44WNy/5v1gN1JfFsNk=";

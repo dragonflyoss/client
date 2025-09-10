@@ -165,16 +165,16 @@ async fn main() -> Result<(), anyhow::Error> {
         })?;
     let manager_client = Arc::new(manager_client);
 
-    // Get key from Manager
-    let key = if config.storage.encryption.enable { 
-        let key = get_key_from_manager(&config, &manager_client).await;
-        Some(key)
-    } else {
-        None
-    };
+    // Get primary key from manager, None when encryption disabled
+    let primary_key = get_key_from_manager(&config, &manager_client).await;
 
     // Initialize storage.
-    let storage = Storage::new(config.clone(), config.storage.dir.as_path(), args.log_dir, key)
+    let storage = Storage::new(
+        config.clone(), 
+        config.storage.dir.as_path(), 
+        args.log_dir, 
+        primary_key.clone()
+    )
         .await
         .inspect_err(|err| {
             error!("initialize storage failed: {}", err);
@@ -263,6 +263,7 @@ async fn main() -> Result<(), anyhow::Error> {
         download_rate_limiter.clone(),
         upload_rate_limiter.clone(),
         prefetch_rate_limiter.clone(),
+        primary_key.clone(),
     )?;
     let task = Arc::new(task);
 
@@ -276,6 +277,7 @@ async fn main() -> Result<(), anyhow::Error> {
         download_rate_limiter.clone(),
         upload_rate_limiter.clone(),
         prefetch_rate_limiter.clone(),
+        primary_key.clone(),
     )?;
     let persistent_cache_task = Arc::new(persistent_cache_task);
 
@@ -347,6 +349,7 @@ async fn main() -> Result<(), anyhow::Error> {
         interface.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
+        primary_key.clone(),
     );
 
     // Initialize download grpc server.
@@ -357,6 +360,7 @@ async fn main() -> Result<(), anyhow::Error> {
         persistent_cache_task.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
+        primary_key.clone(),
     );
 
     // Initialize garbage collector.
@@ -463,25 +467,29 @@ async fn main() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-async fn get_key_from_manager(config: &dfdaemon::Config, client: &ManagerClient) -> Vec<u8>{
+async fn get_key_from_manager(config: &dfdaemon::Config, client: &ManagerClient) -> Option<Vec<u8>>{
     let source_type = if config.seed_peer.enable {
         SourceType::SeedPeerSource.into()
     } else {
         SourceType::PeerSource.into()
     };
     // Request a key from Manager
-    let key = client.request_encryption_key(
+    let (enable, key) = client.request_encryption_key(
         RequestEncryptionKeyRequest {
             source_type: source_type,
             hostname: config.host.hostname.clone(),
             ip: config.host.ip.unwrap().to_string(),
         }
     ).await
-    .expect("fail to get key from Manager");
+    .expect("fail to get encryption info from Manager");
 
+    if !enable {
+        info!("encryption is disabled");
+        return None;
+    }
+    info!("encryption is enabled");
+    let key = key.expect("should have key when manager enable encryption");
     let key_base64 = BASE64_STANDARD.encode(&key);
-    // TODO: avoid printing key
     debug!("key response(base64): {} \n (hex): {:x?}", key_base64, key);
-
-    key
+    Some(key)
 }

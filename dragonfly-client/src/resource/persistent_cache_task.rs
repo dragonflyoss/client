@@ -80,6 +80,9 @@ pub struct PersistentCacheTask {
 
     /// piece is the piece manager.
     pub piece: Arc<piece::Piece>,
+
+    /// primary_key is the primary key from manager
+    pub primary_key: Option<Vec<u8>>,
 }
 
 /// PersistentCacheTask is the implementation of PersistentCacheTask.
@@ -95,6 +98,7 @@ impl PersistentCacheTask {
         download_rate_limiter: Arc<RateLimiter>,
         upload_rate_limiter: Arc<RateLimiter>,
         prefetch_rate_limiter: Arc<RateLimiter>,
+        primary_key: Option<Vec<u8>>,
     ) -> ClientResult<Self> {
         let piece = piece::Piece::new(
             config.clone(),
@@ -113,6 +117,7 @@ impl PersistentCacheTask {
             storage,
             scheduler_client,
             piece,
+            primary_key,
         })
     }
 
@@ -485,7 +490,7 @@ impl PersistentCacheTask {
             .await?;
         
         // When enable encryption, copy encrypted file instead of create hard-link to source file
-        if self.config.storage.encryption.enable {
+        if self.primary_key.is_some() {
             info!("omit hard link when encryption is enabled");
             return Ok(task);
         }

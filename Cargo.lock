@@ -980,7 +980,7 @@ dependencies = [
 [[package]]
 name = "dragonfly-api"
 version = "2.1.59"
-source = "git+file:///codes/dragonflyoss/api_fork?branch=for_client#4abcd9deeb97b6617b821be6ef7cd47b2402dbb7"
+source = "git+file:///codes/dragonflyoss/api_fork?branch=for_client#b2d4cd3fda9f70c78a195ef745e3960dba480ce7"
 dependencies = [
  "prost 0.13.5",
  "prost-types 0.14.1",
