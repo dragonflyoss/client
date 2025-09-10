@@ -87,6 +87,9 @@ pub struct Task {
 
     /// piece is the piece manager.
     pub piece: Arc<piece::Piece>,
+
+    /// primary_key is the primary key from manager
+    pub primary_key: Option<Vec<u8>>,
 }
 
 /// Task implements the task manager.
@@ -98,6 +101,7 @@ impl Task {
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
+        primary_key: Option<Vec<u8>>,
     ) -> ClientResult<Self> {
         let piece = piece::Piece::new(
             config.clone(),
@@ -114,6 +118,7 @@ impl Task {
             scheduler_client: scheduler_client.clone(),
             backend_factory: backend_factory.clone(),
             piece: piece.clone(),
+            primary_key,
         })
     }
 
@@ -134,7 +139,7 @@ impl Task {
 
         if task.content_length.is_some() && task.piece_length.is_some() {
             // Omit HARD-LINK when use encryption
-            if self.config.storage.encryption.enable {
+            if self.primary_key.is_some() {
                 info!("omit hardlink when encryption is enabled");
                 return Ok(task);
             }
@@ -258,7 +263,7 @@ impl Task {
             .await;
 
         // Omit HARD-LINK when use encryption
-        if self.config.storage.encryption.enable {
+        if self.primary_key.is_some() {
             info!("omit hard link when encryption is enabled");
             return task;
         }
