@@ -897,6 +897,7 @@ mod tests {
             config.clone(),
             temp_dir.path(),
             temp_dir.path().to_path_buf(),
+            None,
         )
         .await
         .unwrap();

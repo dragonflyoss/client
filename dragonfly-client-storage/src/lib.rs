@@ -26,7 +26,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
-use tokio::io::AsyncReadExt;
 use tokio::time::sleep;
 use tokio_util::either::Either;
 use tokio_util::io::InspectReader;
@@ -36,6 +35,7 @@ pub mod cache;
 pub mod content;
 pub mod metadata;
 pub mod storage_engine;
+pub mod encrypt;
 
 /// DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.
 pub const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(100);
@@ -58,9 +58,9 @@ pub struct Storage {
 /// Storage implements the storage.
 impl Storage {
     /// new returns a new storage.
-    pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf) -> Result<Self> {
+    pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf, primary_key: Option<Vec<u8>>) -> Result<Self> {
         let metadata = metadata::Metadata::new(config.clone(), dir, &log_dir)?;
-        let content = content::Content::new(config.clone(), dir).await?;
+        let content = content::Content::new(config.clone(), dir, primary_key).await?;
         let cache = cache::Cache::new(config.clone());
 
         Ok(Storage {
@@ -68,6 +68,7 @@ impl Storage {
             metadata,
             content,
             cache,
+            // key,
         })
     }
 

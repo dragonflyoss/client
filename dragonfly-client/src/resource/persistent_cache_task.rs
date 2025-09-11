@@ -79,6 +79,9 @@ pub struct PersistentCacheTask {
 
     /// piece is the piece manager.
     pub piece: Arc<piece::Piece>,
+
+    /// primary_key is the primary key from manager
+    pub primary_key: Option<Vec<u8>>,
 }
 
 /// PersistentCacheTask is the implementation of PersistentCacheTask.
@@ -90,6 +93,7 @@ impl PersistentCacheTask {
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
+        primary_key: Option<Vec<u8>>,
     ) -> ClientResult<Self> {
         let piece = piece::Piece::new(
             config.clone(),
@@ -105,6 +109,7 @@ impl PersistentCacheTask {
             storage,
             scheduler_client,
             piece,
+            primary_key,
         })
     }
 
@@ -475,6 +480,12 @@ impl PersistentCacheTask {
                 created_at.naive_utc(),
             )
             .await?;
+        
+        // When enable encryption, copy encrypted file instead of create hard-link to source file
+        if self.primary_key.is_some() {
+            info!("omit hard link when encryption is enabled");
+            return Ok(task);
+        }
 
         // Attempt to create a hard link from the task file to the output path.
         //
