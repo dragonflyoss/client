@@ -907,6 +907,7 @@ async fn download(
                 force_hard_link: args.force_hard_link,
                 content_for_calculating_task_id: args.content_for_calculating_task_id,
                 remote_ip: Some(local_ip().unwrap().to_string()),
+                concurrent_piece_count: None,
             }),
         })
         .await

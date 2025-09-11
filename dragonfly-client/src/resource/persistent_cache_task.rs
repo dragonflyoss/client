@@ -728,6 +728,7 @@ impl PersistentCacheTask {
                                 piece_length: task.piece_length,
                                 output_path: request.output_path.clone(),
                                 timeout: request.timeout,
+                                concurrent_piece_count: Some(self.config.download.concurrent_piece_count),
                             },
                         ),
                     ),
