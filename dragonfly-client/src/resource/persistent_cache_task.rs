@@ -272,7 +272,7 @@ impl PersistentCacheTask {
                     finished_pieces.push(metadata.clone());
                 }
                 Err(err) => {
-                    join_set.detach_all();
+                    join_set.shutdown().await;
 
                     // Delete the persistent cache task.
                     self.storage
@@ -728,6 +728,7 @@ impl PersistentCacheTask {
                                 piece_length: task.piece_length,
                                 output_path: request.output_path.clone(),
                                 timeout: request.timeout,
+                                concurrent_piece_count: Some(self.config.download.concurrent_piece_count),
                             },
                         ),
                     ),
@@ -1042,8 +1043,6 @@ impl PersistentCacheTask {
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.concurrent_piece_count as usize,
         ));
-
-        // Download the pieces from the parents.
         while let Some(collect_piece) = piece_collector_rx.recv().await {
             if interrupt.load(Ordering::SeqCst) {
                 // If the interrupt is true, break the collector loop.
@@ -1061,15 +1060,11 @@ impl PersistentCacheTask {
                 need_piece_content: bool,
                 parent: piece_collector::CollectedParent,
                 piece_manager: Arc<super::piece::Piece>,
-                semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadPersistentCacheTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnouncePersistentCachePeerRequest>,
                 interrupt: Arc<AtomicBool>,
                 finished_pieces: Arc<Mutex<Vec<metadata::Piece>>>,
             ) -> ClientResult<metadata::Piece> {
-                // Limit the concurrent download count.
-                let _permit = semaphore.acquire().await.unwrap();
-
                 let piece_id = piece_manager.persistent_cache_id(task_id.as_str(), number);
                 info!(
                     "start to download persistent cache piece {} from parent {:?}",
@@ -1203,24 +1198,34 @@ impl PersistentCacheTask {
                 Ok(metadata)
             }
 
-            join_set.spawn(
+            let task_id = task_id.to_string();
+            let host_id = host_id.to_string();
+            let peer_id = peer_id.to_string();
+            let piece_manager = self.piece.clone();
+            let download_progress_tx = download_progress_tx.clone();
+            let in_stream_tx = in_stream_tx.clone();
+            let interrupt = interrupt.clone();
+            let finished_pieces = finished_pieces.clone();
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            join_set.spawn(async move {
+                let _permit = permit;
                 download_from_parent(
-                    task.id.clone(),
-                    host_id.to_string(),
-                    peer_id.to_string(),
+                    task_id,
+                    host_id,
+                    peer_id,
                     collect_piece.number,
                     collect_piece.length,
                     need_piece_content,
                     collect_piece.parent.clone(),
-                    self.piece.clone(),
-                    semaphore.clone(),
-                    download_progress_tx.clone(),
-                    in_stream_tx.clone(),
-                    interrupt.clone(),
-                    finished_pieces.clone(),
+                    piece_manager,
+                    download_progress_tx,
+                    in_stream_tx,
+                    interrupt,
+                    finished_pieces,
                 )
-                .in_current_span(),
-            );
+                .in_current_span()
+                .await
+            });
         }
 
         // Wait for the pieces to be downloaded.
@@ -1233,7 +1238,7 @@ impl PersistentCacheTask {
             match message {
                 Ok(_) => {}
                 Err(Error::DownloadFromParentFailed(err)) => {
-                    join_set.detach_all();
+                    join_set.shutdown().await;
 
                     // Send the download piece failed request.
                     let (piece_number, parent_id) = (err.piece_number, err.parent_id.clone());
@@ -1263,14 +1268,14 @@ impl PersistentCacheTask {
                     return Err(Error::DownloadFromParentFailed(err));
                 }
                 Err(Error::SendTimeout) => {
-                    join_set.detach_all();
+                    join_set.shutdown().await;
 
                     // If the send timeout with scheduler or download progress, return the error
                     // and interrupt the collector.
                     return Err(Error::SendTimeout);
                 }
                 Err(err) => {
-                    join_set.detach_all();
+                    join_set.shutdown().await;
                     error!("download from parent error: {:?}", err);
                     return Err(err);
                 }

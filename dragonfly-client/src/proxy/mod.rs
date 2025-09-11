@@ -1139,6 +1139,7 @@ fn make_download_task_request(
             force_hard_link: header::get_force_hard_link(&header),
             content_for_calculating_task_id: header::get_content_for_calculating_task_id(&header),
             remote_ip: Some(remote_ip.to_string()),
+            concurrent_piece_count: Some(config.download.concurrent_piece_count),
         }),
     })
 }
