@@ -3,10 +3,9 @@ use bytes::Bytes;
 use chrono::Utc;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
-use dragonfly_client_util::{id_generator::IDGenerator, shutdown};
+use dragonfly_client_util::{id_generator::IDGenerator, shutdown, tls};
 use leaky_bucket::RateLimiter;
 use quinn::{Connection, Endpoint, RecvStream, SendStream, ServerConfig};
-use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,6 +26,7 @@ use vortex_protocol::{
 
 // QUICServer replaces the original TCPServer
 pub struct QUICServer {
+    config: Arc<Config>,
     addr: SocketAddr,
     handler: QUICServerHandler,
     shutdown: shutdown::Shutdown,
@@ -59,6 +59,7 @@ impl QUICServer {
         };
 
         Self {
+            config,
             addr,
             handler,
             shutdown,
@@ -70,24 +71,17 @@ impl QUICServer {
 impl QUICServer {
     pub async fn run(&mut self, quic_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         // Setup server configuration
-        let certs = vec![]; 
-        let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(vec![])); 
-        let server_config = ServerConfig::with_single_cert(certs, private_key)
-            .map_err(|err| {
-                error!("Failed to create server config: {}", err);
-                ClientError::ValidationError("Invalid server config".to_string())
-            })?;
-        let endpoint =
-            Endpoint::server(server_config.clone(), self.addr).map_err(|err| {
-                error!("Failed to bind QUIC endpoint: {}", err);
-                ClientError::HostNotFound(self.addr.to_string())
-            })?;
-
+        // Load certificates and private key from config
+        let subject_alt_names = vec![self.config.host.hostname.clone()];
+        let (certs, key) =
+            tls::generate_simple_self_signed_certs(self.config.host.hostname.as_ref(), subject_alt_names)?;
+        let server_config = ServerConfig::with_single_cert(certs, key)
+            .map_err(|err| ClientError::ValidationError(format!("Failed to create server config: {}", err)))?;
+        let endpoint = Endpoint::server(server_config, self.addr)?;
         info!("QUIC upload server listening on {}", self.addr);
 
-        // Notify that the server is ready
         quic_server_started_barrier.wait().await;
-        info!("QUIC upload server is ready");
+        info!("QUIC upload server started");
 
         loop {
             tokio::select! {

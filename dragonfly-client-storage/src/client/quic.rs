@@ -33,7 +33,7 @@ use vortex_protocol::{
 };
 use quinn::{Endpoint};
 
-/// QUICClient is a QUIC-based client for dfdaemon upload service (单向流，无证书校验，明文传输)。
+/// QUICClient is a QUIC-based client for dfdaemon upload service 。
 #[derive(Clone)]
 pub struct QUICClient {
     /// config is the configuration of the dfdaemon.
@@ -51,18 +51,22 @@ impl QUICClient {
             addr,
         }
     }
-        /// Sends a request and receives a response.
+    /// Sends a request and receives a response.
     pub async fn send(
         &self,
         number: u32,
         task_id: &str,
-        is_persistent: bool,
+        tag: Tag,
     ) -> ClientResult<(impl AsyncRead, u64, String)> {
+
         // Create Endpoint
         let endpoint = Endpoint::client(self.addr.parse::<SocketAddr>().unwrap()).unwrap();
 
         // Connect to QUIC server
-        let connection = endpoint.connect(self.addr.parse::<SocketAddr>().unwrap(), "quic").unwrap().await.map_err(|err| {
+        let connection = endpoint.connect(
+            self.addr.parse::<SocketAddr>().unwrap(),
+            &self.config.host.hostname
+        ).unwrap().await.map_err(|err| {
             error!("QUIC connect error: {}", err);
             ClientError::IO(std::io::Error::new(std::io::ErrorKind::Other, err))
         })?;
@@ -74,7 +78,7 @@ impl QUICClient {
         })?;
 
         // Construct request
-        let request: Bytes = if is_persistent {
+        let request: Bytes = if tag == Tag::DownloadPersistentCachePiece {
             Vortex::DownloadPersistentCachePiece(
             Header::new_download_persistent_cache_piece(),
             DownloadPersistentCachePiece::new(
@@ -110,44 +114,83 @@ impl QUICClient {
         // Read header
         let mut header_bytes = BytesMut::with_capacity(HEADER_SIZE);
         header_bytes.resize(HEADER_SIZE, 0);
-        recv_stream.read_exact(&mut header_bytes).await.unwrap();
-        let header: Header = header_bytes.freeze().try_into().unwrap();
+        if let Err(err) = recv_stream.read_exact(&mut header_bytes).await {
+            error!("Failed to read header: {}", err);
+            return Err(ClientError::IO(std::io::Error::new(std::io::ErrorKind::Other, err)));
+        }
+        let header: Header = match header_bytes.freeze().try_into() {
+            Ok(header) => header,
+            Err(err) => {
+                error!("Failed to parse header: {}", err);
+                return Err(ClientError::IO(std::io::Error::new(std::io::ErrorKind::Other, err)));
+            }
+        };
 
         match header.tag() {
             Tag::PieceContent => {
-                if is_persistent {
-                    return Err(ClientError::UnexpectedResponse);
-                }
                 let mut metadata_length_bytes = BytesMut::with_capacity(piece_content::METADATA_LENGTH_SIZE);
                 metadata_length_bytes.resize(piece_content::METADATA_LENGTH_SIZE, 0);
-                recv_stream.read_exact(&mut metadata_length_bytes).await.unwrap();
-                let metadata_length = u32::from_be_bytes(metadata_length_bytes[..].try_into().unwrap()) as usize;
+                if let Err(err) = recv_stream.read_exact(&mut metadata_length_bytes).await {
+                    error!("Failed to read piece_content metadata length: {}", err);
+                    return Err(ClientError::IO(std::io::Error::new(std::io::ErrorKind::Other, err)));
+                }
+                let metadata_length = match metadata_length_bytes[..].try_into() {
+                    Ok(bytes) => u32::from_be_bytes(bytes) as usize,
+                    Err(err) => {
+                        error!("Failed to parse piece_content metadata length: {}", err);
+                        return Err(ClientError::IO(std::io::Error::new(std::io::ErrorKind::Other, err)));
+                    }
+                };
                 let mut metadata_bytes = BytesMut::with_capacity(metadata_length);
                 metadata_bytes.resize(metadata_length, 0);
-                recv_stream.read_exact(&mut metadata_bytes).await.unwrap();
+                if let Err(err) = recv_stream.read_exact(&mut metadata_bytes).await {
+                    error!("Failed to read piece_content metadata: {}", err);
+                    return Err(ClientError::IO(std::io::Error::new(std::io::ErrorKind::Other, err)));
+                }
                 let mut piece_content_bytes = BytesMut::with_capacity(piece_content::METADATA_LENGTH_SIZE + metadata_length);
                 piece_content_bytes.extend_from_slice(&metadata_length_bytes);
                 piece_content_bytes.extend_from_slice(&metadata_bytes);
-                let piece_content: piece_content::PieceContent = piece_content_bytes.freeze().try_into().unwrap();
+                let piece_content: piece_content::PieceContent = match piece_content_bytes.freeze().try_into() {
+                    Ok(content) => content,
+                    Err(err) => {
+                        error!("Failed to parse piece_content: {}", err);
+                        return Err(ClientError::IO(std::io::Error::new(std::io::ErrorKind::Other, err)));
+                    }
+                };
                 info!("received PieceContent: {:?}", piece_content);
                 let metadata = piece_content.metadata();
                 Ok((recv_stream, metadata.offset, metadata.digest))
             }
             Tag::PersistentCachePieceContent => {
-                if !is_persistent {
-                    return Err(ClientError::UnexpectedResponse);
-                }
                 let mut metadata_length_bytes = BytesMut::with_capacity(persistent_cache_piece_content::METADATA_LENGTH_SIZE);
                 metadata_length_bytes.resize(persistent_cache_piece_content::METADATA_LENGTH_SIZE, 0);
-                recv_stream.read_exact(&mut metadata_length_bytes).await.unwrap();
-                let metadata_length = u32::from_be_bytes(metadata_length_bytes[..].try_into().unwrap()) as usize;
+                if let Err(err) = recv_stream.read_exact(&mut metadata_length_bytes).await {
+                    error!("Failed to read persistent_cache_piece_content metadata length: {}", err);
+                    return Err(ClientError::IO(std::io::Error::new(std::io::ErrorKind::Other, err)));
+                }
+                let metadata_length = match metadata_length_bytes[..].try_into() {
+                    Ok(bytes) => u32::from_be_bytes(bytes) as usize,
+                    Err(err) => {
+                        error!("Failed to parse persistent_cache_piece_content metadata length: {}", err);
+                        return Err(ClientError::IO(std::io::Error::new(std::io::ErrorKind::Other, err)));
+                    }
+                };
                 let mut metadata_bytes = BytesMut::with_capacity(metadata_length);
                 metadata_bytes.resize(metadata_length, 0);
-                recv_stream.read_exact(&mut metadata_bytes).await.unwrap();
+                if let Err(err) = recv_stream.read_exact(&mut metadata_bytes).await {
+                    error!("Failed to read persistent_cache_piece_content metadata: {}", err);
+                    return Err(ClientError::IO(std::io::Error::new(std::io::ErrorKind::Other, err)));
+                }
                 let mut persistent_cache_piece_content_bytes = BytesMut::with_capacity(persistent_cache_piece_content::METADATA_LENGTH_SIZE + metadata_length);
                 persistent_cache_piece_content_bytes.extend_from_slice(&metadata_length_bytes);
                 persistent_cache_piece_content_bytes.extend_from_slice(&metadata_bytes);
-                let persistent_cache_piece_content: persistent_cache_piece_content::PersistentCachePieceContent = persistent_cache_piece_content_bytes.freeze().try_into().unwrap();
+                let persistent_cache_piece_content: persistent_cache_piece_content::PersistentCachePieceContent = match persistent_cache_piece_content_bytes.freeze().try_into() {
+                    Ok(content) => content,
+                    Err(err) => {
+                        error!("Failed to parse persistent_cache_piece_content: {}", err);
+                        return Err(ClientError::IO(std::io::Error::new(std::io::ErrorKind::Other, err)));
+                    }
+                };
                 info!("received PersistentCachePieceContent: {:?}", persistent_cache_piece_content);
                 let metadata = persistent_cache_piece_content.metadata();
                 Ok((recv_stream, metadata.offset, metadata.digest))

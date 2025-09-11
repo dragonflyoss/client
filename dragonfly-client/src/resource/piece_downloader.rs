@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 use tokio::io::AsyncRead;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, instrument};
+use vortex_protocol::tlv::Tag;
 
 /// DEFAULT_DOWNLOADER_CAPACITY is the default capacity of the downloader to store the clients.
 const DEFAULT_DOWNLOADER_CAPACITY: usize = 2000;
@@ -567,7 +568,7 @@ impl Downloader for QUICDownloader {
 
         let entry = self.client_entry(addr).await?;
         let request_guard = RequestGuard::new(entry.active_requests.clone());
-        match entry.client.send(number, task_id, false).await {
+        match entry.client.send(number, task_id, Tag::DownloadPiece).await {
             Ok((reader, offset, digest)) => {
                 Ok((Box::new(reader), offset, digest))
             }
@@ -607,7 +608,7 @@ impl Downloader for QUICDownloader {
 
         let entry = self.client_entry(addr).await?;
         let request_guard = RequestGuard::new(entry.active_requests.clone());
-        match entry.client.send(number, task_id, true).await {
+        match entry.client.send(number, task_id, Tag::DownloadPiece).await {
             Ok((reader, offset, digest)) => {
                 Ok((Box::new(reader), offset, digest))
             }
