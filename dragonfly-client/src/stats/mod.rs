@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::shutdown;
+use dragonfly_client_util::shutdown;
 use pprof::protos::Message;
 use pprof::ProfilerGuard;
 use serde::{Deserialize, Serialize};
