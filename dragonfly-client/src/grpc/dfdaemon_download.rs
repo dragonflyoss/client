@@ -255,6 +255,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             error!("missing download");
             Status::invalid_argument("missing download")
         })?;
+        download.concurrent_piece_count = Some(self.config.download.concurrent_piece_count);
 
         // Generate the task id.
         let task_id = self

@@ -125,6 +125,7 @@ impl DfdaemonUploadServer {
     pub async fn run(&mut self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         let service = DfdaemonUploadGRPCServer::with_interceptor(
             DfdaemonUploadServerHandler {
+                config: self.config.clone(),
                 socket_path: self.config.download.server.socket_path.clone(),
                 task: self.task.clone(),
                 persistent_cache_task: self.persistent_cache_task.clone(),
@@ -204,6 +205,9 @@ impl DfdaemonUploadServer {
 
 /// DfdaemonUploadServerHandler is the handler of the dfdaemon upload grpc service.
 pub struct DfdaemonUploadServerHandler {
+    /// config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
     /// socket_path is the path of the unix domain socket.
     socket_path: PathBuf,
 
@@ -248,6 +252,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             error!("missing download");
             Status::invalid_argument("missing download")
         })?;
+        download.concurrent_piece_count = Some(self.config.download.concurrent_piece_count);
 
         // Generate the task id.
         let task_id = self
