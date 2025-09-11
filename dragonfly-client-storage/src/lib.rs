@@ -33,6 +33,8 @@ use tokio_util::io::InspectReader;
 use tracing::{debug, error, info, instrument, warn};
 
 pub mod cache;
+pub mod client;
+pub mod server;
 pub mod content;
 pub mod metadata;
 pub mod storage_engine;

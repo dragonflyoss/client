@@ -24,7 +24,6 @@ use crate::metrics::{
     collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
 };
 use crate::resource::{persistent_cache_task, task};
-use crate::shutdown;
 use dragonfly_api::common::v2::{CacheTask, PersistentCacheTask, Priority, Task, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_download_client::DfdaemonDownloadClient as DfdaemonDownloadGRPCClient,
@@ -49,6 +48,7 @@ use dragonfly_client_util::{
     digest::{verify_file_digest, Digest},
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
     id_generator::{PersistentCacheTaskIDParameter, TaskIDParameter},
+    shutdown,
 };
 use hyper_util::rt::TokioIo;
 use opentelemetry::Context;
