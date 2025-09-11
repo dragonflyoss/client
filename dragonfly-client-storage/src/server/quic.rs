@@ -70,8 +70,8 @@ impl QUICServer {
 impl QUICServer {
     pub async fn run(&mut self, quic_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         // Setup server configuration
-        let certs = vec![]; // Replace with your certificate chain in PEM format
-        let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(vec![])); // Replace with your private key in PKCS#8 DER format
+        let certs = vec![]; 
+        let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(vec![])); 
         let server_config = ServerConfig::with_single_cert(certs, private_key)
             .map_err(|err| {
                 error!("Failed to create server config: {}", err);
