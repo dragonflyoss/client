@@ -20,7 +20,6 @@ use crate::metrics::{
     collect_proxy_request_via_dfdaemon_metrics,
 };
 use crate::resource::{piece::MIN_PIECE_LENGTH, task::Task};
-use crate::shutdown;
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::{
@@ -32,6 +31,7 @@ use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
+    shutdown,
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
 use futures::TryStreamExt;
