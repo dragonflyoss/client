@@ -22,6 +22,7 @@ use lru_cache::LruCache;
 use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::io::Cursor;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, BufReader};
 use tokio::sync::RwLock;
@@ -110,7 +111,7 @@ pub struct Cache {
     config: Arc<Config>,
 
     /// size is the size of the cache in bytes.
-    size: u64,
+    size: Arc<AtomicU64>,
 
     /// capacity is the maximum capacity of the cache in bytes.
     capacity: u64,
@@ -125,7 +126,7 @@ impl Cache {
     pub fn new(config: Arc<Config>) -> Self {
         Cache {
             config: config.clone(),
-            size: 0,
+            size: Arc::new(AtomicU64::new(0)),
             capacity: config.storage.cache_capacity.as_u64(),
             // LRU cache capacity is set to usize::MAX to avoid evicting tasks. LRU cache will evict tasks
             // by cache capacity(cache size) itself, and used pop_lru to evict the least recently
@@ -221,10 +222,11 @@ impl Cache {
         }
 
         let mut tasks = self.tasks.write().await;
-        while self.size + content_length > self.capacity {
+        while self.size.load(Ordering::Relaxed) + content_length > self.capacity {
             match tasks.pop_lru() {
                 Some((_, task)) => {
-                    self.size -= task.content_length();
+                    self.size
+                        .fetch_sub(task.content_length(), Ordering::Relaxed);
                 }
                 None => {
                     break;
@@ -234,7 +236,7 @@ impl Cache {
 
         let task = Task::new(content_length);
         tasks.put(task_id.to_string(), task);
-        self.size += content_length;
+        self.size.fetch_add(content_length, Ordering::Relaxed);
     }
 
     pub async fn delete_task(&mut self, task_id: &str) -> Result<()> {
@@ -243,7 +245,8 @@ impl Cache {
             return Err(Error::TaskNotFound(task_id.to_string()));
         };
 
-        self.size -= task.content_length();
+        self.size
+            .fetch_sub(task.content_length(), Ordering::Relaxed);
         Ok(())
     }
 
@@ -306,7 +309,7 @@ mod tests {
 
         for (config, expected_size, expected_capacity) in test_cases {
             let cache = Cache::new(Arc::new(config));
-            assert_eq!(cache.size, expected_size);
+            assert_eq!(cache.size.load(Ordering::Relaxed), expected_size);
             assert_eq!(cache.capacity, expected_capacity);
         }
     }

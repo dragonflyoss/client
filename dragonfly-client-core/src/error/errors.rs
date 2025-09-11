@@ -159,7 +159,7 @@ impl<T, E> OrErr<T, E> for Result<T, E> {
 
 /// BackendError is the error for backend.
 #[derive(Debug, thiserror::Error)]
-#[error("backend error {message}")]
+#[error("backend error: {message}")]
 pub struct BackendError {
     /// message is the error message.
     pub message: String,
