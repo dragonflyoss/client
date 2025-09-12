@@ -30,7 +30,7 @@ use dragonfly_client::stats::Stats;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::{dfdaemon, VersionValueParser};
-use dragonfly_client_storage::Storage;
+use dragonfly_client_storage::{server::quic::QUICServer, Storage};
 use dragonfly_client_util::{id_generator::IDGenerator, net::Interface, shutdown};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -136,6 +136,12 @@ async fn main() -> Result<(), anyhow::Error> {
         }
     };
 
+    let mut quic_config = config.clone();
+
+    quic_config.storage.server.protocol = "quic".to_string();
+
+    let quic_config = Arc::new(quic_config);
+
     let config = Arc::new(config);
 
     // Initialize tracing.
@@ -218,6 +224,15 @@ async fn main() -> Result<(), anyhow::Error> {
     )?;
     let task = Arc::new(task);
 
+    let quic_task = Task::new(
+        quic_config.clone(),
+        id_generator.clone(),
+        storage.clone(),
+        scheduler_client.clone(),
+        backend_factory.clone(),
+    )?;
+    let quic_task = Arc::new(quic_task);
+
     // Initialize persistent cache task manager.
     let persistent_cache_task = PersistentCacheTask::new(
         config.clone(),
@@ -227,6 +242,15 @@ async fn main() -> Result<(), anyhow::Error> {
         backend_factory.clone(),
     )?;
     let persistent_cache_task = Arc::new(persistent_cache_task);
+
+    let quic_persistent_cache_task = PersistentCacheTask::new(
+        quic_config.clone(),
+        id_generator.clone(),
+        storage.clone(),
+        scheduler_client.clone(),
+        backend_factory.clone(),
+    )?;
+    let quic_persistent_cache_task = Arc::new(quic_persistent_cache_task);
 
     let interface = Interface::new(config.host.ip.unwrap(), config.upload.rate_limit);
     let interface = Arc::new(interface);
@@ -289,8 +313,21 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut dfdaemon_download_grpc = DfdaemonDownloadServer::new(
         config.clone(),
         config.download.server.socket_path.clone(),
-        task.clone(),
-        persistent_cache_task.clone(),
+        quic_task.clone(),
+        quic_persistent_cache_task.clone(),
+        shutdown.clone(),
+        shutdown_complete_tx.clone(),
+    );
+
+    // Initialize upload QUIC server.
+    let mut dfdaemon_upload_quic = QUICServer::new(
+        config.clone(),
+        id_generator.clone(),
+        storage.clone(),
+        SocketAddr::new(
+            config.upload.server.ip.unwrap(),
+            config.upload.server.port + 2,
+        ),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
@@ -308,8 +345,8 @@ async fn main() -> Result<(), anyhow::Error> {
     // Log dfdaemon started pid.
     info!("dfdaemon started at pid {}", std::process::id());
 
-    // grpc server started barrier.
-    let grpc_server_started_barrier = Arc::new(Barrier::new(3));
+    // server started barrier.
+    let server_started_barrier = Arc::new(Barrier::new(4));
 
     // Wait for servers to exit or shutdown signal.
     tokio::select! {
@@ -338,7 +375,7 @@ async fn main() -> Result<(), anyhow::Error> {
         },
 
         _ = {
-            let barrier = grpc_server_started_barrier.clone();
+            let barrier = server_started_barrier.clone();
             tokio::spawn(async move {
                 dfdaemon_upload_grpc.run(barrier).await.unwrap_or_else(|err| error!("dfdaemon upload grpc server failed: {}", err));
             })
@@ -347,7 +384,7 @@ async fn main() -> Result<(), anyhow::Error> {
         },
 
         _ = {
-            let barrier = grpc_server_started_barrier.clone();
+            let barrier = server_started_barrier.clone();
             tokio::spawn(async move {
                 dfdaemon_download_grpc.run(barrier).await.unwrap_or_else(|err| error!("dfdaemon download grpc server failed: {}", err));
             })
@@ -356,7 +393,16 @@ async fn main() -> Result<(), anyhow::Error> {
         },
 
         _ = {
-            let barrier = grpc_server_started_barrier.clone();
+            let barrier = server_started_barrier.clone();
+            tokio::spawn(async move {
+                dfdaemon_upload_quic.run(barrier).await.unwrap_or_else(|err| error!("dfdaemon upload quic server failed: {}", err));
+            })
+        } => {
+            info!("dfdaemon upload quic server exited");
+        },
+
+        _ = {
+            let barrier = server_started_barrier.clone();
             tokio::spawn(async move {
                 proxy.run(barrier).await.unwrap_or_else(|err| error!("proxy server failed: {}", err));
             })

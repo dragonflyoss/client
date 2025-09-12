@@ -30,7 +30,6 @@ use dragonfly_client_util::id_generator::IDGenerator;
 use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
-use std::io::Cursor;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -452,7 +451,7 @@ impl Piece {
             Error::InvalidPeer(parent.id.clone())
         })?;
 
-        let (content, offset, digest) = self
+        let (mut reader, offset, digest) = self
             .downloader
             .download_piece(
                 format!("{}:{}", host.ip, host.port).as_str(),
@@ -467,7 +466,6 @@ impl Piece {
                     error!("set piece metadata failed: {}", err)
                 };
             })?;
-        let mut reader = Cursor::new(content);
 
         // Record the finish of downloading piece.
         match self
@@ -817,7 +815,7 @@ impl Piece {
             Error::InvalidPeer(parent.id.clone())
         })?;
 
-        let (content, offset, digest) = self
+        let (mut reader, offset, digest) = self
             .downloader
             .download_persistent_cache_piece(
                 format!("{}:{}", host.ip, host.port).as_str(),
@@ -836,7 +834,6 @@ impl Piece {
                     error!("set persistent cache piece metadata failed: {}", err)
                 };
             })?;
-        let mut reader = Cursor::new(content);
 
         // Record the finish of downloading piece.
         match self
