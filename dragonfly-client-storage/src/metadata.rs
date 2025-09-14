@@ -889,6 +889,42 @@ impl<E: StorageEngineOwned> Metadata<E> {
         self.db.delete::<PersistentCacheTask>(id.as_bytes())
     }
 
+    /// prepare_download_cache_task prepares the metadata of the download cache task.
+    #[instrument(skip_all)]
+    pub fn prepare_download_cache_task(&self, id: &str) -> Result<(CacheTask, bool)> {
+        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
+            Some(mut task) => {
+                // Reuse existing task if all conditions are met:
+                // 1. Content length is defined.
+                // 2. Piece length is defined.
+                // 3. Task status is not failed.
+                if task.content_length().is_some()
+                    && task.piece_length().is_some()
+                    && !task.is_failed()
+                {
+                    return Ok((task, true));
+                } else {
+                    // If reuse conditions are not met, update metadata and retry with HEAD request.
+                    task.updated_at = Utc::now().naive_utc();
+                    task.failed_at = None;
+                    task
+                }
+            }
+            None => {
+                // If the task does not exist, create a new task.
+                CacheTask {
+                    id: id.to_string(),
+                    updated_at: Utc::now().naive_utc(),
+                    created_at: Utc::now().naive_utc(),
+                    ..Default::default()
+                }
+            }
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok((task, false))
+    }
+
     /// download_cache_task_started updates the metadata of the cache task when the cache task downloads started.
     #[instrument(skip_all)]
     pub fn download_cache_task_started(

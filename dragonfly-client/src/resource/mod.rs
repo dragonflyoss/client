@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+pub mod cache_task;
 pub mod persistent_cache_task;
 pub mod piece;
 pub mod piece_collector;
