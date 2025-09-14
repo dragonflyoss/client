@@ -25,7 +25,9 @@ use dragonfly_client::grpc::{
 use dragonfly_client::health::Health;
 use dragonfly_client::metrics::Metrics;
 use dragonfly_client::proxy::Proxy;
-use dragonfly_client::resource::{persistent_cache_task::PersistentCacheTask, task::Task};
+use dragonfly_client::resource::{
+    cache_task::CacheTask, persistent_cache_task::PersistentCacheTask, task::Task,
+};
 use dragonfly_client::stats::Stats;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::BackendFactory;
@@ -218,6 +220,16 @@ async fn main() -> Result<(), anyhow::Error> {
     )?;
     let task = Arc::new(task);
 
+    // Initialize cache task manager.
+    let cache_task = CacheTask::new(
+        config.clone(),
+        id_generator.clone(),
+        storage.clone(),
+        scheduler_client.clone(),
+        backend_factory.clone(),
+    )?;
+    let cache_task = Arc::new(cache_task);
+
     // Initialize persistent cache task manager.
     let persistent_cache_task = PersistentCacheTask::new(
         config.clone(),
@@ -279,6 +291,7 @@ async fn main() -> Result<(), anyhow::Error> {
         config.clone(),
         SocketAddr::new(config.upload.server.ip.unwrap(), config.upload.server.port),
         task.clone(),
+        cache_task.clone(),
         persistent_cache_task.clone(),
         interface.clone(),
         shutdown.clone(),
@@ -290,6 +303,7 @@ async fn main() -> Result<(), anyhow::Error> {
         config.clone(),
         config.download.server.socket_path.clone(),
         task.clone(),
+        cache_task.clone(),
         persistent_cache_task.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
