@@ -31,6 +31,9 @@ const SEED_PEER_SUFFIX: &str = "seed";
 /// PERSISTENT_CACHE_TASK_SUFFIX is the suffix of the persistent cache task.
 const PERSISTENT_CACHE_TASK_SUFFIX: &str = "persistent-cache-task";
 
+/// CACHE_TASK_SUFFIX is the suffix of the cache task.
+const CACHE_TASK_SUFFIX: &str = "cache-task";
+
 /// TaskIDParameter is the parameter of the task id.
 pub enum TaskIDParameter {
     /// Content uses the content to generate the task id.
@@ -56,6 +59,21 @@ pub enum PersistentCacheTaskIDParameter {
         piece_length: Option<u64>,
         tag: Option<String>,
         application: Option<String>,
+    },
+}
+
+/// CacheTaskIDParameter is the parameter of the cache task id.
+pub enum CacheTaskIDParameter {
+    /// Content uses the content to generate the cache task id.
+    Content(String),
+    /// URLBased uses the url, piece_length, tag, application and filtered_query_params to generate
+    /// the cache task id.
+    URLBased {
+        url: String,
+        piece_length: Option<u64>,
+        tag: Option<String>,
+        application: Option<String>,
+        filtered_query_params: Vec<String>,
     },
 }
 
@@ -210,6 +228,69 @@ impl IDGenerator {
         }
     }
 
+    /// cache_task_id generates the cache task id.
+    #[inline]
+    pub fn cache_task_id(&self, parameter: CacheTaskIDParameter) -> Result<String> {
+        match parameter {
+            CacheTaskIDParameter::Content(content) => {
+                Ok(hex::encode(Sha256::digest(content.as_bytes())))
+            }
+            CacheTaskIDParameter::URLBased {
+                url,
+                piece_length,
+                tag,
+                application,
+                filtered_query_params,
+            } => {
+                // Filter the query parameters.
+                let url = Url::parse(url.as_str()).or_err(ErrorType::ParseError)?;
+                let query = url
+                    .query_pairs()
+                    .filter(|(k, _)| !filtered_query_params.contains(&k.to_string()));
+
+                let mut artifact_url = url.clone();
+                if query.clone().count() == 0 {
+                    artifact_url.set_query(None);
+                } else {
+                    artifact_url.query_pairs_mut().clear().extend_pairs(query);
+                }
+
+                let artifact_url_str = artifact_url.to_string();
+                let final_url = if artifact_url_str.ends_with('/') && artifact_url.path() == "/" {
+                    artifact_url_str.trim_end_matches('/').to_string()
+                } else {
+                    artifact_url_str
+                };
+
+                // Initialize the hasher.
+                let mut hasher = Sha256::new();
+
+                // Add the url to generate the cache task id.
+                hasher.update(final_url);
+
+                // Add the tag to generate the cache task id.
+                if let Some(tag) = tag {
+                    hasher.update(tag);
+                }
+
+                // Add the application to generate the cache task id.
+                if let Some(application) = application {
+                    hasher.update(application);
+                }
+
+                // Add the piece length to generate the cache task id.
+                if let Some(piece_length) = piece_length {
+                    hasher.update(piece_length.to_string());
+                }
+
+                hasher.update(TaskType::Cache.as_str_name().as_bytes());
+
+                // Generate the cache task id.
+                Ok(hex::encode(hasher.finalize()))
+            }
+        }
+    }
+
     /// peer_id generates the peer id.
     #[inline]
     pub fn peer_id(&self) -> String {
@@ -230,6 +311,10 @@ impl IDGenerator {
     pub fn task_type(&self, id: &str) -> TaskType {
         if id.ends_with(PERSISTENT_CACHE_TASK_SUFFIX) {
             return TaskType::PersistentCache;
+        }
+
+        if id.ends_with(CACHE_TASK_SUFFIX) {
+            return TaskType::Cache;
         }
 
         TaskType::Standard
@@ -434,6 +519,7 @@ mod tests {
                 "some-task-id-persistent-cache-task",
                 TaskType::PersistentCache,
             ),
+            ("some-task-id-cache-task", TaskType::Cache),
         ];
 
         let generator = IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false);
