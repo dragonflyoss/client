@@ -64,16 +64,17 @@ impl Containerd {
             .unwrap_or(2);
         info!("containerd version: {}", version);
 
-        let plugin_key = if version == 3 {
+        let plugin_id = if version == 3 {
             "io.containerd.cri.v1.images"
         } else {
             "io.containerd.grpc.v1.cri"
         };
+
         // If containerd supports config_path mode and config_path is not empty,
         // add registries to the certs.d directory.
         if let Some(config_path) = containerd_config
             .get("plugins")
-            .and_then(|plugins| plugins.get(plugin_key))
+            .and_then(|plugins| plugins.get(plugin_id))
             .and_then(|cri| cri.get("registry"))
             .and_then(|registry| registry.get("config_path"))
             .and_then(|config_path| config_path.as_str())
@@ -105,11 +106,9 @@ impl Containerd {
         let mut registry_table = Table::new();
         registry_table.set_implicit(true);
         registry_table.insert("config_path", value(config_path));
-        containerd_config["plugins"][plugin_key]
+        containerd_config["plugins"][plugin_id]
             .as_table_mut()
-            .ok_or(Error::Unknown(
-                format!("{} not found", plugin_key),
-            ))?
+            .ok_or(Error::Unknown(format!("{} not found", plugin_id)))?
             .insert("registry", Item::Table(registry_table));
 
         // Override containerd configuration.
@@ -200,7 +199,7 @@ mod tests {
     use tokio::fs;
 
     #[tokio::test]
-    async fn test_containerd_config_with_existing_config_path() {
+    async fn test_containerd_config_with_v2_config_path() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.toml");
         let certs_dir = temp_dir.path().join("certs.d");
@@ -262,7 +261,7 @@ X-Dragonfly-Registry = "https://registry.example.com"
 
         assert_eq!(contents.trim(), expected_contents.trim());
     }
-    
+
     #[tokio::test]
     async fn test_containerd_config_with_v3_config_path() {
         let temp_dir = TempDir::new().unwrap();
