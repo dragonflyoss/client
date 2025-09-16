@@ -15,7 +15,7 @@
  */
 
 use clap::Parser;
-use dragonfly_client::tracing::init_tracing;
+use dragonfly_client::tracing::init_command_tracing;
 use dragonfly_client_config::dfinit;
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_init::container_runtime;
@@ -50,20 +50,6 @@ struct Args {
     )]
     log_level: Level,
 
-    #[arg(
-        long,
-        default_value_os_t = dfinit::default_dfinit_log_dir(),
-        help = "Specify the log directory"
-    )]
-    log_dir: PathBuf,
-
-    #[arg(
-        long,
-        default_value_t = 24,
-        help = "Specify the max number of log files"
-    )]
-    log_max_files: usize,
-
     #[arg(long, default_value_t = false, help = "Specify whether to print log")]
     console: bool,
 
@@ -84,19 +70,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let args = Args::parse();
 
     // Initialize tracing.
-    let _guards = init_tracing(
-        dfinit::NAME,
-        args.log_dir,
-        args.log_level,
-        args.log_max_files,
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        args.console,
-    );
+    let _guards = init_command_tracing(args.log_level, args.console);
 
     // Load config.
     let config = dfinit::Config::load(&args.config).inspect_err(|err| {

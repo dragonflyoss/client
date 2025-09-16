@@ -33,11 +33,6 @@ pub fn default_dfinit_config_path() -> PathBuf {
     crate::default_config_dir().join("dfinit.yaml")
 }
 
-/// default_dfinit_log_dir is the default log directory for dfinit.
-pub fn default_dfinit_log_dir() -> PathBuf {
-    crate::default_log_dir().join(NAME)
-}
-
 /// default_container_runtime_containerd_config_path is the default containerd configuration path.
 #[inline]
 fn default_container_runtime_containerd_config_path() -> PathBuf {
@@ -358,12 +353,6 @@ mod tests {
     fn test_default_dfinit_config_path() {
         let expected = crate::default_config_dir().join("dfinit.yaml");
         assert_eq!(default_dfinit_config_path(), expected);
-    }
-
-    #[test]
-    fn test_default_dfinit_log_dir() {
-        let expected = crate::default_log_dir().join(NAME);
-        assert_eq!(default_dfinit_log_dir(), expected);
     }
 
     #[test]

@@ -24,7 +24,7 @@ use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::resource::piece::MIN_PIECE_LENGTH;
-use dragonfly_client::tracing::init_tracing;
+use dragonfly_client::tracing::init_command_tracing;
 use dragonfly_client_backend::{hdfs, object_storage, BackendFactory, DirEntry};
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
@@ -277,20 +277,6 @@ struct Args {
     )]
     log_level: Level,
 
-    #[arg(
-        long,
-        default_value_os_t = dfget::default_dfget_log_dir(),
-        help = "Specify the log directory"
-    )]
-    log_dir: PathBuf,
-
-    #[arg(
-        long,
-        default_value_t = 6,
-        help = "Specify the max number of log files"
-    )]
-    log_max_files: usize,
-
     #[arg(long, default_value_t = false, help = "Specify whether to print log")]
     console: bool,
 
@@ -311,19 +297,7 @@ async fn main() -> anyhow::Result<()> {
     let args = convert_args(Args::parse());
 
     // Initialize tracing.
-    let _guards = init_tracing(
-        dfget::NAME,
-        args.log_dir.clone(),
-        args.log_level,
-        args.log_max_files,
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        args.console,
-    );
+    let _guards = init_command_tracing(args.log_level, args.console);
 
     // Validate command line arguments.
     if let Err(err) = validate_args(&args) {
