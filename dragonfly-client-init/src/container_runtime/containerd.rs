@@ -56,11 +56,24 @@ impl Containerd {
             .parse::<DocumentMut>()
             .or_err(ErrorType::ParseError)?;
 
+        // Get the containerd version for config_path parsing, default to containerd 1.x if not set.
+        // https://github.com/containerd/containerd/blob/main/docs/hosts.md#cri.
+        let version = containerd_config
+            .get("version")
+            .and_then(|v| v.as_integer())
+            .unwrap_or(2);
+        info!("containerd version: {}", version);
+
+        let plugin_key = if version == 3 {
+            "io.containerd.cri.v1.images"
+        } else {
+            "io.containerd.grpc.v1.cri"
+        };
         // If containerd supports config_path mode and config_path is not empty,
         // add registries to the certs.d directory.
         if let Some(config_path) = containerd_config
             .get("plugins")
-            .and_then(|plugins| plugins.get("io.containerd.grpc.v1.cri"))
+            .and_then(|plugins| plugins.get(plugin_key))
             .and_then(|cri| cri.get("registry"))
             .and_then(|registry| registry.get("config_path"))
             .and_then(|config_path| config_path.as_str())
@@ -92,10 +105,10 @@ impl Containerd {
         let mut registry_table = Table::new();
         registry_table.set_implicit(true);
         registry_table.insert("config_path", value(config_path));
-        containerd_config["plugins"]["io.containerd.grpc.v1.cri"]
+        containerd_config["plugins"][plugin_key]
             .as_table_mut()
             .ok_or(Error::Unknown(
-                "io.containerd.grpc.v1.cri not found".to_string(),
+                format!("{} not found", plugin_key),
             ))?
             .insert("registry", Item::Table(registry_table));
 
@@ -199,6 +212,72 @@ mod tests {
 [plugins]
   [plugins."io.containerd.grpc.v1.cri"]
     [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "{}"
+"#,
+            certs_dir_str
+        );
+        fs::write(&config_path, initial_config).await.unwrap();
+
+        // Create Containerd instance
+        let containerd = Containerd::new(
+            dfinit::Containerd {
+                config_path: config_path.clone(),
+                registries: vec![ContainerdRegistry {
+                    host_namespace: "docker.io".into(),
+                    server_addr: "https://registry.example.com".into(),
+                    skip_verify: Some(true),
+                    ca: Some(vec!["test-ca-cert".into()]),
+                    capabilities: vec!["pull".into(), "resolve".into()],
+                }],
+            },
+            dfinit::Proxy {
+                addr: "http://127.0.0.1:65001".into(),
+            },
+        );
+
+        // Run containerd configuration
+        let result = containerd.run().await;
+        if let Err(e) = &result {
+            println!("Error: {:?}", e);
+            if let Ok(contents) = fs::read_to_string(&config_path).await {
+                println!("Current config file contents:\n{}", contents);
+            }
+        }
+        assert!(result.is_ok());
+
+        // Verify the hosts.toml file content
+        let hosts_file_path = certs_dir.join("docker.io").join("hosts.toml");
+        let contents = fs::read_to_string(&hosts_file_path).await.unwrap();
+
+        let expected_contents = r#"server = "https://registry.example.com"
+
+[host."http://127.0.0.1:65001"]
+capabilities = ["pull", "resolve"]
+skip_verify = true
+ca = ["test-ca-cert"]
+
+[host."http://127.0.0.1:65001".header]
+X-Dragonfly-Registry = "https://registry.example.com"
+"#;
+
+        assert_eq!(contents.trim(), expected_contents.trim());
+    }
+    
+    #[tokio::test]
+    async fn test_containerd_config_with_v3_config_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+        let certs_dir = temp_dir.path().join("certs.d");
+        let certs_dir_str = certs_dir.to_str().unwrap();
+
+        // Create initial containerd config with version = 3 and config_path
+        let initial_config = format!(
+            r#"
+version = 3
+
+[plugins]
+  [plugins."io.containerd.cri.v1.images"]
+    [plugins."io.containerd.cri.v1.images".registry]
       config_path = "{}"
 "#,
             certs_dir_str
