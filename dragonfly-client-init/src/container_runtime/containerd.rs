@@ -55,14 +55,13 @@ impl Containerd {
         let mut containerd_config = content
             .parse::<DocumentMut>()
             .or_err(ErrorType::ParseError)?;
-        
-        // Get the containerd version for config_path parsing, default to v2 if not set.
 
+        // Get the containerd version for config_path parsing, default to containerd 1.x if not set.
         // https://github.com/containerd/containerd/blob/main/docs/hosts.md#cri.
         let version = containerd_config
             .get("version")
             .and_then(|v| v.as_integer())
-            .unwrap_or(2); // default v2
+            .unwrap_or(2);
         info!("containerd version: {}", version);
 
         let plugin_key = if version == 3 {
