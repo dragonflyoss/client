@@ -109,20 +109,6 @@ pub struct ExportCommand {
     )]
     log_level: Level,
 
-    #[arg(
-        long,
-        default_value_os_t = dfcache::default_dfcache_log_dir(),
-        help = "Specify the log directory"
-    )]
-    log_dir: PathBuf,
-
-    #[arg(
-        long,
-        default_value_t = 6,
-        help = "Specify the max number of log files"
-    )]
-    log_max_files: usize,
-
     #[arg(long, default_value_t = false, help = "Specify whether to print log")]
     console: bool,
 }
@@ -141,19 +127,7 @@ impl ExportCommand {
         Args::parse();
 
         // Initialize tracing.
-        let _guards = init_tracing(
-            dfcache::NAME,
-            self.log_dir.clone(),
-            self.log_level,
-            self.log_max_files,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            self.console,
-        );
+        let _guards = init_command_tracing(self.log_level, self.console);
 
         // Validate the command line arguments.
         if let Err(err) = self.validate_args() {

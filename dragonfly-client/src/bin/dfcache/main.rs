@@ -17,7 +17,7 @@
 use clap::{Parser, Subcommand};
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
-use dragonfly_client::tracing::init_tracing;
+use dragonfly_client::tracing::init_command_tracing;
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{dfcache, dfdaemon};
 use dragonfly_client_core::Result;
