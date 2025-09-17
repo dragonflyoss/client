@@ -991,18 +991,6 @@ impl Default for StorageServer {
     }
 }
 
-/// Encryption is the storage encryption configuration for dfdaemon.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Encryption {
-    pub enable: bool,
-}
-
-fn default_storage_encryption() -> Encryption {
-    Encryption { 
-        enable: false,
-    }
-}
-
 /// Storage is the storage configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
