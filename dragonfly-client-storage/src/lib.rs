@@ -25,7 +25,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncRead;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::time::sleep;
 use tokio_util::either::Either;
 use tokio_util::io::InspectReader;
