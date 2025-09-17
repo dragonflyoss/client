@@ -30,7 +30,7 @@ use dragonfly_client::stats::Stats;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::{dfdaemon, VersionValueParser};
-use dragonfly_client_storage::Storage;
+use dragonfly_client_storage::{server::tcp::TCPServer, Storage};
 use dragonfly_client_util::{id_generator::IDGenerator, net::Interface, shutdown};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -285,6 +285,19 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     );
 
+    // Initialize storage tcp server.
+    let mut storage_tcp = TCPServer::new(
+        config.clone(),
+        id_generator.clone(),
+        storage.clone(),
+        SocketAddr::new(
+            config.host.ip.unwrap(),
+            config.storage.server.tcp_port,
+        ),
+        shutdown.clone(),
+        shutdown_complete_tx.clone(),
+    );
+
     // Initialize download grpc server.
     let mut dfdaemon_download_grpc = DfdaemonDownloadServer::new(
         config.clone(),
@@ -362,6 +375,14 @@ async fn main() -> Result<(), anyhow::Error> {
             })
         } => {
             info!("proxy server exited");
+        },
+
+        _ = {
+            tokio::spawn(async move {
+                storage_tcp.run().await.unwrap_or_else(|err| error!("storage tcp server failed: {}", err));
+            })
+        } => {
+            info!("storage tcp server exited");
         },
 
         _ = shutdown::shutdown_signal() => {},

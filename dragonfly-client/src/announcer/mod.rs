@@ -236,6 +236,8 @@ impl SchedulerAnnouncer {
             scheduler_cluster_id: self.config.host.scheduler_cluster_id.unwrap_or_default(),
             disable_shared: self.config.upload.disable_shared,
             proxy_port: self.config.proxy.server.port as i32,
+            download_tcp_port: self.config.storage.server.tcp_port as i32,
+            download_quic_port: self.config.storage.server.quic_port as i32,
         };
 
         Ok(AnnounceHostRequest {
