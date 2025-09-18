@@ -103,9 +103,10 @@ impl TCPClient {
                     error!("failed to receive response header: {}", err);
                     ClientError::MpscSend(err.to_string())
                 })?;
-                let header: Header = header_bytes.freeze().try_into().map_err(|_| {
-                    ClientError::UnexpectedResponse
-                })?;
+                let header: Header = header_bytes
+                    .freeze()
+                    .try_into()
+                    .map_err(|_| ClientError::UnexpectedResponse)?;
 
                 match header.tag() {
                     Tag::PieceContent => {
@@ -115,32 +116,40 @@ impl TCPClient {
                         let mut metadata_length_bytes =
                             BytesMut::with_capacity(piece_content::METADATA_LENGTH_SIZE);
                         metadata_length_bytes.resize(piece_content::METADATA_LENGTH_SIZE, 0);
-                        reader.read_exact(&mut metadata_length_bytes).await.map_err(|err| {
-                            error!("failed to receive PieceContent metadata length: {}", err);
-                            ClientError::MpscSend(err.to_string())
-                        })?;
+                        reader
+                            .read_exact(&mut metadata_length_bytes)
+                            .await
+                            .map_err(|err| {
+                                error!("failed to receive PieceContent metadata length: {}", err);
+                                ClientError::MpscSend(err.to_string())
+                            })?;
 
-                        let metadata_length =
-                            u32::from_be_bytes(metadata_length_bytes[..].try_into().map_err(|_| {
-                                ClientError::UnexpectedResponse
-                            })?) as usize;
+                        let metadata_length = u32::from_be_bytes(
+                            metadata_length_bytes[..]
+                                .try_into()
+                                .map_err(|_| ClientError::UnexpectedResponse)?,
+                        ) as usize;
 
                         let mut metadata_bytes = BytesMut::with_capacity(metadata_length);
                         metadata_bytes.resize(metadata_length, 0);
-                        reader.read_exact(&mut metadata_bytes).await.map_err(|err| {
-                            error!("failed to receive PieceContent metadata: {}", err);
-                            ClientError::MpscSend(err.to_string())
-                        })?;
+                        reader
+                            .read_exact(&mut metadata_bytes)
+                            .await
+                            .map_err(|err| {
+                                error!("failed to receive PieceContent metadata: {}", err);
+                                ClientError::MpscSend(err.to_string())
+                            })?;
 
-                        let mut piece_content_bytes =
-                            BytesMut::with_capacity(piece_content::METADATA_LENGTH_SIZE + metadata_length);
+                        let mut piece_content_bytes = BytesMut::with_capacity(
+                            piece_content::METADATA_LENGTH_SIZE + metadata_length,
+                        );
 
                         piece_content_bytes.extend_from_slice(&metadata_length_bytes);
                         piece_content_bytes.extend_from_slice(&metadata_bytes);
-                        let piece_content: piece_content::PieceContent =
-                            piece_content_bytes.freeze().try_into().map_err(|_| {
-                                ClientError::UnexpectedResponse
-                            })?;
+                        let piece_content: piece_content::PieceContent = piece_content_bytes
+                            .freeze()
+                            .try_into()
+                            .map_err(|_| ClientError::UnexpectedResponse)?;
                         info!("received PieceContent: {:?}", piece_content);
 
                         let metadata = piece_content.metadata();
@@ -156,15 +165,18 @@ impl TCPClient {
                             error!("failed to receive Error: {}", err);
                             ClientError::MpscSend(err.to_string())
                         })?;
-                        let error: Error = error_bytes.freeze().try_into().map_err(|_| {
-                            ClientError::UnexpectedResponse
-                        })?;
+                        let error: Error = error_bytes
+                            .freeze()
+                            .try_into()
+                            .map_err(|_| ClientError::UnexpectedResponse)?;
 
                         error!("received Error: {}", error.message());
                         match error.code() {
                             Code::Unknown => Err(ClientError::Unknown(error.message().to_string())),
                             Code::InvalidArgument => Err(ClientError::InvalidParameter),
-                            Code::NotFound => Err(ClientError::PieceNotFound(error.message().to_string())),
+                            Code::NotFound => {
+                                Err(ClientError::PieceNotFound(error.message().to_string()))
+                            }
                             Code::Internal => {
                                 Err(ClientError::PieceStateIsFailed(error.message().to_string()))
                             }
@@ -204,42 +216,53 @@ impl TCPClient {
                     error!("failed to receive response header: {}", err);
                     ClientError::MpscSend(err.to_string())
                 })?;
-                let header: Header = header_bytes.freeze().try_into().map_err(|_| {
-                    ClientError::UnexpectedResponse
-                })?;
+                let header: Header = header_bytes
+                    .freeze()
+                    .try_into()
+                    .map_err(|_| ClientError::UnexpectedResponse)?;
 
                 match header.tag() {
                     Tag::PersistentCachePieceContent => {
                         // ------------------------------
                         // Receive PersistentCachePieceContent response.
                         // ------------------------------
-                        let mut metadata_length_bytes =
-                            BytesMut::with_capacity(persistent_cache_piece_content::METADATA_LENGTH_SIZE);
+                        let mut metadata_length_bytes = BytesMut::with_capacity(
+                            persistent_cache_piece_content::METADATA_LENGTH_SIZE,
+                        );
                         metadata_length_bytes
                             .resize(persistent_cache_piece_content::METADATA_LENGTH_SIZE, 0);
-                        metadata_length_bytes.resize(persistent_cache_piece_content::METADATA_LENGTH_SIZE, 0);
+                        metadata_length_bytes
+                            .resize(persistent_cache_piece_content::METADATA_LENGTH_SIZE, 0);
                         reader.read_exact(&mut metadata_length_bytes).await.map_err(|err| {
                             error!("failed to receive PersistentCachePieceContent metadata length: {}", err);
                             ClientError::MpscSend(err.to_string())
                         })?;
 
-                        let metadata_length =
-                            u32::from_be_bytes(metadata_length_bytes[..].try_into().map_err(|_| {
-                                ClientError::UnexpectedResponse
-                            })?) as usize;
+                        let metadata_length = u32::from_be_bytes(
+                            metadata_length_bytes[..]
+                                .try_into()
+                                .map_err(|_| ClientError::UnexpectedResponse)?,
+                        ) as usize;
 
                         let mut metadata_bytes = BytesMut::with_capacity(metadata_length);
                         metadata_bytes.resize(metadata_length, 0);
-                        reader.read_exact(&mut metadata_bytes).await.map_err(|err| {
-                            error!("failed to receive PersistentCachePieceContent metadata: {}", err);
-                            ClientError::MpscSend(err.to_string())
-                        })?;
+                        reader
+                            .read_exact(&mut metadata_bytes)
+                            .await
+                            .map_err(|err| {
+                                error!(
+                                    "failed to receive PersistentCachePieceContent metadata: {}",
+                                    err
+                                );
+                                ClientError::MpscSend(err.to_string())
+                            })?;
 
                         let mut persistent_cache_piece_content_bytes = BytesMut::with_capacity(
                             persistent_cache_piece_content::METADATA_LENGTH_SIZE + metadata_length,
                         );
 
-                        persistent_cache_piece_content_bytes.extend_from_slice(&metadata_length_bytes);
+                        persistent_cache_piece_content_bytes
+                            .extend_from_slice(&metadata_length_bytes);
                         persistent_cache_piece_content_bytes.extend_from_slice(&metadata_bytes);
                         let persistent_cache_piece_content: persistent_cache_piece_content::PersistentCachePieceContent =
                             persistent_cache_piece_content_bytes.freeze().try_into().map_err(|_| {
@@ -263,15 +286,18 @@ impl TCPClient {
                             error!("failed to receive Error: {}", err);
                             ClientError::MpscSend(err.to_string())
                         })?;
-                        let error: Error = error_bytes.freeze().try_into().map_err(|_| {
-                            ClientError::UnexpectedResponse
-                        })?;
+                        let error: Error = error_bytes
+                            .freeze()
+                            .try_into()
+                            .map_err(|_| ClientError::UnexpectedResponse)?;
 
                         error!("received Error: {}", error.message());
                         match error.code() {
                             Code::Unknown => Err(ClientError::Unknown(error.message().to_string())),
                             Code::InvalidArgument => Err(ClientError::InvalidParameter),
-                            Code::NotFound => Err(ClientError::PieceNotFound(error.message().to_string())),
+                            Code::NotFound => {
+                                Err(ClientError::PieceNotFound(error.message().to_string()))
+                            }
                             Code::Internal => {
                                 Err(ClientError::PieceStateIsFailed(error.message().to_string()))
                             }
@@ -284,7 +310,10 @@ impl TCPClient {
                     }
                 }
             }
-            _ => Err(ClientError::Unsupported(format!("unsupported tag: {:?}", tag)))
+            _ => Err(ClientError::Unsupported(format!(
+                "unsupported tag: {:?}",
+                tag
+            ))),
         }
     }
 }

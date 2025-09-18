@@ -290,10 +290,7 @@ async fn main() -> Result<(), anyhow::Error> {
         config.clone(),
         id_generator.clone(),
         storage.clone(),
-        SocketAddr::new(
-            config.host.ip.unwrap(),
-            config.storage.server.tcp_port,
-        ),
+        SocketAddr::new(config.host.ip.unwrap(), config.storage.server.tcp_port),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );

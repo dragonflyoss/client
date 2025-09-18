@@ -154,10 +154,7 @@ pub struct TCPServerHandler {
 
 impl TCPServerHandler {
     /// Handles a single TCP connection.
-    async fn handle_connection(
-        &self,
-        stream: TokioTcpStream,
-    ) -> ClientResult<()> {
+    async fn handle_connection(&self, stream: TokioTcpStream) -> ClientResult<()> {
         let (s_reader, s_writer) = stream.into_split();
         let mut reader = BufReader::with_capacity(self.read_buffer_size, s_reader);
         let mut writer = BufWriter::with_capacity(self.write_buffer_size, s_writer);
@@ -168,9 +165,10 @@ impl TCPServerHandler {
             error!("failed to receive request header: {}", err);
             ClientError::MpscSend(err.to_string())
         })?;
-        let header: Header = header_bytes.freeze().try_into().map_err(|_| {
-            ClientError::UnexpectedResponse
-        })?;
+        let header: Header = header_bytes
+            .freeze()
+            .try_into()
+            .map_err(|_| ClientError::UnexpectedResponse)?;
         info!("received header: {:?}", header);
 
         match header.tag() {
@@ -180,15 +178,18 @@ impl TCPServerHandler {
                 // ------------------------------
                 let mut download_piece_bytes = BytesMut::with_capacity(header.length() as usize);
                 download_piece_bytes.resize(header.length() as usize, 0);
-                reader.read_exact(&mut download_piece_bytes).await.map_err(|err| {
-                    error!("failed to receive DownloadPiece: {}", err);
-                    ClientError::MpscSend(err.to_string())
-                })?;
+                reader
+                    .read_exact(&mut download_piece_bytes)
+                    .await
+                    .map_err(|err| {
+                        error!("failed to receive DownloadPiece: {}", err);
+                        ClientError::MpscSend(err.to_string())
+                     })?;
 
-                let download_piece: DownloadPiece =
-                    download_piece_bytes.freeze().try_into().map_err(|_| {
-                        ClientError::UnexpectedResponse
-                    })?;
+                let download_piece: DownloadPiece = download_piece_bytes
+                    .freeze()
+                    .try_into()
+                    .map_err(|_| ClientError::UnexpectedResponse)?;
                 info!("received DownloadPiece request: {:?}", download_piece);
 
                 // ---------------------------
@@ -262,9 +263,7 @@ impl TCPServerHandler {
                     download_persistent_cache_piece_bytes
                         .freeze()
                         .try_into()
-                        .map_err(|_| {
-                            ClientError::UnexpectedResponse
-                        })?;
+                        .map_err(|_| ClientError::UnexpectedResponse)?;
                 info!(
                     "received DownloadPersistentCachePiece request: {:?}",
                     download_persistent_cache_piece
@@ -332,7 +331,10 @@ impl TCPServerHandler {
 
                 Ok(())
             }
-            _ => Err(ClientError::Unsupported(format!("unsupported tag: {:?}", header.tag())))
+            _ => Err(ClientError::Unsupported(format!(
+                "unsupported tag: {:?}",
+                header.tag()
+            ))),
         }
     }
 

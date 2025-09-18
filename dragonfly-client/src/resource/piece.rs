@@ -453,12 +453,7 @@ impl Piece {
 
         let (mut reader, offset, digest) = self
             .downloader
-            .download_piece(
-                host,
-                number,
-                host_id,
-                task_id,
-            )
+            .download_piece(host, number, host_id, task_id)
             .await
             .inspect_err(|err| {
                 error!("download piece failed: {}", err);
@@ -817,12 +812,7 @@ impl Piece {
 
         let (mut reader, offset, digest) = self
             .downloader
-            .download_persistent_cache_piece(
-                host,
-                number,
-                host_id,
-                task_id,
-            )
+            .download_persistent_cache_piece(host, number, host_id, task_id)
             .await
             .inspect_err(|err| {
                 error!("download persistent cache piece failed: {}", err);

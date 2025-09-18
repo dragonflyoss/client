@@ -81,7 +81,7 @@ impl DownloaderFactory {
                 config.clone(),
                 DEFAULT_DOWNLOADER_CAPACITY,
                 DEFAULT_DOWNLOADER_IDLE_TIMEOUT,
-            ))
+            )),
         };
 
         Ok(Self { downloader })
@@ -583,7 +583,11 @@ impl Downloader for TCPDownloader {
 
         let entry = self.client_entry(&addr).await?;
         let request_guard = RequestGuard::new(entry.active_requests.clone());
-        match entry.client.send(number, task_id, Tag::DownloadPersistentCachePiece).await {
+        match entry
+            .client
+            .send(number, task_id, Tag::DownloadPersistentCachePiece)
+            .await
+        {
             Ok((reader, offset, digest)) => Ok((Box::new(reader), offset, digest)),
             Err(err) => {
                 // If the request fails, it will drop the request guard and remove the client
