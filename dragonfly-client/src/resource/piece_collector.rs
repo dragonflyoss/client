@@ -187,7 +187,7 @@ impl PieceCollector {
 
                 // Create a dfdaemon client.
                 let dfdaemon_upload_client = DfdaemonUploadClient::new(
-                    config.clone(),
+                    config,
                     format!("http://{}:{}", host.ip, host.port),
                     false,
                 )
