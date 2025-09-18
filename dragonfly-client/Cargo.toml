@@ -63,6 +63,8 @@ lazy_static.workspace = true
 futures.workspace = true
 local-ip-address.workspace = true
 sysinfo.workspace = true
+leaky-bucket.workspace = true
+vortex-protocol.workspace = true
 tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
 tracing-panic = "0.1.2"
@@ -78,7 +80,6 @@ tonic-health = "0.12.3"
 tower = { version = "0.4.13", features = ["limit", "load-shed", "buffer"] }
 indicatif = "0.18.0"
 hashring = "0.3.6"
-leaky-bucket = "1.1.2"
 http-body-util = "0.1.3"
 termion = "4.0.5"
 tabled = "0.20.0"
