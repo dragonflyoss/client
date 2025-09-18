@@ -191,7 +191,19 @@ fn default_dynconfig_refresh_interval() -> Duration {
 /// default_storage_server_protocol is the default protocol of the storage server.
 #[inline]
 fn default_storage_server_protocol() -> String {
-    "grpc".to_string()
+    "tcp".to_string()
+}
+
+/// default_tcp_server_port is the default port of the storage tcp server.
+#[inline]
+fn default_tcp_server_port() -> u16 {
+    4005
+}
+
+/// default_quic_server_port is the default port of the storage quic server.
+#[inline]
+fn default_quic_server_port() -> u16 {
+    4006
 }
 
 /// default_storage_keep is the default keep of the task's metadata and content when the dfdaemon restarts.
@@ -956,6 +968,14 @@ pub struct StorageServer {
     /// refer to https://github.com/dragonflyoss/api/blob/main/proto/dfdaemon.proto#L185.
     #[serde(default = "default_storage_server_protocol")]
     pub protocol: String,
+
+    /// port is the port to the tcp server.
+    #[serde(default = "default_tcp_server_port")]
+    pub tcp_port: u16,
+
+    /// port is the port to the quic server.
+    #[serde(default = "default_quic_server_port")]
+    pub quic_port: u16,
 }
 
 /// Storage implements Default.
@@ -963,6 +983,8 @@ impl Default for StorageServer {
     fn default() -> Self {
         StorageServer {
             protocol: default_storage_server_protocol(),
+            tcp_port: default_tcp_server_port(),
+            quic_port: default_quic_server_port(),
         }
     }
 }
