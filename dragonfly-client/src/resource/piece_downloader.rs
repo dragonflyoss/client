@@ -15,10 +15,11 @@
  */
 
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
+use dragonfly_api::common::v2::Host;
 use dragonfly_api::dfdaemon::v2::{DownloadPersistentCachePieceRequest, DownloadPieceRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_storage::{client::quic::QUICClient, metadata};
+use dragonfly_client_storage::{client::quic::QUICClient, client::tcp::TCPClient, metadata};
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -42,7 +43,7 @@ pub trait Downloader: Send + Sync {
     /// download_piece downloads a piece from the other peer by different protocols.
     async fn download_piece(
         &self,
-        addr: &str,
+        host: Host,
         number: u32,
         host_id: &str,
         task_id: &str,
@@ -52,7 +53,7 @@ pub trait Downloader: Send + Sync {
     /// protocols.
     async fn download_persistent_cache_piece(
         &self,
-        addr: &str,
+        host: Host,
         number: u32,
         host_id: &str,
         task_id: &str,
@@ -71,20 +72,16 @@ impl DownloaderFactory {
     /// new returns a new DownloadFactory.
     pub fn new(protocol: &str, config: Arc<Config>) -> Result<Self> {
         let downloader: Arc<dyn Downloader> = match protocol {
-            "grpc" => Arc::new(GRPCDownloader::new(
-                config.clone(),
-                DEFAULT_DOWNLOADER_CAPACITY,
-                DEFAULT_DOWNLOADER_IDLE_TIMEOUT,
-            )),
             "quic" => Arc::new(QUICDownloader::new(
                 config.clone(),
                 DEFAULT_DOWNLOADER_CAPACITY,
                 DEFAULT_DOWNLOADER_IDLE_TIMEOUT,
             )),
-            _ => {
-                error!("downloader unsupported protocol: {}", protocol);
-                return Err(Error::InvalidParameter);
-            }
+            _ => Arc::new(GRPCDownloader::new(
+                config.clone(),
+                DEFAULT_DOWNLOADER_CAPACITY,
+                DEFAULT_DOWNLOADER_IDLE_TIMEOUT,
+            )),
         };
 
         Ok(Self { downloader })
@@ -270,12 +267,14 @@ impl Downloader for GRPCDownloader {
     #[instrument(skip_all)]
     async fn download_piece(
         &self,
-        addr: &str,
+        host: Host,
         number: u32,
         host_id: &str,
         task_id: &str,
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
-        let entry = self.client_entry(addr).await?;
+        let addr = format!("{}:{}", host.ip, host.port);
+      
+        let entry = self.client_entry(&addr).await?;
         let request_guard = RequestGuard::new(entry.active_requests.clone());
         let response = match entry
             .client
@@ -294,7 +293,7 @@ impl Downloader for GRPCDownloader {
                 // If the request fails, it will drop the request guard and remove the client
                 // entry to avoid using the invalid client.
                 drop(request_guard);
-                self.remove_client_entry(addr).await;
+                self.remove_client_entry(&addr).await;
                 return Err(err);
             }
         };
@@ -337,12 +336,14 @@ impl Downloader for GRPCDownloader {
     #[instrument(skip_all)]
     async fn download_persistent_cache_piece(
         &self,
-        addr: &str,
+        host: Host,
         number: u32,
         host_id: &str,
         task_id: &str,
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
-        let entry = self.client_entry(addr).await?;
+        let addr = format!("{}:{}", host.ip, host.port);
+
+        let entry = self.client_entry(&addr).await?;
         let request_guard = RequestGuard::new(entry.active_requests.clone());
         let response = match entry
             .client
@@ -361,7 +362,7 @@ impl Downloader for GRPCDownloader {
                 // If the request fails, it will drop the request guard and remove the client
                 // entry to avoid using the invalid client.
                 drop(request_guard);
-                self.remove_client_entry(addr).await;
+                self.remove_client_entry(&addr).await;
                 return Err(err);
             }
         };
@@ -547,36 +548,22 @@ impl Downloader for QUICDownloader {
     #[instrument(skip_all)]
     async fn download_piece(
         &self,
-        addr: &str,
+        host: Host,
         number: u32,
         _host_id: &str,
         task_id: &str,
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
-        let quic_addr = if let Some((ip_str, port_str)) = addr.split_once(':') {
-            match port_str.parse::<i32>() {
-                Ok(port) => format!("{}:{}", ip_str, port + 2),
-                Err(_) => {
-                    error!("Failed to parse port");
-                    addr.to_string()
-                }
-            }
-        } else {
-            error!("Invalid address format");
-            addr.to_string()
-        };
-        let addr = quic_addr.as_str();
+        let addr = format!("{}:{}", host.ip, host.port + 1);
 
-        let entry = self.client_entry(addr).await?;
+        let entry = self.client_entry(&addr).await?;
         let request_guard = RequestGuard::new(entry.active_requests.clone());
         match entry.client.send(number, task_id, Tag::DownloadPiece).await {
-            Ok((reader, offset, digest)) => {
-                Ok((Box::new(reader), offset, digest))
-            }
+            Ok((reader, offset, digest)) => Ok((Box::new(reader), offset, digest)),
             Err(err) => {
                 // If the request fails, it will drop the request guard and remove the client
                 // entry to avoid using the invalid client.
                 drop(request_guard);
-                self.remove_client_entry(addr).await;
+                self.remove_client_entry(&addr).await;
                 Err(err)
             }
         }
@@ -587,36 +574,26 @@ impl Downloader for QUICDownloader {
     #[instrument(skip_all)]
     async fn download_persistent_cache_piece(
         &self,
-        addr: &str,
+        host: Host,
         number: u32,
         _host_id: &str,
         task_id: &str,
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
-        let quic_addr = if let Some((ip_str, port_str)) = addr.split_once(':') {
-            match port_str.parse::<i32>() {
-                Ok(port) => format!("{}:{}", ip_str, port + 2),
-                Err(_) => {
-                    error!("Failed to parse port");
-                    addr.to_string()
-                }
-            }
-        } else {
-            error!("Invalid address format");
-            addr.to_string()
-        };
-        let addr = quic_addr.as_str();
+        let addr = format!("{}:{}", host.ip, host.port + 1);
 
-        let entry = self.client_entry(addr).await?;
+        let entry = self.client_entry(&addr).await?;
         let request_guard = RequestGuard::new(entry.active_requests.clone());
-        match entry.client.send(number, task_id, Tag::DownloadPiece).await {
-            Ok((reader, offset, digest)) => {
-                Ok((Box::new(reader), offset, digest))
-            }
+        match entry
+            .client
+            .send(number, task_id, Tag::DownloadPersistentCachePiece)
+            .await
+        {
+            Ok((reader, offset, digest)) => Ok((Box::new(reader), offset, digest)),
             Err(err) => {
                 // If the request fails, it will drop the request guard and remove the client
                 // entry to avoid using the invalid client.
                 drop(request_guard);
-                self.remove_client_entry(addr).await;
+                self.remove_client_entry(&addr).await;
                 Err(err)
             }
         }

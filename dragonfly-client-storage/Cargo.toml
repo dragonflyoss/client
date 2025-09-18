@@ -29,6 +29,7 @@ bytesize.workspace = true
 leaky-bucket.workspace = true
 rustls.workspace = true
 rcgen.workspace = true
+vortex-protocol.workspace = true
 num_cpus = "1.17"
 bincode = "1.3.3"
 walkdir = "2.5.0"
