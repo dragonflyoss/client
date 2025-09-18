@@ -523,7 +523,7 @@ impl Storage {
                 piece
             }
             _ = sleep(timeout) => {
-                Err(Error::DownloadPieceFinished(piece_id.to_string()))
+                Err(Error::DownloadPieceFinishedTimeout(piece_id.to_string()))
             }
         }
     }
@@ -572,7 +572,7 @@ impl Storage {
                 piece
             }
             _ = sleep(timeout) => {
-                Err(Error::DownloadPieceFinished(piece_id.to_string()))
+                Err(Error::DownloadPieceFinishedTimeout(piece_id.to_string()))
             }
         }
     }
@@ -947,7 +947,7 @@ impl Storage {
                 piece
             }
             _ = sleep(timeout) => {
-                Err(Error::DownloadPieceFinished(piece_id.to_string()))
+                Err(Error::DownloadPieceFinishedTimeout(piece_id.to_string()))
             }
         }
     }
@@ -1003,7 +1003,7 @@ impl Storage {
                 piece
             }
             _ = sleep(timeout) => {
-                Err(Error::DownloadPieceFinished(piece_id.to_string()))
+                Err(Error::DownloadPieceFinishedTimeout(piece_id.to_string()))
             }
         }
     }

@@ -32,6 +32,7 @@ use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::{dfdaemon, VersionValueParser};
 use dragonfly_client_storage::{server::tcp::TCPServer, Storage};
 use dragonfly_client_util::{id_generator::IDGenerator, net::Interface, shutdown};
+use leaky_bucket::RateLimiter;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -208,6 +209,39 @@ async fn main() -> Result<(), anyhow::Error> {
         })?;
     let backend_factory = Arc::new(backend_factory);
 
+    // Initialize download rate limiter.
+    let download_rate_limiter = Arc::new(
+        RateLimiter::builder()
+            .initial(config.download.rate_limit.as_u64() as usize)
+            .refill(config.download.rate_limit.as_u64() as usize)
+            .max(config.download.rate_limit.as_u64() as usize)
+            .interval(Duration::from_secs(1))
+            .fair(false)
+            .build(),
+    );
+
+    // Initialize upload rate limiter.
+    let upload_rate_limiter = Arc::new(
+        RateLimiter::builder()
+            .initial(config.upload.rate_limit.as_u64() as usize)
+            .refill(config.upload.rate_limit.as_u64() as usize)
+            .max(config.upload.rate_limit.as_u64() as usize)
+            .interval(Duration::from_secs(1))
+            .fair(false)
+            .build(),
+    );
+
+    // Initialize prefetch rate limiter.
+    let prefetch_rate_limiter = Arc::new(
+        RateLimiter::builder()
+            .initial(config.proxy.prefetch_rate_limit.as_u64() as usize)
+            .refill(config.proxy.prefetch_rate_limit.as_u64() as usize)
+            .max(config.proxy.prefetch_rate_limit.as_u64() as usize)
+            .interval(Duration::from_secs(1))
+            .fair(false)
+            .build(),
+    );
+
     // Initialize task manager.
     let task = Task::new(
         config.clone(),
@@ -215,6 +249,9 @@ async fn main() -> Result<(), anyhow::Error> {
         storage.clone(),
         scheduler_client.clone(),
         backend_factory.clone(),
+        download_rate_limiter.clone(),
+        upload_rate_limiter.clone(),
+        prefetch_rate_limiter.clone(),
     )?;
     let task = Arc::new(task);
 
@@ -225,6 +262,9 @@ async fn main() -> Result<(), anyhow::Error> {
         storage.clone(),
         scheduler_client.clone(),
         backend_factory.clone(),
+        download_rate_limiter.clone(),
+        upload_rate_limiter.clone(),
+        prefetch_rate_limiter.clone(),
     )?;
     let persistent_cache_task = Arc::new(persistent_cache_task);
 

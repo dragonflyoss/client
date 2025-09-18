@@ -60,31 +60,22 @@ impl TCPServer {
     /// Creates a new TCPServer.
     pub fn new(
         config: Arc<Config>,
+        addr: SocketAddr,
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
-        addr: SocketAddr,
+        upload_rate_limiter: Arc<RateLimiter>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
-        let handler = TCPServerHandler {
-            id_generator,
-            storage,
-            upload_rate_limiter: Arc::new(
-                RateLimiter::builder()
-                    .initial(config.upload.rate_limit.as_u64() as usize)
-                    .refill(config.upload.rate_limit.as_u64() as usize)
-                    .max(config.upload.rate_limit.as_u64() as usize)
-                    .interval(Duration::from_secs(1))
-                    .fair(false)
-                    .build(),
-            ),
-            read_buffer_size: config.storage.read_buffer_size,
-            write_buffer_size: config.storage.write_buffer_size,
-        };
-
         Self {
             addr,
-            handler,
+            handler: TCPServerHandler {
+                id_generator,
+                storage,
+                upload_rate_limiter,
+                read_buffer_size: config.storage.read_buffer_size,
+                write_buffer_size: config.storage.write_buffer_size,
+            },
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -93,11 +84,9 @@ impl TCPServer {
     /// Starts the storage tcp server.
     pub async fn run(&mut self) -> ClientResult<()> {
         // Initialize the TCP service.
-        let listener = TokioTcpListener::bind(self.addr).await.map_err(|err| {
-            error!("failed to bind to {}: {}", self.addr, err);
-            ClientError::HostNotFound(self.addr.to_string())
+        let listener = TokioTcpListener::bind(self.addr).await.inspect_err(|err| {
+            error!("failed to bind tcp server: {}", err);
         })?;
-
         info!("storage tcp server listening on {}", self.addr);
 
         loop {

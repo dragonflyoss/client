@@ -31,7 +31,7 @@ use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{error, info, instrument, Span};
 
@@ -91,6 +91,9 @@ impl Piece {
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
         backend_factory: Arc<BackendFactory>,
+        download_rate_limiter: Arc<RateLimiter>,
+        upload_rate_limiter: Arc<RateLimiter>,
+        prefetch_rate_limiter: Arc<RateLimiter>,
     ) -> Result<Self> {
         Ok(Self {
             config: config.clone(),
@@ -102,33 +105,9 @@ impl Piece {
             )?
             .build(),
             backend_factory,
-            download_rate_limiter: Arc::new(
-                RateLimiter::builder()
-                    .initial(config.download.rate_limit.as_u64() as usize)
-                    .refill(config.download.rate_limit.as_u64() as usize)
-                    .max(config.download.rate_limit.as_u64() as usize)
-                    .interval(Duration::from_secs(1))
-                    .fair(false)
-                    .build(),
-            ),
-            upload_rate_limiter: Arc::new(
-                RateLimiter::builder()
-                    .initial(config.upload.rate_limit.as_u64() as usize)
-                    .refill(config.upload.rate_limit.as_u64() as usize)
-                    .max(config.upload.rate_limit.as_u64() as usize)
-                    .interval(Duration::from_secs(1))
-                    .fair(false)
-                    .build(),
-            ),
-            prefetch_rate_limiter: Arc::new(
-                RateLimiter::builder()
-                    .initial(config.proxy.prefetch_rate_limit.as_u64() as usize)
-                    .refill(config.proxy.prefetch_rate_limit.as_u64() as usize)
-                    .max(config.proxy.prefetch_rate_limit.as_u64() as usize)
-                    .interval(Duration::from_secs(1))
-                    .fair(false)
-                    .build(),
-            ),
+            download_rate_limiter,
+            upload_rate_limiter,
+            prefetch_rate_limiter,
         })
     }
 
@@ -892,11 +871,18 @@ mod tests {
         let backend_factory = BackendFactory::new(None).unwrap();
         let backend_factory = Arc::new(backend_factory);
 
+        let download_rate_limiter = Arc::new(RateLimiter::builder().build());
+        let upload_rate_limiter = Arc::new(RateLimiter::builder().build());
+        let prefetch_rate_limiter = Arc::new(RateLimiter::builder().build());
+
         let piece = Piece::new(
             config.clone(),
             id_generator.clone(),
             storage.clone(),
             backend_factory.clone(),
+            download_rate_limiter,
+            upload_rate_limiter,
+            prefetch_rate_limiter,
         )
         .unwrap();
 

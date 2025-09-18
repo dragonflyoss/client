@@ -48,6 +48,7 @@ use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
     id_generator::IDGenerator,
 };
+use leaky_bucket::RateLimiter;
 use reqwest::header::HeaderMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -98,12 +99,18 @@ impl Task {
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
+        download_rate_limiter: Arc<RateLimiter>,
+        upload_rate_limiter: Arc<RateLimiter>,
+        prefetch_rate_limiter: Arc<RateLimiter>,
     ) -> ClientResult<Self> {
         let piece = piece::Piece::new(
             config.clone(),
             id_generator.clone(),
             storage.clone(),
             backend_factory.clone(),
+            download_rate_limiter,
+            upload_rate_limiter,
+            prefetch_rate_limiter,
         )?;
         let piece = Arc::new(piece);
 
