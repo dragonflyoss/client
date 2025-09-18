@@ -166,7 +166,7 @@ where
 }
 
 /// The File Entry of a directory, including some relevant file metadata.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct DirEntry {
     /// url is the url of the entry.
     pub url: String,
@@ -253,6 +253,9 @@ impl BackendFactory {
             .get(scheme)
             .map(|boxed_backend| &**boxed_backend)
             .ok_or(Error::InvalidParameter)
+            .inspect_err(|_err| {
+                error!("unsupported backend scheme: {}", scheme);
+            })
     }
 
     /// load_builtin_backends loads the builtin backends.

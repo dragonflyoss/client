@@ -22,12 +22,14 @@ use dragonfly_client_core::{
     Error, Result,
 };
 use humantime::format_duration;
+use local_ip_address::local_ip;
 use std::time::Duration;
 use tabled::{
     settings::{object::Rows, Alignment, Modify, Style},
     Table, Tabled,
 };
 use termion::{color, style};
+use tracing::error;
 
 use super::*;
 
@@ -53,45 +55,25 @@ pub struct StatCommand {
     )]
     log_level: Level,
 
-    #[arg(
-        long,
-        default_value_os_t = dfcache::default_dfcache_log_dir(),
-        help = "Specify the log directory"
-    )]
-    log_dir: PathBuf,
-
-    #[arg(
-        long,
-        default_value_t = 6,
-        help = "Specify the max number of log files"
-    )]
-    log_max_files: usize,
-
     #[arg(long, default_value_t = false, help = "Specify whether to print log")]
     console: bool,
 }
 
 /// Implement the execute for StatCommand.
 impl StatCommand {
-    /// execute executes the stat command.
+    /// Executes the stat command with comprehensive error handling and user feedback.
+    ///
+    /// This function serves as the main entry point for the dfcache stat command execution.
+    /// It handles the complete lifecycle including argument parsing, logging initialization,
+    /// dfdaemon client setup, and command execution with detailed error reporting. The
+    /// function provides colored terminal output for better user experience and exits
+    /// with appropriate status codes on failure.
     pub async fn execute(&self) -> Result<()> {
         // Parse command line arguments.
         Args::parse();
 
         // Initialize tracing.
-        let _guards = init_tracing(
-            dfcache::NAME,
-            self.log_dir.clone(),
-            self.log_level,
-            self.log_max_files,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            self.console,
-        );
+        let _guards = init_command_tracing(self.log_level, self.console);
 
         // Get dfdaemon download client.
         let dfdaemon_download_client =
@@ -233,11 +215,17 @@ impl StatCommand {
         Ok(())
     }
 
-    /// run runs the stat command.
+    /// Executes the stat command to retrieve and display persistent cache task information.
+    ///
+    /// This function queries the dfdaemon service for detailed information about a specific
+    /// persistent cache task and presents it in a formatted table for user consumption.
+    /// It handles data conversion from raw protocol buffer values to human-readable formats
+    /// including byte sizes, durations, and timestamps with proper timezone conversion.
     async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
         let task = dfdaemon_download_client
             .stat_persistent_cache_task(StatPersistentCacheTaskRequest {
                 task_id: self.id.clone(),
+                remote_ip: Some(local_ip().unwrap().to_string()),
             })
             .await?;
 
@@ -272,8 +260,14 @@ impl StatCommand {
         };
 
         // Convert ttl to human readable format.
-        let ttl = Duration::try_from(task.ttl.ok_or(Error::InvalidParameter)?)
-            .or_err(ErrorType::ParseError)?;
+        let ttl = task
+            .ttl
+            .ok_or(Error::InvalidParameter)
+            .inspect_err(|_err| {
+                error!("task ttl is missing");
+            })?;
+
+        let ttl = Duration::try_from(ttl).or_err(ErrorType::ParseError)?;
         table_task.ttl = format_duration(ttl).to_string();
 
         // Convert created_at to human readable format.

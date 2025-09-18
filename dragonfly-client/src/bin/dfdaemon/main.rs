@@ -15,7 +15,7 @@
  */
 
 use clap::Parser;
-use dragonfly_client::announcer::{ManagerAnnouncer, SchedulerAnnouncer};
+use dragonfly_client::announcer::SchedulerAnnouncer;
 use dragonfly_client::dynconfig::Dynconfig;
 use dragonfly_client::gc::GC;
 use dragonfly_client::grpc::{
@@ -28,13 +28,12 @@ use dragonfly_client::proxy::Proxy;
 use dragonfly_client::resource::{
     parent_selector::ParentSelector, persistent_cache_task::PersistentCacheTask, task::Task,
 };
-use dragonfly_client::shutdown;
 use dragonfly_client::stats::Stats;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::{dfdaemon, VersionValueParser};
-use dragonfly_client_storage::Storage;
-use dragonfly_client_util::id_generator::IDGenerator;
+use dragonfly_client_storage::{server::tcp::TCPServer, Storage};
+use dragonfly_client_util::{id_generator::IDGenerator, net::Interface, shutdown};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -242,6 +241,9 @@ async fn main() -> Result<(), anyhow::Error> {
     )?;
     let persistent_cache_task = Arc::new(persistent_cache_task);
 
+    let interface = Interface::new(config.host.ip.unwrap(), config.upload.rate_limit);
+    let interface = Arc::new(interface);
+
     // Initialize health server.
     let health = Health::new(
         SocketAddr::new(config.health.server.ip.unwrap(), config.health.server.port),
@@ -271,19 +273,12 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     );
 
-    // Initialize manager announcer.
-    let manager_announcer = ManagerAnnouncer::new(
-        config.clone(),
-        manager_client.clone(),
-        shutdown.clone(),
-        shutdown_complete_tx.clone(),
-    );
-
     // Initialize scheduler announcer.
     let scheduler_announcer = SchedulerAnnouncer::new(
         config.clone(),
         id_generator.host_id(),
         scheduler_client.clone(),
+        interface.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     )
@@ -298,6 +293,17 @@ async fn main() -> Result<(), anyhow::Error> {
         SocketAddr::new(config.upload.server.ip.unwrap(), config.upload.server.port),
         task.clone(),
         persistent_cache_task.clone(),
+        interface.clone(),
+        shutdown.clone(),
+        shutdown_complete_tx.clone(),
+    );
+
+    // Initialize storage tcp server.
+    let mut storage_tcp = TCPServer::new(
+        config.clone(),
+        id_generator.clone(),
+        storage.clone(),
+        SocketAddr::new(config.host.ip.unwrap(), config.storage.server.tcp_port),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
@@ -346,10 +352,6 @@ async fn main() -> Result<(), anyhow::Error> {
             info!("stats server exited");
         },
 
-        _ = tokio::spawn(async move { manager_announcer.run().await.unwrap_or_else(|err| error!("announcer manager failed: {}", err))} ) => {
-            info!("announcer manager exited");
-        },
-
         _ = tokio::spawn(async move { scheduler_announcer.run().await }) => {
             info!("announcer scheduler exited");
         },
@@ -383,6 +385,14 @@ async fn main() -> Result<(), anyhow::Error> {
             })
         } => {
             info!("proxy server exited");
+        },
+
+        _ = {
+            tokio::spawn(async move {
+                storage_tcp.run().await.unwrap_or_else(|err| error!("storage tcp server failed: {}", err));
+            })
+        } => {
+            info!("storage tcp server exited");
         },
 
         _ = shutdown::shutdown_signal() => {},

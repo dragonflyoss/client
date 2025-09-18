@@ -20,7 +20,6 @@ use crate::metrics::{
     collect_proxy_request_via_dfdaemon_metrics,
 };
 use crate::resource::{piece::MIN_PIECE_LENGTH, task::Task};
-use crate::shutdown;
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::{
@@ -32,6 +31,7 @@ use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
+    shutdown,
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
 use futures::TryStreamExt;
@@ -208,7 +208,7 @@ impl Proxy {
                                 service_fn(move |request|{
                                     let context = context.clone();
                                     async move {
-                                        handler(context.config, context.task, request, context.dfdaemon_download_client, context.registry_cert, context.server_ca_cert).await
+                                        handler(context.config, context.task, request, context.dfdaemon_download_client, context.registry_cert, context.server_ca_cert, remote_address.ip()).await
                                     }
                                 } ),
                                 )
@@ -231,7 +231,7 @@ impl Proxy {
 }
 
 /// handler handles the request from the client.
-#[instrument(skip_all, fields(uri, method))]
+#[instrument(skip_all, fields(url, method, remote_ip))]
 pub async fn handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -239,7 +239,13 @@ pub async fn handler(
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
+    remote_ip: std::net::IpAddr,
 ) -> ClientResult<Response> {
+    // Span record the url and method.
+    Span::current().record("url", request.uri().to_string().as_str());
+    Span::current().record("method", request.method().as_str());
+    Span::current().record("remote_ip", remote_ip.to_string().as_str());
+
     // Record the proxy request started metrics. The metrics will be recorded
     // when the request is kept alive.
     collect_proxy_request_started_metrics();
@@ -252,6 +258,7 @@ pub async fn handler(
                 config,
                 task,
                 request,
+                remote_ip,
                 dfdaemon_download_client,
                 registry_cert,
                 server_ca_cert,
@@ -263,15 +270,12 @@ pub async fn handler(
             config,
             task,
             request,
+            remote_ip,
             dfdaemon_download_client,
             registry_cert,
         )
         .await;
     }
-
-    // Span record the uri and method.
-    Span::current().record("uri", request.uri().to_string().as_str());
-    Span::current().record("method", request.method().as_str());
 
     // Handle CONNECT request.
     if Method::CONNECT == request.method() {
@@ -279,6 +283,7 @@ pub async fn handler(
             config,
             task,
             request,
+            remote_ip,
             dfdaemon_download_client,
             registry_cert,
             server_ca_cert,
@@ -290,6 +295,7 @@ pub async fn handler(
         config,
         task,
         request,
+        remote_ip,
         dfdaemon_download_client,
         registry_cert,
     )
@@ -302,6 +308,7 @@ pub async fn registry_mirror_http_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
+    remote_ip: std::net::IpAddr,
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
@@ -310,6 +317,7 @@ pub async fn registry_mirror_http_handler(
         config,
         task,
         request,
+        remote_ip,
         dfdaemon_download_client,
         registry_cert,
     )
@@ -322,6 +330,7 @@ pub async fn registry_mirror_https_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
+    remote_ip: std::net::IpAddr,
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
@@ -331,6 +340,7 @@ pub async fn registry_mirror_https_handler(
         config,
         task,
         request,
+        remote_ip,
         dfdaemon_download_client,
         registry_cert,
         server_ca_cert,
@@ -344,6 +354,7 @@ pub async fn http_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
+    remote_ip: std::net::IpAddr,
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
@@ -355,11 +366,19 @@ pub async fn http_handler(
             Ok(_) => {}
             Err(ClientError::Unauthorized) => {
                 error!("basic auth failed");
-                return Ok(make_error_response(http::StatusCode::UNAUTHORIZED, None));
+                return Ok(make_error_response(
+                    header::ErrorType::Proxy,
+                    http::StatusCode::UNAUTHORIZED,
+                    None,
+                ));
             }
             Err(err) => {
                 error!("verify basic auth failed: {}", err);
-                return Ok(make_error_response(http::StatusCode::BAD_REQUEST, None));
+                return Ok(make_error_response(
+                    header::ErrorType::Proxy,
+                    http::StatusCode::BAD_REQUEST,
+                    None,
+                ));
             }
         }
     }
@@ -375,7 +394,15 @@ pub async fn http_handler(
             request.method(),
             request_uri
         );
-        return proxy_via_dfdaemon(config, task, &rule, request, dfdaemon_download_client).await;
+        return proxy_via_dfdaemon(
+            config,
+            task,
+            &rule,
+            request,
+            remote_ip,
+            dfdaemon_download_client,
+        )
+        .await;
     }
 
     // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
@@ -391,6 +418,7 @@ pub async fn http_handler(
             task,
             &Rule::default(),
             request,
+            remote_ip,
             dfdaemon_download_client,
         )
         .await;
@@ -419,6 +447,7 @@ pub async fn https_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
+    remote_ip: std::net::IpAddr,
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
@@ -438,6 +467,7 @@ pub async fn https_handler(
                         upgraded,
                         host,
                         port,
+                        remote_ip,
                         dfdaemon_download_client,
                         registry_cert,
                         server_ca_cert,
@@ -453,7 +483,11 @@ pub async fn https_handler(
 
         Ok(Response::new(empty()))
     } else {
-        return Ok(make_error_response(http::StatusCode::BAD_REQUEST, None));
+        return Ok(make_error_response(
+            header::ErrorType::Proxy,
+            http::StatusCode::BAD_REQUEST,
+            None,
+        ));
     }
 }
 
@@ -468,6 +502,7 @@ async fn upgraded_tunnel(
     upgraded: Upgraded,
     host: String,
     port: u16,
+    remote_ip: std::net::IpAddr,
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
@@ -516,6 +551,7 @@ async fn upgraded_tunnel(
                     host.clone(),
                     port,
                     request,
+                    remote_ip,
                     dfdaemon_download_client.clone(),
                     registry_cert.clone(),
                 )
@@ -531,18 +567,20 @@ async fn upgraded_tunnel(
 }
 
 /// upgraded_handler handles the upgraded https request from the client.
-#[instrument(skip_all, fields(uri, method))]
+#[allow(clippy::too_many_arguments)]
+#[instrument(skip_all, fields(url, method))]
 pub async fn upgraded_handler(
     config: Arc<Config>,
     task: Arc<Task>,
     host: String,
     port: u16,
     mut request: Request<hyper::body::Incoming>,
+    remote_ip: std::net::IpAddr,
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
-    // Span record the uri and method.
-    Span::current().record("uri", request.uri().to_string().as_str());
+    // Span record the url and method.
+    Span::current().record("url", request.uri().to_string().as_str());
     Span::current().record("method", request.method().as_str());
 
     // Authenticate the request with the basic auth.
@@ -550,11 +588,19 @@ pub async fn upgraded_handler(
         match basic_auth.credentials().verify(request.headers()) {
             Ok(_) => {}
             Err(ClientError::Unauthorized) => {
-                return Ok(make_error_response(http::StatusCode::UNAUTHORIZED, None));
+                return Ok(make_error_response(
+                    header::ErrorType::Proxy,
+                    http::StatusCode::UNAUTHORIZED,
+                    None,
+                ));
             }
             Err(err) => {
                 error!("verify basic auth failed: {}", err);
-                return Ok(make_error_response(http::StatusCode::BAD_REQUEST, None));
+                return Ok(make_error_response(
+                    header::ErrorType::Proxy,
+                    http::StatusCode::BAD_REQUEST,
+                    None,
+                ));
             }
         }
     }
@@ -587,7 +633,15 @@ pub async fn upgraded_handler(
             request.method(),
             request_uri
         );
-        return proxy_via_dfdaemon(config, task, &rule, request, dfdaemon_download_client).await;
+        return proxy_via_dfdaemon(
+            config,
+            task,
+            &rule,
+            request,
+            remote_ip,
+            dfdaemon_download_client,
+        )
+        .await;
     }
 
     // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
@@ -603,6 +657,7 @@ pub async fn upgraded_handler(
             task,
             &Rule::default(),
             request,
+            remote_ip,
             dfdaemon_download_client,
         )
         .await;
@@ -632,22 +687,25 @@ async fn proxy_via_dfdaemon(
     task: Arc<Task>,
     rule: &Rule,
     request: Request<hyper::body::Incoming>,
+    remote_ip: std::net::IpAddr,
     dfdaemon_download_client: DfdaemonDownloadClient,
 ) -> ClientResult<Response> {
     // Collect the metrics for the proxy request via dfdaemon.
     collect_proxy_request_via_dfdaemon_metrics();
 
     // Make the download task request.
-    let download_task_request = match make_download_task_request(config.clone(), rule, request) {
-        Ok(download_task_request) => download_task_request,
-        Err(err) => {
-            error!("make download task request failed: {}", err);
-            return Ok(make_error_response(
-                http::StatusCode::INTERNAL_SERVER_ERROR,
-                None,
-            ));
-        }
-    };
+    let download_task_request =
+        match make_download_task_request(config.clone(), rule, request, remote_ip) {
+            Ok(download_task_request) => download_task_request,
+            Err(err) => {
+                error!("make download task request failed: {}", err);
+                return Ok(make_error_response(
+                    header::ErrorType::Proxy,
+                    http::StatusCode::INTERNAL_SERVER_ERROR,
+                    None,
+                ));
+            }
+        };
 
     // Download the task by the dfdaemon download client.
     let response = match dfdaemon_download_client
@@ -661,6 +719,7 @@ async fn proxy_via_dfdaemon(
                     Ok(backend) => {
                         error!("download task failed: {:?}", backend);
                         return Ok(make_error_response(
+                            header::ErrorType::Backend,
                             http::StatusCode::from_u16(
                                 backend.status_code.unwrap_or_default() as u16
                             )
@@ -671,6 +730,7 @@ async fn proxy_via_dfdaemon(
                     Err(_) => {
                         error!("download task failed: {}", err);
                         return Ok(make_error_response(
+                            header::ErrorType::Dfdaemon,
                             http::StatusCode::INTERNAL_SERVER_ERROR,
                             None,
                         ));
@@ -680,6 +740,7 @@ async fn proxy_via_dfdaemon(
             _ => {
                 error!("download task failed: {}", err);
                 return Ok(make_error_response(
+                    header::ErrorType::Dfdaemon,
                     http::StatusCode::INTERNAL_SERVER_ERROR,
                     None,
                 ));
@@ -692,6 +753,7 @@ async fn proxy_via_dfdaemon(
     let Ok(Some(message)) = out_stream.message().await else {
         error!("response message failed");
         return Ok(make_error_response(
+            header::ErrorType::Dfdaemon,
             http::StatusCode::INTERNAL_SERVER_ERROR,
             None,
         ));
@@ -709,6 +771,7 @@ async fn proxy_via_dfdaemon(
     else {
         error!("response is not started");
         return Ok(make_error_response(
+            header::ErrorType::Dfdaemon,
             http::StatusCode::INTERNAL_SERVER_ERROR,
             None,
         ));
@@ -731,7 +794,11 @@ async fn proxy_via_dfdaemon(
 
     // Construct the response.
     let mut response = Response::new(boxed_body);
-    *response.headers_mut() = make_response_headers(download_task_started_response.clone())?;
+    *response.headers_mut() = make_response_headers(
+        message.task_id.as_str(),
+        config.host.ip.unwrap(),
+        download_task_started_response.clone(),
+    )?;
     *response.status_mut() = http::StatusCode::OK;
 
     // Return the response if the client return the first piece.
@@ -867,6 +934,7 @@ async fn proxy_via_dfdaemon(
                                 sender
                                     .send_timeout(
                                         Some(make_error_response(
+                                            header::ErrorType::Backend,
                                             http::StatusCode::from_u16(
                                                 backend.status_code.unwrap_or_default() as u16,
                                             )
@@ -886,6 +954,7 @@ async fn proxy_via_dfdaemon(
                                 sender
                                     .send_timeout(
                                         Some(make_error_response(
+                                            header::ErrorType::Dfdaemon,
                                             http::StatusCode::INTERNAL_SERVER_ERROR,
                                             None,
                                         )),
@@ -908,6 +977,7 @@ async fn proxy_via_dfdaemon(
         Some(Some(response)) => Ok(response),
         Some(None) => return Ok(response),
         None => Ok(make_error_response(
+            header::ErrorType::Dfdaemon,
             http::StatusCode::INTERNAL_SERVER_ERROR,
             None,
         )),
@@ -919,7 +989,11 @@ async fn proxy_via_dfdaemon(
 async fn proxy_via_http(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
     let Some(host) = request.uri().host() else {
         error!("CONNECT host is not socket addr: {:?}", request.uri());
-        return Ok(make_error_response(http::StatusCode::BAD_REQUEST, None));
+        return Ok(make_error_response(
+            header::ErrorType::Proxy,
+            http::StatusCode::BAD_REQUEST,
+            None,
+        ));
     };
     let port = request.uri().port_u16().unwrap_or(80);
 
@@ -1016,6 +1090,7 @@ fn make_download_task_request(
     config: Arc<Config>,
     rule: &Rule,
     request: Request<hyper::body::Incoming>,
+    remote_ip: std::net::IpAddr,
 ) -> ClientResult<DownloadTaskRequest> {
     // Convert the Reqwest header to the Hyper header.
     let mut header = request.headers().clone();
@@ -1061,9 +1136,10 @@ fn make_download_task_request(
             hdfs: None,
             is_prefetch: false,
             need_piece_content: false,
-            load_to_cache: false,
             force_hard_link: header::get_force_hard_link(&header),
             content_for_calculating_task_id: header::get_content_for_calculating_task_id(&header),
+            remote_ip: Some(remote_ip.to_string()),
+            concurrent_piece_count: Some(config.download.concurrent_piece_count),
         }),
     })
 }
@@ -1112,6 +1188,8 @@ fn make_download_url(
 
 /// make_response_headers makes the response headers.
 fn make_response_headers(
+    task_id: &str,
+    server_ip: std::net::IpAddr,
     mut download_task_started_response: DownloadTaskStartedResponse,
 ) -> ClientResult<hyper::header::HeaderMap> {
     // Insert the content range header to the response header.
@@ -1132,6 +1210,23 @@ fn make_response_headers(
         );
     };
 
+    if download_task_started_response.is_finished {
+        download_task_started_response.response_header.insert(
+            header::DRAGONFLY_TASK_DOWNLOAD_FINISHED_HEADER.to_string(),
+            "true".to_string(),
+        );
+    }
+
+    download_task_started_response.response_header.insert(
+        header::DRAGONFLY_TASK_ID_HEADER.to_string(),
+        task_id.to_string(),
+    );
+
+    download_task_started_response.response_header.insert(
+        header::DRAGONFLY_SERVER_IP_HEADER.to_string(),
+        server_ip.to_string(),
+    );
+
     hashmap_to_headermap(&download_task_started_response.response_header)
 }
 
@@ -1142,7 +1237,11 @@ fn find_matching_rule(rules: Option<&[Rule]>, url: &str) -> Option<Rule> {
 }
 
 /// make_error_response makes an error response with the given status and message.
-fn make_error_response(status: http::StatusCode, header: Option<http::HeaderMap>) -> Response {
+fn make_error_response(
+    error_type: header::ErrorType,
+    status: http::StatusCode,
+    header: Option<http::HeaderMap>,
+) -> Response {
     let mut response = Response::new(empty());
     *response.status_mut() = status;
     if let Some(header) = header {
@@ -1150,6 +1249,12 @@ fn make_error_response(status: http::StatusCode, header: Option<http::HeaderMap>
             response.headers_mut().insert(k, v.clone());
         }
     }
+
+    // Insert the error type header for client to identify where the error occurred.
+    response.headers_mut().insert(
+        header::DRAGONFLY_ERROR_TYPE_HEADER,
+        error_type.as_str().parse().unwrap(),
+    );
 
     response
 }

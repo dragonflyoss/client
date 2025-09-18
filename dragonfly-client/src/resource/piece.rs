@@ -30,7 +30,6 @@ use dragonfly_client_util::id_generator::IDGenerator;
 use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
-use std::io::Cursor;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -144,6 +143,11 @@ impl Piece {
         self.storage.get_piece(piece_id)
     }
 
+    /// get_all gets all pieces of a task from the local storage.
+    pub fn get_all(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
+        self.storage.get_pieces(task_id)
+    }
+
     /// calculate_interested calculates the interested pieces by content_length and range.
     pub fn calculate_interested(
         &self,
@@ -159,6 +163,7 @@ impl Piece {
         // If range is not None, calculate the pieces by range.
         if let Some(range) = range {
             if range.length == 0 {
+                error!("range length is 0");
                 return Err(Error::InvalidParameter);
             }
 
@@ -221,10 +226,13 @@ impl Piece {
         loop {
             // If offset is greater than content_length, break the loop.
             if offset >= content_length {
-                let mut piece = pieces.pop().ok_or_else(|| {
-                    error!("piece not found");
-                    Error::InvalidParameter
-                })?;
+                let mut piece =
+                    pieces
+                        .pop()
+                        .ok_or(Error::InvalidParameter)
+                        .inspect_err(|_err| {
+                            error!("piece not found");
+                        })?;
 
                 piece.length = piece_length + content_length - offset;
                 pieces.push(piece);
@@ -407,7 +415,6 @@ impl Piece {
         length: u64,
         parent: piece_collector::CollectedParent,
         is_prefetch: bool,
-        load_to_cache: bool,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
@@ -444,14 +451,9 @@ impl Piece {
             Error::InvalidPeer(parent.id.clone())
         })?;
 
-        let (content, offset, digest) = self
+        let (mut reader, offset, digest) = self
             .downloader
-            .download_piece(
-                format!("{}:{}", host.ip, host.port).as_str(),
-                number,
-                host_id,
-                task_id,
-            )
+            .download_piece(host, number, host_id, task_id)
             .await
             .inspect_err(|err| {
                 error!("download piece failed: {}", err);
@@ -459,7 +461,6 @@ impl Piece {
                     error!("set piece metadata failed: {}", err)
                 };
             })?;
-        let mut reader = Cursor::new(content);
 
         // Record the finish of downloading piece.
         match self
@@ -472,7 +473,6 @@ impl Piece {
                 digest.as_str(),
                 parent.id.as_str(),
                 &mut reader,
-                load_to_cache,
                 self.config.storage.write_piece_timeout,
             )
             .await
@@ -510,7 +510,6 @@ impl Piece {
         length: u64,
         request_header: HeaderMap,
         is_prefetch: bool,
-        load_to_cache: bool,
         object_storage: Option<ObjectStorage>,
         hdfs: Option<Hdfs>,
     ) -> Result<metadata::Piece> {
@@ -636,7 +635,6 @@ impl Piece {
                 offset,
                 length,
                 &mut response.reader,
-                load_to_cache,
                 self.config.storage.write_piece_timeout,
             )
             .await
@@ -812,14 +810,9 @@ impl Piece {
             Error::InvalidPeer(parent.id.clone())
         })?;
 
-        let (content, offset, digest) = self
+        let (mut reader, offset, digest) = self
             .downloader
-            .download_persistent_cache_piece(
-                format!("{}:{}", host.ip, host.port).as_str(),
-                number,
-                host_id,
-                task_id,
-            )
+            .download_persistent_cache_piece(host, number, host_id, task_id)
             .await
             .inspect_err(|err| {
                 error!("download persistent cache piece failed: {}", err);
@@ -831,7 +824,6 @@ impl Piece {
                     error!("set persistent cache piece metadata failed: {}", err)
                 };
             })?;
-        let mut reader = Cursor::new(content);
 
         // Record the finish of downloading piece.
         match self

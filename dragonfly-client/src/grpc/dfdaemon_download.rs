@@ -24,16 +24,16 @@ use crate::metrics::{
     collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
 };
 use crate::resource::{persistent_cache_task, task};
-use crate::shutdown;
-use dragonfly_api::common::v2::{PersistentCacheTask, Priority, Task, TaskType};
+use dragonfly_api::common::v2::{CacheTask, PersistentCacheTask, Priority, Task, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_download_client::DfdaemonDownloadClient as DfdaemonDownloadGRPCClient,
     dfdaemon_download_server::{
         DfdaemonDownload, DfdaemonDownloadServer as DfdaemonDownloadGRPCServer,
     },
-    DeleteTaskRequest, DownloadPersistentCacheTaskRequest, DownloadPersistentCacheTaskResponse,
-    DownloadTaskRequest, DownloadTaskResponse, Entry, ListTaskEntriesRequest,
-    ListTaskEntriesResponse, StatPersistentCacheTaskRequest,
+    DeleteCacheTaskRequest, DeleteTaskRequest, DownloadCacheTaskRequest, DownloadCacheTaskResponse,
+    DownloadPersistentCacheTaskRequest, DownloadPersistentCacheTaskResponse, DownloadTaskRequest,
+    DownloadTaskResponse, Entry, ListTaskEntriesRequest, ListTaskEntriesResponse,
+    StatCacheTaskRequest as DfdaemonStatCacheTaskRequest, StatPersistentCacheTaskRequest,
     StatTaskRequest as DfdaemonStatTaskRequest, UploadPersistentCacheTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
@@ -48,6 +48,7 @@ use dragonfly_client_util::{
     digest::{verify_file_digest, Digest},
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
     id_generator::{PersistentCacheTaskIDParameter, TaskIDParameter},
+    shutdown,
 };
 use hyper_util::rt::TokioIo;
 use opentelemetry::Context;
@@ -148,7 +149,7 @@ impl DfdaemonDownloadServer {
 
         // Bind the unix domain socket and set the permissions for the socket.
         let uds = UnixListener::bind(&self.socket_path)?;
-        let perms = std::fs::Permissions::from_mode(0o660);
+        let perms = std::fs::Permissions::from_mode(0o777);
         fs::set_permissions(&self.socket_path, perms).await?;
 
         // TODO(Gaius): RateLimitLayer is not implemented Clone, so we can't use it here.
@@ -165,7 +166,7 @@ impl DfdaemonDownloadServer {
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
             .layer(rate_limit_layer)
-            .add_service(reflection.clone())
+            .add_service(reflection)
             .add_service(health_service)
             .add_service(service)
             .serve_with_incoming_shutdown(uds_stream, async move {
@@ -230,7 +231,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
     /// download_task tells the dfdaemon to download the task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id, url, content_length))]
+    #[instrument(
+        skip_all,
+        fields(host_id, task_id, peer_id, url, remote_ip, content_length)
+    )]
     async fn download_task(
         &self,
         request: Request<DownloadTaskRequest>,
@@ -251,6 +255,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             error!("missing download");
             Status::invalid_argument("missing download")
         })?;
+        download.concurrent_piece_count = Some(self.config.download.concurrent_piece_count);
 
         // Generate the task id.
         let task_id = self
@@ -282,6 +287,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
         Span::current().record("url", download.url.clone());
+        Span::current().record(
+            "remote_ip",
+            download.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("download task in download server");
 
         // Download task started.
@@ -662,7 +671,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 
     /// stat_task gets the status of the task.
-    #[instrument(skip_all, fields(host_id, task_id))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip, local_only))]
     async fn stat_task(
         &self,
         request: Request<DfdaemonStatTaskRequest>,
@@ -681,32 +690,48 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Get the task id from the request.
         let task_id = request.task_id;
 
+        // Get the local_only flag from the request, default to false.
+        let local_only = request.local_only;
+
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        Span::current().record("local_only", local_only.to_string().as_str());
         info!("stat task in download server");
 
         // Collect the stat task metrics.
         collect_stat_task_started_metrics(TaskType::Standard as i32);
 
-        // Get the task from the scheduler.
-        let task = self
+        match self
             .task
-            .stat(task_id.as_str(), host_id.as_str())
+            .stat(task_id.as_str(), host_id.as_str(), local_only)
             .await
-            .map_err(|err| {
+        {
+            Ok(task) => Ok(Response::new(task)),
+            Err(err) => {
                 // Collect the stat task failure metrics.
                 collect_stat_task_failure_metrics(TaskType::Standard as i32);
 
-                error!("stat task: {}", err);
-                Status::internal(err.to_string())
-            })?;
+                // Log the error with detailed context.
+                error!("stat task failed: {}", err);
 
-        Ok(Response::new(task))
+                // Map the error to an appropriate gRPC status.
+                Err(match err {
+                    ClientError::TaskNotFound(id) => {
+                        Status::not_found(format!("task not found: {}", id))
+                    }
+                    _ => Status::internal(err.to_string()),
+                })
+            }
+        }
     }
 
     /// list_tasks lists the tasks.
-    #[instrument(skip_all, fields(task_id, url))]
+    #[instrument(skip_all, fields(task_id, url, remote_ip))]
     async fn list_task_entries(
         &self,
         request: Request<ListTaskEntriesRequest>,
@@ -722,6 +747,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Span record the task id and url.
         Span::current().record("task_id", request.task_id.as_str());
         Span::current().record("url", request.url.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("list tasks in download server");
 
         // Collect the list tasks started metrics.
@@ -740,17 +769,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 Status::internal(err.to_string())
             })?;
 
-        let timeout = match request.timeout {
-            Some(timeout) => Duration::try_from(timeout).map_err(|err| {
-                // Collect the list tasks failure metrics.
-                collect_list_task_entries_failure_metrics(TaskType::Standard as i32);
-
-                error!("parse timeout: {}", err);
-                Status::invalid_argument(err.to_string())
-            })?,
-            None => self.config.download.piece_timeout,
-        };
-
         // Head the task entries.
         let response = backend
             .head(HeadRequest {
@@ -762,7 +780,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         Status::internal(err.to_string())
                     },
                 )?),
-                timeout,
+                timeout: self.config.download.piece_timeout,
                 client_cert: None,
                 object_storage: request.object_storage.clone(),
                 hdfs: request.hdfs.clone(),
@@ -793,7 +811,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 
     /// delete_task calls the dfdaemon to delete the task.
-    #[instrument(skip_all, fields(host_id, task_id))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn delete_task(
         &self,
         request: Request<DeleteTaskRequest>,
@@ -815,6 +833,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("delete task in download server");
 
         // Collect the delete task started metrics.
@@ -873,7 +895,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         ReceiverStream<Result<DownloadPersistentCacheTaskResponse, Status>>;
 
     /// download_persistent_cache_task downloads the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id, content_length))]
+    #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip, content_length))]
     async fn download_persistent_cache_task(
         &self,
         request: Request<DownloadPersistentCacheTaskRequest>,
@@ -906,6 +928,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("download persistent cache task in download server");
 
         // Download task started.
@@ -1127,7 +1153,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 
     /// upload_persistent_cache_task uploads the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id, peer_id))]
+    #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip))]
     async fn upload_persistent_cache_task(
         &self,
         request: Request<UploadPersistentCacheTaskRequest>,
@@ -1174,6 +1200,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("peer_id", peer_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("upload persistent cache task in download server");
 
         // Collect upload task started metrics.
@@ -1224,7 +1254,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 
     /// stat_persistent_cache_task stats the persistent cache task.
-    #[instrument(skip_all, fields(host_id, task_id))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_persistent_cache_task(
         &self,
         request: Request<StatPersistentCacheTaskRequest>,
@@ -1246,6 +1276,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
         info!("stat persistent cache task in download server");
 
         // Collect the stat persistent cache task started metrics.
@@ -1264,6 +1298,39 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             })?;
 
         Ok(Response::new(task))
+    }
+
+    /// DownloadCacheTaskStream is the stream of the download cache task response.
+    type DownloadCacheTaskStream = ReceiverStream<Result<DownloadCacheTaskResponse, Status>>;
+
+    /// download_cache_task tells the dfdaemon to download the cache task.
+    #[instrument(
+        skip_all,
+        fields(host_id, task_id, peer_id, url, remote_ip, content_length)
+    )]
+    async fn download_cache_task(
+        &self,
+        _request: Request<DownloadCacheTaskRequest>,
+    ) -> Result<Response<Self::DownloadCacheTaskStream>, Status> {
+        todo!();
+    }
+
+    /// stat_cache_task gets the status of the cache task.
+    #[instrument(skip_all, fields(host_id, task_id, remote_pi, local_only))]
+    async fn stat_cache_task(
+        &self,
+        _request: Request<DfdaemonStatCacheTaskRequest>,
+    ) -> Result<Response<CacheTask>, Status> {
+        todo!();
+    }
+
+    /// delete_cache_task calls the dfdaemon to delete the cache task.
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
+    async fn delete_cache_task(
+        &self,
+        _request: Request<DeleteCacheTaskRequest>,
+    ) -> Result<Response<()>, Status> {
+        todo!();
     }
 }
 

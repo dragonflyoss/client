@@ -17,7 +17,7 @@
 use clap::{Parser, Subcommand};
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
-use dragonfly_client::tracing::init_tracing;
+use dragonfly_client::tracing::init_command_tracing;
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{dfcache, dfdaemon};
 use dragonfly_client_core::Result;
@@ -106,7 +106,12 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// get_and_check_dfdaemon_download_client gets a dfdaemon download client and checks its health.
+/// Creates and validates a dfdaemon download client with health checking.
+///
+/// This function establishes a connection to the dfdaemon service via Unix domain socket
+/// and performs a health check to ensure the service is running and ready to handle
+/// download requests. Only after successful health verification does it return the
+/// download client for actual use.
 pub async fn get_dfdaemon_download_client(endpoint: PathBuf) -> Result<DfdaemonDownloadClient> {
     // Check dfdaemon's health.
     let health_client = HealthClient::new_unix(endpoint.clone()).await?;

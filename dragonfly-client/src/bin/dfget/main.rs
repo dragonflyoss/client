@@ -24,17 +24,20 @@ use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::resource::piece::MIN_PIECE_LENGTH;
-use dragonfly_client::tracing::init_tracing;
+use dragonfly_client::tracing::init_command_tracing;
 use dragonfly_client_backend::{hdfs, object_storage, BackendFactory, DirEntry};
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::{fs::fallocate, http::header_vec_to_hashmap};
+use glob::Pattern;
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
+use local_ip_address::local_ip;
 use path_absolutize::*;
 use percent_encoding::percent_decode_str;
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -108,7 +111,7 @@ struct Args {
 
     #[arg(
         long = "content-for-calculating-task-id",
-        help = "Specify the content used to calculate the task ID. If it is set, use its value to calculate the task ID, Otherwise, calculate the task ID based on url, piece-length, tag, application, and filtered-query-params."
+        help = "Specify the content used to calculate the task ID. If it is set, use its value to calculate the task ID, Otherwise, calculate the task ID based on URL, piece-length, tag, application, and filtered-query-params."
     )]
     content_for_calculating_task_id: Option<String>,
 
@@ -128,6 +131,14 @@ struct Args {
     endpoint: PathBuf,
 
     #[arg(
+        short = 'r',
+        long = "recursive",
+        default_value_t = false,
+        help = "Specify whether to download the directory recursively. If it is true, dfget will download all files in the directory. If it is false, dfget will download the single file specified by the URL."
+    )]
+    recursive: bool,
+
+    #[arg(
         long = "timeout",
         value_parser= humantime::parse_duration,
         default_value = "2h",
@@ -138,7 +149,7 @@ struct Args {
     #[arg(
         long = "digest",
         required = false,
-        help = "Verify the integrity of the downloaded file using the specified digest, support sha256, sha512, crc32. If the digest is not specified, the downloaded file will not be verified. Format: <algorithm>:<digest>, e.g. sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef, crc32:12345678"
+        help = "Verify the integrity of the downloaded file using the specified digest, support sha256, sha512, crc32. If the digest is not specified, the downloaded file will not be verified. Format: <algorithm>:<digest>. Examples: sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef, crc32:12345678"
     )]
     digest: Option<String>,
 
@@ -160,14 +171,14 @@ struct Args {
     #[arg(
         long = "application",
         default_value = "",
-        help = "Different applications for the same url will be divided into different tasks"
+        help = "Different applications for the same URL will be divided into different tasks"
     )]
     application: String,
 
     #[arg(
         long = "tag",
         default_value = "",
-        help = "Different tags for the same url will be divided into different tasks"
+        help = "Different tags for the same URL will be divided into different tasks"
     )]
     tag: String,
 
@@ -175,16 +186,24 @@ struct Args {
         short = 'H',
         long = "header",
         required = false,
-        help = "Specify the header for downloading file, e.g. --header='Content-Type: application/json' --header='Accept: application/json'"
+        help = "Specify the header for downloading file. Examples: --header='Content-Type: application/json' --header='Accept: application/json'"
     )]
     header: Option<Vec<String>>,
 
     #[arg(
         long = "filtered-query-param",
         required = false,
-        help = "Filter the query parameters of the downloaded URL. If the download URL is the same, it will be scheduled as the same task, e.g. --filtered-query-param='signature' --filtered-query-param='timeout'"
+        help = "Filter the query parameters of the downloaded URL. If the download URL is the same, it will be scheduled as the same task. Examples: --filtered-query-param='signature' --filtered-query-param='timeout'"
     )]
     filtered_query_params: Option<Vec<String>>,
+
+    #[arg(
+        short = 'I',
+        long = "include-files",
+        required = false,
+        help = "Filter files to download in a directory using glob patterns relative to the root URL's path. Examples: --include-files file.txt --include-files subdir/file.txt --include-files subdir/dir/"
+    )]
+    include_files: Option<Vec<String>>,
 
     #[arg(
         long = "disable-back-to-source",
@@ -245,7 +264,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value_t = 5,
+        default_value_t = 1,
         help = "Specify the max count of concurrent download files when downloading a directory"
     )]
     max_concurrent_requests: usize,
@@ -257,20 +276,6 @@ struct Args {
         help = "Specify the logging level [trace, debug, info, warn, error]"
     )]
     log_level: Level,
-
-    #[arg(
-        long,
-        default_value_os_t = dfget::default_dfget_log_dir(),
-        help = "Specify the log directory"
-    )]
-    log_dir: PathBuf,
-
-    #[arg(
-        long,
-        default_value_t = 6,
-        help = "Specify the max number of log files"
-    )]
-    log_max_files: usize,
 
     #[arg(long, default_value_t = false, help = "Specify whether to print log")]
     console: bool,
@@ -289,22 +294,10 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Parse command line arguments.
-    let args = Args::parse();
+    let args = convert_args(Args::parse());
 
     // Initialize tracing.
-    let _guards = init_tracing(
-        dfget::NAME,
-        args.log_dir.clone(),
-        args.log_level,
-        args.log_max_files,
-        None,
-        None,
-        None,
-        None,
-        None,
-        false,
-        args.console,
-    );
+    let _guards = init_command_tracing(args.log_level, args.console);
 
     // Validate command line arguments.
     if let Err(err) = validate_args(&args) {
@@ -593,7 +586,12 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// run runs the dfget command.
+/// Runs the dfget command to download files or directories from a given URL.
+///
+/// This function serves as the main entry point for the dfget download operation.
+/// It handles both single file downloads and directory downloads based on the URL format.
+/// The function performs path normalization, validates the URL scheme's capabilities,
+/// and delegates to the appropriate download handler.
 async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
     // Get the absolute path of the output file.
     args.output = Path::new(&args.output).absolutize()?.into();
@@ -613,7 +611,13 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
     download(args, ProgressBar::new(0), dfdaemon_download_client).await
 }
 
-/// download_dir downloads all files in the directory.
+/// Downloads all files in a directory from various storage backends (object storage, HDFS, etc.).
+///
+/// This function handles directory-based downloads by recursively fetching all entries
+/// in the specified directory. It supports filtering files based on include patterns,
+/// enforces download limits, and performs concurrent downloads with configurable
+/// concurrency control. The function creates the necessary directory structure
+/// locally and downloads files while preserving the remote directory hierarchy.
 async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Result<()> {
     // Initialize the object storage config and the hdfs config.
     let object_storage = Some(ObjectStorage {
@@ -630,12 +634,22 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         delegation_token: args.hdfs_delegation_token.clone(),
     });
 
-    // Get all entries in the directory. If the directory is empty, then return directly.
-    let entries = get_entries(args.clone(), object_storage, hdfs, download_client.clone()).await?;
+    // Get all entries in the directory with include files filter.
+    let entries: Vec<DirEntry> = get_all_entries(
+        &args.url,
+        args.header.clone(),
+        args.include_files.clone(),
+        object_storage,
+        hdfs,
+        download_client.clone(),
+    )
+    .await?;
+
+    // If the entries is empty, then return directly.
     if entries.is_empty() {
-        warn!("directory {} is empty", args.url);
+        warn!("no entries found in directory {}", args.url);
         return Ok(());
-    };
+    }
 
     // If the actual file count is greater than the max_files, then reject the downloading.
     let count = entries.iter().filter(|entry| !entry.is_dir).count();
@@ -667,23 +681,12 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
             entry_args.url = entry_url;
 
             let progress_bar = multi_progress_bar.add(ProgressBar::new(0));
-            async fn download_entry(
-                args: Args,
-                progress_bar: ProgressBar,
-                download_client: DfdaemonDownloadClient,
-                semaphore: Arc<Semaphore>,
-            ) -> Result<()> {
-                // Limit the concurrent download tasks.
-                let _permit = semaphore.acquire().await.unwrap();
-                download(args, progress_bar, download_client).await
-            }
-
-            join_set.spawn(download_entry(
-                entry_args,
-                progress_bar,
-                download_client.clone(),
-                semaphore.clone(),
-            ));
+            let download_client = download_client.clone();
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            join_set.spawn(async move {
+                let _permit = permit;
+                download(entry_args, progress_bar, download_client).await
+            });
         }
     }
 
@@ -698,6 +701,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
             Ok(_) => continue,
             Err(err) => {
                 error!("download entry failed: {}", err);
+                join_set.shutdown().await;
                 return Err(err);
             }
         }
@@ -706,7 +710,105 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
     Ok(())
 }
 
-/// download downloads the single file.
+/// Get all entries in the directory with include files filter.
+async fn get_all_entries(
+    url: &Url,
+    header: Option<Vec<String>>,
+    include_files: Option<Vec<String>>,
+    object_storage: Option<ObjectStorage>,
+    hdfs: Option<Hdfs>,
+    download_client: DfdaemonDownloadClient,
+) -> Result<Vec<DirEntry>> {
+    let urls: HashSet<Url> = match include_files {
+        Some(files) => {
+            let mut urls = HashSet::with_capacity(files.len());
+            for file in files {
+                let url = url.join(&file).or_err(ErrorType::ParseError)?;
+                urls.insert(url);
+            }
+
+            urls
+        }
+        None => {
+            let mut urls = HashSet::with_capacity(1);
+            urls.insert(url.clone());
+            urls
+        }
+    };
+    info!(
+        "make urls by args: {:?}",
+        urls.iter().map(|u| u.as_str()).collect::<Vec<&str>>()
+    );
+
+    let mut entries = HashSet::new();
+    for url in &urls {
+        if !url.to_string().ends_with('/') {
+            entries.insert(DirEntry {
+                url: url.to_string(),
+                content_length: 0,
+                is_dir: false,
+            });
+
+            let parent = url.join(".").or_err(ErrorType::ParseError)?;
+            if parent.path() != "/" {
+                entries.insert(DirEntry {
+                    url: parent.to_string(),
+                    content_length: 0,
+                    is_dir: true,
+                });
+            }
+
+            info!("add entries {:?} by url: {}", entries, url);
+            continue;
+        };
+
+        let mut dir_entries = get_entries(
+            url,
+            header.clone(),
+            object_storage.clone(),
+            hdfs.clone(),
+            download_client.clone(),
+        )
+        .await
+        .inspect_err(|err| {
+            error!("get dir entries for {} failed: {}", url, err);
+        })?;
+
+        for dir_entry in dir_entries.clone() {
+            if dir_entry.is_dir {
+                continue;
+            }
+
+            let parent = Url::parse(&dir_entry.url)
+                .or_err(ErrorType::ParseError)?
+                .join(".")
+                .or_err(ErrorType::ParseError)?;
+
+            if parent.path() != "/" {
+                dir_entries.push(DirEntry {
+                    url: parent.to_string(),
+                    content_length: 0,
+                    is_dir: true,
+                });
+            }
+        }
+
+        let mut seen = HashSet::new();
+        entries.retain(|entry| seen.insert(entry.clone()));
+        entries.extend(dir_entries.clone());
+        info!("add entries {:?} by dir url: {}", dir_entries, url);
+    }
+
+    Ok(entries.into_iter().collect())
+}
+
+/// Downloads a single file from various storage backends using the dfdaemon service.
+///
+/// This function handles single file downloads by communicating with a dfdaemon client.
+/// It supports multiple storage protocols (object storage, HDFS, HTTP/HTTPS) and provides
+/// two transfer modes: direct download by dfdaemon or streaming piece content through
+/// the client. The function includes progress tracking, file creation, and proper error
+/// handling throughout the download process.
 async fn download(
     args: Args,
     progress_bar: ProgressBar,
@@ -776,9 +878,10 @@ async fn download(
                 need_piece_content,
                 object_storage,
                 hdfs,
-                load_to_cache: false,
                 force_hard_link: args.force_hard_link,
                 content_for_calculating_task_id: args.content_for_calculating_task_id,
+                remote_ip: Some(local_ip().unwrap().to_string()),
+                concurrent_piece_count: None,
             }),
         })
         .await
@@ -845,7 +948,12 @@ async fn download(
                 progress_bar.set_length(response.content_length);
             }
             Some(download_task_response::Response::DownloadPieceFinishedResponse(response)) => {
-                let piece = response.piece.ok_or(Error::InvalidParameter)?;
+                let piece = response
+                    .piece
+                    .ok_or(Error::InvalidParameter)
+                    .inspect_err(|_err| {
+                        error!("response piece is missing");
+                    })?;
 
                 // Dfget needs to write the piece content to the output file.
                 if let Some(f) = &mut f {
@@ -855,7 +963,14 @@ async fn download(
                             error!("seek {:?} failed: {}", args.output, err);
                         })?;
 
-                    let content = piece.content.ok_or(Error::InvalidParameter)?;
+                    let content =
+                        piece
+                            .content
+                            .ok_or(Error::InvalidParameter)
+                            .inspect_err(|_err| {
+                                error!("piece content is missing");
+                            })?;
+
                     f.write_all(&content).await.inspect_err(|err| {
                         error!("write {:?} failed: {}", args.output, err);
                     })?;
@@ -878,26 +993,32 @@ async fn download(
     Ok(())
 }
 
-/// get_entries gets all entries in the directory.
+/// Retrieves all directory entries from a remote storage location.
+///
+/// This function communicates with the dfdaemon service to list all entries
+/// (files and subdirectories) in the specified directory URL. It supports
+/// various storage backends including object storage and HDFS by passing
+/// the appropriate credentials and configuration. The function converts
+/// the gRPC response into a local `DirEntry` format for further processing.
 async fn get_entries(
-    args: Args,
+    url: &Url,
+    header: Option<Vec<String>>,
     object_storage: Option<ObjectStorage>,
     hdfs: Option<Hdfs>,
     download_client: DfdaemonDownloadClient,
 ) -> Result<Vec<DirEntry>> {
-    info!("list task entries: {:?}", args.url);
+    info!("list task entries: {:?}", url);
     // List task entries.
     let response = download_client
         .list_task_entries(ListTaskEntriesRequest {
             task_id: Uuid::new_v4().to_string(),
-            url: args.url.to_string(),
-            request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
-            timeout: Some(
-                prost_wkt_types::Duration::try_from(args.timeout).or_err(ErrorType::ParseError)?,
-            ),
+            url: url.to_string(),
+            request_header: header_vec_to_hashmap(header.clone().unwrap_or_default())?,
+            timeout: None,
             certificate_chain: Vec::new(),
             object_storage,
             hdfs,
+            remote_ip: Some(local_ip().unwrap().to_string()),
         })
         .await
         .inspect_err(|err| {
@@ -915,7 +1036,12 @@ async fn get_entries(
         .collect())
 }
 
-/// make_output_by_entry makes the output path by the entry information.
+/// Constructs the local output path for a directory entry based on its remote URL.
+///
+/// This function maps a remote directory entry to its corresponding local file system
+/// path by replacing the remote root directory with the local output directory.
+/// It handles URL percent-decoding to ensure proper path construction and maintains
+/// the relative directory structure from the remote source.
 fn make_output_by_entry(url: Url, output: &Path, entry: DirEntry) -> Result<PathBuf> {
     // Get the root directory of the download directory and the output root directory.
     let root_dir = url.path().to_string();
@@ -933,7 +1059,12 @@ fn make_output_by_entry(url: Url, output: &Path, entry: DirEntry) -> Result<Path
         .into())
 }
 
-/// get_and_check_dfdaemon_download_client gets a dfdaemon download client and checks its health.
+/// Creates and validates a dfdaemon download client with health checking.
+///
+/// This function establishes a connection to the dfdaemon service via Unix domain socket
+/// and performs a health check to ensure the service is running and ready to handle
+/// download requests. Only after successful health verification does it return the
+/// download client for actual use.
 async fn get_dfdaemon_download_client(endpoint: PathBuf) -> Result<DfdaemonDownloadClient> {
     // Check dfdaemon's health.
     let health_client = HealthClient::new_unix(endpoint.clone()).await?;
@@ -944,7 +1075,28 @@ async fn get_dfdaemon_download_client(endpoint: PathBuf) -> Result<DfdaemonDownl
     Ok(dfdaemon_download_client)
 }
 
-/// validate_args validates the command line arguments.
+/// Converts command line arguments for download operations.
+///
+/// This function modifies the command line arguments to ensure
+/// the arguments are in a suitable format for processing.
+fn convert_args(mut args: Args) -> Args {
+    // If the URL is a directory and the recursive flag is set, ensure the URL ends with '/'.
+    // This is necessary to ensure that the URL is treated as a directory, can be downloaded recursively.
+    if args.recursive && !args.url.path().ends_with('/') {
+        let mut path = args.url.path().to_string();
+        path.push('/');
+        args.url.set_path(&path);
+    }
+    args
+}
+
+/// Validates command line arguments for consistency and safety requirements.
+///
+/// This function performs comprehensive validation of the download arguments to ensure
+/// they are logically consistent and safe to execute. It checks URL-output path matching,
+/// directory existence, file conflicts, piece length constraints, and glob pattern validity.
+/// The validation prevents common user errors and potential security issues before
+/// starting the download process.
 fn validate_args(args: &Args) -> Result<()> {
     // If the URL is a directory, the output path should be a directory.
     if args.url.path().ends_with('/') && !args.output.is_dir() {
@@ -993,13 +1145,102 @@ fn validate_args(args: &Args) -> Result<()> {
         }
     }
 
+    if let Some(ref include_files) = args.include_files {
+        for include_file in include_files {
+            if Pattern::new(include_file).is_err() {
+                return Err(Error::ValidationError(format!(
+                    "invalid glob pattern in include_files: '{}'",
+                    include_file
+                )));
+            }
+
+            if !is_normal_relative_path(include_file) {
+                return Err(Error::ValidationError(format!(
+                    "path is not a normal relative path in include_files: '{}'. It must not contain '..', '.', or start with '/'.",
+                    include_file
+                )));
+            }
+        }
+    }
+
     Ok(())
+}
+
+/// Validates that a path string is a normal relative path without unsafe components.
+///
+/// This function ensures that a given path is both relative (doesn't start with '/')
+/// and contains only normal path components. It rejects paths with parent directory
+/// references ('..'), current directory references ('.'), or any other special
+/// path components that could be used for directory traversal attacks or unexpected
+/// file system navigation.
+fn is_normal_relative_path(path: &str) -> bool {
+    let path = Path::new(path);
+    path.is_relative()
+        && path
+            .components()
+            .all(|comp| matches!(comp, Component::Normal(_)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn should_convert_args() {
+        let tempdir = tempfile::tempdir().unwrap();
+
+        let test_cases = vec![
+            (
+                Args::parse_from(vec![
+                    "dfget",
+                    "http://test.local/test.txt",
+                    "--output",
+                    tempdir
+                        .path()
+                        .join("test.txt")
+                        .as_os_str()
+                        .to_str()
+                        .unwrap(),
+                ]),
+                "http://test.local/test.txt",
+            ),
+            (
+                Args::parse_from(vec![
+                    "dfget",
+                    "http://test.local/test-dir",
+                    "--recursive",
+                    "--output",
+                    tempdir.path().as_os_str().to_str().unwrap(),
+                ]),
+                "http://test.local/test-dir/",
+            ),
+            (
+                Args::parse_from(vec![
+                    "dfget",
+                    "http://test.local/test-dir/",
+                    "--recursive",
+                    "--output",
+                    tempdir.path().as_os_str().to_str().unwrap(),
+                ]),
+                "http://test.local/test-dir/",
+            ),
+            (
+                Args::parse_from(vec![
+                    "dfget",
+                    "http://test.local/test-dir/",
+                    "--output",
+                    tempdir.path().as_os_str().to_str().unwrap(),
+                ]),
+                "http://test.local/test-dir/",
+            ),
+        ];
+
+        for (args, expected_url) in test_cases {
+            let args = convert_args(args);
+            assert!(args.url.to_string() == expected_url);
+        }
+    }
 
     #[test]
     fn should_validate_args() {

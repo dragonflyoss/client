@@ -24,6 +24,7 @@ use dragonfly_client_core::{
     Error, Result,
 };
 use indicatif::{ProgressBar, ProgressStyle};
+use local_ip_address::local_ip;
 use path_absolutize::*;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -107,45 +108,25 @@ pub struct ImportCommand {
     )]
     log_level: Level,
 
-    #[arg(
-        long,
-        default_value_os_t = dfcache::default_dfcache_log_dir(),
-        help = "Specify the log directory"
-    )]
-    log_dir: PathBuf,
-
-    #[arg(
-        long,
-        default_value_t = 6,
-        help = "Specify the max number of log files"
-    )]
-    log_max_files: usize,
-
     #[arg(long, default_value_t = false, help = "Specify whether to print log")]
     console: bool,
 }
 
 /// Implement the execute for ImportCommand.
 impl ImportCommand {
-    /// execute executes the import sub command.
+    /// Executes the import sub command with comprehensive validation and error handling.
+    ///
+    /// This function serves as the main entry point for the dfcache import command execution.
+    /// It handles the complete workflow including argument parsing, validation, logging setup,
+    /// dfdaemon client connection, and import operation execution. The function provides
+    /// detailed error reporting with colored terminal output and follows a fail-fast approach
+    /// with immediate process termination on any critical failures.
     pub async fn execute(&self) -> Result<()> {
         // Parse command line arguments.
         Args::parse();
 
         // Initialize tracing.
-        let _guards = init_tracing(
-            dfcache::NAME,
-            self.log_dir.clone(),
-            self.log_level,
-            self.log_max_files,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            self.console,
-        );
+        let _guards = init_command_tracing(self.log_level, self.console);
 
         // Validate the command line arguments.
         if let Err(err) = self.validate_args() {
@@ -325,7 +306,13 @@ impl ImportCommand {
         Ok(())
     }
 
-    /// run runs the import sub command.
+    /// Executes the cache import operation by uploading a file to the persistent cache system.
+    ///
+    /// This function handles the core import functionality by uploading a local file to the
+    /// dfdaemon persistent cache system. It provides visual feedback through a progress spinner,
+    /// converts the file path to absolute format, and configures the cache task with specified
+    /// parameters including TTL, replica count, and piece length. The operation is asynchronous
+    /// and provides completion feedback with the generated task ID.
     async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
         let absolute_path = Path::new(&self.path).absolutize()?;
         info!("import file: {}", absolute_path.to_string_lossy());
@@ -354,6 +341,7 @@ impl ImportCommand {
                     prost_wkt_types::Duration::try_from(self.timeout)
                         .or_err(ErrorType::ParseError)?,
                 ),
+                remote_ip: Some(local_ip().unwrap().to_string()),
             })
             .await?;
 
@@ -361,7 +349,12 @@ impl ImportCommand {
         Ok(())
     }
 
-    /// validate_args validates the command line arguments.
+    /// Validates command line arguments for the import operation to ensure safe and correct execution.
+    ///
+    /// This function performs comprehensive validation of import-specific parameters to prevent
+    /// invalid operations and ensure the import request meets all system requirements. It validates
+    /// TTL boundaries, file existence and type, and piece length constraints before allowing the
+    /// import operation to proceed.
     fn validate_args(&self) -> Result<()> {
         if self.ttl < Duration::from_secs(5 * 60)
             || self.ttl > Duration::from_secs(7 * 24 * 60 * 60)

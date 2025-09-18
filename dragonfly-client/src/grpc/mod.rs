@@ -72,6 +72,7 @@ pub async fn prefetch_task(
     // Make the prefetch request.
     let mut request = request.into_inner();
     let Some(download) = request.download.as_mut() else {
+        error!("request download is missing");
         return Err(ClientError::InvalidParameter);
     };
 

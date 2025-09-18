@@ -102,8 +102,16 @@ pub fn init_tracing(
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::default().add_directive(log_level.into()));
 
+    // Enable console subscriber layer for tracing spawn tasks on `127.0.0.1:6669` when log level is TRACE.
+    let console_subscriber_layer = if log_level == Level::TRACE {
+        Some(console_subscriber::spawn())
+    } else {
+        None
+    };
+
     let subscriber = Registry::default()
         .with(env_filter)
+        .with(console_subscriber_layer)
         .with(file_logging_layer)
         .with(stdout_logging_layer);
 
@@ -209,6 +217,55 @@ pub fn init_tracing(
         log_dir.as_path().display(),
         log_level
     );
+
+    guards
+}
+
+/// init_command_tracing initializes the tracing system for command line tools.
+#[allow(clippy::too_many_arguments)]
+pub fn init_command_tracing(log_level: Level, console: bool) -> Vec<WorkerGuard> {
+    let mut guards = vec![];
+
+    // Setup stdout layer.
+    let (stdout_writer, stdout_guard) = tracing_appender::non_blocking(std::io::stdout());
+    guards.push(stdout_guard);
+
+    // Initialize stdout layer.
+    let stdout_filter = if console {
+        LevelFilter::DEBUG
+    } else {
+        LevelFilter::OFF
+    };
+    let stdout_logging_layer = Layer::new()
+        .with_writer(stdout_writer)
+        .with_file(true)
+        .with_line_number(true)
+        .with_target(false)
+        .with_thread_names(false)
+        .with_thread_ids(false)
+        .with_timer(ChronoLocal::rfc_3339())
+        .pretty()
+        .with_filter(stdout_filter);
+
+    // Setup env filter for log level.
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::default().add_directive(log_level.into()));
+
+    // Enable console subscriber layer for tracing spawn tasks on `127.0.0.1:6669` when log level is TRACE.
+    let console_subscriber_layer = if log_level == Level::TRACE {
+        Some(console_subscriber::spawn())
+    } else {
+        None
+    };
+
+    let subscriber = Registry::default()
+        .with(env_filter)
+        .with(console_subscriber_layer)
+        .with(stdout_logging_layer);
+    subscriber.init();
+
+    std::panic::set_hook(Box::new(tracing_panic::panic_hook));
+    info!("tracing initialized level: {}", log_level);
 
     guards
 }

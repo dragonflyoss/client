@@ -22,7 +22,8 @@ use crate::metrics::{
 use crate::resource::parent_selector::ParentSelector;
 use crate::resource::piece_collector::CollectedParent;
 use dragonfly_api::common::v2::{
-    Download, Hdfs, ObjectStorage, Peer, Piece, Task as CommonTask, TrafficType,
+    Download, Hdfs, ObjectStorage, Peer, Piece, SizeScope, Task as CommonTask, TaskType,
+    TrafficType,
 };
 use dragonfly_api::dfdaemon::{
     self,
@@ -50,6 +51,7 @@ use dragonfly_client_util::{
     id_generator::IDGenerator,
 };
 use reqwest::header::HeaderMap;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -213,8 +215,8 @@ impl Task {
 
             return Err(Error::BackendError(Box::new(BackendError {
                 message: response.error_message.unwrap_or_default(),
-                status_code: Some(response.http_status_code.unwrap_or_default()),
-                header: Some(response.http_header.unwrap_or_default()),
+                status_code: response.http_status_code,
+                header: response.http_header,
             })));
         }
 
@@ -253,13 +255,7 @@ impl Task {
 
         let task = self
             .storage
-            .download_task_started(
-                id,
-                piece_length,
-                content_length,
-                response.http_header,
-                request.load_to_cache,
-            )
+            .download_task_started(id, piece_length, content_length, response.http_header)
             .await;
 
         // Attempt to create a hard link from the task file to the output path.
@@ -399,6 +395,7 @@ impl Task {
                                 range: request.range,
                                 response_header: task.response_header.clone(),
                                 pieces,
+                                is_finished: task.is_finished(),
                             },
                         ),
                     ),
@@ -745,7 +742,6 @@ impl Task {
                                 remaining_interested_pieces.clone(),
                                 request.is_prefetch,
                                 request.need_piece_content,
-                                request.load_to_cache,
                                 download_progress_tx.clone(),
                                 in_stream_tx.clone(),
                             )
@@ -775,7 +771,6 @@ impl Task {
                                 remaining_interested_pieces.clone(),
                                 request.is_prefetch,
                                 request.need_piece_content,
-                                request.load_to_cache,
                                 download_progress_tx.clone(),
                                 in_stream_tx.clone(),
                             )
@@ -1020,7 +1015,6 @@ impl Task {
         interested_pieces: Vec<metadata::Piece>,
         is_prefetch: bool,
         need_piece_content: bool,
-        load_to_cache: bool,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
         in_stream_tx: Sender<AnnouncePeerRequest>,
     ) -> ClientResult<Vec<metadata::Piece>> {
@@ -1060,8 +1054,6 @@ impl Task {
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.concurrent_piece_count as usize,
         ));
-
-        // Download the pieces from the parents.
         while let Some(collect_piece) = piece_collector_rx.recv().await {
             if interrupt.load(Ordering::SeqCst) {
                 // If the interrupt is true, break the collector loop.
@@ -1078,18 +1070,13 @@ impl Task {
                 length: u64,
                 parent: piece_collector::CollectedParent,
                 piece_manager: Arc<piece::Piece>,
-                semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnouncePeerRequest>,
                 interrupt: Arc<AtomicBool>,
                 finished_pieces: Arc<Mutex<Vec<metadata::Piece>>>,
                 is_prefetch: bool,
                 need_piece_content: bool,
-                load_to_cache: bool,
             ) -> ClientResult<metadata::Piece> {
-                // Limit the concurrent piece count.
-                let _permit = semaphore.acquire().await.unwrap();
-
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!(
                     "start to download piece {} from parent {:?}",
@@ -1106,7 +1093,6 @@ impl Task {
                         length,
                         parent.clone(),
                         is_prefetch,
-                        load_to_cache,
                     )
                     .await
                     .map_err(|err| {
@@ -1224,26 +1210,35 @@ impl Task {
                 Ok(metadata)
             }
 
-            join_set.spawn(
+            let task_id = task_id.to_string();
+            let host_id = host_id.to_string();
+            let peer_id = peer_id.to_string();
+            let piece_manager = self.piece.clone();
+            let download_progress_tx = download_progress_tx.clone();
+            let in_stream_tx = in_stream_tx.clone();
+            let interrupt = interrupt.clone();
+            let finished_pieces = finished_pieces.clone();
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            join_set.spawn(async move {
+                let _permit = permit;
                 download_from_parent(
-                    task_id.to_string(),
-                    host_id.to_string(),
-                    peer_id.to_string(),
+                    task_id,
+                    host_id,
+                    peer_id,
                     collect_piece.number,
                     collect_piece.length,
                     collect_piece.parent.clone(),
-                    self.piece.clone(),
-                    semaphore.clone(),
-                    download_progress_tx.clone(),
-                    in_stream_tx.clone(),
-                    interrupt.clone(),
-                    finished_pieces.clone(),
+                    piece_manager,
+                    download_progress_tx,
+                    in_stream_tx,
+                    interrupt,
+                    finished_pieces,
                     is_prefetch,
                     need_piece_content,
-                    load_to_cache,
                 )
-                .in_current_span(),
-            );
+                .in_current_span()
+                .await
+            });
         }
 
         // Wait for the pieces to be downloaded.
@@ -1291,7 +1286,7 @@ impl Task {
                     continue;
                 }
                 Err(Error::SendTimeout) => {
-                    join_set.detach_all();
+                    join_set.shutdown().await;
 
                     // If the send timeout with scheduler or download progress, return the finished pieces.
                     // It will stop the download from the parent with scheduler
@@ -1354,17 +1349,12 @@ impl Task {
                 request_header: HeaderMap,
                 is_prefetch: bool,
                 need_piece_content: bool,
-                load_to_cache: bool,
                 piece_manager: Arc<piece::Piece>,
-                semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnouncePeerRequest>,
                 object_storage: Option<ObjectStorage>,
                 hdfs: Option<Hdfs>,
             ) -> ClientResult<metadata::Piece> {
-                // Limit the concurrent download count.
-                let _permit = semaphore.acquire().await.unwrap();
-
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!("start to download piece {} from source", piece_id);
 
@@ -1378,7 +1368,6 @@ impl Task {
                         length,
                         request_header,
                         is_prefetch,
-                        load_to_cache,
                         object_storage,
                         hdfs,
                     )
@@ -1471,28 +1460,39 @@ impl Task {
                 Ok(metadata)
             }
 
-            join_set.spawn(
+            let task_id = task_id.to_string();
+            let host_id = host_id.to_string();
+            let peer_id = peer_id.to_string();
+            let url = request.url.clone();
+            let request_header = request_header.clone();
+            let piece_manager = self.piece.clone();
+            let download_progress_tx = download_progress_tx.clone();
+            let in_stream_tx = in_stream_tx.clone();
+            let object_storage = request.object_storage.clone();
+            let hdfs = request.hdfs.clone();
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            join_set.spawn(async move {
+                let _permit = permit;
                 download_from_source(
-                    task_id.to_string(),
-                    host_id.to_string(),
-                    peer_id.to_string(),
+                    task_id,
+                    host_id,
+                    peer_id,
                     interested_piece.number,
-                    request.url.clone(),
+                    url,
                     interested_piece.offset,
                     interested_piece.length,
-                    request_header.clone(),
+                    request_header,
                     request.is_prefetch,
                     request.need_piece_content,
-                    request.load_to_cache,
-                    self.piece.clone(),
-                    semaphore.clone(),
-                    download_progress_tx.clone(),
-                    in_stream_tx.clone(),
-                    request.object_storage.clone(),
-                    request.hdfs.clone(),
+                    piece_manager,
+                    download_progress_tx,
+                    in_stream_tx,
+                    object_storage,
+                    hdfs,
                 )
-                .in_current_span(),
-            );
+                .in_current_span()
+                .await
+            });
         }
 
         // Wait for the pieces to be downloaded.
@@ -1508,7 +1508,7 @@ impl Task {
                     finished_pieces.push(metadata.clone());
                 }
                 Err(Error::BackendError(err)) => {
-                    join_set.detach_all();
+                    join_set.shutdown().await;
 
                     // Send the download piece http failed request.
                     in_stream_tx.send_timeout(AnnouncePeerRequest {
@@ -1537,7 +1537,7 @@ impl Task {
                     return Err(Error::BackendError(err));
                 }
                 Err(Error::SendTimeout) => {
-                    join_set.detach_all();
+                    join_set.shutdown().await;
 
                     // Send the download piece failed request.
                     in_stream_tx.send_timeout(AnnouncePeerRequest {
@@ -1564,7 +1564,7 @@ impl Task {
                     return Ok(finished_pieces);
                 }
                 Err(err) => {
-                    join_set.detach_all();
+                    join_set.shutdown().await;
 
                     // Send the download piece failed request.
                     in_stream_tx.send_timeout(AnnouncePeerRequest {
@@ -1738,8 +1738,7 @@ impl Task {
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.concurrent_piece_count as usize,
         ));
-
-        for interested_piece in &interested_pieces {
+        for interested_piece in interested_pieces.clone() {
             async fn download_from_source(
                 task_id: String,
                 host_id: String,
@@ -1750,16 +1749,12 @@ impl Task {
                 length: u64,
                 request_header: HeaderMap,
                 is_prefetch: bool,
-                load_to_cache: bool,
+                need_piece_content: bool,
                 piece_manager: Arc<piece::Piece>,
-                semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 object_storage: Option<ObjectStorage>,
                 hdfs: Option<Hdfs>,
             ) -> ClientResult<metadata::Piece> {
-                // Limit the concurrent download count.
-                let _permit = semaphore.acquire().await.unwrap();
-
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!("start to download piece {} from source", piece_id);
 
@@ -1773,14 +1768,13 @@ impl Task {
                         length,
                         request_header,
                         is_prefetch,
-                        load_to_cache,
                         object_storage,
                         hdfs,
                     )
                     .await?;
 
                 // Construct the piece.
-                let piece = Piece {
+                let mut piece = Piece {
                     number: metadata.number,
                     parent_id: None,
                     offset: metadata.offset,
@@ -1791,6 +1785,30 @@ impl Task {
                     cost: metadata.prost_cost(),
                     created_at: Some(prost_wkt_types::Timestamp::from(metadata.created_at)),
                 };
+
+                // If need_piece_content is true, read the piece content from the local.
+                if need_piece_content {
+                    let mut reader = piece_manager
+                        .download_from_local_into_async_read(
+                            piece_id.as_str(),
+                            task_id.as_str(),
+                            piece.length,
+                            None,
+                            true,
+                            false,
+                        )
+                        .await
+                        .inspect_err(|err| {
+                            error!("read piece {} failed: {:?}", piece_id, err);
+                        })?;
+
+                    let mut content = vec![0; piece.length as usize];
+                    reader.read_exact(&mut content).await.inspect_err(|err| {
+                        error!("read piece {} failed: {:?}", piece_id, err);
+                    })?;
+
+                    piece.content = Some(content);
+                }
 
                 // Send the download progress.
                 download_progress_tx
@@ -1821,26 +1839,37 @@ impl Task {
                 Ok(metadata)
             }
 
-            join_set.spawn(
+            let task_id = task_id.to_string();
+            let host_id = host_id.to_string();
+            let peer_id = peer_id.to_string();
+            let url = request.url.clone();
+            let request_header = request_header.clone();
+            let piece_manager = self.piece.clone();
+            let download_progress_tx = download_progress_tx.clone();
+            let object_storage = request.object_storage.clone();
+            let hdfs = request.hdfs.clone();
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            join_set.spawn(async move {
+                let _permit = permit;
                 download_from_source(
-                    task_id.to_string(),
-                    host_id.to_string(),
-                    peer_id.to_string(),
+                    task_id,
+                    host_id,
+                    peer_id,
                     interested_piece.number,
-                    request.url.clone(),
+                    url,
                     interested_piece.offset,
                     interested_piece.length,
-                    request_header.clone(),
+                    request_header,
                     request.is_prefetch,
-                    request.load_to_cache,
-                    self.piece.clone(),
-                    semaphore.clone(),
-                    download_progress_tx.clone(),
-                    request.object_storage.clone(),
-                    request.hdfs.clone(),
+                    request.need_piece_content,
+                    piece_manager,
+                    download_progress_tx,
+                    object_storage,
+                    hdfs,
                 )
-                .in_current_span(),
-            );
+                .in_current_span()
+                .await
+            });
         }
 
         // Wait for the pieces to be downloaded.
@@ -1856,7 +1885,7 @@ impl Task {
                     finished_pieces.push(metadata.clone());
                 }
                 Err(err) => {
-                    join_set.detach_all();
+                    join_set.shutdown().await;
 
                     // If the download failed from the source, return the error.
                     // It will stop the download from the source.
@@ -1878,7 +1907,74 @@ impl Task {
 
     /// stat_task returns the task metadata.
     #[instrument(skip_all)]
-    pub async fn stat(&self, task_id: &str, host_id: &str) -> ClientResult<CommonTask> {
+    pub async fn stat(
+        &self,
+        task_id: &str,
+        host_id: &str,
+        local_only: bool,
+    ) -> ClientResult<CommonTask> {
+        if local_only {
+            let Some(task_metadata) = self.storage.get_task(task_id).inspect_err(|err| {
+                error!("get task {} from local storage error: {:?}", task_id, err);
+            })?
+            else {
+                return Err(Error::TaskNotFound(task_id.to_owned()));
+            };
+
+            let piece_metadatas = self.piece.get_all(task_id).inspect_err(|err| {
+                error!(
+                    "get pieces for task {} from local storage error: {:?}",
+                    task_id, err
+                );
+            })?;
+
+            let pieces = piece_metadatas
+                .into_iter()
+                .filter(|piece| piece.is_finished())
+                .map(|piece| {
+                    // The traffic_type indicates whether the first download was from the source or hit the remote peer cache.
+                    // If the parent_id exists, the piece was downloaded from a remote peer. Otherwise, it was
+                    // downloaded from the source.
+                    let traffic_type = match piece.parent_id {
+                        None => TrafficType::BackToSource,
+                        Some(_) => TrafficType::RemotePeer,
+                    };
+
+                    Piece {
+                        number: piece.number,
+                        parent_id: piece.parent_id.clone(),
+                        offset: piece.offset,
+                        length: piece.length,
+                        digest: piece.digest.clone(),
+                        content: None,
+                        traffic_type: Some(traffic_type as i32),
+                        cost: piece.prost_cost(),
+                        created_at: Some(prost_wkt_types::Timestamp::from(piece.created_at)),
+                    }
+                })
+                .collect::<Vec<Piece>>();
+
+            return Ok(CommonTask {
+                id: task_metadata.id,
+                r#type: TaskType::Standard as i32,
+                url: String::new(),
+                digest: None,
+                tag: None,
+                application: None,
+                filtered_query_params: Vec::new(),
+                request_header: HashMap::new(),
+                content_length: task_metadata.content_length.unwrap_or(0),
+                piece_count: pieces.len() as u32,
+                size_scope: SizeScope::Normal as i32,
+                pieces,
+                state: String::new(),
+                peer_count: 0,
+                has_available_peer: false,
+                created_at: Some(prost_wkt_types::Timestamp::from(task_metadata.created_at)),
+                updated_at: Some(prost_wkt_types::Timestamp::from(task_metadata.updated_at)),
+            });
+        }
+
         let task = self
             .scheduler_client
             .stat_task(StatTaskRequest {
@@ -1936,7 +2032,6 @@ impl Task {
         interested_pieces: Vec<metadata::Piece>,
         is_prefetch: bool,
         need_piece_content: bool,
-        load_to_cache: bool,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
         in_stream_tx: Sender<AnnouncePeerRequest>,
     ) -> ClientResult<Vec<metadata::Piece>> {
@@ -2010,7 +2105,6 @@ impl Task {
                 finished_pieces: Arc<Mutex<Vec<metadata::Piece>>>,
                 is_prefetch: bool,
                 need_piece_content: bool,
-                load_to_cache: bool,
                 parent_selector: Arc<ParentSelector>,
                 piece_collector: Arc<piece_collector::PieceParentCollector>,
             ) -> ClientResult<metadata::Piece> {
@@ -2042,7 +2136,6 @@ impl Task {
                         length,
                         parent.clone(),
                         is_prefetch,
-                        load_to_cache,
                     )
                     .await
                     .map_err(|err| {
@@ -2176,7 +2269,6 @@ impl Task {
                     finished_pieces.clone(),
                     is_prefetch,
                     need_piece_content,
-                    load_to_cache,
                     self.parent_selector.clone(),
                     piece_collector.clone(),
                 )
@@ -2288,7 +2380,7 @@ mod tests {
         // Create a task and save it to storage.
         let task_id = "test-task-id";
         storage
-            .download_task_started(task_id, 1024, 4096, None, false)
+            .download_task_started(task_id, 1024, 4096, None)
             .await
             .unwrap();
 

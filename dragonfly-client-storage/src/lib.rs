@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use bytes::BytesMut;
 use chrono::NaiveDateTime;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
@@ -25,14 +26,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
+use tokio::io::AsyncReadExt;
 use tokio::time::sleep;
 use tokio_util::either::Either;
 use tokio_util::io::InspectReader;
 use tracing::{debug, error, info, instrument, warn};
 
 pub mod cache;
+pub mod client;
 pub mod content;
 pub mod metadata;
+pub mod server;
 pub mod storage_engine;
 
 /// DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.
@@ -117,14 +121,8 @@ impl Storage {
         piece_length: u64,
         content_length: u64,
         response_header: Option<HeaderMap>,
-        load_to_cache: bool,
     ) -> Result<metadata::Task> {
         self.content.create_task(id, content_length).await?;
-        if load_to_cache {
-            let mut cache = self.cache.clone();
-            cache.put_task(id, content_length).await;
-            debug!("put task to cache: {}", id);
-        }
 
         self.metadata.download_task_started(
             id,
@@ -370,6 +368,102 @@ impl Storage {
             });
     }
 
+    /// prepare_download_cache_task_started prepares the metadata of the cache task when the cache task downloads
+    /// started.
+    pub async fn prepare_download_cache_task_started(
+        &self,
+        id: &str,
+    ) -> Result<metadata::CacheTask> {
+        self.metadata
+            .download_cache_task_started(id, None, None, None)
+    }
+
+    /// download_cache_task_started updates the metadata of the cache task and create cache task content
+    /// when the cache task downloads started.
+    #[instrument(skip_all)]
+    pub async fn download_cache_task_started(
+        &self,
+        id: &str,
+        piece_length: u64,
+        content_length: u64,
+        response_header: Option<HeaderMap>,
+    ) -> Result<metadata::CacheTask> {
+        let mut cache = self.cache.clone();
+        cache.put_task(id, content_length).await;
+
+        self.metadata.download_cache_task_started(
+            id,
+            Some(piece_length),
+            Some(content_length),
+            response_header,
+        )
+    }
+
+    /// download_cache_task_finished updates the metadata of the cache task when the cache task downloads finished.
+    #[instrument(skip_all)]
+    pub fn download_cache_task_finished(&self, id: &str) -> Result<metadata::CacheTask> {
+        self.metadata.download_cache_task_finished(id)
+    }
+
+    /// download_cache_task_failed updates the metadata of the cache task when the cache task downloads failed.
+    #[instrument(skip_all)]
+    pub async fn download_cache_task_failed(&self, id: &str) -> Result<metadata::CacheTask> {
+        self.metadata.download_cache_task_failed(id)
+    }
+
+    /// prefetch_cache_task_started updates the metadata of the cache task when the cache task prefetches started.
+    #[instrument(skip_all)]
+    pub async fn prefetch_cache_task_started(&self, id: &str) -> Result<metadata::CacheTask> {
+        self.metadata.prefetch_cache_task_started(id)
+    }
+
+    /// prefetch_cache_task_failed updates the metadata of the cache task when the cache task prefetches failed.
+    #[instrument(skip_all)]
+    pub async fn prefetch_cache_task_failed(&self, id: &str) -> Result<metadata::CacheTask> {
+        self.metadata.prefetch_cache_task_failed(id)
+    }
+
+    /// upload_cache_task_finished updates the metadata of the cache task when the cache task uploads finished.
+    #[instrument(skip_all)]
+    pub fn upload_cache_task_finished(&self, id: &str) -> Result<metadata::CacheTask> {
+        self.metadata.upload_cache_task_finished(id)
+    }
+
+    /// get_cache_task returns the cache task metadata.
+    #[instrument(skip_all)]
+    pub fn get_cache_task(&self, id: &str) -> Result<Option<metadata::CacheTask>> {
+        self.metadata.get_cache_task(id)
+    }
+
+    /// is_cache_task_exists returns whether the cache task exists.
+    #[instrument(skip_all)]
+    pub fn is_cache_task_exists(&self, id: &str) -> Result<bool> {
+        self.metadata.is_cache_task_exists(id)
+    }
+
+    /// get_cache_tasks returns the cache task metadatas.
+    #[instrument(skip_all)]
+    pub fn get_cache_tasks(&self) -> Result<Vec<metadata::CacheTask>> {
+        self.metadata.get_cache_tasks()
+    }
+
+    /// delete_cache_task deletes the cache task metadatas, cache task content and piece metadatas.
+    #[instrument(skip_all)]
+    pub async fn delete_cache_task(&self, id: &str) {
+        self.metadata
+            .delete_cache_task(id)
+            .unwrap_or_else(|err| error!("delete cache task metadata failed: {}", err));
+
+        self.metadata.delete_pieces(id).unwrap_or_else(|err| {
+            error!("delete cache piece metadatas failed: {}", err);
+        });
+
+        let mut cache = self.cache.clone();
+        cache.delete_task(id).await.unwrap_or_else(|err| {
+            info!("delete cache task from cache failed: {}", err);
+        });
+    }
+
     /// create_persistent_cache_piece creates a new persistent cache piece.
     #[instrument(skip_all)]
     pub async fn create_persistent_cache_piece<R: AsyncRead + Unpin + ?Sized>(
@@ -422,11 +516,10 @@ impl Storage {
         offset: u64,
         length: u64,
         reader: &mut R,
-        load_to_cache: bool,
         timeout: Duration,
     ) -> Result<metadata::Piece> {
         tokio::select! {
-            piece = self.handle_downloaded_from_source_finished(piece_id, task_id, offset, length, reader, load_to_cache) => {
+            piece = self.handle_downloaded_from_source_finished(piece_id, task_id, offset, length, reader) => {
                 piece
             }
             _ = sleep(timeout) => {
@@ -444,30 +537,11 @@ impl Storage {
         offset: u64,
         length: u64,
         reader: &mut R,
-        load_to_cache: bool,
     ) -> Result<metadata::Piece> {
-        let response = if load_to_cache {
-            let mut buffer = Vec::with_capacity(length as usize);
-            let mut tee = InspectReader::new(reader, |bytes| {
-                buffer.extend_from_slice(bytes);
-            });
-
-            let response = self
-                .content
-                .write_piece(task_id, offset, length, &mut tee)
-                .await?;
-
-            self.cache
-                .write_piece(task_id, piece_id, bytes::Bytes::from(buffer))
-                .await?;
-            debug!("put piece to cache: {}", piece_id);
-
-            response
-        } else {
-            self.content
-                .write_piece(task_id, offset, length, reader)
-                .await?
-        };
+        let response = self
+            .content
+            .write_piece(task_id, offset, length, reader)
+            .await?;
 
         let digest = Digest::new(Algorithm::Crc32, response.hash);
         self.metadata.download_piece_finished(
@@ -491,11 +565,10 @@ impl Storage {
         expected_digest: &str,
         parent_id: &str,
         reader: &mut R,
-        load_to_cache: bool,
         timeout: Duration,
     ) -> Result<metadata::Piece> {
         tokio::select! {
-            piece = self.handle_downloaded_piece_from_parent_finished(piece_id, task_id, offset, length, expected_digest, parent_id, reader, load_to_cache) => {
+            piece = self.handle_downloaded_piece_from_parent_finished(piece_id, task_id, offset, length, expected_digest, parent_id, reader) => {
                 piece
             }
             _ = sleep(timeout) => {
@@ -516,30 +589,11 @@ impl Storage {
         expected_digest: &str,
         parent_id: &str,
         reader: &mut R,
-        load_to_cache: bool,
     ) -> Result<metadata::Piece> {
-        let response = if load_to_cache {
-            let mut buffer = Vec::with_capacity(length as usize);
-            let mut tee = InspectReader::new(reader, |bytes| {
-                buffer.extend_from_slice(bytes);
-            });
-
-            let response = self
-                .content
-                .write_piece(task_id, offset, length, &mut tee)
-                .await?;
-
-            self.cache
-                .write_piece(task_id, piece_id, bytes::Bytes::from(buffer))
-                .await?;
-            debug!("put piece to cache: {}", piece_id);
-
-            response
-        } else {
-            self.content
-                .write_piece(task_id, offset, length, reader)
-                .await?
-        };
+        let response = self
+            .content
+            .write_piece(task_id, offset, length, reader)
+            .await?;
 
         let length = response.length;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
@@ -844,6 +898,258 @@ impl Storage {
                 _ = interval.tick() => {
                     let piece = self
                         .get_persistent_cache_piece(piece_id)?
+                        .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
+
+                    // If the piece is finished, return.
+                    if piece.is_finished() {
+                        debug!("wait piece finished success");
+                        return Ok(piece);
+                    }
+                }
+                _ = &mut wait_timeout => {
+                    self.metadata.wait_for_piece_finished_failed(piece_id).unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
+                    return Err(Error::WaitForPieceFinishedTimeout(piece_id.to_string()));
+                }
+            }
+        }
+    }
+
+    /// download_cache_piece_started updates the metadata of the cache piece and writes
+    /// the data of cache piece to file when the cache piece downloads started.
+    #[instrument(skip_all)]
+    pub async fn download_cache_piece_started(
+        &self,
+        piece_id: &str,
+        number: u32,
+    ) -> Result<metadata::Piece> {
+        // Wait for the piece to be finished.
+        match self.wait_for_cache_piece_finished(piece_id).await {
+            Ok(piece) => Ok(piece),
+            // If piece is not found or wait timeout, create piece metadata.
+            Err(_) => self.metadata.download_piece_started(piece_id, number),
+        }
+    }
+
+    /// download_cache_piece_from_source_finished is used for downloading cache piece from source.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
+    pub async fn download_cache_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+        reader: &mut R,
+        timeout: Duration,
+    ) -> Result<metadata::Piece> {
+        tokio::select! {
+            piece = self.handle_downloaded_cache_piece_from_source_finished(piece_id, task_id, offset, length, reader) => {
+                piece
+            }
+            _ = sleep(timeout) => {
+                Err(Error::DownloadPieceFinished(piece_id.to_string()))
+            }
+        }
+    }
+
+    // handle_downloaded_cache_piece_from_source_finished handles the downloaded cache piece from source.
+    #[instrument(skip_all)]
+    async fn handle_downloaded_cache_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+        reader: &mut R,
+    ) -> Result<metadata::Piece> {
+        let mut hasher = crc32fast::Hasher::new();
+        let mut content = BytesMut::with_capacity(length as usize);
+        let mut tee = InspectReader::new(reader, |bytes| {
+            hasher.update(bytes);
+        });
+        tee.read_buf(&mut content).await?;
+
+        self.cache
+            .write_piece(task_id, piece_id, content.freeze())
+            .await?;
+
+        let hash = hasher.finalize().to_string();
+        let digest = Digest::new(Algorithm::Crc32, hash);
+        self.metadata.download_piece_finished(
+            piece_id,
+            offset,
+            length,
+            digest.to_string().as_str(),
+            None,
+        )
+    }
+
+    /// download_cache_piece_from_parent_finished is used for downloading cache piece from parent.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
+    pub async fn download_cache_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+        expected_digest: &str,
+        parent_id: &str,
+        reader: &mut R,
+        timeout: Duration,
+    ) -> Result<metadata::Piece> {
+        tokio::select! {
+            piece = self.handle_downloaded_cache_piece_from_parent_finished(piece_id, task_id, offset, length, expected_digest, parent_id, reader) => {
+                piece
+            }
+            _ = sleep(timeout) => {
+                Err(Error::DownloadPieceFinished(piece_id.to_string()))
+            }
+        }
+    }
+
+    // handle_downloaded_cache_piece_from_parent_finished handles the downloaded cache piece from parent.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
+    async fn handle_downloaded_cache_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+        expected_digest: &str,
+        parent_id: &str,
+        reader: &mut R,
+    ) -> Result<metadata::Piece> {
+        let mut hasher = crc32fast::Hasher::new();
+        let mut content = BytesMut::with_capacity(length as usize);
+        let mut tee = InspectReader::new(reader, |bytes| {
+            hasher.update(bytes);
+        });
+        tee.read_buf(&mut content).await?;
+
+        self.cache
+            .write_piece(task_id, piece_id, content.freeze())
+            .await?;
+
+        let hash = hasher.finalize().to_string();
+        let digest = Digest::new(Algorithm::Crc32, hash);
+
+        // Check the digest of the piece.
+        if expected_digest != digest.to_string() {
+            return Err(Error::DigestMismatch(
+                expected_digest.to_string(),
+                digest.to_string(),
+            ));
+        }
+
+        self.metadata.download_piece_finished(
+            piece_id,
+            offset,
+            length,
+            digest.to_string().as_str(),
+            Some(parent_id.to_string()),
+        )
+    }
+    /// download_cache_piece_failed updates the metadata of the cache piece when the cache piece downloads failed.
+    #[instrument(skip_all)]
+    pub fn download_cache_piece_failed(&self, piece_id: &str) -> Result<()> {
+        self.metadata.download_piece_failed(piece_id)
+    }
+
+    /// upload_cache_piece updates the metadata of the piece and
+    /// returns the data of the piece.
+    #[instrument(skip_all)]
+    pub async fn upload_cache_piece(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        range: Option<Range>,
+    ) -> Result<impl AsyncRead> {
+        // Wait for the cache piece to be finished.
+        self.wait_for_cache_piece_finished(piece_id).await?;
+
+        // Start uploading the task.
+        self.metadata.upload_cache_task_started(task_id)?;
+
+        // Get the piece metadata and return the content of the piece.
+        match self.metadata.get_piece(piece_id) {
+            Ok(Some(piece)) => {
+                if self.cache.contains_piece(task_id, piece_id).await {
+                    match self
+                        .cache
+                        .read_piece(task_id, piece_id, piece.clone(), range)
+                        .await
+                    {
+                        Ok(reader) => {
+                            // Finish uploading the task.
+                            self.metadata.upload_cache_task_finished(task_id)?;
+                            debug!("get piece from cache: {}", piece_id);
+                            Ok(reader)
+                        }
+                        Err(err) => {
+                            // Failed uploading the cache task.
+                            self.metadata.upload_cache_task_failed(task_id)?;
+                            Err(err)
+                        }
+                    }
+                } else {
+                    // Failed uploading the cache task.
+                    self.metadata.upload_cache_task_failed(task_id)?;
+                    Err(Error::PieceNotFound(piece_id.to_string()))
+                }
+            }
+            Ok(None) => {
+                // Failed uploading the cache task.
+                self.metadata.upload_cache_task_failed(task_id)?;
+                Err(Error::PieceNotFound(piece_id.to_string()))
+            }
+            Err(err) => {
+                // Failed uploading the cache task.
+                self.metadata.upload_cache_task_failed(task_id)?;
+                Err(err)
+            }
+        }
+    }
+
+    /// get_cache_piece returns the cache piece metadata.
+    pub fn get_cache_piece(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
+        self.metadata.get_piece(piece_id)
+    }
+
+    /// is_cache_piece_exists returns whether the cache piece exists.
+    #[instrument(skip_all)]
+    pub fn is_cache_piece_exists(&self, piece_id: &str) -> Result<bool> {
+        self.metadata.is_piece_exists(piece_id)
+    }
+
+    /// get_cache_pieces returns the cache piece metadatas.
+    #[instrument(skip_all)]
+    pub fn get_cache_pieces(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
+        self.metadata.get_pieces(task_id)
+    }
+
+    /// cache_piece_id returns the cache piece id.
+    #[inline]
+    pub fn cache_piece_id(&self, task_id: &str, number: u32) -> String {
+        self.metadata.piece_id(task_id, number)
+    }
+
+    /// wait_for_cache_piece_finished waits for the cache piece to be finished.
+    #[instrument(skip_all)]
+    async fn wait_for_cache_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
+        // Total timeout for downloading a piece, combining the download time and the time to write to storage.
+        let wait_timeout = tokio::time::sleep(
+            self.config.download.piece_timeout + self.config.storage.write_piece_timeout,
+        );
+        tokio::pin!(wait_timeout);
+
+        let mut interval = tokio::time::interval(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL);
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let piece = self
+                        .get_cache_piece(piece_id)?
                         .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
 
                     // If the piece is finished, return.

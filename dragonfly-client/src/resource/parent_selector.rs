@@ -16,7 +16,6 @@
 
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::resource::piece_collector::CollectedParent;
-use crate::shutdown::{self, Shutdown};
 use dashmap::DashMap;
 use dragonfly_api::common::v2::{Host, Peer};
 use dragonfly_api::dfdaemon::v2::SyncHostRequest;
@@ -24,6 +23,7 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Error;
 use dragonfly_client_core::Result;
 use dragonfly_client_util::id_generator::IDGenerator;
+use dragonfly_client_util::shutdown::{self, Shutdown};
 use rand::distr::weighted::WeightedIndex;
 use rand::distr::Distribution;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -400,8 +400,9 @@ impl ParentSelector {
             None => return 0,
         };
 
-        if network.upload_rate < network.upload_rate_limit {
-            network.upload_rate_limit - network.upload_rate
+        let tx_bandwidth = network.tx_bandwidth.unwrap_or(0);
+        if tx_bandwidth < network.max_rx_bandwidth {
+            network.max_rx_bandwidth - tx_bandwidth
         } else {
             0
         }

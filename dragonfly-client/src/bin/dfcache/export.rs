@@ -25,6 +25,7 @@ use dragonfly_client_core::{
 };
 use dragonfly_client_util::fs::fallocate;
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
+use local_ip_address::local_ip;
 use path_absolutize::*;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -108,45 +109,25 @@ pub struct ExportCommand {
     )]
     log_level: Level,
 
-    #[arg(
-        long,
-        default_value_os_t = dfcache::default_dfcache_log_dir(),
-        help = "Specify the log directory"
-    )]
-    log_dir: PathBuf,
-
-    #[arg(
-        long,
-        default_value_t = 6,
-        help = "Specify the max number of log files"
-    )]
-    log_max_files: usize,
-
     #[arg(long, default_value_t = false, help = "Specify whether to print log")]
     console: bool,
 }
 
 /// Implement the execute for ExportCommand.
 impl ExportCommand {
-    /// execute executes the export command.
+    /// Executes the export command with comprehensive validation and advanced error handling.
+    ///
+    /// This function serves as the main entry point for the dfcache export command execution.
+    /// It handles the complete workflow including argument parsing, validation, logging setup,
+    /// dfdaemon client connection, and export operation execution. The function provides
+    /// sophisticated error reporting with colored terminal output, including specialized
+    /// handling for backend errors with HTTP status codes and headers.
     pub async fn execute(&self) -> Result<()> {
         // Parse command line arguments.
         Args::parse();
 
         // Initialize tracing.
-        let _guards = init_tracing(
-            dfcache::NAME,
-            self.log_dir.clone(),
-            self.log_level,
-            self.log_max_files,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            self.console,
-        );
+        let _guards = init_command_tracing(self.log_level, self.console);
 
         // Validate the command line arguments.
         if let Err(err) = self.validate_args() {
@@ -435,7 +416,13 @@ impl ExportCommand {
         Ok(())
     }
 
-    /// run runs the export command.
+    /// Executes the export operation to retrieve cached files from the persistent cache system.
+    ///
+    /// This function handles the core export functionality by downloading a cached file from the
+    /// dfdaemon persistent cache system. It supports two transfer modes: direct file transfer
+    /// by dfdaemon (hardlink/copy) or streaming piece content through the client for manual
+    /// file assembly. The operation provides real-time progress feedback and handles file
+    /// creation, directory setup, and efficient piece-by-piece writing with sparse file allocation.
     async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
         // Dfcache needs to notify dfdaemon to transfer the piece content of downloading file via unix domain socket
         // when the `transfer_from_dfdaemon` is true. Otherwise, dfdaemon will download the file and hardlink or
@@ -465,6 +452,7 @@ impl ExportCommand {
                 need_piece_content,
                 force_hard_link: self.force_hard_link,
                 digest: self.digest.clone(),
+                remote_ip: Some(local_ip().unwrap().to_string()),
             })
             .await
             .inspect_err(|err| {
@@ -533,7 +521,9 @@ impl ExportCommand {
                 Some(download_persistent_cache_task_response::Response::DownloadPieceFinishedResponse(
                     response,
                 )) => {
-                    let piece = response.piece.ok_or(Error::InvalidParameter)?;
+                    let piece = response.piece.ok_or(Error::InvalidParameter).inspect_err(|_err| {
+                        error!("response piece is missing");
+                    })?;
 
                     // Dfcache needs to write the piece content to the output file.
                     if let Some(f) = &mut f {
@@ -543,7 +533,10 @@ impl ExportCommand {
                                 error!("seek {:?} failed: {}", self.output, err);
                             })?;
 
-                        let content = piece.content.ok_or(Error::InvalidParameter)?;
+                        let content = piece.content.ok_or(Error::InvalidParameter).inspect_err(|_err| {
+                            error!("piece content is missing");
+                        })?;
+
                         f.write_all(&content).await.inspect_err(|err| {
                             error!("write {:?} failed: {}", self.output, err);
                         })?;
@@ -563,7 +556,12 @@ impl ExportCommand {
         Ok(())
     }
 
-    /// validate_args validates the command line arguments.
+    /// Validates command line arguments for the export operation to ensure safe file output.
+    ///
+    /// This function performs essential validation of the output path to prevent file conflicts
+    /// and ensure the target location is suitable for export operations. It checks parent
+    /// directory existence, prevents accidental file overwrites, and validates path accessibility
+    /// before allowing the export operation to proceed.
     fn validate_args(&self) -> Result<()> {
         let absolute_path = Path::new(&self.output).absolutize()?;
         match absolute_path.parent() {

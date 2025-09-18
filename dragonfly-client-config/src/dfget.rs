@@ -14,16 +14,9 @@
  * limitations under the License.
  */
 
-use std::path::PathBuf;
-
 /// NAME is the name of dfget.
 pub const NAME: &str = "dfget";
 
 // DEFAULT_OUTPUT_FILE_MODE defines the default file mode for output files when downloading with dfget
 // using the `--transfer-from-dfdaemon=true` option.
 pub const DEFAULT_OUTPUT_FILE_MODE: u32 = 0o644;
-
-/// default_dfget_log_dir is the default log directory for dfget.
-pub fn default_dfget_log_dir() -> PathBuf {
-    crate::default_log_dir().join(NAME)
-}
