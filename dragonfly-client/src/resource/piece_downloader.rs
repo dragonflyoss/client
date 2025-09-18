@@ -553,7 +553,7 @@ impl Downloader for TCPDownloader {
         _host_id: &str,
         task_id: &str,
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
-        let addr = format!("{}:{}", host.ip, host.download_tcp_port);
+        let addr = format!("{}:{}", host.ip, host.port + 1);
 
         let entry = self.client_entry(&addr).await?;
         let request_guard = RequestGuard::new(entry.active_requests.clone());
@@ -579,7 +579,7 @@ impl Downloader for TCPDownloader {
         _host_id: &str,
         task_id: &str,
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
-        let addr = format!("{}:{}", host.ip, host.download_tcp_port);
+        let addr = format!("{}:{}", host.ip, host.port + 1);
 
         let entry = self.client_entry(&addr).await?;
         let request_guard = RequestGuard::new(entry.active_requests.clone());
