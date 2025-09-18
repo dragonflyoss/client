@@ -69,6 +69,12 @@ pub fn default_download_request_rate_limit() -> u64 {
 /// default_parent_selector_sync_interval is the default interval to sync host information.
 #[inline]
 fn default_parent_selector_sync_interval() -> Duration {
+    Duration::from_millis(500)
+}
+
+/// default_parent_selector_timeout is the default timeout for the sync host.
+#[inline]
+fn default_parent_selector_timeout() -> Duration {
     Duration::from_secs(3)
 }
 
@@ -191,7 +197,7 @@ fn default_dynconfig_refresh_interval() -> Duration {
 /// default_storage_server_protocol is the default protocol of the storage server.
 #[inline]
 fn default_storage_server_protocol() -> String {
-    "tcp".to_string()
+    "grpc".to_string()
 }
 
 /// default_tcp_server_port is the default port of the storage tcp server.
@@ -684,6 +690,10 @@ pub struct ParentSelector {
         with = "humantime_serde"
     )]
     pub sync_interval: Duration,
+
+    /// timeout is the timeout for the sync host.
+    #[serde(default = "default_parent_selector_timeout", with = "humantime_serde")]
+    pub timeout: Duration,
 
     /// capacity is the maximum number of gRPC connections that `DfdaemonUpload.SyncHost` maintains
     /// in the `ParentSelector`, the default value is 20.
