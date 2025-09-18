@@ -1021,23 +1021,19 @@ impl Task {
         // Get the id of the task.
         let task_id = task.id.as_str();
 
-        // Convert Peer to CollectedParent
-        let collected_parents: Vec<CollectedParent> = parents
-            .clone()
-            .into_iter()
-            .map(|peer| CollectedParent {
-                id: peer.id,
-                host: peer.host,
-            })
-            .collect();
-
         // Initialize the piece collector.
         let piece_collector = piece_collector::PieceCollector::new(
             self.config.clone(),
             host_id,
             task_id,
             interested_pieces.clone(),
-            collected_parents.clone(),
+            parents
+                .into_iter()
+                .map(|peer| piece_collector::CollectedParent {
+                    id: peer.id,
+                    host: peer.host,
+                })
+                .collect(),
         )
         .await;
         let mut piece_collector_rx = piece_collector.run().await;
@@ -2020,7 +2016,7 @@ impl Task {
         }
     }
 
-    /// download_partial_with_scheduler_from_parent_selector downloads a partial task with scheduler from a parent, using parent selector.
+    /// download_partial_with_scheduler_from_parent downloads a partial task with scheduler from a parent.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler_from_parent_selector(
@@ -2080,8 +2076,6 @@ impl Task {
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.concurrent_piece_count as usize,
         ));
-
-        // Download the pieces from the parents.
         while let Some(collect_piece) = piece_collector_rx.recv().await {
             if interrupt.load(Ordering::SeqCst) {
                 // If the interrupt is true, break the collector loop.
@@ -2098,18 +2092,16 @@ impl Task {
                 length: u64,
                 parent: piece_collector::CollectedParent,
                 piece_manager: Arc<piece::Piece>,
-                semaphore: Arc<Semaphore>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnouncePeerRequest>,
                 interrupt: Arc<AtomicBool>,
                 finished_pieces: Arc<Mutex<Vec<metadata::Piece>>>,
                 is_prefetch: bool,
                 need_piece_content: bool,
-                parent_selector: Arc<ParentSelector>,
                 piece_collector: Arc<piece_collector::PieceParentCollector>,
+                parent_selector: Arc<ParentSelector>,
             ) -> ClientResult<metadata::Piece> {
-                // Limit the concurrent piece count.
-                let _permit = semaphore.acquire().await.unwrap();
+                let piece_id = piece_manager.id(task_id.as_str(), number);
 
                 let parent = if let Some(parents) = piece_collector.get_candidate_parents(number) {
                     match parent_selector.select_parent(parents) {
@@ -2120,7 +2112,6 @@ impl Task {
                     parent
                 };
 
-                let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!(
                     "start to download piece {} from parent {:?}",
                     piece_id,
@@ -2253,27 +2244,39 @@ impl Task {
                 Ok(metadata)
             }
 
-            join_set.spawn(
+            let task_id = task_id.to_string();
+            let host_id = host_id.to_string();
+            let peer_id = peer_id.to_string();
+            let piece_manager = self.piece.clone();
+            let download_progress_tx = download_progress_tx.clone();
+            let in_stream_tx = in_stream_tx.clone();
+            let interrupt = interrupt.clone();
+            let finished_pieces = finished_pieces.clone();
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let piece_collector = piece_collector.clone();
+            let parent_selector = self.parent_selector.clone();
+            join_set.spawn(async move {
+                let _permit = permit;
                 download_from_parent(
-                    task_id.to_string(),
-                    host_id.to_string(),
-                    peer_id.to_string(),
+                    task_id,
+                    host_id,
+                    peer_id,
                     collect_piece.number,
                     collect_piece.length,
                     collect_piece.parent.clone(),
-                    self.piece.clone(),
-                    semaphore.clone(),
-                    download_progress_tx.clone(),
-                    in_stream_tx.clone(),
-                    interrupt.clone(),
-                    finished_pieces.clone(),
+                    piece_manager,
+                    download_progress_tx,
+                    in_stream_tx,
+                    interrupt,
+                    finished_pieces,
                     is_prefetch,
                     need_piece_content,
-                    self.parent_selector.clone(),
-                    piece_collector.clone(),
+                    piece_collector,
+                    parent_selector,
                 )
-                .in_current_span(),
-            );
+                .in_current_span()
+                .await
+            });
         }
 
         // Wait for the pieces to be downloaded.
@@ -2321,7 +2324,7 @@ impl Task {
                     continue;
                 }
                 Err(Error::SendTimeout) => {
-                    join_set.detach_all();
+                    join_set.shutdown().await;
 
                     // If the send timeout with scheduler or download progress, return the finished pieces.
                     // It will stop the download from the parent with scheduler

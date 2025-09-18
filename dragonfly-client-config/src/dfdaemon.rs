@@ -197,7 +197,7 @@ fn default_dynconfig_refresh_interval() -> Duration {
 /// default_storage_server_protocol is the default protocol of the storage server.
 #[inline]
 fn default_storage_server_protocol() -> String {
-    "tcp".to_string()
+    "grpc".to_string()
 }
 
 /// default_tcp_server_port is the default port of the storage tcp server.
