@@ -35,7 +35,6 @@ use tokio_stream::StreamExt;
 use tracing::{debug, error, info, instrument, warn, Instrument};
 
 /// Connection manages a single parent connection.
-#[derive(Clone)]
 struct Connection {
     /// client is the dfdaemon upload client for this parent.
     client: DfdaemonUploadClient,
@@ -69,7 +68,7 @@ impl Connection {
 
     /// release_request decrements the reference count.
     pub fn release_request(&self) {
-        drop(self.connection_guard.clone());
+        self.connection_guard.release();
     }
 
     /// shutdown triggers shutdown of the sync host.
@@ -97,13 +96,9 @@ impl ConnectionGuard {
     fn acquire(&self) {
         self.active_requests.fetch_add(1, Ordering::SeqCst);
     }
-}
 
-impl Clone for ConnectionGuard {
-    fn clone(&self) -> Self {
-        Self {
-            active_requests: self.active_requests.clone(),
-        }
+    fn release(&self) {
+        self.active_requests.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -118,9 +113,6 @@ pub struct ParentSelector {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// sync_interval represents the time interval between two refreshing probability operations.
-    sync_interval: Duration,
-
     /// timeout is the timeout for the sync host.
     timeout: Duration,
 
@@ -130,8 +122,8 @@ pub struct ParentSelector {
     /// peer_id is the id of the peer.
     peer_id: String,
 
-    /// wetghts stores the latest host information and bandwidth weights for different parents.
-    wetghts: Arc<DashMap<String, u32>>,
+    /// weights stores the latest host information and bandwidth weights for different parents.
+    weights: Arc<DashMap<String, u32>>,
 
     /// connections stores parent connections with reference counting.
     connections: Arc<DashMap<String, Connection>>,
@@ -155,17 +147,15 @@ impl ParentSelector {
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> ParentSelector {
         let config = config.clone();
-        let sync_interval = config.download.parent_selector.sync_interval;
         let timeout = config.download.parent_selector.timeout;
-        let wetghts = Arc::new(DashMap::new());
+        let weights = Arc::new(DashMap::new());
 
         Self {
             config,
-            sync_interval,
             timeout,
             host_id,
             peer_id,
-            wetghts,
+            weights,
             connections: Arc::new(DashMap::new()),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
@@ -178,16 +168,13 @@ impl ParentSelector {
     async fn sync_host(
         host_id: String,
         peer_id: String,
-        parent: CollectedParent,
+        remote_host_id: String,
         weights: Arc<DashMap<String, u32>>,
         timeout: Duration,
-        sync_interval: Duration,
         client: DfdaemonUploadClient,
         mut shutdown: Shutdown,
         mut dfdaemon_shutdown: Shutdown,
     ) -> Result<()> {
-        let remote_host_id = Self::get_host_id(&parent.host);
-
         let response = client
             .sync_host(SyncHostRequest { host_id, peer_id })
             .await
@@ -217,9 +204,6 @@ impl ParentSelector {
                         None => break,
                     }
                 }
-                _ = tokio::time::sleep(sync_interval) => {
-                    // Continue the loop after sync_interval
-                }
                 _ = shutdown.recv() => {
                     debug!("parent selector: shutdown signal received for host {}", remote_host_id);
                     break;
@@ -238,11 +222,18 @@ impl ParentSelector {
     pub fn select_parent(&self, parents: Vec<CollectedParent>) -> Option<CollectedParent> {
         let remote_hosts: Vec<String> = parents
             .iter()
-            .map(|parent| Self::get_host_id(&parent.host))
+            .map(|parent| {
+                IDGenerator::new(
+                    parent.host.as_ref().unwrap().ip.clone(),
+                    parent.host.as_ref().unwrap().hostname.clone(),
+                    false,
+                )
+                .host_id()
+            })
             .collect();
         let weights: Vec<u32> = remote_hosts
             .iter()
-            .map(|remote_host| self.wetghts.get(remote_host).map(|w| *w).unwrap_or(0))
+            .map(|remote_host| self.weights.get(remote_host).map(|w| *w).unwrap_or(0))
             .collect();
 
         match WeightedIndex::new(weights) {
@@ -258,23 +249,41 @@ impl ParentSelector {
         }
     }
 
-    /// unregister_parents removes the weights of the given parents and triggers shutdown.
-    pub async fn unregister_parents(&self, parents: Vec<Peer>) {
+    /// unregister_parents triggers shutdown.
+    pub fn unregister_parents(&self, parents: Vec<Peer>) {
         for parent in parents {
-            let host_id = Self::get_host_id(&parent.host);
+            let host_id = IDGenerator::new(
+                parent.host.as_ref().unwrap().ip.clone(),
+                parent.host.as_ref().unwrap().hostname.clone(),
+                false,
+            )
+            .host_id();
+
             if let Some(connection) = self.connections.get(&host_id) {
                 connection.release_request();
                 if connection.active_requests() == 0 {
                     info!("shutting down sync host for parent {}", host_id);
                     connection.shutdown();
+                    drop(connection);
+                    self.weights.remove(&host_id);
+                    self.connections.remove(&host_id);
                 }
             }
         }
     }
 
-    /// get_connection returns a connection guard for the given parent, creating the connection if needed.
-    pub async fn get_connection(&self, parent: &CollectedParent) -> Result<DfdaemonUploadClient> {
-        let remote_host_id = Self::get_host_id(&parent.host);
+    /// get_connection_client returns a client for the given parent, creating the connection if needed.
+    pub async fn get_connection_client(
+        &self,
+        parent: &Option<Host>,
+    ) -> Result<DfdaemonUploadClient> {
+        let Some(parent) = parent else {
+            error!("parent is not found");
+            return Err(Error::InvalidPeer(String::new()));
+        };
+
+        let remote_host_id =
+            IDGenerator::new(parent.ip.clone(), parent.hostname.clone(), false).host_id();
 
         // Try to get existing connection
         if let Some(connection) = self.connections.get(&remote_host_id) {
@@ -282,14 +291,9 @@ impl ParentSelector {
             return Ok(connection.client.clone());
         }
 
-        let host = parent
-            .host
-            .as_ref()
-            .ok_or_else(|| Error::InvalidPeer(parent.id.clone()))?;
-
         let client = DfdaemonUploadClient::new(
             self.config.clone(),
-            format!("http://{}:{}", host.ip, host.port),
+            format!("http://{}:{}", parent.ip, parent.port),
             false,
         )
         .await?;
@@ -318,7 +322,12 @@ impl ParentSelector {
         let mut join_set = JoinSet::<Result<()>>::new();
 
         for parent in parents {
-            let remote_host_id = Self::get_host_id(&parent.host);
+            let remote_host_id = IDGenerator::new(
+                parent.host.as_ref().unwrap().ip.clone(),
+                parent.host.as_ref().unwrap().hostname.clone(),
+                false,
+            )
+            .host_id();
 
             // Check if connection already has active requests
             if let Some(connection) = self.connections.get(&remote_host_id) {
@@ -329,14 +338,12 @@ impl ParentSelector {
             }
 
             // Get or create connection for the sync host.
-            let client = self.get_connection(parent).await?;
+            let client = self.get_connection_client(&parent.host).await?;
 
             // Start sync host for this parent.
             let parent = parent.clone();
-            let weights = self.wetghts.clone();
-            let connections = self.connections.clone();
+            let weights = self.weights.clone();
             let timeout = self.timeout;
-            let sync_interval = self.sync_interval;
             let host_id = self.host_id.clone();
             let peer_id = self.peer_id.clone();
             let shutdown = self
@@ -353,26 +360,17 @@ impl ParentSelector {
                     if let Err(err) = Self::sync_host(
                         host_id,
                         peer_id,
-                        parent.clone(),
+                        remote_host_id.clone(),
                         weights.clone(),
                         timeout,
-                        sync_interval,
                         client,
                         shutdown,
                         dfdaemon_shutdown_clone,
                     )
                     .await
                     {
-                        error!("sync host for parent {} failed: {}", parent.id, err);
+                        error!("sync host for parent {} failed: {}", remote_host_id, err);
                         return Err(err);
-                    }
-
-                    // Check if connection should be cleaned up.
-                    if let Some(connection) = connections.get(&remote_host_id) {
-                        if connection.active_requests() == 0 {
-                            weights.remove(&remote_host_id);
-                            connections.remove(&remote_host_id);
-                        }
                     }
 
                     Ok(())
@@ -396,29 +394,16 @@ impl ParentSelector {
     }
 
     /// get_idle_upload_rate returns the available upload rate of a host.
-    fn get_idle_upload_rate(host: &Host) -> f64 {
+    fn get_idle_upload_rate(host: &Host) -> u64 {
         let network = match &host.network {
             Some(network) => network,
-            None => return 0f64,
+            None => return 0,
         };
 
-        let idle_upload_rate = if network.upload_rate < network.upload_rate_limit {
+        if network.upload_rate < network.upload_rate_limit {
             network.upload_rate_limit - network.upload_rate
         } else {
             0
-        };
-
-        idle_upload_rate as f64
-    }
-
-    /// get_host_id extracts the host id from parent id.
-    fn get_host_id(parent: &Option<Host>) -> String {
-        let Some(host) = parent.as_ref() else {
-            error!("parent is not found");
-            return String::new();
-        };
-
-        let id_generator = IDGenerator::new(host.ip.clone(), host.hostname.clone(), false);
-        id_generator.host_id()
+        }
     }
 }

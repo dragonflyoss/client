@@ -735,33 +735,65 @@ impl Task {
                     );
 
                     // Download the pieces from the parent.
-                    let partial_finished_pieces = match self
-                        .download_partial_with_scheduler_from_parent(
-                            task,
-                            host_id,
-                            peer_id,
-                            response.candidate_parents.clone(),
-                            remaining_interested_pieces.clone(),
-                            request.is_prefetch,
-                            request.need_piece_content,
-                            request.load_to_cache,
-                            download_progress_tx.clone(),
-                            in_stream_tx.clone(),
-                        )
-                        .await
-                    {
-                        Ok(partial_finished_pieces) => {
-                            info!(
-                                "schedule {} finished {} pieces from parent",
-                                schedule_count,
-                                partial_finished_pieces.len()
-                            );
+                    let partial_finished_pieces = if self.config.download.parent_selector.enable {
+                        match self
+                            .download_partial_with_scheduler_from_parent_selector(
+                                task,
+                                host_id,
+                                peer_id,
+                                response.candidate_parents.clone(),
+                                remaining_interested_pieces.clone(),
+                                request.is_prefetch,
+                                request.need_piece_content,
+                                request.load_to_cache,
+                                download_progress_tx.clone(),
+                                in_stream_tx.clone(),
+                            )
+                            .await
+                        {
+                            Ok(partial_finished_pieces) => {
+                                info!(
+                                    "schedule {} finished {} pieces from parent",
+                                    schedule_count,
+                                    partial_finished_pieces.len()
+                                );
 
-                            partial_finished_pieces
+                                partial_finished_pieces
+                            }
+                            Err(err) => {
+                                error!("download from parent error: {:?}", err);
+                                Vec::new()
+                            }
                         }
-                        Err(err) => {
-                            error!("download from parent error: {:?}", err);
-                            Vec::new()
+                    } else {
+                        match self
+                            .download_partial_with_scheduler_from_parent(
+                                task,
+                                host_id,
+                                peer_id,
+                                response.candidate_parents.clone(),
+                                remaining_interested_pieces.clone(),
+                                request.is_prefetch,
+                                request.need_piece_content,
+                                request.load_to_cache,
+                                download_progress_tx.clone(),
+                                in_stream_tx.clone(),
+                            )
+                            .await
+                        {
+                            Ok(partial_finished_pieces) => {
+                                info!(
+                                    "schedule {} finished {} pieces from parent",
+                                    schedule_count,
+                                    partial_finished_pieces.len()
+                                );
+
+                                partial_finished_pieces
+                            }
+                            Err(err) => {
+                                error!("download from parent error: {:?}", err);
+                                Vec::new()
+                            }
                         }
                     };
 
@@ -1015,23 +1047,6 @@ impl Task {
         )
         .await;
         let mut piece_collector_rx = piece_collector.run().await;
-        let piece_collector = Arc::new(piece_collector);
-
-        let mut parent_selector = None;
-        if self.config.download.parent_selector.enable {
-            match self
-                .parent_selector
-                .register_parents(&collected_parents)
-                .await
-            {
-                Ok(_) => {
-                    parent_selector = Some(self.parent_selector.clone());
-                }
-                Err(err) => {
-                    error!("register parents failed: {:?}", err);
-                }
-            }
-        }
 
         // Initialize the interrupt. If download from parent failed with scheduler or download
         // progress, interrupt the collector and return the finished pieces.
@@ -1071,25 +1086,9 @@ impl Task {
                 is_prefetch: bool,
                 need_piece_content: bool,
                 load_to_cache: bool,
-                parent_selector: Option<Arc<ParentSelector>>,
-                piece_collector: Arc<piece_collector::PieceCollector>,
             ) -> ClientResult<metadata::Piece> {
                 // Limit the concurrent piece count.
                 let _permit = semaphore.acquire().await.unwrap();
-
-                let parent = match parent_selector {
-                    Some(parent_selector) => {
-                        if let Some(parents) = piece_collector.get_candidate_parents(number) {
-                            match parent_selector.select_parent(parents) {
-                                Some(selected_parent) => selected_parent,
-                                None => parent,
-                            }
-                        } else {
-                            parent
-                        }
-                    }
-                    None => parent,
-                };
 
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!(
@@ -1242,8 +1241,6 @@ impl Task {
                     is_prefetch,
                     need_piece_content,
                     load_to_cache,
-                    parent_selector.clone(),
-                    piece_collector.clone(),
                 )
                 .in_current_span(),
             );
@@ -1310,10 +1307,6 @@ impl Task {
                     continue;
                 }
             }
-        }
-
-        if let Some(parent_selector) = parent_selector {
-            parent_selector.unregister_parents(parents).await;
         }
 
         let finished_pieces = finished_pieces.lock().unwrap().clone();
@@ -1929,6 +1922,335 @@ impl Task {
                 Err(Error::TaskNotFound(task_id.to_owned()))
             }
         }
+    }
+
+    /// download_partial_with_scheduler_from_parent_selector downloads a partial task with scheduler from a parent, using parent selector.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
+    async fn download_partial_with_scheduler_from_parent_selector(
+        &self,
+        task: &metadata::Task,
+        host_id: &str,
+        peer_id: &str,
+        parents: Vec<Peer>,
+        interested_pieces: Vec<metadata::Piece>,
+        is_prefetch: bool,
+        need_piece_content: bool,
+        load_to_cache: bool,
+        download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
+        in_stream_tx: Sender<AnnouncePeerRequest>,
+    ) -> ClientResult<Vec<metadata::Piece>> {
+        // Get the id of the task.
+        let task_id = task.id.as_str();
+
+        // Convert Peer to CollectedParent
+        let collected_parents: Vec<CollectedParent> = parents
+            .clone()
+            .into_iter()
+            .map(|peer| CollectedParent {
+                id: peer.id,
+                host: peer.host,
+            })
+            .collect();
+
+        // Initialize the piece collector.
+        let piece_collector = piece_collector::PieceParentCollector::new(
+            self.config.clone(),
+            host_id,
+            task_id,
+            interested_pieces.clone(),
+            collected_parents.clone(),
+        )
+        .await;
+        let mut piece_collector_rx = piece_collector.run().await;
+        let piece_collector = Arc::new(piece_collector);
+
+        if let Err(err) = self
+            .parent_selector
+            .register_parents(&collected_parents)
+            .await
+        {
+            error!("register parents failed: {:?}", err);
+        }
+
+        // Initialize the interrupt. If download from parent failed with scheduler or download
+        // progress, interrupt the collector and return the finished pieces.
+        let interrupt = Arc::new(AtomicBool::new(false));
+
+        // Initialize the finished pieces.
+        let finished_pieces = Arc::new(Mutex::new(Vec::new()));
+
+        // Initialize the join set.
+        let mut join_set = JoinSet::new();
+        let semaphore = Arc::new(Semaphore::new(
+            self.config.download.concurrent_piece_count as usize,
+        ));
+
+        // Download the pieces from the parents.
+        while let Some(collect_piece) = piece_collector_rx.recv().await {
+            if interrupt.load(Ordering::SeqCst) {
+                // If the interrupt is true, break the collector loop.
+                debug!("interrupt the piece collector");
+                drop(piece_collector_rx);
+                break;
+            }
+
+            async fn download_from_parent(
+                task_id: String,
+                host_id: String,
+                peer_id: String,
+                number: u32,
+                length: u64,
+                parent: piece_collector::CollectedParent,
+                piece_manager: Arc<piece::Piece>,
+                semaphore: Arc<Semaphore>,
+                download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
+                in_stream_tx: Sender<AnnouncePeerRequest>,
+                interrupt: Arc<AtomicBool>,
+                finished_pieces: Arc<Mutex<Vec<metadata::Piece>>>,
+                is_prefetch: bool,
+                need_piece_content: bool,
+                load_to_cache: bool,
+                parent_selector: Arc<ParentSelector>,
+                piece_collector: Arc<piece_collector::PieceParentCollector>,
+            ) -> ClientResult<metadata::Piece> {
+                // Limit the concurrent piece count.
+                let _permit = semaphore.acquire().await.unwrap();
+
+                let parent = if let Some(parents) = piece_collector.get_candidate_parents(number) {
+                    match parent_selector.select_parent(parents) {
+                        Some(selected_parent) => selected_parent,
+                        None => parent,
+                    }
+                } else {
+                    parent
+                };
+
+                let piece_id = piece_manager.id(task_id.as_str(), number);
+                info!(
+                    "start to download piece {} from parent {:?}",
+                    piece_id,
+                    parent.id.clone()
+                );
+
+                let metadata = piece_manager
+                    .download_from_parent(
+                        piece_id.as_str(),
+                        host_id.as_str(),
+                        task_id.as_str(),
+                        number,
+                        length,
+                        parent.clone(),
+                        is_prefetch,
+                        load_to_cache,
+                    )
+                    .await
+                    .map_err(|err| {
+                        error!(
+                            "download piece {} from parent {:?} error: {:?}",
+                            piece_id,
+                            parent.id.clone(),
+                            err
+                        );
+                        Error::DownloadFromParentFailed(DownloadFromParentFailed {
+                            piece_number: number,
+                            parent_id: parent.id.clone(),
+                        })
+                    })?;
+
+                // Construct the piece.
+                let mut piece = Piece {
+                    number: metadata.number,
+                    parent_id: metadata.parent_id.clone(),
+                    offset: metadata.offset,
+                    length: metadata.length,
+                    digest: metadata.digest.clone(),
+                    content: None,
+                    traffic_type: Some(TrafficType::RemotePeer as i32),
+                    cost: metadata.prost_cost(),
+                    created_at: Some(prost_wkt_types::Timestamp::from(metadata.created_at)),
+                };
+
+                // If need_piece_content is true, read the piece content from the local.
+                if need_piece_content {
+                    let mut reader = piece_manager
+                        .download_from_local_into_async_read(
+                            piece_id.as_str(),
+                            task_id.as_str(),
+                            metadata.length,
+                            None,
+                            true,
+                            false,
+                        )
+                        .await
+                        .inspect_err(|err| {
+                            error!("read piece {} failed: {:?}", piece_id, err);
+                            interrupt.store(true, Ordering::SeqCst);
+                        })?;
+
+                    let mut content = vec![0; metadata.length as usize];
+                    reader.read_exact(&mut content).await.inspect_err(|err| {
+                        error!("read piece {} failed: {:?}", piece_id, err);
+                        interrupt.store(true, Ordering::SeqCst);
+                    })?;
+
+                    piece.content = Some(content);
+                }
+
+                // Send the download piece finished request.
+                in_stream_tx
+                    .send_timeout(
+                        AnnouncePeerRequest {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                            request: Some(
+                                announce_peer_request::Request::DownloadPieceFinishedRequest(
+                                    DownloadPieceFinishedRequest {
+                                        piece: Some(piece.clone()),
+                                    },
+                                ),
+                            ),
+                        },
+                        REQUEST_TIMEOUT,
+                    )
+                    .await
+                    .unwrap_or_else(|err| {
+                        error!(
+                            "send DownloadPieceFinishedRequest for piece {} failed: {:?}",
+                            piece_id, err
+                        );
+                        interrupt.store(true, Ordering::SeqCst);
+                    });
+
+                // Send the download progress.
+                download_progress_tx
+                    .send_timeout(
+                        Ok(DownloadTaskResponse {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                            response: Some(
+                                download_task_response::Response::DownloadPieceFinishedResponse(
+                                    dfdaemon::v2::DownloadPieceFinishedResponse {
+                                        piece: Some(piece.clone()),
+                                    },
+                                ),
+                            ),
+                        }),
+                        REQUEST_TIMEOUT,
+                    )
+                    .await
+                    .unwrap_or_else(|err| {
+                        error!(
+                            "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                            piece_id, err
+                        );
+                        interrupt.store(true, Ordering::SeqCst);
+                    });
+
+                info!(
+                    "finished piece {} from parent {:?}",
+                    piece_id, metadata.parent_id
+                );
+
+                let mut finished_pieces = finished_pieces.lock().unwrap();
+                finished_pieces.push(metadata.clone());
+
+                Ok(metadata)
+            }
+
+            join_set.spawn(
+                download_from_parent(
+                    task_id.to_string(),
+                    host_id.to_string(),
+                    peer_id.to_string(),
+                    collect_piece.number,
+                    collect_piece.length,
+                    collect_piece.parent.clone(),
+                    self.piece.clone(),
+                    semaphore.clone(),
+                    download_progress_tx.clone(),
+                    in_stream_tx.clone(),
+                    interrupt.clone(),
+                    finished_pieces.clone(),
+                    is_prefetch,
+                    need_piece_content,
+                    load_to_cache,
+                    self.parent_selector.clone(),
+                    piece_collector.clone(),
+                )
+                .in_current_span(),
+            );
+        }
+
+        // Wait for the pieces to be downloaded.
+        while let Some(message) = join_set
+            .join_next()
+            .await
+            .transpose()
+            .or_err(ErrorType::AsyncRuntimeError)?
+        {
+            match message {
+                Ok(_) => {}
+                Err(Error::DownloadFromParentFailed(err)) => {
+                    let (piece_number, parent_id) = (err.piece_number, err.parent_id);
+
+                    // Send the download piece failed request.
+                    in_stream_tx
+                        .send_timeout(
+                            AnnouncePeerRequest {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.to_string(),
+                                peer_id: peer_id.to_string(),
+                                request: Some(
+                                    announce_peer_request::Request::DownloadPieceFailedRequest(
+                                        DownloadPieceFailedRequest {
+                                            piece_number: Some(err.piece_number),
+                                            parent_id,
+                                            temporary: true,
+                                        },
+                                    ),
+                                ),
+                            },
+                            REQUEST_TIMEOUT,
+                        )
+                        .await
+                        .unwrap_or_else(|err| {
+                            error!(
+                                "send DownloadPieceFailedRequest for piece {} failed: {:?}",
+                                self.piece.id(task_id, piece_number),
+                                err
+                            )
+                        });
+
+                    // If the download failed from the parent, continue to download the next
+                    // piece and ignore the error.
+                    continue;
+                }
+                Err(Error::SendTimeout) => {
+                    join_set.detach_all();
+
+                    // If the send timeout with scheduler or download progress, return the finished pieces.
+                    // It will stop the download from the parent with scheduler
+                    // and download from the source directly from middle.
+                    let finished_pieces = finished_pieces.lock().unwrap().clone();
+                    return Ok(finished_pieces);
+                }
+                Err(err) => {
+                    error!("download from parent error: {:?}", err);
+
+                    // If the unknown error occurred, continue to download the next piece and
+                    // ignore the error.
+                    continue;
+                }
+            }
+        }
+
+        self.parent_selector.unregister_parents(parents);
+
+        let finished_pieces = finished_pieces.lock().unwrap().clone();
+        Ok(finished_pieces)
     }
 }
 
