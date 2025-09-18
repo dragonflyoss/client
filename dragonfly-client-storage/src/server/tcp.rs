@@ -184,7 +184,7 @@ impl TCPServerHandler {
                     .map_err(|err| {
                         error!("failed to receive DownloadPiece: {}", err);
                         ClientError::MpscSend(err.to_string())
-                     })?;
+                    })?;
 
                 let download_piece: DownloadPiece = download_piece_bytes
                     .freeze()
