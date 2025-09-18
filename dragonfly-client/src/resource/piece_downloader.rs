@@ -19,7 +19,7 @@ use dragonfly_api::common::v2::Host;
 use dragonfly_api::dfdaemon::v2::{DownloadPersistentCachePieceRequest, DownloadPieceRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_storage::{client::tcp::TCPClient, metadata};
+use dragonfly_client_storage::{client::quic::QUICClient, client::tcp::TCPClient, metadata};
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -72,7 +72,7 @@ impl DownloaderFactory {
     /// new returns a new DownloadFactory.
     pub fn new(protocol: &str, config: Arc<Config>) -> Result<Self> {
         let downloader: Arc<dyn Downloader> = match protocol {
-            "tcp" => Arc::new(TCPDownloader::new(
+            "quic" => Arc::new(QUICDownloader::new(
                 config.clone(),
                 DEFAULT_DOWNLOADER_CAPACITY,
                 DEFAULT_DOWNLOADER_IDLE_TIMEOUT,
@@ -273,7 +273,7 @@ impl Downloader for GRPCDownloader {
         task_id: &str,
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
         let addr = format!("{}:{}", host.ip, host.port);
-
+      
         let entry = self.client_entry(&addr).await?;
         let request_guard = RequestGuard::new(entry.active_requests.clone());
         let response = match entry
@@ -401,11 +401,11 @@ impl Downloader for GRPCDownloader {
     }
 }
 
-/// TCPClientEntry is the entry of the tcp client.
+/// QUICClientEntry is the entry of the quic client.
 #[derive(Clone)]
-struct TCPClientEntry {
-    /// client is the tcp client.
-    client: TCPClient,
+struct QUICClientEntry {
+    /// client is the quic client.
+    client: QUICClient,
 
     /// active_requests is the number of the active requests.
     active_requests: Arc<AtomicUsize>,
@@ -414,17 +414,17 @@ struct TCPClientEntry {
     actived_at: Arc<std::sync::Mutex<Instant>>,
 }
 
-/// TCPDownloader is the downloader for downloading pieces by the TCP protocol.
-/// It will reuse the tcp clients to download pieces from the other peers by
+/// QUICDownloader is the downloader for downloading pieces by the QUIC protocol.
+/// It will reuse the quic clients to download pieces from the other peers by
 /// peer's address.
-pub struct TCPDownloader {
+pub struct QUICDownloader {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// clients is the map of the tcp clients.
-    clients: Arc<Mutex<HashMap<String, TCPClientEntry>>>,
+    /// clients is the map of the quic clients.
+    clients: Arc<Mutex<HashMap<String, QUICClientEntry>>>,
 
-    /// capacity is the capacity of the tcp clients. If the number of the
+    /// capacity is the capacity of the quic clients. If the number of the
     /// clients exceeds the capacity, it will clean up the idle clients.
     capacity: usize,
 
@@ -436,9 +436,9 @@ pub struct TCPDownloader {
     cleanup_at: Arc<Mutex<Instant>>,
 }
 
-/// TCPDownloader implements the downloader with the TCP protocol.
-impl TCPDownloader {
-    /// new returns a new TCPDownloader.
+/// QUICDownloader implements the downloader with the QUIC protocol.
+impl QUICDownloader {
+    /// new returns a new QUICDownloader.
     pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
         Self {
             config,
@@ -456,7 +456,7 @@ impl TCPDownloader {
     ///    the address.
     /// 2. If the client entry does not exist, it will create a new client entry and insert it
     ///    into the clients map.
-    async fn client_entry(&self, addr: &str) -> Result<TCPClientEntry> {
+    async fn client_entry(&self, addr: &str) -> Result<QUICClientEntry> {
         let now = Instant::now();
 
         // Cleanup the idle clients first to avoid the clients exceeding the capacity and the
@@ -474,10 +474,10 @@ impl TCPDownloader {
         // If there are many concurrent requests to create the client, it will create multiple
         // clients for the same address. But it will reuse the same client by entry operation.
         debug!("creating client: {}", addr);
-        let client = TCPClient::new(self.config.clone(), addr.to_string());
+        let client = QUICClient::new(self.config.clone(), addr.to_string());
 
         let mut clients = self.clients.lock().await;
-        let entry = clients.entry(addr.to_string()).or_insert(TCPClientEntry {
+        let entry = clients.entry(addr.to_string()).or_insert(QUICClientEntry {
             client: client.clone(),
             active_requests: Arc::new(AtomicUsize::new(0)),
             actived_at: Arc::new(std::sync::Mutex::new(now)),
@@ -541,10 +541,10 @@ impl TCPDownloader {
     }
 }
 
-/// TCPDownloader implements the Downloader trait.
+/// QUICDownloader implements the Downloader trait.
 #[tonic::async_trait]
-impl Downloader for TCPDownloader {
-    /// download_piece downloads a piece from the other peer by the TCP protocol.
+impl Downloader for QUICDownloader {
+    /// download_piece downloads a piece from the other peer by the QUIC protocol.
     #[instrument(skip_all)]
     async fn download_piece(
         &self,
@@ -570,7 +570,7 @@ impl Downloader for TCPDownloader {
     }
 
     /// download_persistent_cache_piece downloads a persistent cache piece from the other peer by
-    /// the TCP protocol.
+    /// the QUIC protocol.
     #[instrument(skip_all)]
     async fn download_persistent_cache_piece(
         &self,
