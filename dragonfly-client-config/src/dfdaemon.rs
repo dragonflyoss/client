@@ -194,15 +194,15 @@ fn default_storage_server_protocol() -> String {
     "tcp".to_string()
 }
 
-/// default_tcp_server_port is the default port of the storage tcp server.
+/// default_storage_server_tcp_port is the default port of the storage tcp server.
 #[inline]
-fn default_tcp_server_port() -> u16 {
+fn default_storage_server_tcp_port() -> u16 {
     4005
 }
 
-/// default_quic_server_port is the default port of the storage quic server.
+/// default_storage_server_quic_port is the default port of the storage quic server.
 #[inline]
-fn default_quic_server_port() -> u16 {
+fn default_storage_server_quic_port() -> u16 {
     4006
 }
 
@@ -962,19 +962,19 @@ impl Default for Dynconfig {
 #[serde(default, rename_all = "camelCase")]
 pub struct StorageServer {
     /// protocol is the protocol of the storage server. The protocol used for downloading pieces
-    /// between different peers, now only support gRPC.
-    ///
-    /// gRPC Protocol: The storage server will start a gRPC service in the DfdaemonUploadServer,
-    /// refer to https://github.com/dragonflyoss/api/blob/main/proto/dfdaemon.proto#L185.
+    /// between different peers, now support tcp and quic protocol.
     #[serde(default = "default_storage_server_protocol")]
     pub protocol: String,
 
+    /// ip is the listen ip of the gRPC server.
+    pub ip: Option<IpAddr>,
+
     /// port is the port to the tcp server.
-    #[serde(default = "default_tcp_server_port")]
+    #[serde(default = "default_storage_server_tcp_port")]
     pub tcp_port: u16,
 
     /// port is the port to the quic server.
-    #[serde(default = "default_quic_server_port")]
+    #[serde(default = "default_storage_server_quic_port")]
     pub quic_port: u16,
 }
 
@@ -983,8 +983,21 @@ impl Default for StorageServer {
     fn default() -> Self {
         StorageServer {
             protocol: default_storage_server_protocol(),
-            tcp_port: default_tcp_server_port(),
-            quic_port: default_quic_server_port(),
+            ip: None,
+            tcp_port: default_storage_server_tcp_port(),
+            quic_port: default_storage_server_quic_port(),
+        }
+    }
+}
+
+/// StorageServer implements storage server.
+impl StorageServer {
+    /// Port returns the port of the storage server based on the protocol.
+    pub fn port(&self) -> u16 {
+        match self.protocol.as_str() {
+            "tcp" => self.tcp_port,
+            "quic" => self.quic_port,
+            _ => self.tcp_port,
         }
     }
 }
@@ -1609,6 +1622,15 @@ impl Config {
         // Convert upload gRPC server listen ip.
         if self.upload.server.ip.is_none() {
             self.upload.server.ip = if self.network.enable_ipv6 {
+                Some(Ipv6Addr::UNSPECIFIED.into())
+            } else {
+                Some(Ipv4Addr::UNSPECIFIED.into())
+            }
+        }
+
+        // Convert storage server listen ip.
+        if self.storage.server.ip.is_none() {
+            self.storage.server.ip = if self.network.enable_ipv6 {
                 Some(Ipv6Addr::UNSPECIFIED.into())
             } else {
                 Some(Ipv4Addr::UNSPECIFIED.into())

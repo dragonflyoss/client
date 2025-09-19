@@ -85,6 +85,7 @@ pub struct PersistentCacheTask {
 /// PersistentCacheTask is the implementation of PersistentCacheTask.
 impl PersistentCacheTask {
     /// new creates a new PersistentCacheTask.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
@@ -1032,6 +1033,9 @@ impl PersistentCacheTask {
                 .map(|peer| piece_collector::CollectedParent {
                     id: peer.id,
                     host: peer.host,
+                    download_protocol: None,
+                    download_ip: None,
+                    download_port: None,
                 })
                 .collect(),
         )

@@ -24,7 +24,7 @@ use tokio::net::{
     TcpStream as TokioTcpStream,
 };
 use tokio::time;
-use tracing::error;
+use tracing::{error, instrument};
 use vortex_protocol::{
     tlv::{
         download_persistent_cache_piece::DownloadPersistentCachePiece,
@@ -55,6 +55,7 @@ impl TCPClient {
     ///
     /// This is the main entry point for downloading a piece. It applies
     /// a timeout based on the configuration and handles connection timeouts gracefully.
+    #[instrument(skip_all)]
     pub async fn download_piece(
         &self,
         number: u32,
@@ -76,6 +77,7 @@ impl TCPClient {
     /// 2. Establishes TCP connection and sends the request.
     /// 3. Reads and validates the response header.
     /// 4. Processes the piece content based on the response type.
+    #[instrument(skip_all)]
     async fn handle_download_piece(
         &self,
         number: u32,
@@ -87,7 +89,7 @@ impl TCPClient {
         )
         .into();
 
-        let (mut reader, _writer) = self.connect_and_send_request(request).await?;
+        let (mut reader, _writer) = self.connect_and_write_request(request).await?;
         let header = self.read_header(&mut reader).await?;
         match header.tag() {
             Tag::PieceContent => {
@@ -109,6 +111,7 @@ impl TCPClient {
     /// Downloads a persistent cache piece from the server using the vortex protocol.
     ///
     /// Similar to `download_piece` but specifically for persistent cache piece.
+    #[instrument(skip_all)]
     pub async fn download_persistent_cache_piece(
         &self,
         number: u32,
@@ -128,6 +131,7 @@ impl TCPClient {
     ///
     /// Implements the same protocol flow as `handle_download_piece` but uses
     /// persistent cache specific request/response types.
+    #[instrument(skip_all)]
     async fn handle_download_persistent_cache_piece(
         &self,
         number: u32,
@@ -139,7 +143,7 @@ impl TCPClient {
         )
         .into();
 
-        let (mut reader, _writer) = self.connect_and_send_request(request).await?;
+        let (mut reader, _writer) = self.connect_and_write_request(request).await?;
         let header = self.read_header(&mut reader).await?;
         match header.tag() {
             Tag::PersistentCachePieceContent => {
@@ -158,12 +162,13 @@ impl TCPClient {
         }
     }
 
-    /// Establishes TCP connection and sends a vortex protocol request.
+    /// Establishes TCP connection and writes a vortex protocol request.
     ///
     /// This is a low-level utility function that handles the TCP connection
     /// lifecycle and request transmission. It ensures proper error handling
     /// and connection cleanup.
-    async fn connect_and_send_request(
+    #[instrument(skip_all)]
+    async fn connect_and_write_request(
         &self,
         request: Bytes,
     ) -> ClientResult<(OwnedReadHalf, OwnedWriteHalf)> {
@@ -190,6 +195,7 @@ impl TCPClient {
     /// The header contains metadata about the following message, including
     /// the message type (tag) and payload length. This is critical for
     /// proper protocol message framing.
+    #[instrument(skip_all)]
     async fn read_header(&self, reader: &mut OwnedReadHalf) -> ClientResult<Header> {
         let mut header_bytes = BytesMut::with_capacity(HEADER_SIZE);
         header_bytes.resize(HEADER_SIZE, 0);
@@ -208,6 +214,7 @@ impl TCPClient {
     /// This generic function handles the two-stage reading process for
     /// piece content: first reading the metadata length, then reading
     /// the actual metadata, and finally constructing the complete message.
+    #[instrument(skip_all)]
     async fn read_piece_content<T>(
         &self,
         reader: &mut OwnedReadHalf,
@@ -246,6 +253,7 @@ impl TCPClient {
     /// When the server responds with an error tag, this function reads
     /// the error payload and converts it into an appropriate client error.
     /// This provides structured error handling for protocol-level failures.
+    #[instrument(skip_all)]
     async fn read_error(&self, reader: &mut OwnedReadHalf, header_length: usize) -> ClientError {
         let mut error_bytes = BytesMut::with_capacity(header_length);
         error_bytes.resize(header_length, 0);

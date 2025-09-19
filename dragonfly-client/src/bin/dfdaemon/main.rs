@@ -36,6 +36,7 @@ use leaky_bucket::RateLimiter;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use termion::{color, style};
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
@@ -292,6 +293,19 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     );
 
+    // Initialize storage tcp server.
+    let mut storage_tcp_server = TCPServer::new(
+        SocketAddr::new(
+            config.storage.server.ip.unwrap(),
+            config.storage.server.tcp_port,
+        ),
+        id_generator.clone(),
+        storage.clone(),
+        upload_rate_limiter.clone(),
+        shutdown.clone(),
+        shutdown_complete_tx.clone(),
+    );
+
     // Initialize proxy server.
     let proxy = Proxy::new(
         config.clone(),
@@ -321,16 +335,6 @@ async fn main() -> Result<(), anyhow::Error> {
         task.clone(),
         persistent_cache_task.clone(),
         interface.clone(),
-        shutdown.clone(),
-        shutdown_complete_tx.clone(),
-    );
-
-    // Initialize storage tcp server.
-    let mut storage_tcp = TCPServer::new(
-        config.clone(),
-        id_generator.clone(),
-        storage.clone(),
-        SocketAddr::new(config.host.ip.unwrap(), config.storage.server.tcp_port),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
@@ -388,6 +392,14 @@ async fn main() -> Result<(), anyhow::Error> {
         },
 
         _ = {
+            tokio::spawn(async move {
+                storage_tcp_server.run().await.unwrap_or_else(|err| error!("storage tcp server failed: {}", err));
+            })
+        } => {
+            info!("storage tcp server exited");
+        },
+
+        _ = {
             let barrier = grpc_server_started_barrier.clone();
             tokio::spawn(async move {
                 dfdaemon_upload_grpc.run(barrier).await.unwrap_or_else(|err| error!("dfdaemon upload grpc server failed: {}", err));
@@ -412,14 +424,6 @@ async fn main() -> Result<(), anyhow::Error> {
             })
         } => {
             info!("proxy server exited");
-        },
-
-        _ = {
-            tokio::spawn(async move {
-                storage_tcp.run().await.unwrap_or_else(|err| error!("storage tcp server failed: {}", err));
-            })
-        } => {
-            info!("storage tcp server exited");
         },
 
         _ = shutdown::shutdown_signal() => {},

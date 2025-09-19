@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tracing::{error, info, instrument, Span};
+use tracing::{error, info, instrument, warn, Span};
 
 /// MAX_PIECE_COUNT is the maximum piece count. If the piece count is upper
 /// than MAX_PIECE_COUNT, the piece length will be optimized by the file length.
@@ -67,8 +67,11 @@ pub struct Piece {
     /// storage is the local storage.
     storage: Arc<Storage>,
 
-    /// downloader is the piece downloader.
-    downloader: Arc<dyn piece_downloader::Downloader>,
+    /// grpc_downloader is the gRPC piece downloader.
+    grpc_downloader: Arc<dyn piece_downloader::Downloader>,
+
+    /// tcp_downloader is the TCP piece downloader.
+    tcp_downloader: Arc<dyn piece_downloader::Downloader>,
 
     /// backend_factory is the backend factory.
     backend_factory: Arc<BackendFactory>,
@@ -99,11 +102,10 @@ impl Piece {
             config: config.clone(),
             id_generator,
             storage,
-            downloader: piece_downloader::DownloaderFactory::new(
-                config.storage.server.protocol.as_str(),
-                config.clone(),
-            )?
-            .build(),
+            grpc_downloader: piece_downloader::DownloaderFactory::new("grpc", config.clone())?
+                .build(),
+            tcp_downloader: piece_downloader::DownloaderFactory::new("tcp", config.clone())?
+                .build(),
             backend_factory,
             download_rate_limiter,
             upload_rate_limiter,
@@ -420,26 +422,61 @@ impl Piece {
             self.download_rate_limiter.acquire(length as usize).await;
         }
 
-        // Create a dfdaemon client.
-        let host = parent.host.clone().ok_or_else(|| {
-            error!("peer host is empty");
-            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
-                error!("set piece metadata failed: {}", err)
-            };
+        // Download piece using the configured protocol (TCP preferred) or fall back to gRPC.
+        // This implements the multi-protocol download strategy where TCP is used when explicitly
+        // configured with protocol/ip/port, otherwise defaults to gRPC using peer host information.
+        // All download failures are recorded in storage for monitoring and debugging purposes.
+        let (mut reader, offset, digest) = if let (Some(protocol), Some(ip), Some(port)) = (
+            parent.download_protocol,
+            parent.download_ip,
+            parent.download_port,
+        ) {
+            match protocol.as_str() {
+                "tcp" => {
+                    self.tcp_downloader
+                        .download_piece(
+                            format!("{}:{}", ip, port).as_str(),
+                            number,
+                            host_id,
+                            task_id,
+                        )
+                        .await?
+                }
+                _ => {
+                    error!("unsupported download protocol: {}", protocol);
+                    if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
+                        error!("set piece metadata failed: {}", err)
+                    };
 
-            Error::InvalidPeer(parent.id.clone())
-        })?;
-
-        let (mut reader, offset, digest) = self
-            .downloader
-            .download_piece(host, number, host_id, task_id)
-            .await
-            .inspect_err(|err| {
-                error!("download piece failed: {}", err);
+                    return Err(Error::InvalidParameter);
+                }
+            }
+        } else {
+            warn!("missing download protocol, fall back to grpc");
+            let host = parent.host.clone().ok_or_else(|| {
+                error!("peer host is empty");
                 if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
                     error!("set piece metadata failed: {}", err)
                 };
+
+                Error::InvalidPeer(parent.id.clone())
             })?;
+
+            self.grpc_downloader
+                .download_piece(
+                    format!("{}:{}", host.ip, host.port).as_str(),
+                    number,
+                    host_id,
+                    task_id,
+                )
+                .await
+                .inspect_err(|err| {
+                    error!("download piece failed: {}", err);
+                    if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
+                        error!("set piece metadata failed: {}", err)
+                    };
+                })?
+        };
 
         // Record the finish of downloading piece.
         match self
@@ -775,26 +812,43 @@ impl Piece {
             return Ok(piece);
         }
 
-        // Create a dfdaemon client.
-        let host = parent.host.clone().ok_or_else(|| {
-            error!("peer host is empty");
-            if let Some(err) = self
-                .storage
-                .download_persistent_cache_piece_failed(piece_id)
-                .err()
-            {
-                error!("set persistent cache piece metadata failed: {}", err)
-            };
+        // Download persistent cache piece using the configured protocol (TCP preferred) or fall back to gRPC.
+        // This implements the multi-protocol download strategy where TCP is used when explicitly
+        // configured with protocol/ip/port, otherwise defaults to gRPC using peer host information.
+        // All download failures are recorded in storage for monitoring and debugging purposes.
+        let (mut reader, offset, digest) = if let (Some(protocol), Some(ip), Some(port)) = (
+            parent.download_protocol,
+            parent.download_ip,
+            parent.download_port,
+        ) {
+            match protocol.as_str() {
+                "tcp" => {
+                    self.tcp_downloader
+                        .download_persistent_cache_piece(
+                            format!("{}:{}", ip, port).as_str(),
+                            number,
+                            host_id,
+                            task_id,
+                        )
+                        .await?
+                }
+                _ => {
+                    error!("unsupported download protocol: {}", protocol);
+                    if let Some(err) = self
+                        .storage
+                        .download_persistent_cache_piece_failed(piece_id)
+                        .err()
+                    {
+                        error!("set persistent cache piece metadata failed: {}", err)
+                    };
 
-            Error::InvalidPeer(parent.id.clone())
-        })?;
-
-        let (mut reader, offset, digest) = self
-            .downloader
-            .download_persistent_cache_piece(host, number, host_id, task_id)
-            .await
-            .inspect_err(|err| {
-                error!("download persistent cache piece failed: {}", err);
+                    return Err(Error::InvalidParameter);
+                }
+            }
+        } else {
+            warn!("missing download protocol, fall back to grpc");
+            let host = parent.host.clone().ok_or_else(|| {
+                error!("peer host is empty");
                 if let Some(err) = self
                     .storage
                     .download_persistent_cache_piece_failed(piece_id)
@@ -802,7 +856,29 @@ impl Piece {
                 {
                     error!("set persistent cache piece metadata failed: {}", err)
                 };
+
+                Error::InvalidPeer(parent.id.clone())
             })?;
+
+            self.grpc_downloader
+                .download_persistent_cache_piece(
+                    format!("{}:{}", host.ip, host.port).as_str(),
+                    number,
+                    host_id,
+                    task_id,
+                )
+                .await
+                .inspect_err(|err| {
+                    error!("download persistent cache piece failed: {}", err);
+                    if let Some(err) = self
+                        .storage
+                        .download_persistent_cache_piece_failed(piece_id)
+                        .err()
+                    {
+                        error!("set persistent cache piece metadata failed: {}", err)
+                    };
+                })?
+        };
 
         // Record the finish of downloading piece.
         match self

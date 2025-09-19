@@ -93,6 +93,7 @@ pub struct Task {
 /// Task implements the task manager.
 impl Task {
     /// new returns a new Task.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
@@ -1001,6 +1002,9 @@ impl Task {
                 .map(|peer| piece_collector::CollectedParent {
                     id: peer.id,
                     host: peer.host,
+                    download_protocol: None,
+                    download_ip: None,
+                    download_port: None,
                 })
                 .collect(),
         )

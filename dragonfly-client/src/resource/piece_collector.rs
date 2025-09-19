@@ -33,11 +33,22 @@ const DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS: Duration = Duration::from_m
 /// CollectedParent is the parent peer collected from the parent.
 #[derive(Clone, Debug)]
 pub struct CollectedParent {
-    /// id is the id of the parent.
+    /// ID is the id of the parent.
     pub id: String,
 
-    /// host is the host of the parent.
+    /// Host is the host of the parent.
     pub host: Option<Host>,
+
+    // Download protocol, such as grpc, tcp, quic, and rdma.
+    pub download_protocol: Option<String>,
+
+    // download_ip  which is used to indicate the IP address of the peer. If protocol is rdma,
+    // the IP is used to exchange the queue pair endpoint of IBVerbs.
+    pub download_ip: Option<String>,
+
+    // Download port, which is used to indicate the port of the peer. If protocol is rdma,
+    // the port is used to exchange the queue pair endpoint of IBVerbs.
+    pub download_port: Option<i32>,
 }
 
 /// CollectedPiece is the piece collected from a peer.
@@ -171,7 +182,7 @@ impl PieceCollector {
                 config: Arc<Config>,
                 host_id: String,
                 task_id: String,
-                parent: CollectedParent,
+                mut parent: CollectedParent,
                 interested_pieces: Vec<metadata::Piece>,
                 collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
                 collected_piece_tx: Sender<CollectedPiece>,
@@ -222,6 +233,15 @@ impl PieceCollector {
                 })? {
                     let message = message?;
                     if let Some(mut parents) = collected_pieces.get_mut(&message.number) {
+                        // Handle backward compatibility with older client versions that don't support
+                        // the new download protocol field. Legacy clients send empty download_protocol,
+                        // so we only update the parent's download configuration when protocol info is present.
+                        if !message.download_protocol.is_empty() {
+                            parent.download_protocol = Some(message.download_protocol.clone());
+                            parent.download_ip = Some(message.download_ip.clone());
+                            parent.download_port = Some(message.download_port);
+                        }
+
                         parents.push(parent.clone());
                     } else {
                         continue;
@@ -425,7 +445,7 @@ impl PersistentCachePieceCollector {
                 config: Arc<Config>,
                 host_id: String,
                 task_id: String,
-                parent: CollectedParent,
+                mut parent: CollectedParent,
                 interested_pieces: Vec<metadata::Piece>,
                 collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
                 collected_piece_tx: Sender<CollectedPiece>,
@@ -482,6 +502,15 @@ impl PersistentCachePieceCollector {
                 })? {
                     let message = message?;
                     if let Some(mut parents) = collected_pieces.get_mut(&message.number) {
+                        // Handle backward compatibility with older client versions that don't support
+                        // the new download protocol field. Legacy clients send empty download_protocol,
+                        // so we only update the parent's download configuration when protocol info is present.
+                        if !message.download_protocol.is_empty() {
+                            parent.download_protocol = Some(message.download_protocol.clone());
+                            parent.download_ip = Some(message.download_ip.clone());
+                            parent.download_port = Some(message.download_port);
+                        }
+
                         parents.push(parent.clone());
                     } else {
                         continue;
