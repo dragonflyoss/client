@@ -39,16 +39,15 @@ pub struct CollectedParent {
     /// Host is the host of the parent.
     pub host: Option<Host>,
 
-    // Download protocol, such as grpc, tcp, quic, and rdma.
-    pub download_protocol: Option<String>,
-
-    // download_ip  which is used to indicate the IP address of the peer. If protocol is rdma,
+    // IP is used to indicate the IP address of the peer. If protocol is rdma,
     // the IP is used to exchange the queue pair endpoint of IBVerbs.
     pub download_ip: Option<String>,
 
-    // Download port, which is used to indicate the port of the peer. If protocol is rdma,
-    // the port is used to exchange the queue pair endpoint of IBVerbs.
-    pub download_port: Option<i32>,
+    // TCP port is used to indicate the tcp server port of the peer.
+    pub download_tcp_port: Option<i32>,
+
+    // QUIC port is used to indicate the quic server port of the peer.
+    pub download_quic_port: Option<i32>,
 }
 
 /// CollectedPiece is the piece collected from a peer.
@@ -233,15 +232,9 @@ impl PieceCollector {
                 })? {
                     let message = message?;
                     if let Some(mut parents) = collected_pieces.get_mut(&message.number) {
-                        // Handle backward compatibility with older client versions that don't support
-                        // the new download protocol field. Legacy clients send empty download_protocol,
-                        // so we only update the parent's download configuration when protocol info is present.
-                        if !message.download_protocol.is_empty() {
-                            parent.download_protocol = Some(message.download_protocol.clone());
-                            parent.download_ip = Some(message.download_ip.clone());
-                            parent.download_port = Some(message.download_port);
-                        }
-
+                        parent.download_ip = Some(message.ip);
+                        parent.download_tcp_port = message.tcp_port;
+                        parent.download_quic_port = message.quic_port;
                         parents.push(parent.clone());
                     } else {
                         continue;
@@ -502,15 +495,9 @@ impl PersistentCachePieceCollector {
                 })? {
                     let message = message?;
                     if let Some(mut parents) = collected_pieces.get_mut(&message.number) {
-                        // Handle backward compatibility with older client versions that don't support
-                        // the new download protocol field. Legacy clients send empty download_protocol,
-                        // so we only update the parent's download configuration when protocol info is present.
-                        if !message.download_protocol.is_empty() {
-                            parent.download_protocol = Some(message.download_protocol.clone());
-                            parent.download_ip = Some(message.download_ip.clone());
-                            parent.download_port = Some(message.download_port);
-                        }
-
+                        parent.download_ip = Some(message.ip);
+                        parent.download_tcp_port = message.tcp_port;
+                        parent.download_quic_port = message.quic_port;
                         parents.push(parent.clone());
                     } else {
                         continue;
