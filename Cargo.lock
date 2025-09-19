@@ -971,9 +971,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.1.65"
+version = "2.1.68"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7044a2572066a5e08d70a01514fb0605ea8b68b6c144f6fabfd1cfdaa822600c"
+checksum = "0e51cf42713d1fa0e6a25b1a9cc9e7d22c267438067287ce933259e5a05b3565"
 dependencies = [
  "prost 0.13.5",
  "prost-types 0.14.1",
@@ -1135,6 +1135,7 @@ dependencies = [
  "tonic",
  "tonic-reflection",
  "url",
+ "vortex-protocol",
 ]
 
 [[package]]

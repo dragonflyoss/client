@@ -48,6 +48,7 @@ use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
     id_generator::IDGenerator,
 };
+use leaky_bucket::RateLimiter;
 use reqwest::header::HeaderMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -92,18 +93,25 @@ pub struct Task {
 /// Task implements the task manager.
 impl Task {
     /// new returns a new Task.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
+        download_rate_limiter: Arc<RateLimiter>,
+        upload_rate_limiter: Arc<RateLimiter>,
+        prefetch_rate_limiter: Arc<RateLimiter>,
     ) -> ClientResult<Self> {
         let piece = piece::Piece::new(
             config.clone(),
             id_generator.clone(),
             storage.clone(),
             backend_factory.clone(),
+            download_rate_limiter,
+            upload_rate_limiter,
+            prefetch_rate_limiter,
         )?;
         let piece = Arc::new(piece);
 
@@ -994,6 +1002,9 @@ impl Task {
                 .map(|peer| piece_collector::CollectedParent {
                     id: peer.id,
                     host: peer.host,
+                    download_protocol: None,
+                    download_ip: None,
+                    download_port: None,
                 })
                 .collect(),
         )

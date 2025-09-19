@@ -32,9 +32,11 @@ use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::{dfdaemon, VersionValueParser};
 use dragonfly_client_storage::{server::tcp::TCPServer, Storage};
 use dragonfly_client_util::{id_generator::IDGenerator, net::Interface, shutdown};
+use leaky_bucket::RateLimiter;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use termion::{color, style};
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
@@ -208,6 +210,39 @@ async fn main() -> Result<(), anyhow::Error> {
         })?;
     let backend_factory = Arc::new(backend_factory);
 
+    // Initialize download rate limiter.
+    let download_rate_limiter = Arc::new(
+        RateLimiter::builder()
+            .initial(config.download.rate_limit.as_u64() as usize)
+            .refill(config.download.rate_limit.as_u64() as usize)
+            .max(config.download.rate_limit.as_u64() as usize)
+            .interval(Duration::from_secs(1))
+            .fair(false)
+            .build(),
+    );
+
+    // Initialize upload rate limiter.
+    let upload_rate_limiter = Arc::new(
+        RateLimiter::builder()
+            .initial(config.upload.rate_limit.as_u64() as usize)
+            .refill(config.upload.rate_limit.as_u64() as usize)
+            .max(config.upload.rate_limit.as_u64() as usize)
+            .interval(Duration::from_secs(1))
+            .fair(false)
+            .build(),
+    );
+
+    // Initialize prefetch rate limiter.
+    let prefetch_rate_limiter = Arc::new(
+        RateLimiter::builder()
+            .initial(config.proxy.prefetch_rate_limit.as_u64() as usize)
+            .refill(config.proxy.prefetch_rate_limit.as_u64() as usize)
+            .max(config.proxy.prefetch_rate_limit.as_u64() as usize)
+            .interval(Duration::from_secs(1))
+            .fair(false)
+            .build(),
+    );
+
     // Initialize task manager.
     let task = Task::new(
         config.clone(),
@@ -215,6 +250,9 @@ async fn main() -> Result<(), anyhow::Error> {
         storage.clone(),
         scheduler_client.clone(),
         backend_factory.clone(),
+        download_rate_limiter.clone(),
+        upload_rate_limiter.clone(),
+        prefetch_rate_limiter.clone(),
     )?;
     let task = Arc::new(task);
 
@@ -225,6 +263,9 @@ async fn main() -> Result<(), anyhow::Error> {
         storage.clone(),
         scheduler_client.clone(),
         backend_factory.clone(),
+        download_rate_limiter.clone(),
+        upload_rate_limiter.clone(),
+        prefetch_rate_limiter.clone(),
     )?;
     let persistent_cache_task = Arc::new(persistent_cache_task);
 
@@ -248,6 +289,19 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize stats server.
     let stats = Stats::new(
         SocketAddr::new(config.stats.server.ip.unwrap(), config.stats.server.port),
+        shutdown.clone(),
+        shutdown_complete_tx.clone(),
+    );
+
+    // Initialize storage tcp server.
+    let mut storage_tcp_server = TCPServer::new(
+        SocketAddr::new(
+            config.storage.server.ip.unwrap(),
+            config.storage.server.tcp_port,
+        ),
+        id_generator.clone(),
+        storage.clone(),
+        upload_rate_limiter.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
@@ -281,16 +335,6 @@ async fn main() -> Result<(), anyhow::Error> {
         task.clone(),
         persistent_cache_task.clone(),
         interface.clone(),
-        shutdown.clone(),
-        shutdown_complete_tx.clone(),
-    );
-
-    // Initialize storage tcp server.
-    let mut storage_tcp = TCPServer::new(
-        config.clone(),
-        id_generator.clone(),
-        storage.clone(),
-        SocketAddr::new(config.host.ip.unwrap(), config.storage.server.tcp_port),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
@@ -348,6 +392,14 @@ async fn main() -> Result<(), anyhow::Error> {
         },
 
         _ = {
+            tokio::spawn(async move {
+                storage_tcp_server.run().await.unwrap_or_else(|err| error!("storage tcp server failed: {}", err));
+            })
+        } => {
+            info!("storage tcp server exited");
+        },
+
+        _ = {
             let barrier = grpc_server_started_barrier.clone();
             tokio::spawn(async move {
                 dfdaemon_upload_grpc.run(barrier).await.unwrap_or_else(|err| error!("dfdaemon upload grpc server failed: {}", err));
@@ -372,14 +424,6 @@ async fn main() -> Result<(), anyhow::Error> {
             })
         } => {
             info!("proxy server exited");
-        },
-
-        _ = {
-            tokio::spawn(async move {
-                storage_tcp.run().await.unwrap_or_else(|err| error!("storage tcp server failed: {}", err));
-            })
-        } => {
-            info!("storage tcp server exited");
         },
 
         _ = shutdown::shutdown_signal() => {},

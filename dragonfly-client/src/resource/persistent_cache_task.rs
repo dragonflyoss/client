@@ -44,6 +44,7 @@ use dragonfly_client_core::{
 };
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::id_generator::IDGenerator;
+use leaky_bucket::RateLimiter;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -84,18 +85,25 @@ pub struct PersistentCacheTask {
 /// PersistentCacheTask is the implementation of PersistentCacheTask.
 impl PersistentCacheTask {
     /// new creates a new PersistentCacheTask.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
+        download_rate_limiter: Arc<RateLimiter>,
+        upload_rate_limiter: Arc<RateLimiter>,
+        prefetch_rate_limiter: Arc<RateLimiter>,
     ) -> ClientResult<Self> {
         let piece = piece::Piece::new(
             config.clone(),
             id_generator.clone(),
             storage.clone(),
             backend_factory.clone(),
+            download_rate_limiter,
+            upload_rate_limiter,
+            prefetch_rate_limiter,
         )?;
         let piece = Arc::new(piece);
 
@@ -1025,6 +1033,9 @@ impl PersistentCacheTask {
                 .map(|peer| piece_collector::CollectedParent {
                     id: peer.id,
                     host: peer.host,
+                    download_protocol: None,
+                    download_ip: None,
+                    download_port: None,
                 })
                 .collect(),
         )
