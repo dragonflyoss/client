@@ -1002,9 +1002,9 @@ impl Task {
                 .map(|peer| piece_collector::CollectedParent {
                     id: peer.id,
                     host: peer.host,
-                    download_protocol: None,
                     download_ip: None,
-                    download_port: None,
+                    download_tcp_port: None,
+                    download_quic_port: None,
                 })
                 .collect(),
         )
@@ -1045,6 +1045,7 @@ impl Task {
                 finished_pieces: Arc<Mutex<Vec<metadata::Piece>>>,
                 is_prefetch: bool,
                 need_piece_content: bool,
+                protocol: String,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!(
@@ -1169,8 +1170,8 @@ impl Task {
                     });
 
                 info!(
-                    "finished piece {} from parent {:?}",
-                    piece_id, metadata.parent_id
+                    "finished piece {} from parent {:?} using protocol {}",
+                    piece_id, metadata.parent_id, protocol,
                 );
 
                 let mut finished_pieces = finished_pieces.lock().unwrap();
@@ -1187,6 +1188,7 @@ impl Task {
             let in_stream_tx = in_stream_tx.clone();
             let interrupt = interrupt.clone();
             let finished_pieces = finished_pieces.clone();
+            let protocol = self.config.download.protocol.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(async move {
                 let _permit = permit;
@@ -1204,6 +1206,7 @@ impl Task {
                     finished_pieces,
                     is_prefetch,
                     need_piece_content,
+                    protocol,
                 )
                 .in_current_span()
                 .await

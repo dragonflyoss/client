@@ -787,9 +787,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let task_manager = self.task.clone();
 
         // Get the download server info from the config.
-        let download_protocol = self.config.storage.server.protocol.clone();
         let download_ip = self.config.storage.server.ip.unwrap().to_string();
-        let download_port = self.config.storage.server.port();
+        let download_tcp_port = self.config.storage.server.tcp_port;
+        let download_quic_port = self.config.storage.server.quic_port;
 
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
@@ -837,9 +837,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                         number: piece.number,
                                         offset: piece.offset,
                                         length: piece.length,
-                                        download_protocol: download_protocol.clone(),
-                                        download_ip: download_ip.clone(),
-                                        download_port: download_port as i32,
+                                        ip: download_ip.clone(),
+                                        tcp_port: Some(download_tcp_port as i32),
+                                        quic_port: Some(download_quic_port as i32),
                                     }),
                                     super::REQUEST_TIMEOUT,
                                 )
@@ -1495,9 +1495,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let task_manager = self.task.clone();
 
         // Get the download server info from the config.
-        let download_protocol = self.config.storage.server.protocol.clone();
         let download_ip = self.config.storage.server.ip.unwrap().to_string();
-        let download_port = self.config.storage.server.port();
+        let download_tcp_port = self.config.storage.server.tcp_port;
+        let download_quic_port = self.config.storage.server.quic_port;
 
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
@@ -1541,9 +1541,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                     number: piece.number,
                                     offset: piece.offset,
                                     length: piece.length,
-                                    download_protocol: download_protocol.clone(),
-                                    download_ip: download_ip.clone(),
-                                    download_port: download_port as i32,
+                                    ip: download_ip.clone(),
+                                    tcp_port: Some(download_tcp_port as i32),
+                                    quic_port: Some(download_quic_port as i32),
                                 }), super::REQUEST_TIMEOUT)
                                 .await
                             {

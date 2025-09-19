@@ -971,9 +971,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.1.67"
+version = "2.1.68"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5601015365ef3b617d919aac76a3f2c4ab1d2ea45b094dcd3136e48804efbdcc"
+checksum = "0e51cf42713d1fa0e6a25b1a9cc9e7d22c267438067287ce933259e5a05b3565"
 dependencies = [
  "prost 0.13.5",
  "prost-types 0.14.1",

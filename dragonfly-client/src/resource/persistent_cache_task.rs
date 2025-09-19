@@ -1033,9 +1033,9 @@ impl PersistentCacheTask {
                 .map(|peer| piece_collector::CollectedParent {
                     id: peer.id,
                     host: peer.host,
-                    download_protocol: None,
                     download_ip: None,
-                    download_port: None,
+                    download_tcp_port: None,
+                    download_quic_port: None,
                 })
                 .collect(),
         )
@@ -1075,6 +1075,7 @@ impl PersistentCacheTask {
                 in_stream_tx: Sender<AnnouncePersistentCachePeerRequest>,
                 interrupt: Arc<AtomicBool>,
                 finished_pieces: Arc<Mutex<Vec<metadata::Piece>>>,
+                protocol: String,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.persistent_cache_id(task_id.as_str(), number);
                 info!(
@@ -1199,8 +1200,8 @@ impl PersistentCacheTask {
                     });
 
                 info!(
-                    "finished persistent cache piece {} from parent {:?}",
-                    piece_id, metadata.parent_id
+                    "finished persistent cache piece {} from parent {:?}  using protocol {}",
+                    piece_id, metadata.parent_id, protocol,
                 );
 
                 let mut finished_pieces = finished_pieces.lock().unwrap();
@@ -1217,6 +1218,7 @@ impl PersistentCacheTask {
             let in_stream_tx = in_stream_tx.clone();
             let interrupt = interrupt.clone();
             let finished_pieces = finished_pieces.clone();
+            let protocol = self.config.download.protocol.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(async move {
                 let _permit = permit;
@@ -1233,6 +1235,7 @@ impl PersistentCacheTask {
                     in_stream_tx,
                     interrupt,
                     finished_pieces,
+                    protocol,
                 )
                 .in_current_span()
                 .await
