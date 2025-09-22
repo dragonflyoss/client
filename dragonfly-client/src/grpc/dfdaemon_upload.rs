@@ -787,7 +787,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let task_manager = self.task.clone();
 
         // Get the download server info from the config.
-        let download_ip = self.config.storage.server.ip.unwrap().to_string();
+        let download_ip = self.config.host.ip.unwrap().to_string();
         let download_tcp_port = self.config.storage.server.tcp_port;
         let download_quic_port = self.config.storage.server.quic_port;
 
@@ -1495,7 +1495,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let task_manager = self.task.clone();
 
         // Get the download server info from the config.
-        let download_ip = self.config.storage.server.ip.unwrap().to_string();
+        let download_ip = self.config.host.ip.unwrap().to_string();
         let download_tcp_port = self.config.storage.server.tcp_port;
         let download_quic_port = self.config.storage.server.quic_port;
 
