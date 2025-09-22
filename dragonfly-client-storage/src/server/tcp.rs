@@ -16,19 +16,19 @@
 
 use crate::Storage;
 use bytes::{Bytes, BytesMut};
-use chrono::Utc;
 use dragonfly_api::common::v2::TrafficType;
-use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_util::{id_generator::IDGenerator, shutdown};
 use leaky_bucket::RateLimiter;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{copy, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
-use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
+use tokio::io::{copy, AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::net::{
+    tcp::{OwnedReadHalf, OwnedWriteHalf},
+    TcpListener as TokioTcpListener, TcpStream as TokioTcpStream,
+};
 use tokio::sync::mpsc;
-use tracing::{error, info, Span};
+use tracing::{debug, error, info, instrument, Span};
 use vortex_protocol::{
     tlv::{
         download_persistent_cache_piece::DownloadPersistentCachePiece,
@@ -56,35 +56,24 @@ pub struct TCPServer {
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
+/// TCPServer implements the TCP server.
 impl TCPServer {
     /// Creates a new TCPServer.
     pub fn new(
-        config: Arc<Config>,
+        addr: SocketAddr,
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
-        addr: SocketAddr,
+        upload_rate_limiter: Arc<RateLimiter>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
-        let handler = TCPServerHandler {
-            id_generator,
-            storage,
-            upload_rate_limiter: Arc::new(
-                RateLimiter::builder()
-                    .initial(config.upload.rate_limit.as_u64() as usize)
-                    .refill(config.upload.rate_limit.as_u64() as usize)
-                    .max(config.upload.rate_limit.as_u64() as usize)
-                    .interval(Duration::from_secs(1))
-                    .fair(false)
-                    .build(),
-            ),
-            read_buffer_size: config.storage.read_buffer_size,
-            write_buffer_size: config.storage.write_buffer_size,
-        };
-
         Self {
             addr,
-            handler,
+            handler: TCPServerHandler {
+                id_generator,
+                storage,
+                upload_rate_limiter,
+            },
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -92,36 +81,24 @@ impl TCPServer {
 
     /// Starts the storage tcp server.
     pub async fn run(&mut self) -> ClientResult<()> {
-        // Initialize the TCP service.
-        let listener = TokioTcpListener::bind(self.addr).await.map_err(|err| {
-            error!("failed to bind to {}: {}", self.addr, err);
-            ClientError::HostNotFound(self.addr.to_string())
+        let listener = TokioTcpListener::bind(self.addr).await.inspect_err(|err| {
+            error!("failed to bind tcp server: {}", err);
         })?;
-
         info!("storage tcp server listening on {}", self.addr);
 
         loop {
             tokio::select! {
-                // Accept new connections
-                result = listener.accept() => {
-                    match result {
-                        Ok((stream, peer_addr)) => {
-                            let handler = self.handler.clone();
+                tcp_accepted = listener.accept() => {
+                    let (tcp, remote_address) = tcp_accepted?;
+                    debug!("accepted connection from {}", remote_address);
 
-                            // Spawn a task to handle the connection
-                            tokio::spawn(async move {
-                                if let Err(err) = handler.handle_connection(stream).await {
-                                    error!("error handling connection from {}: {}", peer_addr, err);
-                                }
-                            });
+                    let handler = self.handler.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = handler.handle(tcp, remote_address.to_string()).await {
+                           error!("failed to serve connection from {}: {}", remote_address, err);
                         }
-                        Err(err) => {
-                            error!("failed to accept connection: {}", err);
-                        }
-                    }
-                }
-
-                // Handle shutdown signal
+                    });
+                },
                 _ = self.shutdown.recv() => {
                     info!("tcp server shutting down");
                     break;
@@ -144,188 +121,115 @@ pub struct TCPServerHandler {
 
     /// upload_rate_limiter is the rate limiter of the upload speed in bps(bytes per second).
     upload_rate_limiter: Arc<RateLimiter>,
-
-    /// read_buffer_size is the buffer size for reading piece to stream, default is 128KB.
-    pub read_buffer_size: usize,
-
-    /// write_buffer_size is the buffer size for writing piece to stream, default is 128KB.
-    pub write_buffer_size: usize,
 }
 
+/// TCPServerHandler implements the request handler.
 impl TCPServerHandler {
-    /// Handles a single TCP connection.
-    async fn handle_connection(&self, stream: TokioTcpStream) -> ClientResult<()> {
-        let (s_reader, s_writer) = stream.into_split();
-        let mut reader = BufReader::with_capacity(self.read_buffer_size, s_reader);
-        let mut writer = BufWriter::with_capacity(self.write_buffer_size, s_writer);
-
-        let mut header_bytes = BytesMut::with_capacity(HEADER_SIZE);
-        header_bytes.resize(HEADER_SIZE, 0);
-        reader.read_exact(&mut header_bytes).await.map_err(|err| {
-            error!("failed to receive request header: {}", err);
-            ClientError::MpscSend(err.to_string())
-        })?;
-        let header: Header = header_bytes
-            .freeze()
-            .try_into()
-            .map_err(|_| ClientError::UnexpectedResponse)?;
-        info!("received header: {:?}", header);
-
+    /// Handles a single TCP connection for the Dragonfly P2P protocol.
+    ///
+    /// This is the main entry point for processing incoming TCP connections.
+    /// It reads the protocol header to determine the request type and dispatches
+    /// to the appropriate handler. Supports both regular piece downloads and
+    /// persistent cache piece downloads with proper request/response framing.
+    #[instrument(skip_all, fields(host_id, remote_address, task_id, piece_id))]
+    async fn handle(&self, stream: TokioTcpStream, remote_address: String) -> ClientResult<()> {
+        let (mut reader, mut writer) = stream.into_split();
+        let header = self.read_header(&mut reader).await?;
         match header.tag() {
             Tag::DownloadPiece => {
-                // ------------------------------
-                // Recieve DownloadPiece request.
-                // ------------------------------
-                let mut download_piece_bytes = BytesMut::with_capacity(header.length() as usize);
-                download_piece_bytes.resize(header.length() as usize, 0);
-                reader
-                    .read_exact(&mut download_piece_bytes)
-                    .await
-                    .map_err(|err| {
-                        error!("failed to receive DownloadPiece: {}", err);
-                        ClientError::MpscSend(err.to_string())
-                    })?;
+                let download_piece: DownloadPiece = self
+                    .read_download_piece(&mut reader, header.length() as usize)
+                    .await?;
 
-                let download_piece: DownloadPiece = download_piece_bytes
-                    .freeze()
-                    .try_into()
-                    .map_err(|_| ClientError::UnexpectedResponse)?;
-                info!("received DownloadPiece request: {:?}", download_piece);
+                // Generate the host id.
+                let host_id = self.id_generator.host_id();
 
-                // ---------------------------
-                // Send PieceContent response.
-                // ---------------------------
-                match self.handle_piece(&download_piece).await {
+                // Get the task id from the request.
+                let task_id = download_piece.task_id();
+
+                // Get the interested piece number from the request.
+                let piece_number = download_piece.piece_number();
+
+                // Generate the piece id.
+                let piece_id = self.storage.piece_id(task_id, piece_number);
+
+                Span::current().record("host_id", host_id);
+                Span::current().record("remote_address", remote_address.as_str());
+                Span::current().record("task_id", task_id);
+                Span::current().record("piece_id", piece_id.as_str());
+                info!("start upload piece content");
+                match self.handle_piece(piece_id.as_str(), task_id).await {
                     Ok((piece_content, mut content_reader)) => {
-                        let piece_content_bytes: Bytes = piece_content.clone().into();
+                        let piece_content_bytes: Bytes = piece_content.into();
+
                         let header = Header::new_piece_content(piece_content_bytes.len() as u32);
-                        let header_bytes: Bytes = header.clone().into();
+                        let header_bytes: Bytes = header.into();
 
-                        let mut request =
+                        let mut response =
                             BytesMut::with_capacity(HEADER_SIZE + piece_content_bytes.len());
-                        request.extend_from_slice(&header_bytes);
-                        request.extend_from_slice(&piece_content_bytes);
+                        response.extend_from_slice(&header_bytes);
+                        response.extend_from_slice(&piece_content_bytes);
 
-                        // Write header and piece_content.
-                        writer.write_all(&request).await.map_err(|err| {
-                            error!("failed to send PieceContent: {}", err);
-                            ClientError::MpscSend(err.to_string())
-                        })?;
-                        writer.flush().await.map_err(|err| {
-                            error!("failed to send PieceContent: {}", err);
-                            ClientError::MpscSend(err.to_string())
-                        })?;
-                        info!("sent PieceContent: {:?}", piece_content);
-
-                        // Write content.
-                        copy(&mut content_reader, &mut writer)
-                            .await
-                            .inspect_err(|err| {
-                                error!("copy failed: {}", err);
-                            })?;
-
-                        writer.flush().await.inspect_err(|err| {
-                            error!("flush failed: {}", err);
-                        })?;
+                        self.write_response(response.freeze(), &mut writer).await?;
+                        self.write_stream(&mut content_reader, &mut writer).await?;
                     }
                     Err(err) => {
                         let error_response: Bytes =
                             Vortex::Error(Header::new_error(err.len() as u32), err).into();
-                        writer.write_all(&error_response).await.map_err(|err| {
-                            error!("failed to send Error: {}", err);
-                            ClientError::MpscSend(err.to_string())
-                        })?;
-                        writer.flush().await.map_err(|err| {
-                            error!("failed to send Error: {}", err);
-                            ClientError::MpscSend(err.to_string())
-                        })?;
+                        self.write_response(error_response, &mut writer).await?;
                     }
                 }
 
                 Ok(())
             }
             Tag::DownloadPersistentCachePiece => {
-                // ------------------------------
-                // Recieve DownloadPersistentCachePiece request.
-                // ------------------------------
-                let mut download_persistent_cache_piece_bytes =
-                    BytesMut::with_capacity(header.length() as usize);
-                download_persistent_cache_piece_bytes.resize(header.length() as usize, 0);
-                reader
-                    .read_exact(&mut download_persistent_cache_piece_bytes)
-                    .await
-                    .map_err(|err| {
-                        error!("failed to receive DownloadPersistentCachePiece: {}", err);
-                        ClientError::MpscSend(err.to_string())
-                    })?;
+                let download_persistent_cache_piece: DownloadPersistentCachePiece = self
+                    .read_download_piece(&mut reader, header.length() as usize)
+                    .await?;
 
-                let download_persistent_cache_piece: DownloadPersistentCachePiece =
-                    download_persistent_cache_piece_bytes
-                        .freeze()
-                        .try_into()
-                        .map_err(|_| ClientError::UnexpectedResponse)?;
-                info!(
-                    "received DownloadPersistentCachePiece request: {:?}",
-                    download_persistent_cache_piece
-                );
+                // Generate the host id.
+                let host_id = self.id_generator.host_id();
 
-                // ---------------------------
-                // Send PersistentCachePieceContent response.
-                // ---------------------------
+                // Get the task id from the request.
+                let task_id = download_persistent_cache_piece.task_id();
+
+                // Get the interested piece number from the request.
+                let piece_number = download_persistent_cache_piece.piece_number();
+
+                // Generate the piece id.
+                let piece_id = self.storage.piece_id(task_id, piece_number);
+
+                Span::current().record("host_id", host_id);
+                Span::current().record("remote_address", remote_address.as_str());
+                Span::current().record("task_id", task_id);
+                Span::current().record("piece_id", piece_id.as_str());
+                info!("start upload persistent cache piece content");
                 match self
-                    .handle_persistent_cache_piece(&download_persistent_cache_piece)
+                    .handle_persistent_cache_piece(piece_id.as_str(), task_id)
                     .await
                 {
                     Ok((persistent_cache_piece_content, mut content_reader)) => {
                         let persistent_cache_piece_content_bytes: Bytes =
-                            persistent_cache_piece_content.clone().into();
+                            persistent_cache_piece_content.into();
+
                         let header = Header::new_persistent_cache_piece_content(
                             persistent_cache_piece_content_bytes.len() as u32,
                         );
-                        let header_bytes: Bytes = header.clone().into();
+                        let header_bytes: Bytes = header.into();
 
-                        let mut request = BytesMut::with_capacity(
+                        let mut response = BytesMut::with_capacity(
                             HEADER_SIZE + persistent_cache_piece_content_bytes.len(),
                         );
-                        request.extend_from_slice(&header_bytes);
-                        request.extend_from_slice(&persistent_cache_piece_content_bytes);
+                        response.extend_from_slice(&header_bytes);
+                        response.extend_from_slice(&persistent_cache_piece_content_bytes);
 
-                        // Write header and persistent_cache_piece_content.
-                        writer.write_all(&request).await.map_err(|err| {
-                            error!("failed to send PersistentCachePieceContent: {}", err);
-                            ClientError::MpscSend(err.to_string())
-                        })?;
-                        writer.flush().await.map_err(|err| {
-                            error!("failed to send PersistentCachePieceContent: {}", err);
-                            ClientError::MpscSend(err.to_string())
-                        })?;
-                        info!(
-                            "sent PersistentCachePieceContent: {:?}",
-                            persistent_cache_piece_content
-                        );
-
-                        // Write content.
-                        copy(&mut content_reader, &mut writer)
-                            .await
-                            .inspect_err(|err| {
-                                error!("copy failed: {}", err);
-                            })?;
-
-                        writer.flush().await.inspect_err(|err| {
-                            error!("flush failed: {}", err);
-                        })?;
+                        self.write_response(response.freeze(), &mut writer).await?;
+                        self.write_stream(&mut content_reader, &mut writer).await?;
                     }
                     Err(err) => {
                         let error_response: Bytes =
                             Vortex::Error(Header::new_error(err.len() as u32), err).into();
-                        writer.write_all(&error_response).await.map_err(|err| {
-                            error!("failed to send Error: {}", err);
-                            ClientError::MpscSend(err.to_string())
-                        })?;
-                        writer.flush().await.map_err(|err| {
-                            error!("failed to send Error: {}", err);
-                            ClientError::MpscSend(err.to_string())
-                        })?;
+                        self.write_response(error_response, &mut writer).await?;
                     }
                 }
 
@@ -338,49 +242,36 @@ impl TCPServerHandler {
         }
     }
 
-    /// Handles download piece request.
+    /// Handles download piece request and retrieves piece content.
+    ///
+    /// This function fetches piece metadata from local storage, applies
+    /// upload rate limiting, and prepares both the piece metadata and
+    /// content stream for transmission. It's the core handler for regular
+    /// piece download requests in the P2P network.
+    #[instrument(skip_all)]
     async fn handle_piece(
         &self,
-        request: &DownloadPiece,
+        piece_id: &str,
+        task_id: &str,
     ) -> Result<(PieceContent, impl AsyncRead), Error> {
-        // Generate the host id.
-        let host_id = self.id_generator.host_id();
-
-        // Get the task id from the request.
-        let task_id = request.task_id();
-
-        // Get the interested piece number from the request.
-        let piece_number = request.piece_number();
-
-        // Generate the piece id.
-        let piece_id = self.storage.piece_id(task_id, piece_number);
-
-        // Span record the host id, task id and piece number.
-        Span::current().record("host_id", host_id.as_str());
-        Span::current().record("task_id", task_id);
-        Span::current().record("piece_id", piece_id.as_str());
-        info!("download piece content in storage tcp server");
-
         // Get the piece metadata from the local storage.
-        let piece = self
-            .storage
-            .get_piece(piece_id.as_str())
-            .map_err(|err| {
-                Error::new(
-                    Code::InvalidArgument,
-                    format!("failed to get piece metadata: {}", err),
-                )
-            })?
-            .ok_or_else(|| {
-                error!("piece metadata not found");
-                Error::new(Code::NotFound, piece_id.clone())
-            })?;
-
-        info!("start upload piece content");
-
-        // Span record the piece_id.
-        Span::current().record("piece_id", piece_id.as_str());
-        Span::current().record("piece_length", piece.length);
+        let piece = match self.storage.get_piece(piece_id) {
+            Ok(Some(piece)) => piece,
+            Ok(None) => {
+                error!("piece {} not found in local storage", piece_id);
+                return Err(Error::new(
+                    Code::NotFound,
+                    format!("piece {} not found", piece_id),
+                ));
+            }
+            Err(err) => {
+                error!("get piece {} from local storage error: {:?}", piece_id, err);
+                return Err(Error::new(
+                    Code::Internal,
+                    format!("failed to get piece: {}", err),
+                ));
+            }
+        };
 
         // Acquire the upload rate limiter.
         self.upload_rate_limiter
@@ -390,72 +281,61 @@ impl TCPServerHandler {
         // Upload the piece content.
         let reader = self
             .storage
-            .upload_piece(piece_id.as_str(), task_id, None)
+            .upload_piece(piece_id, task_id, None)
             .await
             .map_err(|err| {
                 error!("failed to get piece content: {}", err);
-                Error::new(Code::Internal, piece_id)
+                Error::new(
+                    Code::Internal,
+                    format!("failed to get piece {} content: {}", piece_id, err),
+                )
             })?;
-        info!("finished upload piece content");
 
-        // Create response
-        let piece_content = PieceContent::new(
-            piece_number,
-            piece.offset,
-            piece.length,
-            piece.digest,
-            piece.parent_id.unwrap_or_default(),
-            TrafficType::RemotePeer as u8,
-            Duration::from_secs(30),
-            Utc::now().naive_utc(),
-        );
-
-        Ok((piece_content, reader))
+        Ok((
+            PieceContent::new(
+                piece.number,
+                piece.offset,
+                piece.length,
+                piece.digest.clone(),
+                piece.parent_id.clone().unwrap_or_default(),
+                TrafficType::RemotePeer as u8,
+                piece.cost().unwrap_or_default(),
+                piece.created_at,
+            ),
+            reader,
+        ))
     }
 
-    /// Handles download piece request.
+    /// Handles download persistent cache piece request and retrieves content.
+    ///
+    /// Similar to handle_piece but specifically for persistent cache pieces
+    /// which have different storage semantics and metadata structure. This
+    /// enables efficient serving of frequently accessed content from the
+    /// persistent cache layer.
+    #[instrument(skip_all)]
     async fn handle_persistent_cache_piece(
         &self,
-        request: &DownloadPersistentCachePiece,
+        piece_id: &str,
+        task_id: &str,
     ) -> Result<(PersistentCachePieceContent, impl AsyncRead), Error> {
-        // Generate the host id.
-        let host_id = self.id_generator.host_id();
-
-        // Get the task id from the request.
-        let task_id = request.task_id();
-
-        // Get the interested piece number from the request.
-        let piece_number = request.piece_number();
-
-        // Generate the piece id.
-        let piece_id = self.storage.piece_id(task_id, piece_number);
-
-        // Span record the host id, task id and piece number.
-        Span::current().record("host_id", host_id.as_str());
-        Span::current().record("task_id", task_id);
-        Span::current().record("piece_id", piece_id.as_str());
-        info!("download persistent cache piece content in storage tcp server");
-
         // Get the piece metadata from the local storage.
-        let piece = self
-            .storage
-            .get_persistent_cache_piece(piece_id.as_str())
-            .map_err(|err| {
-                Error::new(
-                    Code::InvalidArgument,
-                    format!("failed to get persistent cache piece metadata: {}", err),
-                )
-            })?
-            .ok_or_else(|| {
-                error!("persistent cache piece metadata not found");
-                Error::new(Code::NotFound, piece_id.clone())
-            })?;
-
-        info!("start upload persistent cache piece content");
-
-        // Span record the piece_id.
-        Span::current().record("piece_id", piece_id.as_str());
-        Span::current().record("piece_length", piece.length);
+        let piece = match self.storage.get_persistent_cache_piece(piece_id) {
+            Ok(Some(piece)) => piece,
+            Ok(None) => {
+                error!("piece {} not found in local storage", piece_id);
+                return Err(Error::new(
+                    Code::NotFound,
+                    format!("piece {} not found", piece_id),
+                ));
+            }
+            Err(err) => {
+                error!("get piece {} from local storage error: {:?}", piece_id, err);
+                return Err(Error::new(
+                    Code::Internal,
+                    format!("failed to get piece: {}", err),
+                ));
+            }
+        };
 
         // Acquire the upload rate limiter.
         self.upload_rate_limiter
@@ -465,26 +345,117 @@ impl TCPServerHandler {
         // Upload the piece content.
         let reader = self
             .storage
-            .upload_persistent_cache_piece(piece_id.as_str(), task_id, None)
+            .upload_persistent_cache_piece(piece_id, task_id, None)
             .await
             .map_err(|err| {
-                error!("failed to get persistent cache piece content: {}", err);
-                Error::new(Code::Internal, piece_id)
+                error!("failed to get piece content: {}", err);
+                Error::new(
+                    Code::Internal,
+                    format!("failed to get piece {} content: {}", piece_id, err),
+                )
             })?;
-        info!("finished upload persistent cache piece content");
 
-        // Create response
-        let persistent_cache_piece_content = PersistentCachePieceContent::new(
-            piece_number,
-            piece.offset,
-            piece.length,
-            piece.digest,
-            piece.parent_id.unwrap_or_default(),
-            TrafficType::RemotePeer as u8,
-            Duration::from_secs(30),
-            Utc::now().naive_utc(),
-        );
+        Ok((
+            PersistentCachePieceContent::new(
+                piece.number,
+                piece.offset,
+                piece.length,
+                piece.digest.clone(),
+                piece.parent_id.clone().unwrap_or_default(),
+                TrafficType::RemotePeer as u8,
+                piece.cost().unwrap_or_default(),
+                piece.created_at,
+            ),
+            reader,
+        ))
+    }
 
-        Ok((persistent_cache_piece_content, reader))
+    /// Reads and parses a vortex protocol header from the TCP stream.
+    ///
+    /// The header contains metadata about the following message, including
+    /// the message type (tag) and payload length. This is critical for
+    /// proper protocol message framing.
+    async fn read_header(&self, reader: &mut OwnedReadHalf) -> ClientResult<Header> {
+        let mut header_bytes = BytesMut::with_capacity(HEADER_SIZE);
+        header_bytes.resize(HEADER_SIZE, 0);
+        reader
+            .read_exact(&mut header_bytes)
+            .await
+            .inspect_err(|err| {
+                error!("failed to receive header: {}", err);
+            })?;
+
+        Header::try_from(header_bytes.freeze()).map_err(Into::into)
+    }
+
+    /// Reads and parses a download piece message from the TCP stream.
+    ///
+    /// This function reads a fixed-length payload based on the header length
+    /// and attempts to parse it into the specified type T. The type T must
+    /// implement TryFrom<Bytes> for deserialization from the raw bytes.
+    pub async fn read_download_piece<T>(
+        &self,
+        reader: &mut OwnedReadHalf,
+        header_length: usize,
+    ) -> ClientResult<T>
+    where
+        T: TryFrom<Bytes, Error: Into<ClientError>>,
+    {
+        let mut download_piece_bytes = BytesMut::with_capacity(header_length);
+        download_piece_bytes.resize(header_length, 0);
+
+        reader
+            .read_exact(&mut download_piece_bytes)
+            .await
+            .inspect_err(|err| {
+                error!("failed to receive download piece: {}", err);
+            })?;
+
+        download_piece_bytes.freeze().try_into().map_err(Into::into)
+    }
+
+    /// Writes a complete response message to the TCP stream.
+    ///
+    /// This function sends the provided bytes as a response and ensures
+    /// all data is flushed to the underlying transport. This is typically
+    /// used for sending headers and small payloads in a single operation.
+    #[instrument(skip_all)]
+    async fn write_response(
+        &self,
+        request: Bytes,
+        writer: &mut OwnedWriteHalf,
+    ) -> ClientResult<()> {
+        writer.write_all(&request).await.inspect_err(|err| {
+            error!("failed to send request: {}", err);
+        })?;
+
+        writer.flush().await.inspect_err(|err| {
+            error!("failed to flush request: {}", err);
+        })?;
+
+        Ok(())
+    }
+
+    /// Streams data from a reader directly to the TCP writer.
+    ///
+    /// This function efficiently copies all data from the provided stream
+    /// to the TCP connection using tokio's copy utility. It's designed for
+    /// streaming large piece content without loading everything into memory.
+    /// The operation is flushed to ensure data delivery.
+    #[instrument(skip_all)]
+    async fn write_stream<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        stream: &mut R,
+        writer: &mut OwnedWriteHalf,
+    ) -> ClientResult<()> {
+        copy(stream, writer).await.inspect_err(|err| {
+            error!("copy failed: {}", err);
+        })?;
+
+        writer.flush().await.inspect_err(|err| {
+            error!("flush failed: {}", err);
+        })?;
+
+        Ok(())
     }
 }

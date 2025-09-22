@@ -786,6 +786,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Clone the task.
         let task_manager = self.task.clone();
 
+        // Get the download server info from the config.
+        let download_ip = self.config.storage.server.ip.unwrap().to_string();
+        let download_tcp_port = self.config.storage.server.tcp_port;
+        let download_quic_port = self.config.storage.server.quic_port;
+
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
@@ -832,6 +837,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                         number: piece.number,
                                         offset: piece.offset,
                                         length: piece.length,
+                                        ip: download_ip.clone(),
+                                        tcp_port: Some(download_tcp_port as i32),
+                                        quic_port: Some(download_quic_port as i32),
                                     }),
                                     super::REQUEST_TIMEOUT,
                                 )
@@ -1486,6 +1494,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Clone the task.
         let task_manager = self.task.clone();
 
+        // Get the download server info from the config.
+        let download_ip = self.config.storage.server.ip.unwrap().to_string();
+        let download_tcp_port = self.config.storage.server.tcp_port;
+        let download_quic_port = self.config.storage.server.quic_port;
+
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
@@ -1528,6 +1541,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                     number: piece.number,
                                     offset: piece.offset,
                                     length: piece.length,
+                                    ip: download_ip.clone(),
+                                    tcp_port: Some(download_tcp_port as i32),
+                                    quic_port: Some(download_quic_port as i32),
                                 }), super::REQUEST_TIMEOUT)
                                 .await
                             {
