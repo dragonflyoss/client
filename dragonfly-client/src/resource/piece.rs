@@ -15,16 +15,16 @@
  */
 
 use super::*;
-use crate::metrics::{
-    collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
-    collect_backend_request_started_metrics, collect_download_piece_traffic_metrics,
-    collect_upload_piece_traffic_metrics,
-};
 use chrono::Utc;
 use dragonfly_api::common::v2::{Hdfs, ObjectStorage, Range, TrafficType};
 use dragonfly_client_backend::{BackendFactory, GetRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{error::BackendError, Error, Result};
+use dragonfly_client_metric::{
+    collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
+    collect_backend_request_started_metrics, collect_download_piece_traffic_metrics,
+    collect_upload_piece_traffic_metrics,
+};
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::id_generator::IDGenerator;
 use leaky_bucket::RateLimiter;

@@ -14,15 +14,6 @@
  * limitations under the License.
  */
 
-use crate::metrics::{
-    collect_delete_host_failure_metrics, collect_delete_host_started_metrics,
-    collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
-    collect_download_task_failure_metrics, collect_download_task_finished_metrics,
-    collect_download_task_started_metrics, collect_list_task_entries_failure_metrics,
-    collect_list_task_entries_started_metrics, collect_stat_task_failure_metrics,
-    collect_stat_task_started_metrics, collect_upload_task_failure_metrics,
-    collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
-};
 use crate::resource::{persistent_cache_task, task};
 use dragonfly_api::common::v2::{CacheTask, PersistentCacheTask, Priority, Task, TaskType};
 use dragonfly_api::dfdaemon::v2::{
@@ -43,6 +34,15 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error as ClientError, Result as ClientResult,
+};
+use dragonfly_client_metric::{
+    collect_delete_host_failure_metrics, collect_delete_host_started_metrics,
+    collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
+    collect_download_task_failure_metrics, collect_download_task_finished_metrics,
+    collect_download_task_started_metrics, collect_list_task_entries_failure_metrics,
+    collect_list_task_entries_started_metrics, collect_stat_task_failure_metrics,
+    collect_stat_task_started_metrics, collect_upload_task_failure_metrics,
+    collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
 };
 use dragonfly_client_util::{
     digest::{verify_file_digest, Digest},

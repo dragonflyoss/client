@@ -15,10 +15,6 @@
  */
 
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
-use crate::metrics::{
-    collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
-    collect_backend_request_started_metrics,
-};
 use dragonfly_api::common::v2::{
     Download, Hdfs, ObjectStorage, Peer, Piece, SizeScope, Task as CommonTask, TaskType,
     TrafficType,
@@ -42,6 +38,10 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{BackendError, DownloadFromParentFailed, ErrorType, OrErr},
     Error, Result as ClientResult,
+};
+use dragonfly_client_metric::{
+    collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
+    collect_backend_request_started_metrics,
 };
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::{
