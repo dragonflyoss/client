@@ -19,7 +19,6 @@ pub mod dynconfig;
 pub mod gc;
 pub mod grpc;
 pub mod health;
-pub mod metrics;
 pub mod proxy;
 pub mod resource;
 pub mod stats;
