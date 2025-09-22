@@ -64,7 +64,7 @@ pub enum DFError {
 
     /// DownloadPieceFinished is the error when the download piece finished timeout.
     #[error{"download piece {0} finished timeout"}]
-    DownloadPieceFinished(String),
+    DownloadPieceFinishedTimeout(String),
 
     /// WaitForPieceFinishedTimeout is the error when the wait for piece finished timeout.
     #[error{"wait for piece {0} finished timeout"}]
@@ -158,6 +158,18 @@ pub enum DFError {
     #[error{"unauthorized"}]
     Unauthorized,
 
+    /// ArrayTryFromSliceError is the error for array try from slice.
+    #[error(transparent)]
+    ArrayTryFromSliceError(#[from] std::array::TryFromSliceError),
+
+    /// VortexProtocolStatus is the error for vortex protocol status.
+    #[error("vortex protocol status: code={0:?}, message={1}")]
+    VortexProtocolStatus(vortex_protocol::tlv::error::Code, String),
+
+    /// VortexProtocolError is the error for vortex protocol.
+    #[error(transparent)]
+    VortexProtocolError(#[from] vortex_protocol::error::Error),
+
     /// TonicStatus is the error for tonic status.
     #[error(transparent)]
     TonicStatus(#[from] tonic::Status),
@@ -173,6 +185,10 @@ pub enum DFError {
     /// TonicStreamElapsed is the error for tonic stream elapsed.
     #[error(transparent)]
     TokioStreamElapsed(#[from] tokio_stream::Elapsed),
+
+    // TokioTimeErrorElapsed is the error for tokio time elapsed.
+    #[error(transparent)]
+    TokioTimeErrorElapsed(#[from] tokio::time::error::Elapsed),
 
     /// HeadersError is the error for headers.
     #[error(transparent)]

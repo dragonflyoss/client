@@ -44,6 +44,7 @@ use dragonfly_client_core::{
 };
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::id_generator::IDGenerator;
+use leaky_bucket::RateLimiter;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -84,18 +85,25 @@ pub struct PersistentCacheTask {
 /// PersistentCacheTask is the implementation of PersistentCacheTask.
 impl PersistentCacheTask {
     /// new creates a new PersistentCacheTask.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
+        download_rate_limiter: Arc<RateLimiter>,
+        upload_rate_limiter: Arc<RateLimiter>,
+        prefetch_rate_limiter: Arc<RateLimiter>,
     ) -> ClientResult<Self> {
         let piece = piece::Piece::new(
             config.clone(),
             id_generator.clone(),
             storage.clone(),
             backend_factory.clone(),
+            download_rate_limiter,
+            upload_rate_limiter,
+            prefetch_rate_limiter,
         )?;
         let piece = Arc::new(piece);
 
@@ -1025,6 +1033,9 @@ impl PersistentCacheTask {
                 .map(|peer| piece_collector::CollectedParent {
                     id: peer.id,
                     host: peer.host,
+                    download_ip: None,
+                    download_tcp_port: None,
+                    download_quic_port: None,
                 })
                 .collect(),
         )
@@ -1064,6 +1075,7 @@ impl PersistentCacheTask {
                 in_stream_tx: Sender<AnnouncePersistentCachePeerRequest>,
                 interrupt: Arc<AtomicBool>,
                 finished_pieces: Arc<Mutex<Vec<metadata::Piece>>>,
+                protocol: String,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.persistent_cache_id(task_id.as_str(), number);
                 info!(
@@ -1188,8 +1200,8 @@ impl PersistentCacheTask {
                     });
 
                 info!(
-                    "finished persistent cache piece {} from parent {:?}",
-                    piece_id, metadata.parent_id
+                    "finished persistent cache piece {} from parent {:?}  using protocol {}",
+                    piece_id, metadata.parent_id, protocol,
                 );
 
                 let mut finished_pieces = finished_pieces.lock().unwrap();
@@ -1206,6 +1218,7 @@ impl PersistentCacheTask {
             let in_stream_tx = in_stream_tx.clone();
             let interrupt = interrupt.clone();
             let finished_pieces = finished_pieces.clone();
+            let protocol = self.config.download.protocol.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(async move {
                 let _permit = permit;
@@ -1222,6 +1235,7 @@ impl PersistentCacheTask {
                     in_stream_tx,
                     interrupt,
                     finished_pieces,
+                    protocol,
                 )
                 .in_current_span()
                 .await

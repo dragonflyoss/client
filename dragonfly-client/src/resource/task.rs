@@ -48,6 +48,7 @@ use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
     id_generator::IDGenerator,
 };
+use leaky_bucket::RateLimiter;
 use reqwest::header::HeaderMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -92,18 +93,25 @@ pub struct Task {
 /// Task implements the task manager.
 impl Task {
     /// new returns a new Task.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
+        download_rate_limiter: Arc<RateLimiter>,
+        upload_rate_limiter: Arc<RateLimiter>,
+        prefetch_rate_limiter: Arc<RateLimiter>,
     ) -> ClientResult<Self> {
         let piece = piece::Piece::new(
             config.clone(),
             id_generator.clone(),
             storage.clone(),
             backend_factory.clone(),
+            download_rate_limiter,
+            upload_rate_limiter,
+            prefetch_rate_limiter,
         )?;
         let piece = Arc::new(piece);
 
@@ -994,6 +1002,9 @@ impl Task {
                 .map(|peer| piece_collector::CollectedParent {
                     id: peer.id,
                     host: peer.host,
+                    download_ip: None,
+                    download_tcp_port: None,
+                    download_quic_port: None,
                 })
                 .collect(),
         )
@@ -1034,6 +1045,7 @@ impl Task {
                 finished_pieces: Arc<Mutex<Vec<metadata::Piece>>>,
                 is_prefetch: bool,
                 need_piece_content: bool,
+                protocol: String,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!(
@@ -1158,8 +1170,8 @@ impl Task {
                     });
 
                 info!(
-                    "finished piece {} from parent {:?}",
-                    piece_id, metadata.parent_id
+                    "finished piece {} from parent {:?} using protocol {}",
+                    piece_id, metadata.parent_id, protocol,
                 );
 
                 let mut finished_pieces = finished_pieces.lock().unwrap();
@@ -1176,6 +1188,7 @@ impl Task {
             let in_stream_tx = in_stream_tx.clone();
             let interrupt = interrupt.clone();
             let finished_pieces = finished_pieces.clone();
+            let protocol = self.config.download.protocol.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(async move {
                 let _permit = permit;
@@ -1193,6 +1206,7 @@ impl Task {
                     finished_pieces,
                     is_prefetch,
                     need_piece_content,
+                    protocol,
                 )
                 .in_current_span()
                 .await
