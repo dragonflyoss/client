@@ -18,6 +18,9 @@ use crate::Storage;
 use bytes::{Bytes, BytesMut};
 use dragonfly_api::common::v2::TrafficType;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
+use dragonfly_client_metric::{
+    collect_upload_piece_failure_metrics, collect_upload_piece_started_metrics,
+};
 use dragonfly_client_util::{id_generator::IDGenerator, shutdown};
 use leaky_bucket::RateLimiter;
 use std::net::SocketAddr;
@@ -157,7 +160,11 @@ impl TCPServerHandler {
                 Span::current().record("remote_address", remote_address.as_str());
                 Span::current().record("task_id", task_id);
                 Span::current().record("piece_id", piece_id.as_str());
+
+                // Collect upload piece started metrics.
+                collect_upload_piece_started_metrics();
                 info!("start upload piece content");
+
                 match self.handle_piece(piece_id.as_str(), task_id).await {
                     Ok((piece_content, mut content_reader)) => {
                         let piece_content_bytes: Bytes = piece_content.into();
@@ -174,6 +181,9 @@ impl TCPServerHandler {
                         self.write_stream(&mut content_reader, &mut writer).await?;
                     }
                     Err(err) => {
+                        // Collect upload piece failure metrics.
+                        collect_upload_piece_failure_metrics();
+
                         let error_response: Bytes =
                             Vortex::Error(Header::new_error(err.len() as u32), err).into();
                         self.write_response(error_response, &mut writer).await?;
@@ -203,7 +213,11 @@ impl TCPServerHandler {
                 Span::current().record("remote_address", remote_address.as_str());
                 Span::current().record("task_id", task_id);
                 Span::current().record("piece_id", piece_id.as_str());
+
+                // Collect upload piece started metrics.
+                collect_upload_piece_started_metrics();
                 info!("start upload persistent cache piece content");
+
                 match self
                     .handle_persistent_cache_piece(piece_id.as_str(), task_id)
                     .await
@@ -227,6 +241,9 @@ impl TCPServerHandler {
                         self.write_stream(&mut content_reader, &mut writer).await?;
                     }
                     Err(err) => {
+                        // Collect upload piece failure metrics.
+                        collect_upload_piece_failure_metrics();
+
                         let error_response: Bytes =
                             Vortex::Error(Header::new_error(err.len() as u32), err).into();
                         self.write_response(error_response, &mut writer).await?;

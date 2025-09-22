@@ -9,6 +9,7 @@ members = [
     "dragonfly-client-storage",
     "dragonfly-client-util",
     "dragonfly-client-backend/examples/plugin",
+    "dragonfly-client-metric",
 ]
 
 [workspace.package]
@@ -27,6 +28,7 @@ dragonfly-client-core = { path = "dragonfly-client-core", version = "1.0.21" }
 dragonfly-client-config = { path = "dragonfly-client-config", version = "1.0.21" }
 dragonfly-client-storage = { path = "dragonfly-client-storage", version = "1.0.21" }
 dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.0.21" }
+dragonfly-client-metric = { path = "dragonfly-client-metric", version = "1.0.21" }
 dragonfly-client-util = { path = "dragonfly-client-util", version = "1.0.21" }
 dragonfly-client-init = { path = "dragonfly-client-init", version = "1.0.21" }
 dragonfly-api = "=2.1.68"

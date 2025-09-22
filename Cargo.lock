@@ -999,6 +999,7 @@ dependencies = [
  "dragonfly-client-backend",
  "dragonfly-client-config",
  "dragonfly-client-core",
+ "dragonfly-client-metric",
  "dragonfly-client-storage",
  "dragonfly-client-util",
  "fastrand",
@@ -1025,7 +1026,6 @@ dependencies = [
  "path-absolutize",
  "percent-encoding",
  "pprof",
- "prometheus",
  "prost-wkt-types",
  "rcgen",
  "reqwest",
@@ -1156,6 +1156,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dragonfly-client-metric"
+version = "1.0.21"
+dependencies = [
+ "dragonfly-api",
+ "dragonfly-client-config",
+ "dragonfly-client-util",
+ "fs2",
+ "lazy_static",
+ "prometheus",
+ "tokio",
+ "tracing",
+ "warp",
+]
+
+[[package]]
 name = "dragonfly-client-storage"
 version = "1.0.21"
 dependencies = [
@@ -1168,6 +1183,7 @@ dependencies = [
  "dragonfly-api",
  "dragonfly-client-config",
  "dragonfly-client-core",
+ "dragonfly-client-metric",
  "dragonfly-client-util",
  "fs2",
  "leaky-bucket",
