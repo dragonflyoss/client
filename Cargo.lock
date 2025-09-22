@@ -986,7 +986,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "1.0.21"
+version = "1.0.22"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1060,7 +1060,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "1.0.21"
+version = "1.0.22"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-core",
@@ -1091,7 +1091,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "1.0.21"
+version = "1.0.22"
 dependencies = [
  "bytesize",
  "bytesize-serde",
@@ -1121,7 +1121,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "1.0.21"
+version = "1.0.22"
 dependencies = [
  "headers 0.4.1",
  "hyper 1.6.0",
@@ -1140,7 +1140,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "1.0.21"
+version = "1.0.22"
 dependencies = [
  "anyhow",
  "clap",
@@ -1157,7 +1157,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-metric"
-version = "1.0.21"
+version = "1.0.22"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-config",
@@ -1172,7 +1172,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "1.0.21"
+version = "1.0.22"
 dependencies = [
  "bincode",
  "bytes",
@@ -1202,7 +1202,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "1.0.21"
+version = "1.0.22"
 dependencies = [
  "base64 0.22.1",
  "bytesize",
@@ -1613,7 +1613,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "1.0.21"
+version = "1.0.22"
 dependencies = [
  "dragonfly-client-backend",
  "dragonfly-client-core",
