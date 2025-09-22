@@ -34,7 +34,7 @@ dragonfly-client-init = { path = "dragonfly-client-init", version = "1.0.22" }
 dragonfly-api = "=2.1.68"
 thiserror = "2.0"
 futures = "0.3.31"
-reqwest = { version = "0.12.4", features = [
+reqwest = { version = "0.12.12", features = [
     "stream",
     "native-tls",
     "default-tls",
