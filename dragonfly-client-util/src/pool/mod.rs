@@ -34,14 +34,18 @@ pub struct RequestGuard {
     active_requests: Arc<AtomicUsize>,
 }
 
+/// RequestGuard implements the request guard pattern.
 impl RequestGuard {
+    /// Create a new request guard.
     fn new(active_requests: Arc<AtomicUsize>) -> Self {
         active_requests.fetch_add(1, Ordering::SeqCst);
         Self { active_requests }
     }
 }
 
+/// RequestGuard decrements the active request count when dropped.
 impl Drop for RequestGuard {
+    /// Decrement the active request count.
     fn drop(&mut self) {
         self.active_requests.fetch_sub(1, Ordering::SeqCst);
     }
@@ -60,7 +64,9 @@ pub struct Entry<T> {
     actived_at: Arc<std::sync::Mutex<Instant>>,
 }
 
+/// Entry methods for managing client state.
 impl<T> Entry<T> {
+    /// Create a new entry with the given client.
     fn new(client: T) -> Self {
         Self {
             client,
@@ -75,8 +81,8 @@ impl<T> Entry<T> {
     }
 
     /// Update the last active time.
-    fn update_actived_at(&self) {
-        *self.actived_at.lock().unwrap() = Instant::now();
+    fn set_actived_at(&self, actived_at: Instant) {
+        *self.actived_at.lock().unwrap() = actived_at;
     }
 
     /// Check if the client has active requests.
@@ -96,6 +102,7 @@ impl<T> Entry<T> {
 pub trait Factory<K, T> {
     type Error;
 
+    /// Create a new client for the given key.
     async fn make_client(&self, key: &K) -> Result<T, Self::Error>;
 }
 
@@ -119,6 +126,7 @@ pub struct Pool<K, T, F> {
     cleanup_at: Arc<Mutex<Instant>>,
 }
 
+/// Builder for creating a client pool.
 pub struct Builder<K, T, F> {
     factory: F,
     capacity: usize,
@@ -126,6 +134,7 @@ pub struct Builder<K, T, F> {
     _phantom: PhantomData<(K, T)>,
 }
 
+/// Builder methods for configuring and building the pool.
 impl<K, T, F> Builder<K, T, F>
 where
     K: Clone + Eq + Hash + std::fmt::Display,
@@ -166,6 +175,14 @@ where
     }
 }
 
+/// Generic client pool for managing reusable client instances with automatic cleanup.
+///
+/// This client pool provides connection reuse, automatic cleanup, and capacity management
+/// capabilities, primarily used for:
+/// - Connection Reuse: Reuse existing client instances to avoid repeated creation overhead.
+/// - Automatic Cleanup: Periodically remove idle clients that exceed timeout thresholds.
+/// - Capacity Control: Limit maximum client count to prevent resource exhaustion.
+/// - Thread Safety: Use async locks and atomic operations for high-concurrency access.
 impl<K, T, F> Pool<K, T, F>
 where
     K: Clone + Eq + Hash + std::fmt::Display,
@@ -182,7 +199,7 @@ where
             let clients = self.clients.lock().await;
             if let Some(entry) = clients.get(key) {
                 debug!("reusing client: {}", key);
-                entry.update_actived_at();
+                entry.set_actived_at(Instant::now());
                 return Ok(entry.clone());
             }
         }
@@ -190,11 +207,10 @@ where
         // Create new client.
         debug!("creating client: {}", key);
         let client = self.factory.make_client(key).await?;
-
         let mut clients = self.clients.lock().await;
         let entry = clients.entry(key.clone()).or_insert(Entry::new(client));
+        entry.set_actived_at(Instant::now());
 
-        entry.update_actived_at();
         Ok(entry.clone())
     }
 
@@ -231,7 +247,6 @@ where
             let is_recent = idle_duration <= self.idle_timeout;
 
             let should_retain = has_active_requests || (!exceeds_capacity && is_recent);
-
             if !should_retain {
                 info!(
                     "removing idle client: {}, exceeds_capacity: {}, idle_duration: {}s",

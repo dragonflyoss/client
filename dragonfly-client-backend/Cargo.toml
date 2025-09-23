@@ -25,16 +25,16 @@ tracing.workspace = true
 opendal.workspace = true
 percent-encoding.workspace = true
 futures.workspace = true
+reqwest-tracing.workspace = true
 reqwest-retry = "0.7"
-reqwest-tracing = "0.5"
 libloading = "0.8.8"
 
 [dev-dependencies]
 tempfile.workspace = true
-wiremock = "0.6.4"
 rustls-pki-types.workspace = true
 rustls-pemfile.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 tokio-rustls.workspace = true
 rcgen.workspace = true
+wiremock = "0.6.4"
