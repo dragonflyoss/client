@@ -14,25 +14,19 @@
  * limitations under the License.
  */
 
-use dragonfly_client_core::Error as DFError;
 use reqwest;
 use std::collections::HashMap;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error(transparent)]
-    Base(#[from] DFError),
+    #[error{"request timeout: {0}"}]
+    RequestTimeout(String),
 
-    #[allow(clippy::enum_variant_names)]
-    #[error(transparent)]
-    ReqwestError(#[from] reqwest::Error),
+    #[error{"invalid argument: {0}"}]
+    InvalidArgument(String),
 
-    #[allow(clippy::enum_variant_names)]
-    #[error(transparent)]
-    TonicTransportError(#[from] tonic::transport::Error),
-
-    #[error(transparent)]
-    InvalidHeaderValue(#[from] reqwest::header::InvalidHeaderValue),
+    #[error{"request internal error: {0}"}]
+    Internal(String),
 
     #[allow(clippy::enum_variant_names)]
     #[error(transparent)]
@@ -47,38 +41,42 @@ pub enum Error {
     DfdaemonError(#[from] DfdaemonError),
 }
 
-// BackendError is error detail for Backend.
+/// BackendError is error detail for Backend.
 #[derive(Debug, thiserror::Error)]
-#[error("error occurred in the backend server, message: {message:?}, header: {header:?}, status_code: {status_code:?}")]
+#[error(
+    "backend server error, message: {message:?}, header: {header:?}, status_code: {status_code:?}"
+)]
 pub struct BackendError {
-    // Backend error message.
+    /// Backend error message.
     pub message: Option<String>,
 
-    // Backend HTTP response header.
+    /// Backend HTTP response header.
     pub header: HashMap<String, String>,
 
-    // Backend HTTP status code.
+    /// Backend HTTP status code.
     pub status_code: Option<reqwest::StatusCode>,
 }
 
-// ProxyError is error detail for Proxy.
+/// ProxyError is error detail for Proxy.
 #[derive(Debug, thiserror::Error)]
-#[error("error occurred in the proxy server, message: {message:?}, header: {header:?}, status_code: {status_code:?}")]
+#[error(
+    "proxy server error, message: {message:?}, header: {header:?}, status_code: {status_code:?}"
+)]
 pub struct ProxyError {
-    // Proxy error message.
+    /// Proxy error message.
     pub message: Option<String>,
 
-    // Proxy HTTP response header.
+    /// Proxy HTTP response header.
     pub header: HashMap<String, String>,
 
-    // Proxy HTTP status code.
+    /// Proxy HTTP status code.
     pub status_code: Option<reqwest::StatusCode>,
 }
 
-// DfdaemonError is error detail for Dfdaemon.
+/// DfdaemonError is error detail for Dfdaemon.
 #[derive(Debug, thiserror::Error)]
-#[error("error occurred in the dfdaemon, message: {message:?}")]
+#[error("dfdaemon error, message: {message:?}")]
 pub struct DfdaemonError {
-    // Dfdaemon error message.
+    /// Dfdaemon error message.
     pub message: Option<String>,
 }

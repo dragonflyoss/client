@@ -1227,6 +1227,8 @@ dependencies = [
  "protobuf 3.7.2",
  "rcgen",
  "reqwest",
+ "reqwest-middleware",
+ "reqwest-tracing",
  "rustix 1.1.2",
  "rustls 0.22.4",
  "rustls-pemfile 2.2.0",
