@@ -18,7 +18,7 @@ use bytesize::ByteSize;
 use clap::Parser;
 use dragonfly_api::common::v2::{Download, Hdfs, ObjectStorage, TaskType};
 use dragonfly_api::dfdaemon::v2::{
-    download_task_response, DownloadTaskRequest, ListTaskEntriesRequest,
+    download_task_response, DownloadTaskRequest, ListTaskEntriesRequest, ListTaskEntriesResponse,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
@@ -1184,6 +1184,7 @@ fn is_normal_relative_path(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mocktail::prelude::*;
     use tempfile::tempdir;
 
     #[test]
@@ -1399,5 +1400,35 @@ mod tests {
 
         let result = make_output_by_entry(url, output, entry);
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn should_get_all_entries() {
+        let mut mocks = MockSet::new();
+        mocks.mock(|when, then| {
+            when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries")
+                .pb(ListTaskEntriesResponse {});
+            then.pb(ListTaskEntriesRequest { hosts: vec![] });
+        });
+
+        let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
+        server.start().await.unwrap();
+
+        let dfdaemon_download_client = DfdaemonDownloadClient::new(
+            Arc::new(dfdaemon::Config::default()),
+            format!("http://0.0.0.0:{}", server.port().unwrap()),
+        )
+        .await
+        .unwrap();
+
+        let entries = get_all_entries(
+            &Url::parse("http://example.com/root/").unwrap(),
+            None,
+            None,
+            None,
+            None,
+            dfdaemon_download_client,
+        )
+        .await;
     }
 }
