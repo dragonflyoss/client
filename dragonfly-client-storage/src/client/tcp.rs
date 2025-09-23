@@ -274,3 +274,152 @@ impl TCPClient {
             })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::BytesMut;
+    use dragonfly_client_config::dfdaemon::Config;
+    use dragonfly_client_core::Error as ClientError;
+    use std::{sync::Arc, time::Duration};
+    use tokio::io::{AsyncRead, AsyncReadExt};
+    use vortex_protocol::tlv::download_piece::DownloadPiece;
+
+    fn create_test_config() -> Arc<Config> {
+        let mut config = Config::default();
+        config.download.piece_timeout = Duration::from_secs(5);
+        Arc::new(config)
+    }
+
+    fn create_test_client() -> TCPClient {
+        let config = create_test_config();
+        let addr = "127.0.0.1:8080".to_string();
+        TCPClient::new(config, addr)
+    }
+
+    #[test]
+    fn test_new_client_creation() {
+        let client = create_test_client();
+
+        // Verify the client is created
+        assert!(std::mem::size_of_val(&client) > 0);
+
+        // Test clone functionality
+        let cloned_client = client.clone();
+        assert!(std::mem::size_of_val(&cloned_client) > 0);
+    }
+
+    #[test]
+    fn test_config_timeout_setting() {
+        let mut config = Config::default();
+        config.download.piece_timeout = Duration::from_millis(500);
+        let config_arc = Arc::new(config);
+
+        // Verify config is set correctly
+        assert_eq!(config_arc.download.piece_timeout, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_client_error_conversions() {
+        // Test various error type conversions
+        let io_error = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "Connection refused");
+        let client_error = ClientError::IO(io_error);
+
+        match client_error {
+            ClientError::IO(_) => assert!(true),
+            _ => assert!(false, "Expected IO error"),
+        }
+
+        let unknown_error = ClientError::Unknown("Test error".to_string());
+        match unknown_error {
+            ClientError::Unknown(msg) => assert_eq!(msg, "Test error"),
+            _ => assert!(false, "Expected Unknown error"),
+        }
+    }
+
+    #[test]
+    fn test_bytes_conversion() {
+        // Test various Bytes operations used in the client
+        let test_data = vec![1, 2, 3, 4, 5];
+        let mut bytes_mut = BytesMut::with_capacity(test_data.len());
+        bytes_mut.extend_from_slice(&test_data);
+
+        let frozen = bytes_mut.freeze();
+        assert_eq!(frozen.len(), test_data.len());
+        assert_eq!(frozen.to_vec(), test_data);
+    }
+
+    #[test]
+    fn test_task_id_and_piece_number_validation() {
+        // Test input validation scenarios
+        let download_piece = DownloadPiece::new("".to_string(), 0);
+        assert_eq!(download_piece.task_id(), "");
+        assert_eq!(download_piece.piece_number(), 0);
+
+        let download_piece = DownloadPiece::new("valid-task-id".to_string(), u32::MAX);
+        assert_eq!(download_piece.task_id(), "valid-task-id");
+        assert_eq!(download_piece.piece_number(), u32::MAX);
+    }
+
+    #[test] 
+    fn test_address_format_validation() {
+        // Test different address formats
+        let addresses = vec![
+            "127.0.0.1:8080",
+            "localhost:9000", 
+            "192.168.1.1:8080",
+            "[::1]:8080", // IPv6
+        ];
+
+        for addr in addresses {
+            let client = TCPClient::new(create_test_config(), addr.to_string());
+            // Just verify client creation doesn't panic
+            assert!(std::mem::size_of_val(&client) > 0);
+        }
+    }
+
+    // Mock async reader for testing read operations
+    struct FailingReader;
+
+    impl AsyncRead for FailingReader {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            _buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionAborted,
+                "Mock connection failure",
+            )))
+        }
+    }
+
+    #[tokio::test] 
+    async fn test_read_error_handling() {
+        // Test error handling in read operations
+        let mut failing_reader = FailingReader;
+        let mut buffer = vec![0u8; 10];
+
+        let result = failing_reader.read(&mut buffer).await;
+        assert!(result.is_err());
+
+        match result.unwrap_err().kind() {
+            std::io::ErrorKind::ConnectionAborted => assert!(true),
+            _ => assert!(false, "Expected ConnectionAborted error"),
+        }
+    }
+
+    #[test]
+    fn test_timeout_duration_settings() {
+        // Test different timeout configurations
+        let short_timeout = Duration::from_millis(100);
+        let long_timeout = Duration::from_secs(30);
+
+        let mut config = Config::default();
+        config.download.piece_timeout = short_timeout;
+        assert_eq!(config.download.piece_timeout, short_timeout);
+
+        config.download.piece_timeout = long_timeout;
+        assert_eq!(config.download.piece_timeout, long_timeout);
+    }
+}

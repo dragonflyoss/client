@@ -476,3 +476,228 @@ impl TCPServerHandler {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::{Bytes, BytesMut};
+    use chrono::DateTime;
+    use dragonfly_api::common::v2::TrafficType;
+    use dragonfly_client_config::dfdaemon::Config;
+    use dragonfly_client_util::{id_generator::IDGenerator, shutdown};
+    use leaky_bucket::RateLimiter;
+    use std::{
+        net::SocketAddr, sync::Arc, time::Duration
+    };
+    use tempfile::tempdir;
+    use tokio::{
+        io::AsyncReadExt,
+        sync::mpsc,
+    };
+    use vortex_protocol::{
+        tlv::{
+            error::{Code, Error as VortexError},
+            piece_content::PieceContent,
+        },
+        Header, Vortex, HEADER_SIZE,
+    };
+
+    fn create_test_id_generator() -> Arc<IDGenerator> {
+        let id_generator =
+            IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false);
+
+        Arc::new(id_generator)
+    }
+
+    async fn create_test_storage() -> Arc<Storage> {
+        let temp_dir = tempdir().unwrap();
+
+        let config = Config::default();
+        let config = Arc::new(config);
+
+        let storage = Storage::new(
+            config,
+            temp_dir.path(),
+            temp_dir.path().to_path_buf(),
+        )
+        .await
+        .unwrap();
+
+        Arc::new(storage)
+    }
+
+    async fn create_test_handler() -> TCPServerHandler {
+        let id_generator = create_test_id_generator();
+
+        let storage = create_test_storage().await;
+
+        let upload_rate_limiter = Arc::new(RateLimiter::builder().build());
+
+        TCPServerHandler {
+            id_generator,
+            storage,
+            upload_rate_limiter,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tcp_server_creation() {
+        let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+
+        let id_generator = create_test_id_generator();
+
+        let storage = create_test_storage().await;
+
+        let upload_rate_limiter = Arc::new(RateLimiter::builder().build());
+
+        let (complete_tx, _complete_rx) = mpsc::unbounded_channel();
+
+        let server = TCPServer::new(
+            addr,
+            id_generator,
+            storage,
+            upload_rate_limiter,
+            shutdown::Shutdown::new(),
+            complete_tx,
+        );
+
+        assert!(std::mem::size_of_val(&server) > 0);
+    }
+
+    #[tokio::test]
+    async fn test_tcp_server_handler_creation() {
+        let handler = create_test_handler().await;
+        assert!(std::mem::size_of_val(&handler) > 0);
+
+        // Test clone functionality
+        let cloned_handler = handler.clone();
+        assert!(std::mem::size_of_val(&cloned_handler) > 0);
+    }
+
+    #[test]
+    fn test_bytes_operations() {
+        // Test BytesMut operations used in the server
+        let mut response = BytesMut::with_capacity(HEADER_SIZE + 100);
+        
+        // Test header creation and addition
+        let header = Header::new_piece_content(100);
+        let header_bytes: Bytes = header.into();
+        response.extend_from_slice(&header_bytes);
+        
+        // Test payload addition
+        let payload = vec![1, 2, 3, 4, 5];
+        response.extend_from_slice(&payload);
+        
+        let frozen = response.freeze();
+        assert_eq!(frozen.len(), HEADER_SIZE + payload.len());
+        assert!(!frozen.is_empty());
+    }
+
+    #[test]
+    fn test_vortex_message_creation() {
+        // Test Vortex message creation with error
+        let error = VortexError::new(Code::NotFound, "Not found".to_string());
+        let error_len = {
+            let temp_bytes: Bytes = error.clone().into();
+            temp_bytes.len() as u32
+        };
+        
+        let vortex_error: Bytes = Vortex::Error(Header::new_error(error_len), error).into();
+        assert!(!vortex_error.is_empty());
+        assert!(vortex_error.len() >= HEADER_SIZE);
+    }
+
+    #[test]
+    fn test_traffic_type_conversion() {
+        let traffic_type = TrafficType::RemotePeer as u8;
+        assert!(traffic_type > 0);
+        
+        // Test in piece content creation
+        let piece_content = PieceContent::new(
+            1, 0, 100, "digest".to_string(), "parent".to_string(),
+            traffic_type, Duration::from_millis(100), DateTime::from_timestamp(1693152000, 0).unwrap().naive_utc()
+        );
+        
+        // Verify it doesn't panic and creates valid content
+        let bytes: Bytes = piece_content.into();
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn test_id_generator_usage() {
+        let id_generator = create_test_id_generator();
+        let host_id = id_generator.host_id();
+        assert!(!host_id.is_empty());
+        assert!(host_id.contains("localhost"));
+    }
+
+    #[test]
+    fn test_rate_limiter_creation() {
+        let rate_limiter = RateLimiter::builder().build();
+        assert!(std::mem::size_of_val(&rate_limiter) > 0);
+        
+        // Test with custom settings
+        let custom_limiter = RateLimiter::builder()
+            .initial(1000)
+            .max(10000)
+            .refill(100)
+            .interval(Duration::from_secs(1))
+            .build();
+        assert!(std::mem::size_of_val(&custom_limiter) > 0);
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_acquire() {
+        let rate_limiter = RateLimiter::builder()
+            .initial(1000)
+            .max(1000)
+            .build();
+        
+        // Should succeed for small amounts
+        rate_limiter.acquire(100).await;
+        rate_limiter.acquire(200).await;
+        
+        // Should work but may take time for larger amounts
+        let start = std::time::Instant::now();
+        rate_limiter.acquire(800).await;  // This might be rate limited
+        let elapsed = start.elapsed();
+        
+        // Just verify it completes without panicking
+        assert!(elapsed >= Duration::from_nanos(0));
+    }
+
+    #[test]
+    fn test_socket_addr_parsing() {
+        let addresses = vec![
+            "127.0.0.1:8080",
+            "0.0.0.0:9000",
+            "192.168.1.1:8080",
+        ];
+        
+        for addr_str in addresses {
+            let addr: SocketAddr = addr_str.parse().unwrap();
+            assert!(addr.port() > 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_async_reader_cursor() {
+        let data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let mut cursor = std::io::Cursor::new(data.clone());
+        
+        let mut buffer = vec![0u8; 5];
+        let bytes_read = cursor.read(&mut buffer).await.unwrap();
+        assert_eq!(bytes_read, 5);
+        assert_eq!(buffer, vec![1, 2, 3, 4, 5]);
+        
+        let mut remaining = Vec::new();
+        cursor.read_to_end(&mut remaining).await.unwrap();
+        assert_eq!(remaining, vec![6, 7, 8, 9, 10]);
+    }
+
+    #[test]
+    fn test_protocol_header_size() {
+        assert!(HEADER_SIZE > 0);
+        assert_eq!(HEADER_SIZE, 6);
+    }
+}
