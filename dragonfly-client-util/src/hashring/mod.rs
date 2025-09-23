@@ -14,42 +14,60 @@
  * limitations under the License.
  */
 
+use hashring::HashRing;
 use std::fmt;
 use std::hash::Hash;
 use std::net::SocketAddr;
 
-use hashring::HashRing;
-
+/// A virtual node (vnode) on the consistent hash ring.
+/// Each physical node (SocketAddr) is represented by multiple vnodes to better
+/// balance key distribution across the ring.
 #[derive(Debug, Copy, Clone, Hash, PartialEq)]
 pub struct VNode {
+    /// The replica index of this vnode for its physical node (0..replica_count-1).
     id: usize,
+
+    /// The physical node address this vnode represents.
     addr: SocketAddr,
 }
 
+/// VNode implements virtual node for consistent hashing.
 impl VNode {
+    /// Creates a new virtual node with the given replica id and physical address.
     fn new(id: usize, addr: SocketAddr) -> Self {
         VNode { id, addr }
     }
 }
 
+/// VNode implements Display trait to format.
 impl fmt::Display for VNode {
+    /// Formats the virtual node as "address|id" as the key for the hash ring.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}|{}", self.addr, self.id)
     }
 }
 
+/// VNode implements methods for hash ring operations.
 impl VNode {
+    /// Returns a reference to the physical node address associated with this vnode.
     pub fn addr(&self) -> &SocketAddr {
         &self.addr
     }
 }
 
+/// A consistent hash ring that uses virtual nodes (vnodes) to improve key distribution.
+/// When a physical node is added, replica_count vnodes are inserted into the ring.
 pub struct VNodeHashRing {
+    /// Number of vnodes to create per physical node.
     replica_count: usize,
+
+    /// The underlying hash ring that stores vnodes.
     ring: HashRing<VNode>,
 }
 
+/// VNodeHashRing implements methods for managing the hash ring.
 impl VNodeHashRing {
+    /// Creates a new vnode-based hash ring.
     pub fn new(replica_count: usize) -> Self {
         VNodeHashRing {
             replica_count,

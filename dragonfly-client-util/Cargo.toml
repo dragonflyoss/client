@@ -41,6 +41,8 @@ tonic-health.workspace = true
 local-ip-address.workspace = true
 hostname.workspace = true
 dashmap.workspace = true
+reqwest-tracing.workspace = true
+reqwest-middleware.workspace = true
 rustix = { version = "1.1.2", features = ["fs"] }
 base64 = "0.22.1"
 pnet = "0.35.0"

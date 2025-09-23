@@ -98,9 +98,12 @@ struct DfdaemonUploadClientFactory {
     config: Arc<Config>,
 }
 
+/// DfdaemonUploadClientFactory implements the Factory trait for creating DfdaemonUploadClient
+/// instances.
 #[tonic::async_trait]
 impl Factory<String, DfdaemonUploadClient> for DfdaemonUploadClientFactory {
     type Error = Error;
+    /// Creates a new DfdaemonUploadClient for the given address.
     async fn make_client(&self, addr: &String) -> Result<DfdaemonUploadClient> {
         DfdaemonUploadClient::new(self.config.clone(), format!("http://{}", addr), true).await
     }
@@ -121,13 +124,9 @@ pub struct GRPCDownloader {
 impl GRPCDownloader {
     /// new returns a new GRPCDownloader.
     pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
-        let factory = DfdaemonUploadClientFactory {
-            config: config.clone(),
-        };
-
         Self {
-            config,
-            client_pool: PoolBuilder::new(factory)
+            config: config.clone(),
+            client_pool: PoolBuilder::new(DfdaemonUploadClientFactory { config })
                 .capacity(capacity)
                 .idle_timeout(idle_timeout)
                 .build(),
@@ -297,9 +296,12 @@ struct TCPClientFactory {
     config: Arc<Config>,
 }
 
+/// TCPClientFactory implements the Factory trait for creating TCPClient instances.
 #[tonic::async_trait]
 impl Factory<String, TCPClient> for TCPClientFactory {
     type Error = Error;
+
+    /// Creates a new TCPClient for the given address.
     async fn make_client(&self, addr: &String) -> Result<TCPClient> {
         Ok(TCPClient::new(self.config.clone(), addr.clone()))
     }
@@ -309,15 +311,13 @@ impl Factory<String, TCPClient> for TCPClientFactory {
 impl TCPDownloader {
     /// new returns a new TCPDownloader.
     pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
-        let factory = TCPClientFactory {
-            config: config.clone(),
-        };
-
         Self {
-            client_pool: PoolBuilder::new(factory)
-                .capacity(capacity)
-                .idle_timeout(idle_timeout)
-                .build(),
+            client_pool: PoolBuilder::new(TCPClientFactory {
+                config: config.clone(),
+            })
+            .capacity(capacity)
+            .idle_timeout(idle_timeout)
+            .build(),
         }
     }
 
@@ -346,6 +346,7 @@ impl Downloader for TCPDownloader {
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
         let entry = self.get_client_entry(addr).await?;
         let request_guard = entry.request_guard();
+
         match entry.client.download_piece(number, task_id).await {
             Ok((reader, offset, digest)) => Ok((Box::new(reader), offset, digest)),
             Err(err) => {
@@ -370,6 +371,7 @@ impl Downloader for TCPDownloader {
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
         let entry = self.get_client_entry(addr).await?;
         let request_guard = entry.request_guard();
+
         match entry
             .client
             .download_persistent_cache_piece(number, task_id)

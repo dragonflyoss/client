@@ -18,7 +18,10 @@ use crate::hashring::VNodeHashRing;
 use crate::shutdown;
 use dragonfly_api::common::v2::Host;
 use dragonfly_api::scheduler::v2::scheduler_client::SchedulerClient;
-use dragonfly_client_core::{Error, Result};
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Error, Result,
+};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -33,6 +36,7 @@ use tracing::{debug, error, info, instrument};
 /// Selector is the interface for selecting item from a list of items by a specific criteria.
 #[tonic::async_trait]
 pub trait Selector: Send + Sync {
+    /// select selects items based on the given task_id and number of replicas.
     async fn select(&self, task_id: String, replicas: u32) -> Result<Vec<Host>>;
 }
 
@@ -42,6 +46,7 @@ const SEED_PEERS_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 /// DEFAULT_VNODES_PER_HOST is the default number of virtual nodes per host.
 const DEFAULT_VNODES_PER_HOST: usize = 3;
 
+/// SeedPeers holds the data of seed peers.
 struct SeedPeers {
     /// hosts is the list of seed peers.
     hosts: HashMap<String, Host>,
@@ -50,6 +55,7 @@ struct SeedPeers {
     hashring: VNodeHashRing,
 }
 
+/// SeedPeerSelector is the implementation of Selector for seed peers.
 pub struct SeedPeerSelector {
     /// health_check_interval is the interval of health check for seed peers.
     health_check_interval: Duration,
@@ -60,10 +66,11 @@ pub struct SeedPeerSelector {
     /// seed_peers is the data of the seed peer selector.
     seed_peers: RwLock<SeedPeers>,
 
-    /// mutex is used to protect refresh.
+    /// mutex is used to protect hot refresh.
     mutex: Mutex<()>,
 }
 
+/// SeedPeerSelector implements a selector that selects seed peers from the scheduler service.
 impl SeedPeerSelector {
     /// new creates a new seed peer selector.
     pub async fn new(
@@ -86,10 +93,6 @@ impl SeedPeerSelector {
 
     /// run starts the seed peer selector service.
     pub async fn run(&self) {
-        // Receive shutdown signal.
-        let mut shutdown = shutdown::Shutdown::default();
-
-        // Start the refresh loop.
         let mut interval = tokio::time::interval(self.health_check_interval);
         loop {
             tokio::select! {
@@ -99,7 +102,7 @@ impl SeedPeerSelector {
                         Ok(_) => debug!("succeed to refresh seed peers"),
                     }
                 }
-                _ = shutdown.recv() => {
+                _ = shutdown::shutdown_signal() => {
                     info!("seed peer selector service is shutting down");
                     return;
                 }
@@ -135,11 +138,13 @@ impl SeedPeerSelector {
 
         let mut hosts = HashMap::with_capacity(seed_peers_length);
         let mut hashring = VNodeHashRing::new(DEFAULT_VNODES_PER_HOST);
-
         while let Some(result) = join_set.join_next().await {
             match result {
                 Ok(Ok(peer)) => {
-                    let addr: SocketAddr = format!("{}:{}", peer.ip, peer.port).parse().unwrap();
+                    let addr: SocketAddr = format!("{}:{}", peer.ip, peer.port)
+                        .parse()
+                        .or_err(ErrorType::ParseError)?;
+
                     hashring.add(addr);
                     hosts.insert(addr.to_string(), peer);
                 }
@@ -179,16 +184,16 @@ impl SeedPeerSelector {
     /// check_health checks the health of each seed peer.
     #[instrument(skip_all)]
     async fn check_health(addr: &str) -> Result<HealthCheckResponse> {
-        let endpoint =
-            Endpoint::from_shared(addr.to_string())?.timeout(SEED_PEERS_HEALTH_CHECK_TIMEOUT);
+        let channel = Endpoint::from_shared(addr.to_string())?
+            .connect_timeout(SEED_PEERS_HEALTH_CHECK_TIMEOUT)
+            .connect()
+            .await?;
 
-        let channel = endpoint.connect().await?;
         let mut client = HealthGRPCClient::new(channel);
-
-        let request = tonic::Request::new(HealthCheckRequest {
+        let mut request = tonic::Request::new(HealthCheckRequest {
             service: "".to_string(),
         });
-
+        request.set_timeout(SEED_PEERS_HEALTH_CHECK_TIMEOUT);
         let response = client.check(request).await?;
         Ok(response.into_inner())
     }
@@ -200,21 +205,21 @@ impl Selector for SeedPeerSelector {
     async fn select(&self, task_id: String, replicas: u32) -> Result<Vec<Host>> {
         // Acquire a read lock and perform all logic within it.
         let seed_peers = self.seed_peers.read().await;
-
         if seed_peers.hosts.is_empty() {
             return Err(Error::HostNotFound("seed peers".to_string()));
         }
 
         // The number of replicas cannot exceed the total number of seed peers.
-        let desired_replicas = std::cmp::min(replicas as usize, seed_peers.hashring.len());
+        let expected_replicas = std::cmp::min(replicas as usize, seed_peers.hashring.len());
+        debug!("expected replicas: {}", expected_replicas);
 
         // Get replica nodes from the hash ring.
         let vnodes = seed_peers
             .hashring
-            .get_with_replicas(&task_id, desired_replicas)
+            .get_with_replicas(&task_id, expected_replicas)
             .unwrap_or_default();
 
-        let seed_peers = vnodes
+        let seed_peers: Vec<Host> = vnodes
             .into_iter()
             .filter_map(|vnode| {
                 seed_peers
@@ -223,6 +228,10 @@ impl Selector for SeedPeerSelector {
                     .cloned()
             })
             .collect();
+
+        if seed_peers.is_empty() {
+            return Err(Error::HostNotFound("selected seed peers".to_string()));
+        }
 
         Ok(seed_peers)
     }
