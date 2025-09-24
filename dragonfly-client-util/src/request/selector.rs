@@ -17,7 +17,7 @@
 use crate::hashring::VNodeHashRing;
 use crate::shutdown;
 use dragonfly_api::common::v2::Host;
-use dragonfly_api::scheduler::v2::scheduler_client::SchedulerClient;
+use dragonfly_api::scheduler::v2::{scheduler_client::SchedulerClient, ListHostsRequest};
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -168,11 +168,8 @@ impl SeedPeerSelector {
     /// list_seed_peers lists the seed peers from scheduler.
     #[instrument(skip_all)]
     async fn list_seed_peers(&self) -> Result<Vec<Host>> {
-        let response = self
-            .scheduler_client
-            .clone()
-            .list_hosts(tonic::Request::new(()))
-            .await?;
+        let request = tonic::Request::new(ListHostsRequest { r#type: None });
+        let response = self.scheduler_client.clone().list_hosts(request).await?;
         let hosts = response.into_inner().hosts;
 
         // Filter for seed peer types, normal peer type is 0 and others are seed peers.
