@@ -51,6 +51,13 @@ pub struct ExportCommand {
     transfer_from_dfdaemon: bool,
 
     #[arg(
+        long = "overwrite",
+        default_value_t = false,
+        help = "Specify whether to overwrite the output file if it already exists. If it is true, dfget will overwrite the output file. If it is false, dfget will return an error if the output file already exists. Cannot be used with `--force-hard-link=true`"
+    )]
+    overwrite: bool,
+
+    #[arg(
         long = "force-hard-link",
         default_value_t = false,
         help = "Specify whether the download file must be hard linked to the output path. If hard link is failed, download will be failed. If it is false, dfdaemon will copy the file to the output path if hard link is failed."
@@ -453,6 +460,7 @@ impl ExportCommand {
                 force_hard_link: self.force_hard_link,
                 digest: self.digest.clone(),
                 remote_ip: Some(local_ip().unwrap().to_string()),
+                overwrite: self.overwrite,
             })
             .await
             .inspect_err(|err| {
@@ -581,7 +589,7 @@ impl ExportCommand {
             }
         }
 
-        if absolute_path.exists() {
+        if !self.overwrite && absolute_path.exists() {
             return Err(Error::ValidationError(format!(
                 "output path {} is already exist",
                 self.output.to_string_lossy()
