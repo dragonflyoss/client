@@ -968,7 +968,7 @@ impl Default for Dynconfig {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct StorageServer {
-    /// ip is the listen ip of the gRPC server.
+    /// ip is the listen ip of the storage server.
     pub ip: Option<IpAddr>,
 
     /// port is the port to the tcp server.

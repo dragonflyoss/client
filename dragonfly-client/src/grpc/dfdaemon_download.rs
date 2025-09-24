@@ -493,6 +493,22 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                         {
                                             Ok(true) => {}
                                             Ok(false) => {
+                                                if download_clone.overwrite {
+                                                    if let Err(err) = task_manager_clone
+                                                        .copy_task(
+                                                            task_clone.id.as_str(),
+                                                            output_path,
+                                                        )
+                                                        .await
+                                                    {
+                                                        error!("copy task: {}", err);
+                                                        handle_error(&out_stream_tx, err).await;
+                                                        return;
+                                                    };
+
+                                                    return;
+                                                }
+
                                                 error!(
                                                     "output path {} is already exists",
                                                     output_path.display()
@@ -1063,6 +1079,19 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                     {
                                         Ok(true) => {}
                                         Ok(false) => {
+                                            if request_clone.overwrite {
+                                                if let Err(err) = task_manager_clone
+                                                    .copy_task(task_clone.id.as_str(), output_path)
+                                                    .await
+                                                {
+                                                    error!("copy task: {}", err);
+                                                    handle_error(&out_stream_tx, err).await;
+                                                    return;
+                                                };
+
+                                                return;
+                                            }
+
                                             error!(
                                                 "output path {} is already exists",
                                                 output_path.display()
