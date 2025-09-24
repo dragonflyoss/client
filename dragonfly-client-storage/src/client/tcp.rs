@@ -333,7 +333,7 @@ mod tests {
             ClientError::IO(err) => {
                 assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused);
                 assert_eq!(err.to_string(), "Connection refused");
-            },
+            }
             _ => unreachable!("Unexpected error"),
         }
 
@@ -414,7 +414,7 @@ mod tests {
             Err(err) => {
                 assert_eq!(err.kind(), std::io::ErrorKind::ConnectionAborted);
                 assert_eq!(err.to_string(), "Mock connection failure");
-            },
+            }
             _ => unreachable!("Unexpected error"),
         }
     }
