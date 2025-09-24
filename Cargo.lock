@@ -1050,6 +1050,7 @@ dependencies = [
  "lazy_static",
  "leaky-bucket",
  "local-ip-address",
+ "mocktail",
  "openssl",
  "opentelemetry",
  "opentelemetry-otlp",

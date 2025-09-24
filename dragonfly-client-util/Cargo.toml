@@ -52,4 +52,4 @@ quinn = "0.11.9"
 
 [dev-dependencies]
 tempfile.workspace = true
-mocktail = "0.3.0"
+mocktail.workspace = true
