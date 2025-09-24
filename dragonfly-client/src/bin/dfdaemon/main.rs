@@ -15,6 +15,7 @@
  */
 
 use clap::Parser;
+use dragonfly_api::manager::v2::{RequestEncryptionKeyRequest, SourceType};
 use dragonfly_client::announcer::SchedulerAnnouncer;
 use dragonfly_client::dynconfig::Dynconfig;
 use dragonfly_client::gc::GC;
@@ -40,7 +41,8 @@ use std::time::Duration;
 use termion::{color, style};
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
-use tracing::{error, info, Level};
+use tracing::{debug, error, info, Level};
+use base64::{prelude::BASE64_STANDARD, Engine as _};
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
@@ -155,8 +157,24 @@ async fn main() -> Result<(), anyhow::Error> {
         args.console,
     );
 
+    // Initialize manager client.
+    let manager_client = ManagerClient::new(config.clone(), config.manager.addr.clone())
+        .await
+        .inspect_err(|err| {
+            error!("initialize manager client failed: {}", err);
+        })?;
+    let manager_client = Arc::new(manager_client);
+
+    // Get primary key from manager, None when encryption disabled
+    let primary_key = get_key_from_manager(&config, &manager_client).await?;
+
     // Initialize storage.
-    let storage = Storage::new(config.clone(), config.storage.dir.as_path(), args.log_dir)
+    let storage = Storage::new(
+        config.clone(), 
+        config.storage.dir.as_path(), 
+        args.log_dir, 
+        primary_key.clone()
+    )
         .await
         .inspect_err(|err| {
             error!("initialize storage failed: {}", err);
@@ -170,14 +188,6 @@ async fn main() -> Result<(), anyhow::Error> {
         config.seed_peer.enable,
     );
     let id_generator = Arc::new(id_generator);
-
-    // Initialize manager client.
-    let manager_client = ManagerClient::new(config.clone(), config.manager.addr.clone())
-        .await
-        .inspect_err(|err| {
-            error!("initialize manager client failed: {}", err);
-        })?;
-    let manager_client = Arc::new(manager_client);
 
     // Initialize channel for graceful shutdown.
     let shutdown = shutdown::Shutdown::default();
@@ -253,6 +263,7 @@ async fn main() -> Result<(), anyhow::Error> {
         download_rate_limiter.clone(),
         upload_rate_limiter.clone(),
         prefetch_rate_limiter.clone(),
+        primary_key.clone(),
     )?;
     let task = Arc::new(task);
 
@@ -266,6 +277,7 @@ async fn main() -> Result<(), anyhow::Error> {
         download_rate_limiter.clone(),
         upload_rate_limiter.clone(),
         prefetch_rate_limiter.clone(),
+        primary_key.clone(),
     )?;
     let persistent_cache_task = Arc::new(persistent_cache_task);
 
@@ -337,6 +349,7 @@ async fn main() -> Result<(), anyhow::Error> {
         interface.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
+        primary_key.clone(),
     );
 
     // Initialize download grpc server.
@@ -347,6 +360,7 @@ async fn main() -> Result<(), anyhow::Error> {
         persistent_cache_task.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
+        primary_key.clone(),
     );
 
     // Initialize garbage collector.
@@ -451,4 +465,38 @@ async fn main() -> Result<(), anyhow::Error> {
     let _ = shutdown_complete_rx.recv().await;
 
     Ok(())
+}
+
+/// get_key_from_manager gets the primary key from the manager.
+async fn get_key_from_manager(
+    config: &dfdaemon::Config, 
+    client: &ManagerClient
+) -> Result<Option<Vec<u8>>, anyhow::Error> {
+    let source_type = if config.seed_peer.enable {
+        SourceType::SeedPeerSource.into()
+    } else {
+        SourceType::PeerSource.into()
+    };
+    // Request a key from Manager
+    let (enable, key) = client.request_encryption_key(
+        RequestEncryptionKeyRequest {
+            source_type: source_type,
+            hostname: config.host.hostname.clone(),
+            ip: config.host.ip.unwrap().to_string(),
+        }
+    )
+    .await
+    .inspect_err(|err| {
+        error!("fail to get encryption info from Manager: {}", err);
+    })?;
+
+    if !enable {
+        info!("encryption is disabled");
+        return Ok(None);
+    }
+    info!("encryption is enabled");
+    let key = key.expect("should have key when manager enable encryption");
+    let key_base64 = BASE64_STANDARD.encode(&key);
+    debug!("key response(base64): {} \n (hex): {:x?}", key_base64, key);
+    Ok(Some(key))
 }

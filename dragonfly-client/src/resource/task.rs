@@ -88,6 +88,9 @@ pub struct Task {
 
     /// piece is the piece manager.
     pub piece: Arc<piece::Piece>,
+
+    /// primary_key is the primary key from manager
+    pub primary_key: Option<Vec<u8>>,
 }
 
 /// Task implements the task manager.
@@ -103,6 +106,7 @@ impl Task {
         download_rate_limiter: Arc<RateLimiter>,
         upload_rate_limiter: Arc<RateLimiter>,
         prefetch_rate_limiter: Arc<RateLimiter>,
+        primary_key: Option<Vec<u8>>,
     ) -> ClientResult<Self> {
         let piece = piece::Piece::new(
             config.clone(),
@@ -122,6 +126,7 @@ impl Task {
             scheduler_client: scheduler_client.clone(),
             backend_factory: backend_factory.clone(),
             piece: piece.clone(),
+            primary_key,
         })
     }
 
@@ -141,6 +146,12 @@ impl Task {
         let task = self.storage.prepare_download_task_started(id).await?;
 
         if task.content_length.is_some() && task.piece_length.is_some() {
+            // Omit HARD-LINK when use encryption
+            if self.primary_key.is_some() {
+                info!("omit hardlink when encryption is enabled");
+                return Ok(task);
+            }
+
             // Attempt to create a hard link from the task file to the output path.
             //
             // Behavior based on force_hard_link setting:
@@ -258,6 +269,12 @@ impl Task {
             .storage
             .download_task_started(id, piece_length, content_length, response.http_header)
             .await;
+
+        // Omit HARD-LINK when use encryption
+        if self.primary_key.is_some() {
+            info!("omit hard link when encryption is enabled");
+            return task;
+        }
 
         // Attempt to create a hard link from the task file to the output path.
         //
@@ -2012,10 +2029,12 @@ mod tests {
         let config = Arc::new(config);
 
         // Create storage.
-        let storage = Storage::new(config.clone(), temp_dir.path(), log_dir)
+        let storage = Storage::new(config.clone(), temp_dir.path(), log_dir, None)
             .await
             .unwrap();
         let storage = Arc::new(storage);
+
+        // TODO bad id < 64 bytes?
 
         // Test Storage.get_task and Error::TaskNotFound.
         let task_id = "non-existent-task-id";
