@@ -103,6 +103,13 @@ struct Args {
     transfer_from_dfdaemon: bool,
 
     #[arg(
+        long = "overwrite",
+        default_value_t = false,
+        help = "Specify whether to overwrite the output file if it already exists. If it is true, dfget will overwrite the output file. If it is false, dfget will return an error if the output file already exists. Cannot be used with `--force-hard-link=true`"
+    )]
+    overwrite: bool,
+
+    #[arg(
         long = "force-hard-link",
         default_value_t = false,
         help = "Specify whether the download file must be hard linked to the output path. If hard link is failed, download will be failed. If it is false, dfdaemon will copy the file to the output path if hard link is failed."
@@ -883,6 +890,7 @@ async fn download(
                 content_for_calculating_task_id: args.content_for_calculating_task_id,
                 remote_ip: Some(local_ip().unwrap().to_string()),
                 concurrent_piece_count: None,
+                overwrite: args.overwrite,
             }),
         })
         .await
@@ -902,7 +910,8 @@ async fn download(
         }
 
         let f = OpenOptions::new()
-            .create_new(true)
+            .create(true)
+            .truncate(true)
             .write(true)
             .mode(dfget::DEFAULT_OUTPUT_FILE_MODE)
             .open(&args.output)
@@ -933,60 +942,76 @@ async fn download(
     // Download file.
     let mut downloaded = 0;
     let mut out_stream = response.into_inner();
-    while let Some(message) = out_stream.message().await.inspect_err(|err| {
-        error!("get message failed: {}", err);
-    })? {
-        match message.response {
-            Some(download_task_response::Response::DownloadTaskStartedResponse(response)) => {
-                if let Some(f) = &f {
-                    fallocate(f, response.content_length)
-                        .await
-                        .inspect_err(|err| {
-                            error!("fallocate {:?} failed: {}", args.output, err);
-                        })?;
-                }
 
-                progress_bar.set_length(response.content_length);
-            }
-            Some(download_task_response::Response::DownloadPieceFinishedResponse(response)) => {
-                let piece = response
-                    .piece
-                    .ok_or(Error::InvalidParameter)
-                    .inspect_err(|_err| {
-                        error!("response piece is missing");
-                    })?;
+    loop {
+        match out_stream.message().await {
+            Ok(Some(message)) => {
+                match message.response {
+                    Some(download_task_response::Response::DownloadTaskStartedResponse(
+                        response,
+                    )) => {
+                        if let Some(f) = &f {
+                            fallocate(f, response.content_length)
+                                .await
+                                .inspect_err(|err| {
+                                    error!("fallocate {:?} failed: {}", args.output, err);
+                                })?;
+                        }
 
-                // Dfget needs to write the piece content to the output file.
-                if let Some(f) = &mut f {
-                    f.seek(SeekFrom::Start(piece.offset))
-                        .await
-                        .inspect_err(|err| {
-                            error!("seek {:?} failed: {}", args.output, err);
-                        })?;
+                        progress_bar.set_length(response.content_length);
+                    }
+                    Some(download_task_response::Response::DownloadPieceFinishedResponse(
+                        response,
+                    )) => {
+                        let piece =
+                            response
+                                .piece
+                                .ok_or(Error::InvalidParameter)
+                                .inspect_err(|_err| {
+                                    error!("response piece is missing");
+                                })?;
 
-                    let content =
-                        piece
-                            .content
-                            .ok_or(Error::InvalidParameter)
-                            .inspect_err(|_err| {
-                                error!("piece content is missing");
+                        // Dfget needs to write the piece content to the output file.
+                        if let Some(f) = &mut f {
+                            f.seek(SeekFrom::Start(piece.offset))
+                                .await
+                                .inspect_err(|err| {
+                                    error!("seek {:?} failed: {}", args.output, err);
+                                })?;
+
+                            let content = piece
+                                .content
+                                .ok_or(Error::InvalidParameter)
+                                .inspect_err(|_err| {
+                                    error!("piece content is missing");
+                                })?;
+
+                            f.write_all(&content).await.inspect_err(|err| {
+                                error!("write {:?} failed: {}", args.output, err);
                             })?;
 
-                    f.write_all(&content).await.inspect_err(|err| {
-                        error!("write {:?} failed: {}", args.output, err);
-                    })?;
+                            debug!("copy piece {} to {:?} success", piece.number, args.output);
+                        }
 
-                    debug!("copy piece {} to {:?} success", piece.number, args.output);
+                        downloaded += piece.length;
+                        let position = min(
+                            downloaded + piece.length,
+                            progress_bar.length().unwrap_or(0),
+                        );
+                        progress_bar.set_position(position);
+                    }
+                    None => {}
                 }
-
-                downloaded += piece.length;
-                let position = min(
-                    downloaded + piece.length,
-                    progress_bar.length().unwrap_or(0),
-                );
-                progress_bar.set_position(position);
             }
-            None => {}
+            Ok(None) => break,
+            Err(err) => {
+                error!("get message failed: {}", err);
+                fs::remove_file(&args.output).await.inspect_err(|err| {
+                    error!("remove file {:?} failed: {}", args.output, err);
+                })?;
+
+                return Err(Error::TonicStatus(err));
+            }
         }
     }
 
@@ -1128,7 +1153,7 @@ fn validate_args(args: &Args) -> Result<()> {
             }
         }
 
-        if absolute_path.exists() {
+        if !args.overwrite && absolute_path.exists() {
             return Err(Error::ValidationError(format!(
                 "output path {} is already exist",
                 args.output.to_string_lossy()
