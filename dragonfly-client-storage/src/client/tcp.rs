@@ -330,14 +330,17 @@ mod tests {
         let client_error = ClientError::IO(io_error);
 
         match client_error {
-            ClientError::IO(_) => assert!(true),
-            _ => assert!(false, "Expected IO error"),
+            ClientError::IO(err) => {
+                assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused);
+                assert_eq!(err.to_string(), "Connection refused");
+            },
+            _ => unreachable!("Unexpected error"),
         }
 
         let unknown_error = ClientError::Unknown("Test error".to_string());
         match unknown_error {
             ClientError::Unknown(msg) => assert_eq!(msg, "Test error"),
-            _ => assert!(false, "Expected Unknown error"),
+            _ => unreachable!("Unexpected error"),
         }
     }
 
@@ -407,9 +410,12 @@ mod tests {
         let result = failing_reader.read(&mut buffer).await;
         assert!(result.is_err());
 
-        match result.unwrap_err().kind() {
-            std::io::ErrorKind::ConnectionAborted => assert!(true),
-            _ => assert!(false, "Expected ConnectionAborted error"),
+        match result {
+            Err(err) => {
+                assert_eq!(err.kind(), std::io::ErrorKind::ConnectionAborted);
+                assert_eq!(err.to_string(), "Mock connection failure");
+            },
+            _ => unreachable!("Unexpected error"),
         }
     }
 

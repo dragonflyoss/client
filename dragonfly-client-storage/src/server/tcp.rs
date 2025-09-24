@@ -687,7 +687,6 @@ mod tests {
 
     #[test]
     fn test_protocol_header_size() {
-        assert!(HEADER_SIZE > 0);
         assert_eq!(HEADER_SIZE, 6);
     }
 }
