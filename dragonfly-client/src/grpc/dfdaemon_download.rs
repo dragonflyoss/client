@@ -70,6 +70,7 @@ use tonic::{
 use tower::{service_fn, ServiceBuilder};
 use tracing::{error, info, instrument, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use url::Url;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 
@@ -1343,7 +1344,61 @@ pub struct DfdaemonDownloadClient {
 
 /// DfdaemonDownloadClient implements the grpc client of the dfdaemon download.
 impl DfdaemonDownloadClient {
-    /// new_unix creates a new DfdaemonDownloadClient with unix domain socket.
+    /// Creates a new DfdaemonDownloadClient.
+    pub async fn new(config: Arc<Config>, addr: String) -> ClientResult<Self> {
+        let domain_name = Url::parse(addr.as_str())?
+            .host_str()
+            .ok_or(ClientError::InvalidParameter)
+            .inspect_err(|_err| {
+                error!("invalid address: {}", addr);
+            })?
+            .to_string();
+
+        let channel = match config
+            .upload
+            .client
+            .load_client_tls_config(domain_name.as_str())
+            .await?
+        {
+            Some(client_tls_config) => {
+                Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
+                    .tls_config(client_tls_config)?
+                    .buffer_size(super::BUFFER_SIZE)
+                    .connect_timeout(super::CONNECT_TIMEOUT)
+                    .timeout(super::REQUEST_TIMEOUT)
+                    .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+                    .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                    .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+                    .connect()
+                    .await
+                    .inspect_err(|err| {
+                        error!("connect to {} failed: {}", addr, err);
+                    })
+                    .or_err(ErrorType::ConnectError)?
+            }
+            None => Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
+                .buffer_size(super::BUFFER_SIZE)
+                .connect_timeout(super::CONNECT_TIMEOUT)
+                .timeout(super::REQUEST_TIMEOUT)
+                .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+                .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+                .connect()
+                .await
+                .inspect_err(|err| {
+                    error!("connect to {} failed: {}", addr, err);
+                })
+                .or_err(ErrorType::ConnectError)?,
+        };
+
+        let client =
+            DfdaemonDownloadGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX);
+        Ok(Self { client })
+    }
+
+    /// Creates a new DfdaemonDownloadClient with unix domain socket.
     pub async fn new_unix(socket_path: PathBuf) -> ClientResult<Self> {
         // Ignore the uri because it is not used.
         let channel = Endpoint::try_from("http://[::]:50051")
