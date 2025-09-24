@@ -486,14 +486,9 @@ mod tests {
     use dragonfly_client_config::dfdaemon::Config;
     use dragonfly_client_util::{id_generator::IDGenerator, shutdown};
     use leaky_bucket::RateLimiter;
-    use std::{
-        net::SocketAddr, sync::Arc, time::Duration
-    };
+    use std::{net::SocketAddr, sync::Arc, time::Duration};
     use tempfile::tempdir;
-    use tokio::{
-        io::AsyncReadExt,
-        sync::mpsc,
-    };
+    use tokio::{io::AsyncReadExt, sync::mpsc};
     use vortex_protocol::{
         tlv::{
             error::{Code, Error as VortexError},
@@ -515,13 +510,9 @@ mod tests {
         let config = Config::default();
         let config = Arc::new(config);
 
-        let storage = Storage::new(
-            config,
-            temp_dir.path(),
-            temp_dir.path().to_path_buf(),
-        )
-        .await
-        .unwrap();
+        let storage = Storage::new(config, temp_dir.path(), temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
 
         Arc::new(storage)
     }
@@ -578,16 +569,16 @@ mod tests {
     fn test_bytes_operations() {
         // Test BytesMut operations used in the server
         let mut response = BytesMut::with_capacity(HEADER_SIZE + 100);
-        
+
         // Test header creation and addition
         let header = Header::new_piece_content(100);
         let header_bytes: Bytes = header.into();
         response.extend_from_slice(&header_bytes);
-        
+
         // Test payload addition
         let payload = vec![1, 2, 3, 4, 5];
         response.extend_from_slice(&payload);
-        
+
         let frozen = response.freeze();
         assert_eq!(frozen.len(), HEADER_SIZE + payload.len());
         assert!(!frozen.is_empty());
@@ -601,7 +592,7 @@ mod tests {
             let temp_bytes: Bytes = error.clone().into();
             temp_bytes.len() as u32
         };
-        
+
         let vortex_error: Bytes = Vortex::Error(Header::new_error(error_len), error).into();
         assert!(!vortex_error.is_empty());
         assert!(vortex_error.len() >= HEADER_SIZE);
@@ -611,13 +602,19 @@ mod tests {
     fn test_traffic_type_conversion() {
         let traffic_type = TrafficType::RemotePeer as u8;
         assert!(traffic_type > 0);
-        
+
         // Test in piece content creation
         let piece_content = PieceContent::new(
-            1, 0, 100, "digest".to_string(), "parent".to_string(),
-            traffic_type, Duration::from_millis(100), DateTime::from_timestamp(1693152000, 0).unwrap().naive_utc()
+            1,
+            0,
+            100,
+            "digest".to_string(),
+            "parent".to_string(),
+            traffic_type,
+            Duration::from_millis(100),
+            DateTime::from_timestamp(1693152000, 0).unwrap().naive_utc(),
         );
-        
+
         // Verify it doesn't panic and creates valid content
         let bytes: Bytes = piece_content.into();
         assert!(!bytes.is_empty());
@@ -635,7 +632,7 @@ mod tests {
     fn test_rate_limiter_creation() {
         let rate_limiter = RateLimiter::builder().build();
         assert!(std::mem::size_of_val(&rate_limiter) > 0);
-        
+
         // Test with custom settings
         let custom_limiter = RateLimiter::builder()
             .initial(1000)
@@ -648,32 +645,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiter_acquire() {
-        let rate_limiter = RateLimiter::builder()
-            .initial(1000)
-            .max(1000)
-            .build();
-        
+        let rate_limiter = RateLimiter::builder().initial(1000).max(1000).build();
+
         // Should succeed for small amounts
         rate_limiter.acquire(100).await;
         rate_limiter.acquire(200).await;
-        
+
         // Should work but may take time for larger amounts
         let start = std::time::Instant::now();
-        rate_limiter.acquire(800).await;  // This might be rate limited
+        rate_limiter.acquire(800).await; // This might be rate limited
         let elapsed = start.elapsed();
-        
+
         // Just verify it completes without panicking
         assert!(elapsed >= Duration::from_nanos(0));
     }
 
     #[test]
     fn test_socket_addr_parsing() {
-        let addresses = vec![
-            "127.0.0.1:8080",
-            "0.0.0.0:9000",
-            "192.168.1.1:8080",
-        ];
-        
+        let addresses = vec!["127.0.0.1:8080", "0.0.0.0:9000", "192.168.1.1:8080"];
+
         for addr_str in addresses {
             let addr: SocketAddr = addr_str.parse().unwrap();
             assert!(addr.port() > 0);
@@ -684,12 +674,12 @@ mod tests {
     async fn test_async_reader_cursor() {
         let data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         let mut cursor = std::io::Cursor::new(data.clone());
-        
+
         let mut buffer = vec![0u8; 5];
         let bytes_read = cursor.read(&mut buffer).await.unwrap();
         assert_eq!(bytes_read, 5);
         assert_eq!(buffer, vec![1, 2, 3, 4, 5]);
-        
+
         let mut remaining = Vec::new();
         cursor.read_to_end(&mut remaining).await.unwrap();
         assert_eq!(remaining, vec![6, 7, 8, 9, 10]);

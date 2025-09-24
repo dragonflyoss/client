@@ -316,13 +316,17 @@ mod tests {
         let config_arc = Arc::new(config);
 
         // Verify config is set correctly
-        assert_eq!(config_arc.download.piece_timeout, Duration::from_millis(500));
+        assert_eq!(
+            config_arc.download.piece_timeout,
+            Duration::from_millis(500)
+        );
     }
 
     #[test]
     fn test_client_error_conversions() {
         // Test various error type conversions
-        let io_error = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "Connection refused");
+        let io_error =
+            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "Connection refused");
         let client_error = ClientError::IO(io_error);
 
         match client_error {
@@ -361,12 +365,12 @@ mod tests {
         assert_eq!(download_piece.piece_number(), u32::MAX);
     }
 
-    #[test] 
+    #[test]
     fn test_address_format_validation() {
         // Test different address formats
         let addresses = vec![
             "127.0.0.1:8080",
-            "localhost:9000", 
+            "localhost:9000",
             "192.168.1.1:8080",
             "[::1]:8080", // IPv6
         ];
@@ -394,7 +398,7 @@ mod tests {
         }
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_read_error_handling() {
         // Test error handling in read operations
         let mut failing_reader = FailingReader;
