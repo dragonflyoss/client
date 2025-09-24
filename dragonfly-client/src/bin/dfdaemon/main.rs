@@ -30,7 +30,7 @@ use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::{dfdaemon, VersionValueParser};
 use dragonfly_client_metric::Metrics;
-use dragonfly_client_storage::{server::tcp::TCPServer, Storage};
+use dragonfly_client_storage::{server::tcp::TCPServer, server::quic::QUICServer, Storage};
 use dragonfly_client_util::{id_generator::IDGenerator, net::Interface, shutdown};
 use leaky_bucket::RateLimiter;
 use std::net::SocketAddr;
@@ -306,6 +306,19 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     );
 
+    // Initialize storage quic server.
+    let mut storage_quic_server = QUICServer::new(
+        SocketAddr::new(
+            config.storage.server.ip.unwrap(),
+            config.storage.server.quic_port,
+        ),
+        id_generator.clone(),
+        storage.clone(),
+        upload_rate_limiter.clone(),
+        shutdown.clone(),
+        shutdown_complete_tx.clone(),
+    );
+
     // Initialize proxy server.
     let proxy = Proxy::new(
         config.clone(),
@@ -397,6 +410,14 @@ async fn main() -> Result<(), anyhow::Error> {
             })
         } => {
             info!("storage tcp server exited");
+        },
+
+        _ = {
+            tokio::spawn(async move {
+                storage_quic_server.run().await.unwrap_or_else(|err| error!("storage quic server failed: {}", err));
+            })
+        } => {
+            info!("storage quic server exited");
         },
 
         _ = {
