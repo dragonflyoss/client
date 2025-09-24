@@ -166,7 +166,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let manager_client = Arc::new(manager_client);
 
     // Get primary key from manager, None when encryption disabled
-    let primary_key = get_key_from_manager(&config, &manager_client).await;
+    let primary_key = get_key_from_manager(&config, &manager_client).await?;
 
     // Initialize storage.
     let storage = Storage::new(
@@ -467,7 +467,11 @@ async fn main() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-async fn get_key_from_manager(config: &dfdaemon::Config, client: &ManagerClient) -> Option<Vec<u8>>{
+/// get_key_from_manager gets the primary key from the manager.
+async fn get_key_from_manager(
+    config: &dfdaemon::Config, 
+    client: &ManagerClient
+) -> Result<Option<Vec<u8>>, anyhow::Error> {
     let source_type = if config.seed_peer.enable {
         SourceType::SeedPeerSource.into()
     } else {
@@ -480,16 +484,19 @@ async fn get_key_from_manager(config: &dfdaemon::Config, client: &ManagerClient)
             hostname: config.host.hostname.clone(),
             ip: config.host.ip.unwrap().to_string(),
         }
-    ).await
-    .expect("fail to get encryption info from Manager");
+    )
+    .await
+    .inspect_err(|err| {
+        error!("fail to get encryption info from Manager: {}", err);
+    })?;
 
     if !enable {
         info!("encryption is disabled");
-        return None;
+        return Ok(None);
     }
     info!("encryption is enabled");
     let key = key.expect("should have key when manager enable encryption");
     let key_base64 = BASE64_STANDARD.encode(&key);
     debug!("key response(base64): {} \n (hex): {:x?}", key_base64, key);
-    Some(key)
+    Ok(Some(key))
 }

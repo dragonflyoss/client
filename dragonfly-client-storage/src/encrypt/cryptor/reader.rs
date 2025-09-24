@@ -7,28 +7,16 @@ use generic_array::GenericArray;
 
 use crate::encrypt::{EncryptionAlgorithm, Aes256Ctr};
 
+/// EncryptReader is a reader that encrypts the data.
 pub struct EncryptReader<R: AsyncRead, A: EncryptionAlgorithm> {
     inner: R,
     cipher: A,
 }
 
-// impl<R, A: EncryptionAlgorithm> EncryptReader<R, A> {
-//     pub fn new(inner: R, key: &[u8], piece_id: &str) -> Self {
-//         let (task_id, piece_num) = parse_piece_id(piece_id)
-//             .expect("should have task_id and piece_num");
-
-//         let nonce = A::build_nonce(task_id, piece_num);
-//         let cipher = A::new(key, &nonce);
-
-//         Self { inner, cipher }
-//     }
-// }
-
 impl<R: AsyncRead> EncryptReader<R, Aes256Ctr> {
     /// default for Aes256Ctr
     pub fn new(inner: R, key: &[u8], task_id: &str, offset: u64) -> Self {
         let key = <Aes256Ctr as EncryptionAlgorithm>::derive_key(key, task_id);
-        // let nonce = [0u8; <Aes256Ctr as EncryptionAlgorithm>::NONCE_SIZE];
         let zero_nonce = GenericArray::<u8, <Aes256Ctr as EncryptionAlgorithm>::NonceSize>::default();
 
         let mut cipher = <Aes256Ctr as EncryptionAlgorithm>::new_from_array(&key, &zero_nonce);
@@ -56,7 +44,8 @@ impl<R: AsyncRead + Unpin, A: EncryptionAlgorithm> AsyncRead for EncryptReader<R
     }
 }
 
-// same for decrypt
+/// DecryptReader is a reader that decrypts the data.
+/// As same as EncryptReader due to symmetric encryption.
 pub type DecryptReader<R, A> = EncryptReader<R, A>;
 
 #[cfg(test)]
@@ -78,7 +67,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_encrypt_decrypt_cycle() {
-        // let (key, iv) = generate_key_iv();
         let key = generate_key();
 
         // Simulate input reader with AsyncCursor

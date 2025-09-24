@@ -12,6 +12,7 @@ edition.workspace = true
 [dependencies]
 dragonfly-client-core.workspace = true
 dragonfly-api.workspace = true
+reqwest.workspace = true
 http-range-header.workspace = true
 http.workspace = true
 tracing.workspace = true

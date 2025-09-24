@@ -94,7 +94,7 @@ pub struct DfdaemonDownloadServer {
     /// _shutdown_complete is used to notify the grpc server is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 
-    // manager key is the primary key fron manager, it is None when encryption disabled
+    /// manager key is the primary key from manager, it is None when encryption disabled
     primary_key: Option<Vec<u8>>,
 }
 

@@ -1262,7 +1262,6 @@ mod tests {
         // base64 key
         let base64_key = "jqe8buWT8rsfBMYt8mpwSbnjy44WNy/5v1gN1JfFsNk=";
         let key = base64::decode(base64_key).expect("Failed to decode base64 key");
-        println!("key: {:#x?}", key);
         
         let config = Arc::new(config);
         let content = Content::new(config, temp_dir.path(), Some(key)).await.unwrap();
@@ -1276,7 +1275,7 @@ mod tests {
 
         let data = b"data";
         
-        // cal CRC
+        // calculate CRC
         let mut plaintext_hasher = crc32fast::Hasher::new();
         plaintext_hasher.update(data);
         let plaintext_crc = plaintext_hasher.finalize();
