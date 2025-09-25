@@ -170,6 +170,38 @@ pub enum DFError {
     #[error(transparent)]
     VortexProtocolError(#[from] vortex_protocol::error::Error),
 
+    /// QuinnConnectError is the error for quinn connect.
+    #[error(transparent)]
+    QuinnConnectError(#[from] quinn::ConnectError),
+
+    /// QuinnConnectionError is the error for quinn connection.
+    #[error(transparent)]
+    QuinnConnectionError(#[from] quinn::ConnectionError),
+
+    /// QuinnWriteError is the error for quinn write.
+    #[error(transparent)]
+    QuinnWriteError(#[from] quinn::WriteError),
+
+    /// QuinnReadError is the error for quinn read.
+    #[error(transparent)]
+    QuinnReadError(#[from] quinn::ReadError),
+
+    /// QuinnReadExactError is the error for quinn read exact.
+    #[error(transparent)]
+    QuinnReadExactError(#[from] quinn::ReadExactError),
+
+    /// QuinnRustlsNoInitialCipherSuite is the error for quinn no initial cipher suite.
+    #[error(transparent)]
+    QuinnRustlsNoInitialCipherSuite(#[from] quinn::crypto::rustls::NoInitialCipherSuite),
+
+    /// QuinnRustlsError is the error for rustls.
+    #[error(transparent)]
+    QuinnRustlsError(#[from] quinn::rustls::Error),
+
+    /// QuinnClosedStream is the error for quinn closed stream.
+    #[error(transparent)]
+    QuinnClosedStream(#[from] quinn::ClosedStream),
+
     /// TonicStatus is the error for tonic status.
     #[error(transparent)]
     TonicStatus(#[from] tonic::Status),
@@ -247,38 +279,6 @@ pub enum DFError {
 impl<T> From<tokio::sync::mpsc::error::SendError<T>> for DFError {
     fn from(e: tokio::sync::mpsc::error::SendError<T>) -> Self {
         Self::MpscSend(e.to_string())
-    }
-}
-
-// --- Conversions for quinn (QUIC) errors ---
-// These allow using the ? operator directly with quinn APIs without repetitive map_err.
-impl From<quinn::ConnectError> for DFError {
-    fn from(err: quinn::ConnectError) -> Self {
-        DFError::Unknown(format!("quinn connect error: {}", err))
-    }
-}
-
-impl From<quinn::ConnectionError> for DFError {
-    fn from(err: quinn::ConnectionError) -> Self {
-        DFError::Unknown(format!("quinn connection error: {}", err))
-    }
-}
-
-impl From<quinn::WriteError> for DFError {
-    fn from(err: quinn::WriteError) -> Self {
-        DFError::Unknown(format!("quinn write error: {}", err))
-    }
-}
-
-impl From<quinn::ReadError> for DFError {
-    fn from(err: quinn::ReadError) -> Self {
-        DFError::Unknown(format!("quinn read error: {}", err))
-    }
-}
-
-impl From<quinn::ReadExactError> for DFError {
-    fn from(err: quinn::ReadExactError) -> Self {
-        DFError::Unknown(format!("quinn read exact error: {}", err))
     }
 }
 

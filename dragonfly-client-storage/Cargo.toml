@@ -31,10 +31,10 @@ bytesize.workspace = true
 leaky-bucket.workspace = true
 vortex-protocol.workspace = true
 rustls.workspace = true
+quinn.workspace = true
 num_cpus = "1.17"
 bincode = "1.3.3"
 walkdir = "2.5.0"
-quinn = "0.11.9"
 
 [dev-dependencies]
 tempfile.workspace = true
