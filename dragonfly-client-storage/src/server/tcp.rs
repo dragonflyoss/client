@@ -88,18 +88,22 @@ impl TCPServer {
         let listener = TcpListener::bind(self.addr).await.inspect_err(|err| {
             error!("failed to bind tcp server: {}", err);
         })?;
+        info!("storage tcp server listening on {}", self.addr);
 
         #[cfg(target_os = "linux")]
         {
             use nix::sys::socket::{setsockopt, sockopt::TcpCongestion};
+            use std::ffi::OsString;
+            use std::os::unix::io::AsRawFd;
+            use tracing::warn;
 
+            let bbr = OsString::from("bbr");
             let raw_fd = listener.as_raw_fd();
-            if let Err(err) = setsockopt(fd, TcpCongestion, "bbr") {
+            let fd = std::os::unix::io::BorrowedFd::borrow_raw(raw_fd);
+            if let Err(err) = setsockopt(fd, TcpCongestion, &bbr) {
                 warn!("failed to set TCP congestion control to BBR: {}", err);
             }
         }
-
-        info!("storage tcp server listening on {}", self.addr);
 
         loop {
             tokio::select! {
