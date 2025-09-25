@@ -30,7 +30,7 @@ use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::{dfdaemon, VersionValueParser};
 use dragonfly_client_metric::Metrics;
-use dragonfly_client_storage::{server::tcp::TCPServer, server::quic::QUICServer, Storage};
+use dragonfly_client_storage::{server::quic::QUICServer, server::tcp::TCPServer, Storage};
 use dragonfly_client_util::{id_generator::IDGenerator, net::Interface, shutdown};
 use leaky_bucket::RateLimiter;
 use std::net::SocketAddr;

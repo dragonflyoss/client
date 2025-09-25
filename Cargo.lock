@@ -1228,6 +1228,7 @@ dependencies = [
  "reqwest",
  "rocksdb",
  "rustls 0.22.4",
+ "rustls-pki-types",
  "serde",
  "tempfile",
  "tokio",

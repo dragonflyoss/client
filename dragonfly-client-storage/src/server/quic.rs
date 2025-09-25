@@ -21,7 +21,9 @@ use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_metric::{
     collect_upload_piece_failure_metrics, collect_upload_piece_started_metrics,
 };
-use dragonfly_client_util::{id_generator::IDGenerator, tls::generate_simple_self_signed_certs, shutdown};
+use dragonfly_client_util::{
+    id_generator::IDGenerator, shutdown, tls::generate_simple_self_signed_certs,
+};
 use leaky_bucket::RateLimiter;
 use quinn::{Endpoint, ServerConfig};
 use std::net::SocketAddr;
@@ -79,12 +81,13 @@ impl QUICServer {
         }
     }
 
-        /// Starts the storage quic server.
+    /// Starts the storage quic server.
     pub async fn run(&mut self) -> ClientResult<()> {
         // Configure TLS for the QUIC server.
         let (certs, key) = generate_simple_self_signed_certs("quic", vec!["quic".into()])?;
-        let server_config = ServerConfig::with_single_cert(certs, key)
-            .map_err(|err| ClientError::Unknown(format!("failed to create server config: {}", err)))?;
+        let server_config = ServerConfig::with_single_cert(certs, key).map_err(|err| {
+            ClientError::Unknown(format!("failed to create server config: {}", err))
+        })?;
         // Create a QUIC endpoint and bind it.
         let endpoint = Endpoint::server(server_config, self.addr)?;
         info!("storage quic server listening on {}", self.addr);
@@ -92,7 +95,7 @@ impl QUICServer {
         loop {
             tokio::select! {
                 Some(conn) = endpoint.accept() => {
-                    debug!("QUIC connection incoming");
+                    info!("QUIC connection incoming");
                     let handler = self.handler.clone();
                     tokio::spawn(async move {
                        if let Err(err) = handler.handle(conn).await {
@@ -129,7 +132,7 @@ impl QUICServerHandler {
     /// handle handles a single QUIC connection.
     #[instrument(skip_all)]
     async fn handle(&self, conn: quinn::Incoming) -> ClientResult<()> {
-    let connection = conn.await?;
+        let connection = conn.await?;
         let remote_address = connection.remote_address().to_string();
         debug!("accepted connection from {}", remote_address);
 
@@ -478,9 +481,7 @@ impl QUICServerHandler {
         reader
             .read_exact(&mut download_piece_bytes)
             .await
-            .inspect_err(|err| {
-                error!("failed to receive download piece: {}", err)
-    })?;
+            .inspect_err(|err| error!("failed to receive download piece: {}", err))?;
 
         download_piece_bytes.freeze().try_into().map_err(Into::into)
     }
@@ -523,4 +524,3 @@ impl QUICServerHandler {
         Ok(())
     }
 }
-

@@ -17,12 +17,12 @@
 use bytes::{Bytes, BytesMut};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
-use dragonfly_client_util::tls::SkipServerVerification;
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::{ClientConfig, Endpoint, RecvStream, SendStream};
+use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-use tokio::io::AsyncRead; 
+use tokio::io::AsyncRead;
 use tokio::time;
 use tracing::{error, instrument};
 use vortex_protocol::{
@@ -174,13 +174,13 @@ impl QUICClient {
     ) -> ClientResult<(RecvStream, SendStream)> {
         let crypto = quinn::rustls::ClientConfig::builder()
             .dangerous()
-            .with_custom_certificate_verifier(SkipServerVerification::new())
+            .with_custom_certificate_verifier(NoVerifier::new())
             .with_no_client_auth();
 
-        let client_config = ClientConfig::new(Arc::new(
-            QuicClientConfig::try_from(crypto)
-                .map_err(|err| ClientError::Unknown(format!("failed to create quic client config: {}", err)))?,
-        ));
+        let client_config =
+            ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto).map_err(
+                |err| ClientError::Unknown(format!("failed to create quic client config: {}", err)),
+            )?));
 
         let endpoint = {
             let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
@@ -221,7 +221,7 @@ impl QUICClient {
             .read_exact(&mut header_bytes)
             .await
             .inspect_err(|err| error!("failed to receive header: {}", err))?;
-        
+
         Header::try_from(header_bytes.freeze()).map_err(Into::into)
     }
 
@@ -284,5 +284,63 @@ impl QUICClient {
                 error!("failed to extract error: {}", err);
                 ClientError::Unknown(format!("failed to extract error: {}", err))
             })
+    }
+}
+
+/// NoVerifier is a verifier for QUIC Client that does not verify the server certificate.
+/// It is used for testing and should not be used in production.
+#[derive(Debug)]
+struct NoVerifier(Arc<quinn::rustls::crypto::CryptoProvider>);
+
+impl NoVerifier {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self(Arc::new(
+            quinn::rustls::crypto::ring::default_provider(),
+        )))
+    }
+}
+
+impl quinn::rustls::client::danger::ServerCertVerifier for NoVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<quinn::rustls::client::danger::ServerCertVerified, quinn::rustls::Error> {
+        Ok(quinn::rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &quinn::rustls::DigitallySignedStruct,
+    ) -> Result<quinn::rustls::client::danger::HandshakeSignatureValid, quinn::rustls::Error> {
+        quinn::rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &quinn::rustls::DigitallySignedStruct,
+    ) -> Result<quinn::rustls::client::danger::HandshakeSignatureValid, quinn::rustls::Error> {
+        quinn::rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<quinn::rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
     }
 }

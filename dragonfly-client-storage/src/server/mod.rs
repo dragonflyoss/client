@@ -14,5 +14,5 @@
  * limitations under the License.
  */
 
-pub mod tcp;
 pub mod quic;
+pub mod tcp;

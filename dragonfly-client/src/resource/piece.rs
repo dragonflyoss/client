@@ -440,8 +440,8 @@ impl Piece {
             }
             ("quic", Some(ip), _, Some(port)) => {
                 // Lazily create a QUIC downloader via factory to avoid holding all three.
-                let quic_downloader = piece_downloader::DownloaderFactory::new("quic", self.config.clone())?
-                    .build();
+                let quic_downloader =
+                    piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
                 quic_downloader
                     .download_piece(
                         format!("{}:{}", ip, port).as_str(),
@@ -830,8 +830,8 @@ impl Piece {
                     .await?
             }
             ("quic", Some(ip), _, Some(port)) => {
-                let quic_downloader = piece_downloader::DownloaderFactory::new("quic", self.config.clone())?
-                    .build();
+                let quic_downloader =
+                    piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
                 quic_downloader
                     .download_persistent_cache_piece(
                         format!("{}:{}", ip, port).as_str(),
