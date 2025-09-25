@@ -18,7 +18,7 @@ use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use dragonfly_api::dfdaemon::v2::{DownloadPersistentCachePieceRequest, DownloadPieceRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_storage::{client::tcp::TCPClient, metadata};
+use dragonfly_client_storage::{client::quic::QUICClient, client::tcp::TCPClient, metadata};
 use dragonfly_client_util::pool::{Builder as PoolBuilder, Entry, Factory, Pool};
 use std::io::Cursor;
 use std::sync::Arc;
@@ -74,6 +74,11 @@ impl DownloaderFactory {
                 DEFAULT_DOWNLOADER_IDLE_TIMEOUT,
             )),
             "grpc" => Arc::new(GRPCDownloader::new(
+                config.clone(),
+                DEFAULT_DOWNLOADER_CAPACITY,
+                DEFAULT_DOWNLOADER_IDLE_TIMEOUT,
+            )),
+            "quic" => Arc::new(QUICDownloader::new(
                 config.clone(),
                 DEFAULT_DOWNLOADER_CAPACITY,
                 DEFAULT_DOWNLOADER_IDLE_TIMEOUT,
@@ -280,6 +285,112 @@ impl Downloader for GRPCDownloader {
         }
 
         Ok((Box::new(Cursor::new(content)), piece.offset, piece.digest))
+    }
+}
+
+/// QUICDownloader is the downloader for downloading pieces by the QUIC protocol.
+/// It will reuse the quic clients to download pieces from the other peers by
+/// peer's address.
+pub struct QUICDownloader {
+    /// client_pool is the pool of the quic clients.
+    client_pool: Pool<String, QUICClient, QUICClientFactory>,
+}
+
+/// Factory for creating QUICClient instances.
+struct QUICClientFactory {
+    config: Arc<Config>,
+}
+
+/// QUICClientFactory implements the Factory trait for creating QUICClient instances.
+#[tonic::async_trait]
+impl Factory<String, QUICClient> for QUICClientFactory {
+    type Error = Error;
+
+    /// Creates a new QUICClient for the given address.
+    async fn make_client(&self, addr: &String) -> Result<QUICClient> {
+        Ok(QUICClient::new(self.config.clone(), addr.clone()))
+    }
+}
+
+/// QUICDownloader implements the downloader with the QUIC protocol.
+impl QUICDownloader {
+    /// new returns a new QUICDownloader.
+    pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
+        Self {
+            client_pool: PoolBuilder::new(QUICClientFactory {
+                config: config.clone(),
+            })
+            .capacity(capacity)
+            .idle_timeout(idle_timeout)
+            .build(),
+        }
+    }
+
+    /// get_client_entry returns a client entry by the address.
+    async fn get_client_entry(&self, addr: &str) -> Result<Entry<QUICClient>> {
+        self.client_pool.entry(&addr.to_string()).await
+    }
+
+    /// remove_client_entry removes the client if it is idle.
+    async fn remove_client_entry(&self, addr: &str) {
+        self.client_pool.remove_entry(&addr.to_string()).await;
+    }
+}
+
+/// QUICDownloader implements the Downloader trait.
+#[tonic::async_trait]
+impl Downloader for QUICDownloader {
+    /// download_piece downloads a piece from the other peer by the QUIC protocol.
+    #[instrument(skip_all)]
+    async fn download_piece(
+        &self,
+        addr: &str,
+        number: u32,
+        _host_id: &str,
+        task_id: &str,
+    ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
+        let entry = self.get_client_entry(addr).await?;
+        let request_guard = entry.request_guard();
+
+        match entry.client.download_piece(number, task_id).await {
+            Ok((reader, offset, digest)) => Ok((Box::new(reader), offset, digest)),
+            Err(err) => {
+                // If the request fails, it will drop the request guard and remove the client
+                // entry to avoid using the invalid client.
+                drop(request_guard);
+                self.remove_client_entry(addr).await;
+                Err(err)
+            }
+        }
+    }
+
+    /// download_persistent_cache_piece downloads a persistent cache piece from the other peer by
+    /// the QUIC protocol.
+    #[instrument(skip_all)]
+    async fn download_persistent_cache_piece(
+        &self,
+        addr: &str,
+        number: u32,
+        _host_id: &str,
+        task_id: &str,
+    ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
+        let entry = self.get_client_entry(addr).await?;
+        let request_guard = entry.request_guard();
+
+        match entry
+            .client
+            .download_persistent_cache_piece(number, task_id)
+            .await
+        {
+            Ok((reader, offset, digest)) => Ok((Box::new(reader), offset, digest)),
+            Err(err) => {
+                // If the request fails, it will drop the request guard and remove the client
+                // entry to avoid using the invalid client.
+                drop(request_guard);
+                self.remove_client_entry(addr).await;
+                Err(err)
+            }
+        }
     }
 }
 
