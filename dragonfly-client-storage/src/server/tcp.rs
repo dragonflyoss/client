@@ -24,7 +24,6 @@ use dragonfly_client_metric::{
 use dragonfly_client_util::{id_generator::IDGenerator, shutdown};
 use leaky_bucket::RateLimiter;
 use std::net::SocketAddr;
-use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use tokio::io::{copy, AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{
@@ -94,13 +93,12 @@ impl TCPServer {
         {
             use nix::sys::socket::{setsockopt, sockopt::TcpCongestion};
             use std::ffi::OsString;
-            use std::os::unix::io::AsRawFd;
+            use std::os::fd::AsFd;
             use tracing::warn;
 
             let bbr = OsString::from("bbr");
-            let raw_fd = listener.as_raw_fd();
-            let fd = std::os::unix::io::BorrowedFd::borrow_raw(raw_fd);
-            if let Err(err) = setsockopt(fd, TcpCongestion, &bbr) {
+            let fd = listener.as_fd();
+            if let Err(err) = setsockopt(&fd, TcpCongestion, &bbr) {
                 warn!("failed to set TCP congestion control to BBR: {}", err);
             }
         }
