@@ -141,10 +141,7 @@ impl Storage {
     /// download_task_failed updates the metadata of the task when the task downloads failed.
     #[instrument(skip_all)]
     pub async fn download_task_failed(&self, id: &str) -> Result<metadata::Task> {
-        let metadata = self.metadata.download_task_failed(id)?;
-        self.content.delete_task(id).await?;
-
-        Ok(metadata)
+        self.metadata.download_task_failed(id)
     }
 
     /// prefetch_task_started updates the metadata of the task when the task prefetches started.
@@ -311,10 +308,7 @@ impl Storage {
         &self,
         id: &str,
     ) -> Result<metadata::PersistentCacheTask> {
-        let metadata = self.metadata.download_persistent_cache_task_failed(id)?;
-        self.content.delete_persistent_cache_task(id).await?;
-
-        Ok(metadata)
+        self.metadata.download_persistent_cache_task_failed(id)
     }
 
     /// upload_persistent_cache_task_finished updates the metadata of the cahce task when persistent cache task uploads finished.
