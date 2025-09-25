@@ -19,7 +19,6 @@ use dragonfly_api::dfdaemon::v2::{
     download_persistent_cache_task_response, DownloadPersistentCacheTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
-use dragonfly_client_core::error::message;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
