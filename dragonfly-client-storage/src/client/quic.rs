@@ -179,12 +179,17 @@ impl QUICClient {
         &self,
         request: Bytes,
     ) -> ClientResult<(RecvStream, SendStream)> {
-        let mut client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(
-            quinn::rustls::ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(NoVerifier::new())
-                .with_no_client_auth(),
-        )?));
+        let mut client_config = ClientConfig::new(Arc::new(
+            QuicClientConfig::try_from(
+                quinn::rustls::ClientConfig::builder()
+                    .dangerous()
+                    .with_custom_certificate_verifier(NoVerifier::new())
+                    .with_no_client_auth(),
+            )
+            .map_err(|err| {
+                ClientError::Unknown(format!("failed to create quic client config: {}", err))
+            })?,
+        ));
 
         let mut transport = TransportConfig::default();
         transport.congestion_controller_factory(Arc::new(BbrConfig::default()));
@@ -304,6 +309,7 @@ struct NoVerifier(Arc<quinn::rustls::crypto::CryptoProvider>);
 
 /// NoVerifier implements a no-op server certificate verifier.
 impl NoVerifier {
+    /// Creates a new NoVerifier instance.
     pub fn new() -> Arc<Self> {
         Arc::new(Self(Arc::new(
             quinn::rustls::crypto::ring::default_provider(),
@@ -313,7 +319,7 @@ impl NoVerifier {
 
 /// NoVerifier implements the ServerCertVerifier trait to skip certificate verification.
 impl quinn::rustls::client::danger::ServerCertVerifier for NoVerifier {
-    /// verify_server_cert always returns Ok, effectively skipping verification.
+    /// Verifies the server certificate.
     fn verify_server_cert(
         &self,
         _end_entity: &CertificateDer<'_>,
@@ -325,7 +331,7 @@ impl quinn::rustls::client::danger::ServerCertVerifier for NoVerifier {
         Ok(quinn::rustls::client::danger::ServerCertVerified::assertion())
     }
 
-    /// verify_tls12_signature verifies TLS 1.2 signatures using the provided algorithms.
+    /// Verifies a TLS 1.2 signature.
     fn verify_tls12_signature(
         &self,
         message: &[u8],
@@ -340,7 +346,7 @@ impl quinn::rustls::client::danger::ServerCertVerifier for NoVerifier {
         )
     }
 
-    /// verify_tls13_signature verifies TLS 1.3 signatures using the provided algorithms.
+    /// Verifies a TLS 1.3 signature.
     fn verify_tls13_signature(
         &self,
         message: &[u8],
@@ -355,7 +361,7 @@ impl quinn::rustls::client::danger::ServerCertVerifier for NoVerifier {
         )
     }
 
-    /// supported_verify_schemes returns the supported signature schemes.
+    /// Returns the supported signature schemes.
     fn supported_verify_schemes(&self) -> Vec<quinn::rustls::SignatureScheme> {
         self.0.signature_verification_algorithms.supported_schemes()
     }
