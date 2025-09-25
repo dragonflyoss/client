@@ -73,6 +73,9 @@ pub struct Piece {
     /// tcp_downloader is the TCP piece downloader.
     tcp_downloader: Arc<dyn piece_downloader::Downloader>,
 
+    /// quic_downloader is the QUIC piece downloader.
+    quic_downloader: Arc<dyn piece_downloader::Downloader>,
+
     /// backend_factory is the backend factory.
     backend_factory: Arc<BackendFactory>,
 
@@ -106,6 +109,7 @@ impl Piece {
                 .build(),
             tcp_downloader: piece_downloader::DownloaderFactory::new("tcp", config.clone())?
                 .build(),
+            quic_downloader: piece_downloader::DownloaderFactory::new("quic", config)?.build(),
             backend_factory,
             download_rate_limiter,
             upload_rate_limiter,
@@ -439,10 +443,7 @@ impl Piece {
                     .await?
             }
             ("quic", Some(ip), _, Some(port)) => {
-                // Lazily create a QUIC downloader via factory to avoid holding all three.
-                let quic_downloader =
-                    piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
-                quic_downloader
+                self.quic_downloader
                     .download_piece(
                         format!("{}:{}", ip, port).as_str(),
                         number,
@@ -830,9 +831,7 @@ impl Piece {
                     .await?
             }
             ("quic", Some(ip), _, Some(port)) => {
-                let quic_downloader =
-                    piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
-                quic_downloader
+                self.quic_downloader
                     .download_persistent_cache_piece(
                         format!("{}:{}", ip, port).as_str(),
                         number,

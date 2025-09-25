@@ -16,11 +16,14 @@
 
 use bytes::{Bytes, BytesMut};
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Error as ClientError, Result as ClientResult,
+};
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::{ClientConfig, Endpoint, RecvStream, SendStream};
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::AsyncRead;
 use tokio::time;
@@ -172,26 +175,22 @@ impl QUICClient {
         &self,
         request: Bytes,
     ) -> ClientResult<(RecvStream, SendStream)> {
-        let crypto = quinn::rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(NoVerifier::new())
-            .with_no_client_auth();
+        let client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(
+            quinn::rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(NoVerifier::new())
+                .with_no_client_auth(),
+        )?));
 
-        let client_config =
-            ClientConfig::new(Arc::new(QuicClientConfig::try_from(crypto).map_err(
-                |err| ClientError::Unknown(format!("failed to create quic client config: {}", err)),
-            )?));
+        // Port is zero to let the OS assign an ephemeral port.
+        let mut endpoint =
+            Endpoint::client(SocketAddr::new(self.config.storage.server.ip.unwrap(), 0))?;
+        endpoint.set_default_client_config(client_config);
 
-        let endpoint = {
-            let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
-            let mut endpoint = Endpoint::client(bind_addr)?;
-            endpoint.set_default_client_config(client_config);
-            endpoint
-        };
-
-        let remote_addr: SocketAddr = self.addr.parse().unwrap();
+        // Connect's server name used for verifying the certificate. Since we used
+        // NoVerifier, it can be anything.
         let connection = endpoint
-            .connect(remote_addr, "quic")?
+            .connect(self.addr.parse().or_err(ErrorType::ParseError)?, "d7y")?
             .await
             .inspect_err(|err| error!("failed to connect to {}: {}", self.addr, err))?;
 
@@ -292,6 +291,7 @@ impl QUICClient {
 #[derive(Debug)]
 struct NoVerifier(Arc<quinn::rustls::crypto::CryptoProvider>);
 
+/// NoVerifier implements a no-op server certificate verifier.
 impl NoVerifier {
     pub fn new() -> Arc<Self> {
         Arc::new(Self(Arc::new(
@@ -300,7 +300,9 @@ impl NoVerifier {
     }
 }
 
+/// NoVerifier implements the ServerCertVerifier trait to skip certificate verification.
 impl quinn::rustls::client::danger::ServerCertVerifier for NoVerifier {
+    /// verify_server_cert always returns Ok, effectively skipping verification.
     fn verify_server_cert(
         &self,
         _end_entity: &CertificateDer<'_>,
@@ -312,6 +314,7 @@ impl quinn::rustls::client::danger::ServerCertVerifier for NoVerifier {
         Ok(quinn::rustls::client::danger::ServerCertVerified::assertion())
     }
 
+    /// verify_tls12_signature verifies TLS 1.2 signatures using the provided algorithms.
     fn verify_tls12_signature(
         &self,
         message: &[u8],
@@ -326,6 +329,7 @@ impl quinn::rustls::client::danger::ServerCertVerifier for NoVerifier {
         )
     }
 
+    /// verify_tls13_signature verifies TLS 1.3 signatures using the provided algorithms.
     fn verify_tls13_signature(
         &self,
         message: &[u8],
@@ -340,6 +344,7 @@ impl quinn::rustls::client::danger::ServerCertVerifier for NoVerifier {
         )
     }
 
+    /// supported_verify_schemes returns the supported signature schemes.
     fn supported_verify_schemes(&self) -> Vec<quinn::rustls::SignatureScheme> {
         self.0.signature_verification_algorithms.supported_schemes()
     }
