@@ -1262,7 +1262,6 @@ dependencies = [
  "openssl",
  "pnet",
  "protobuf 3.7.2",
- "quinn",
  "rcgen",
  "reqwest",
  "reqwest-middleware",
