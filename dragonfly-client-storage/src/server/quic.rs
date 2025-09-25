@@ -83,26 +83,23 @@ impl QUICServer {
 
     /// Starts the storage quic server.
     pub async fn run(&mut self) -> ClientResult<()> {
-        let (certs, key) = generate_simple_self_signed_certs("d7y", vec!["d7y".into()])?;
+        // Configure TLS for the QUIC server.
+        let (certs, key) = generate_simple_self_signed_certs("quic", vec!["quic".into()])?;
         let server_config = ServerConfig::with_single_cert(certs, key).map_err(|err| {
-            error!("failed to create server config: {}", err);
-            ClientError::QuinnRustlsError(err)
+            ClientError::Unknown(format!("failed to create server config: {}", err))
         })?;
-
+        // Create a QUIC endpoint and bind it.
         let endpoint = Endpoint::server(server_config, self.addr)?;
         info!("storage quic server listening on {}", self.addr);
 
         loop {
             tokio::select! {
-                Some(quic_accepted) = endpoint.accept() => {
-                    let quic = quic_accepted.await?;
-                    let remote_address = quic.remote_address();
-                    debug!("accepted connection from {}", remote_address);
-
+                Some(conn) = endpoint.accept() => {
+                    info!("QUIC connection incoming");
                     let handler = self.handler.clone();
                     tokio::spawn(async move {
-                       if let Err(err) = handler.handle(quic, remote_address).await {
-                            error!("failed to handle connection from {}: {}", remote_address, err);
+                       if let Err(err) = handler.handle(conn).await {
+                            error!("failed to handle connection: {}", err);
                         }
                     });
                 },
@@ -134,15 +131,18 @@ pub struct QUICServerHandler {
 impl QUICServerHandler {
     /// handle handles a single QUIC connection.
     #[instrument(skip_all)]
-    async fn handle(
-        &self,
-        connection: quinn::Connection,
-        remote_address: SocketAddr,
-    ) -> ClientResult<()> {
+    async fn handle(&self, conn: quinn::Incoming) -> ClientResult<()> {
+        let connection = conn.await?;
+        let remote_address = connection.remote_address().to_string();
+        debug!("accepted connection from {}", remote_address);
+
+        // A QUIC connection can have multiple streams.
         loop {
             match connection.accept_bi().await {
                 Ok((send, recv)) => {
+                    info!("new bidirectional stream accepted");
                     let handler = self.clone();
+                    let remote_address = remote_address.clone();
                     tokio::spawn(async move {
                         if let Err(err) = handler.handle_stream(recv, send, remote_address).await {
                             error!("failed to handle stream: {}", err);
@@ -150,10 +150,13 @@ impl QUICServerHandler {
                     });
                 }
                 Err(err) => {
+                    // Downgrade common close cases to debug to reduce noisy logs.
                     match err {
-                        quinn::ConnectionError::ApplicationClosed(_)
-                        | quinn::ConnectionError::LocallyClosed => {
-                            debug!("connection closed: {}", err);
+                        quinn::ConnectionError::ApplicationClosed(_) => {
+                            debug!("peer closed connection (application closed): {}", err);
+                        }
+                        quinn::ConnectionError::LocallyClosed => {
+                            debug!("connection closed locally: {}", err);
                         }
                         _ => {
                             error!("failed to accept bidirectional stream: {}", err);
@@ -178,7 +181,7 @@ impl QUICServerHandler {
         &self,
         mut reader: quinn::RecvStream,
         mut writer: quinn::SendStream,
-        remote_address: SocketAddr,
+        remote_address: String,
     ) -> ClientResult<()> {
         let header = self.read_header(&mut reader).await?;
         match header.tag() {
@@ -200,7 +203,7 @@ impl QUICServerHandler {
                 let piece_id = self.storage.piece_id(task_id, piece_number);
 
                 Span::current().record("host_id", host_id);
-                Span::current().record("remote_address", remote_address.to_string().as_str());
+                Span::current().record("remote_address", remote_address.as_str());
                 Span::current().record("task_id", task_id);
                 Span::current().record("piece_id", piece_id.as_str());
 
@@ -222,7 +225,10 @@ impl QUICServerHandler {
 
                         self.write_response(response.freeze(), &mut writer).await?;
                         self.write_stream(&mut content_reader, &mut writer).await?;
-                        writer.finish()?;
+                        // Gracefully finish the stream so the client sees EOF.
+                        if let Err(err) = writer.finish() {
+                            error!("failed to finish stream: {}", err);
+                        }
                     }
                     Err(err) => {
                         // Collect upload piece failure metrics.
@@ -231,7 +237,9 @@ impl QUICServerHandler {
                         let error_response: Bytes =
                             Vortex::Error(Header::new_error(err.len() as u32), err).into();
                         self.write_response(error_response, &mut writer).await?;
-                        writer.finish()?;
+                        if let Err(err) = writer.finish() {
+                            error!("failed to finish stream after error: {}", err);
+                        }
                     }
                 }
 
@@ -255,7 +263,7 @@ impl QUICServerHandler {
                 let piece_id = self.storage.piece_id(task_id, piece_number);
 
                 Span::current().record("host_id", host_id);
-                Span::current().record("remote_address", remote_address.to_string().as_str());
+                Span::current().record("remote_address", remote_address.as_str());
                 Span::current().record("task_id", task_id);
                 Span::current().record("piece_id", piece_id.as_str());
 
@@ -284,7 +292,9 @@ impl QUICServerHandler {
 
                         self.write_response(response.freeze(), &mut writer).await?;
                         self.write_stream(&mut content_reader, &mut writer).await?;
-                        writer.finish()?;
+                        if let Err(err) = writer.finish() {
+                            error!("failed to finish stream: {}", err);
+                        }
                     }
                     Err(err) => {
                         // Collect upload piece failure metrics.
@@ -293,7 +303,9 @@ impl QUICServerHandler {
                         let error_response: Bytes =
                             Vortex::Error(Header::new_error(err.len() as u32), err).into();
                         self.write_response(error_response, &mut writer).await?;
-                        writer.finish()?;
+                        if let Err(err) = writer.finish() {
+                            error!("failed to finish stream after error: {}", err);
+                        }
                     }
                 }
 
