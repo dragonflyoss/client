@@ -168,13 +168,12 @@ impl SeedPeerSelector {
     /// list_seed_peers lists the seed peers from scheduler.
     #[instrument(skip_all)]
     async fn list_seed_peers(&self) -> Result<Vec<Host>> {
-        let request = tonic::Request::new(ListHostsRequest { r#type: None });
-        let response = self.scheduler_client.clone().list_hosts(request).await?;
-        let hosts = response.into_inner().hosts;
-
-        // Filter for seed peer types, normal peer type is 0 and others are seed peers.
+        // Filter for seed peer types, seed peer type is 1.
         // refer to dragonfly-client-config/src/dfdaemon.rs#HostType.
-        let seed_peers: Vec<Host> = hosts.into_iter().filter(|host| host.r#type != 0).collect();
+        let request = tonic::Request::new(ListHostsRequest { r#type: Some(1) });
+        let response = self.scheduler_client.clone().list_hosts(request).await?;
+        let seed_peers = response.into_inner().hosts.into_iter().collect();
+
         Ok(seed_peers)
     }
 
