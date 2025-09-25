@@ -250,6 +250,38 @@ impl<T> From<tokio::sync::mpsc::error::SendError<T>> for DFError {
     }
 }
 
+// --- Conversions for quinn (QUIC) errors ---
+// These allow using the ? operator directly with quinn APIs without repetitive map_err.
+impl From<quinn::ConnectError> for DFError {
+    fn from(err: quinn::ConnectError) -> Self {
+        DFError::Unknown(format!("quinn connect error: {}", err))
+    }
+}
+
+impl From<quinn::ConnectionError> for DFError {
+    fn from(err: quinn::ConnectionError) -> Self {
+        DFError::Unknown(format!("quinn connection error: {}", err))
+    }
+}
+
+impl From<quinn::WriteError> for DFError {
+    fn from(err: quinn::WriteError) -> Self {
+        DFError::Unknown(format!("quinn write error: {}", err))
+    }
+}
+
+impl From<quinn::ReadError> for DFError {
+    fn from(err: quinn::ReadError) -> Self {
+        DFError::Unknown(format!("quinn read error: {}", err))
+    }
+}
+
+impl From<quinn::ReadExactError> for DFError {
+    fn from(err: quinn::ReadExactError) -> Self {
+        DFError::Unknown(format!("quinn read exact error: {}", err))
+    }
+}
+
 /// SendTimeoutError is the error for send timeout.
 impl<T> From<tokio::sync::mpsc::error::SendTimeoutError<T>> for DFError {
     fn from(err: tokio::sync::mpsc::error::SendTimeoutError<T>) -> Self {

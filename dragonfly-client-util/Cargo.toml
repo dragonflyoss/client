@@ -48,7 +48,6 @@ base64 = "0.22.1"
 pnet = "0.35.0"
 protobuf = "3.7.2"
 
-
 [dev-dependencies]
 tempfile.workspace = true
 mocktail.workspace = true

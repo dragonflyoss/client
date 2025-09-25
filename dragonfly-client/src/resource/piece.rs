@@ -438,6 +438,19 @@ impl Piece {
                     )
                     .await?
             }
+            ("quic", Some(ip), _, Some(port)) => {
+                // Lazily create a QUIC downloader via factory to avoid holding all three.
+                let quic_downloader =
+                    piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
+                quic_downloader
+                    .download_piece(
+                        format!("{}:{}", ip, port).as_str(),
+                        number,
+                        host_id,
+                        task_id,
+                    )
+                    .await?
+            }
             _ => {
                 warn!("fall back to grpc downloader");
                 let host = parent.host.clone().ok_or_else(|| {
@@ -808,6 +821,18 @@ impl Piece {
         ) {
             ("tcp", Some(ip), Some(port), _) => {
                 self.tcp_downloader
+                    .download_persistent_cache_piece(
+                        format!("{}:{}", ip, port).as_str(),
+                        number,
+                        host_id,
+                        task_id,
+                    )
+                    .await?
+            }
+            ("quic", Some(ip), _, Some(port)) => {
+                let quic_downloader =
+                    piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
+                quic_downloader
                     .download_persistent_cache_piece(
                         format!("{}:{}", ip, port).as_str(),
                         number,
