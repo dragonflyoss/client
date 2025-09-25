@@ -1002,7 +1002,14 @@ async fn download(
                         );
                         progress_bar.set_position(position);
                     }
-                    None => {}
+                    None => {
+                        error!("response is missing");
+                        fs::remove_file(&args.output).await.inspect_err(|err| {
+                            error!("remove file {:?} failed: {}", args.output, err);
+                        })?;
+
+                        return Err(Error::UnexpectedResponse);
+                    }
                 }
             }
             Ok(None) => break,

@@ -19,6 +19,7 @@ use dragonfly_api::dfdaemon::v2::{
     download_persistent_cache_task_response, DownloadPersistentCacheTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
+use dragonfly_client_core::error::message;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -509,54 +510,72 @@ impl ExportCommand {
         //  Download file.
         let mut downloaded = 0;
         let mut out_stream = response.into_inner();
-        while let Some(message) = out_stream.message().await.inspect_err(|err| {
-            error!("get message failed: {}", err);
-        })? {
-            match message.response {
-                Some(download_persistent_cache_task_response::Response::DownloadPersistentCacheTaskStartedResponse(
-                    response,
-                )) => {
-                    if let Some(f) = &f {
-                        fallocate(f, response.content_length)
-                            .await
-                            .inspect_err(|err| {
-                                error!("fallocate {:?} failed: {}", self.output, err);
-                            })?;
-                    }
+        loop {
+            match out_stream.message().await {
+                Ok(Some(message)) => {
+                    match message.response {
+                        Some(download_persistent_cache_task_response::Response::DownloadPersistentCacheTaskStartedResponse(
+                            response,
+                        )) => {
+                            if let Some(f) = &f {
+                                fallocate(f, response.content_length)
+                                    .await
+                                    .inspect_err(|err| {
+                                        error!("fallocate {:?} failed: {}", self.output, err);
+                                    })?;
+                            }
 
-                    progress_bar.set_length(response.content_length);
+                            progress_bar.set_length(response.content_length);
+                        }
+                        Some(download_persistent_cache_task_response::Response::DownloadPieceFinishedResponse(
+                            response,
+                        )) => {
+                            let piece = response.piece.ok_or(Error::InvalidParameter).inspect_err(|_err| {
+                                error!("response piece is missing");
+                            })?;
+
+                            // Dfcache needs to write the piece content to the output file.
+                            if let Some(f) = &mut f {
+                                f.seek(SeekFrom::Start(piece.offset))
+                                    .await
+                                    .inspect_err(|err| {
+                                        error!("seek {:?} failed: {}", self.output, err);
+                                    })?;
+
+                                let content = piece.content.ok_or(Error::InvalidParameter).inspect_err(|_err| {
+                                    error!("piece content is missing");
+                                })?;
+
+                                f.write_all(&content).await.inspect_err(|err| {
+                                    error!("write {:?} failed: {}", self.output, err);
+                                })?;
+
+                                debug!("copy piece {} to {:?} success", piece.number, self.output);
+                            };
+
+                            downloaded += piece.length;
+                            let position = min(downloaded + piece.length, progress_bar.length().unwrap_or(0));
+                            progress_bar.set_position(position);
+                        }
+                        None => {
+                            error!("response is missing");
+                            fs::remove_file(&self.output).await.inspect_err(|err| {
+                                error!("remove file {:?} failed: {}", self.output, err);
+                            })?;
+
+                            return Err(Error::UnexpectedResponse);
+                        }
+                    }
                 }
-                Some(download_persistent_cache_task_response::Response::DownloadPieceFinishedResponse(
-                    response,
-                )) => {
-                    let piece = response.piece.ok_or(Error::InvalidParameter).inspect_err(|_err| {
-                        error!("response piece is missing");
+                Ok(None) => break,
+                Err(err) => {
+                    error!("get message failed: {}", err);
+                    fs::remove_file(&self.output).await.inspect_err(|err| {
+                        error!("remove file {:?} failed: {}", self.output, err);
                     })?;
 
-                    // Dfcache needs to write the piece content to the output file.
-                    if let Some(f) = &mut f {
-                        f.seek(SeekFrom::Start(piece.offset))
-                            .await
-                            .inspect_err(|err| {
-                                error!("seek {:?} failed: {}", self.output, err);
-                            })?;
-
-                        let content = piece.content.ok_or(Error::InvalidParameter).inspect_err(|_err| {
-                            error!("piece content is missing");
-                        })?;
-
-                        f.write_all(&content).await.inspect_err(|err| {
-                            error!("write {:?} failed: {}", self.output, err);
-                        })?;
-
-                        debug!("copy piece {} to {:?} success", piece.number, self.output);
-                    };
-
-                    downloaded += piece.length;
-                    let position = min(downloaded + piece.length, progress_bar.length().unwrap_or(0));
-                    progress_bar.set_position(position);
+                    return Err(Error::TonicStatus(err));
                 }
-                None => {}
             }
         }
 
