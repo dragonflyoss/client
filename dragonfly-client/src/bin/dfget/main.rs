@@ -28,10 +28,8 @@ use dragonfly_client::tracing::init_command_tracing;
 use dragonfly_client_backend::{hdfs, object_storage, BackendFactory, DirEntry};
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
-use dragonfly_client_core::{
-    error::{ErrorType, OrErr},
-    Error, Result,
-};
+use dragonfly_client_core::error::{ErrorType, OrErr};
+use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::{fs::fallocate, http::header_vec_to_hashmap};
 use glob::Pattern;
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};

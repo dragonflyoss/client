@@ -86,8 +86,7 @@ impl QUICServer {
     pub async fn run(&mut self) -> ClientResult<()> {
         let (certs, key) = generate_simple_self_signed_certs("d7y", vec!["d7y".into()])?;
         let mut server_config = ServerConfig::with_single_cert(certs, key).map_err(|err| {
-            error!("failed to create server config: {}", err);
-            ClientError::QuinnRustlsError(err)
+            ClientError::Unknown(format!("failed to create server config: {}", err))
         })?;
 
         let mut transport = TransportConfig::default();
@@ -158,6 +157,7 @@ impl QUICServerHandler {
                     });
                 }
                 Err(err) => {
+                    // Downgrade common close cases to debug to reduce noisy logs.
                     match err {
                         quinn::ConnectionError::ApplicationClosed(_)
                         | quinn::ConnectionError::LocallyClosed => {
@@ -230,7 +230,10 @@ impl QUICServerHandler {
 
                         self.write_response(response.freeze(), &mut writer).await?;
                         self.write_stream(&mut content_reader, &mut writer).await?;
-                        writer.finish()?;
+
+                        if let Err(err) = writer.finish() {
+                            error!("failed to finish stream: {}", err);
+                        }
                     }
                     Err(err) => {
                         // Collect upload piece failure metrics.
@@ -239,7 +242,10 @@ impl QUICServerHandler {
                         let error_response: Bytes =
                             Vortex::Error(Header::new_error(err.len() as u32), err).into();
                         self.write_response(error_response, &mut writer).await?;
-                        writer.finish()?;
+
+                        if let Err(err) = writer.finish() {
+                            error!("failed to finish stream: {}", err);
+                        }
                     }
                 }
 
@@ -292,7 +298,10 @@ impl QUICServerHandler {
 
                         self.write_response(response.freeze(), &mut writer).await?;
                         self.write_stream(&mut content_reader, &mut writer).await?;
-                        writer.finish()?;
+
+                        if let Err(err) = writer.finish() {
+                            error!("failed to finish stream: {}", err);
+                        }
                     }
                     Err(err) => {
                         // Collect upload piece failure metrics.
@@ -301,7 +310,10 @@ impl QUICServerHandler {
                         let error_response: Bytes =
                             Vortex::Error(Header::new_error(err.len() as u32), err).into();
                         self.write_response(error_response, &mut writer).await?;
-                        writer.finish()?;
+
+                        if let Err(err) = writer.finish() {
+                            error!("failed to finish stream: {}", err);
+                        }
                     }
                 }
 

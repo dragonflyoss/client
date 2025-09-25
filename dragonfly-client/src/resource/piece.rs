@@ -831,7 +831,9 @@ impl Piece {
                     .await?
             }
             ("quic", Some(ip), _, Some(port)) => {
-                self.quic_downloader
+                let quic_downloader =
+                    piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
+                quic_downloader
                     .download_persistent_cache_piece(
                         format!("{}:{}", ip, port).as_str(),
                         number,
