@@ -479,7 +479,8 @@ impl ExportCommand {
             }
 
             let f = OpenOptions::new()
-                .create_new(true)
+                .create(true)
+                .truncate(true)
                 .write(true)
                 .mode(dfcache::DEFAULT_OUTPUT_FILE_MODE)
                 .open(&self.output)
