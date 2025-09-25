@@ -25,9 +25,10 @@ use dragonfly_client_util::{
     id_generator::IDGenerator, shutdown, tls::generate_simple_self_signed_certs,
 };
 use leaky_bucket::RateLimiter;
-use quinn::{Endpoint, ServerConfig};
+use quinn::{congestion::BbrConfig, AckFrequencyConfig, Endpoint, ServerConfig, TransportConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{copy, AsyncRead};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, instrument, Span};
@@ -84,9 +85,16 @@ impl QUICServer {
     /// Starts the storage quic server.
     pub async fn run(&mut self) -> ClientResult<()> {
         let (certs, key) = generate_simple_self_signed_certs("d7y", vec!["d7y".into()])?;
-        let server_config = ServerConfig::with_single_cert(certs, key).map_err(|err| {
+        let mut server_config = ServerConfig::with_single_cert(certs, key).map_err(|err| {
             ClientError::Unknown(format!("failed to create server config: {}", err))
         })?;
+
+        let mut transport = TransportConfig::default();
+        transport.congestion_controller_factory(Arc::new(BbrConfig::default()));
+        transport.keep_alive_interval(Some(Duration::from_secs(5)));
+        transport.max_idle_timeout(Some(Duration::from_secs(300).try_into().unwrap()));
+        transport.ack_frequency_config(Some(AckFrequencyConfig::default()));
+        server_config.transport_config(Arc::new(transport));
 
         let endpoint = Endpoint::server(server_config, self.addr)?;
         info!("storage quic server listening on {}", self.addr);
