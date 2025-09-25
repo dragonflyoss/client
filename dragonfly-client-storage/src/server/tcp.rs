@@ -28,7 +28,7 @@ use std::sync::Arc;
 use tokio::io::{copy, AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{
     tcp::{OwnedReadHalf, OwnedWriteHalf},
-    TcpListener as TokioTcpListener, TcpStream as TokioTcpStream,
+    TcpListener, TcpStream,
 };
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, instrument, Span};
@@ -84,10 +84,24 @@ impl TCPServer {
 
     /// Starts the storage tcp server.
     pub async fn run(&mut self) -> ClientResult<()> {
-        let listener = TokioTcpListener::bind(self.addr).await.inspect_err(|err| {
+        let listener = TcpListener::bind(self.addr).await.inspect_err(|err| {
             error!("failed to bind tcp server: {}", err);
         })?;
         info!("storage tcp server listening on {}", self.addr);
+
+        #[cfg(target_os = "linux")]
+        {
+            use nix::sys::socket::{setsockopt, sockopt::TcpCongestion};
+            use std::ffi::OsString;
+            use std::os::fd::AsFd;
+            use tracing::warn;
+
+            let bbr = OsString::from("bbr");
+            let fd = listener.as_fd();
+            if let Err(err) = setsockopt(&fd, TcpCongestion, &bbr) {
+                warn!("failed to set TCP congestion control to BBR: {}", err);
+            }
+        }
 
         loop {
             tokio::select! {
@@ -135,7 +149,7 @@ impl TCPServerHandler {
     /// to the appropriate handler. Supports both regular piece downloads and
     /// persistent cache piece downloads with proper request/response framing.
     #[instrument(skip_all, fields(host_id, remote_address, task_id, piece_id))]
-    async fn handle(&self, stream: TokioTcpStream, remote_address: String) -> ClientResult<()> {
+    async fn handle(&self, stream: TcpStream, remote_address: String) -> ClientResult<()> {
         let (mut reader, mut writer) = stream.into_split();
         let header = self.read_header(&mut reader).await?;
         match header.tag() {
