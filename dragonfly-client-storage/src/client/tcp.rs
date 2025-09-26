@@ -17,12 +17,10 @@
 use bytes::{Bytes, BytesMut};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
+use socket2::{SockRef, TcpKeepalive};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::net::{
-    tcp::{OwnedReadHalf, OwnedWriteHalf},
-    TcpStream as TokioTcpStream,
-};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::time;
 use tracing::{error, instrument};
 use vortex_protocol::{
@@ -172,13 +170,17 @@ impl TCPClient {
         &self,
         request: Bytes,
     ) -> ClientResult<(OwnedReadHalf, OwnedWriteHalf)> {
-        let (reader, mut writer) = TokioTcpStream::connect(self.addr.clone())
-            .await
-            .inspect_err(|err| {
-                error!("failed to connect to {}: {}", self.addr, err);
-            })?
-            .into_split();
+        let stream = tokio::net::TcpStream::connect(self.addr.clone()).await?;
+        let socket = SockRef::from(&stream);
+        socket.set_tcp_nodelay(true)?;
+        socket.set_nonblocking(true)?;
+        socket.set_send_buffer_size(super::DEFAULT_SEND_BUFFER_SIZE)?;
+        socket.set_recv_buffer_size(super::DEFAULT_RECV_BUFFER_SIZE)?;
+        socket.set_tcp_keepalive(
+            &TcpKeepalive::new().with_interval(super::DEFAULT_KEEPALIVE_INTERVAL),
+        )?;
 
+        let (reader, mut writer) = stream.into_split();
         writer.write_all(&request).await.inspect_err(|err| {
             error!("failed to send request: {}", err);
         })?;

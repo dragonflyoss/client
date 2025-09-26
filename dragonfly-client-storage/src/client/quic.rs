@@ -21,14 +21,10 @@ use dragonfly_client_core::{
     Error as ClientError, Result as ClientResult,
 };
 use quinn::crypto::rustls::QuicClientConfig;
-use quinn::{
-    congestion::BbrConfig, AckFrequencyConfig, ClientConfig, Endpoint, RecvStream, SendStream,
-    TransportConfig,
-};
+use quinn::{AckFrequencyConfig, ClientConfig, Endpoint, RecvStream, SendStream, TransportConfig};
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::io::AsyncRead;
 use tokio::time;
 use tracing::{error, instrument};
@@ -192,10 +188,12 @@ impl QUICClient {
         ));
 
         let mut transport = TransportConfig::default();
-        transport.congestion_controller_factory(Arc::new(BbrConfig::default()));
-        transport.keep_alive_interval(Some(Duration::from_secs(5)));
-        transport.max_idle_timeout(Some(Duration::from_secs(300).try_into().unwrap()));
+        transport.keep_alive_interval(Some(super::DEFAULT_KEEPALIVE_INTERVAL));
+        transport.max_idle_timeout(Some(super::DEFAULT_MAX_IDLE_TIMEOUT.try_into().unwrap()));
         transport.ack_frequency_config(Some(AckFrequencyConfig::default()));
+        transport.send_window(super::DEFAULT_SEND_BUFFER_SIZE as u64);
+        transport.receive_window((super::DEFAULT_RECV_BUFFER_SIZE as u32).into());
+        transport.stream_receive_window((super::DEFAULT_RECV_BUFFER_SIZE as u32).into());
         client_config.transport_config(Arc::new(transport));
 
         // Port is zero to let the OS assign an ephemeral port.

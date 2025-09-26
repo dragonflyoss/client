@@ -28,7 +28,6 @@ use leaky_bucket::RateLimiter;
 use quinn::{congestion::BbrConfig, AckFrequencyConfig, Endpoint, ServerConfig, TransportConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::io::{copy, AsyncRead};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, instrument, Span};
@@ -91,9 +90,12 @@ impl QUICServer {
 
         let mut transport = TransportConfig::default();
         transport.congestion_controller_factory(Arc::new(BbrConfig::default()));
-        transport.keep_alive_interval(Some(Duration::from_secs(5)));
-        transport.max_idle_timeout(Some(Duration::from_secs(300).try_into().unwrap()));
+        transport.keep_alive_interval(Some(super::DEFAULT_KEEPALIVE_INTERVAL));
+        transport.max_idle_timeout(Some(super::DEFAULT_MAX_IDLE_TIMEOUT.try_into().unwrap()));
         transport.ack_frequency_config(Some(AckFrequencyConfig::default()));
+        transport.send_window(super::DEFAULT_SEND_BUFFER_SIZE as u64);
+        transport.receive_window((super::DEFAULT_RECV_BUFFER_SIZE as u32).into());
+        transport.stream_receive_window((super::DEFAULT_RECV_BUFFER_SIZE as u32).into());
         server_config.transport_config(Arc::new(transport));
 
         let endpoint = Endpoint::server(server_config, self.addr)?;
