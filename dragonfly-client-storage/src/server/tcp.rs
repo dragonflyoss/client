@@ -23,6 +23,7 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_util::{id_generator::IDGenerator, shutdown};
 use leaky_bucket::RateLimiter;
+use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{copy, AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -84,24 +85,34 @@ impl TCPServer {
 
     /// Starts the storage tcp server.
     pub async fn run(&mut self) -> ClientResult<()> {
-        let listener = TcpListener::bind(self.addr).await.inspect_err(|err| {
+        let socket = Socket::new(
+            Domain::for_address(self.addr),
+            Type::STREAM,
+            Some(Protocol::TCP),
+        )?;
+        socket.set_tcp_nodelay(true)?;
+        socket.set_nonblocking(true)?;
+        socket.set_send_buffer_size(super::DEFAULT_SEND_BUFFER_SIZE)?;
+        socket.set_recv_buffer_size(super::DEFAULT_RECV_BUFFER_SIZE)?;
+        socket.set_tcp_keepalive(
+            &TcpKeepalive::new().with_interval(super::DEFAULT_KEEPALIVE_INTERVAL),
+        )?;
+        #[cfg(target_os = "linux")]
+        {
+            use tracing::warn;
+            if let Err(err) = socket.set_tcp_congestion("bbr".as_bytes()) {
+                warn!("failed to set tcp congestion: {}", err);
+            }
+            info!("set tcp congestion to bbr");
+        }
+
+        socket.bind(&self.addr.into())?;
+        socket.listen(1024)?;
+        let std_listener: std::net::TcpListener = socket.into();
+        let listener = TcpListener::from_std(std_listener).inspect_err(|err| {
             error!("failed to bind tcp server: {}", err);
         })?;
         info!("storage tcp server listening on {}", self.addr);
-
-        #[cfg(target_os = "linux")]
-        {
-            use nix::sys::socket::{setsockopt, sockopt::TcpCongestion};
-            use std::ffi::OsString;
-            use std::os::fd::AsFd;
-            use tracing::warn;
-
-            let bbr = OsString::from("bbr");
-            let fd = listener.as_fd();
-            if let Err(err) = setsockopt(&fd, TcpCongestion, &bbr) {
-                warn!("failed to set TCP congestion control to BBR: {}", err);
-            }
-        }
 
         loop {
             tokio::select! {
