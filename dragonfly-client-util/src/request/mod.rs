@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-mod errors;
+pub mod errors;
 mod selector;
 
 use crate::http::headermap_to_hashmap;
