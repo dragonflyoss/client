@@ -25,7 +25,8 @@ use dragonfly_client_util::{
     id_generator::IDGenerator, shutdown, tls::generate_simple_self_signed_certs,
 };
 use leaky_bucket::RateLimiter;
-use quinn::{congestion::BbrConfig, AckFrequencyConfig, Endpoint, ServerConfig, TransportConfig};
+// use quinn::{congestion::BbrConfig, AckFrequencyConfig, Endpoint, ServerConfig, TransportConfig};
+use quinn::{AckFrequencyConfig, Endpoint, ServerConfig, TransportConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{copy, AsyncRead};
@@ -89,7 +90,7 @@ impl QUICServer {
         })?;
 
         let mut transport = TransportConfig::default();
-        transport.congestion_controller_factory(Arc::new(BbrConfig::default()));
+        // transport.congestion_controller_factory(Arc::new(BbrConfig::default()));
         transport.keep_alive_interval(Some(super::DEFAULT_KEEPALIVE_INTERVAL));
         transport.max_idle_timeout(Some(super::DEFAULT_MAX_IDLE_TIMEOUT.try_into().unwrap()));
         transport.ack_frequency_config(Some(AckFrequencyConfig::default()));

@@ -97,14 +97,15 @@ impl TCPServer {
         socket.set_tcp_keepalive(
             &TcpKeepalive::new().with_interval(super::DEFAULT_KEEPALIVE_INTERVAL),
         )?;
-        #[cfg(target_os = "linux")]
-        {
-            use tracing::warn;
-            if let Err(err) = socket.set_tcp_congestion("bbr".as_bytes()) {
-                warn!("failed to set tcp congestion: {}", err);
-            }
-            info!("set tcp congestion to bbr");
-        }
+        // #[cfg(target_os = "linux")]
+        // {
+        // use tracing::warn;
+        // if let Err(err) = socket.set_tcp_congestion("bbr".as_bytes()) {
+        // warn!("failed to set tcp congestion: {}", err);
+        // } else {
+        // info!("set tcp congestion to bbr");
+        // }
+        // }
 
         socket.bind(&self.addr.into())?;
         socket.listen(1024)?;
