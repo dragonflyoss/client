@@ -179,6 +179,15 @@ impl TCPClient {
         socket.set_tcp_keepalive(
             &TcpKeepalive::new().with_interval(super::DEFAULT_KEEPALIVE_INTERVAL),
         )?;
+        #[cfg(target_os = "linux")]
+        {
+            use tracing::warn;
+            if let Err(err) = socket.set_tcp_fastopen(true) {
+                warn!("failed to set tcp fast open: {}", err);
+            } else {
+                info!("set tcp fast open");
+            }
+        }
 
         let (reader, mut writer) = stream.into_split();
         writer.write_all(&request).await.inspect_err(|err| {
