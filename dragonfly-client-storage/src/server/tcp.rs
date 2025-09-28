@@ -99,11 +99,21 @@ impl TCPServer {
         )?;
         #[cfg(target_os = "linux")]
         {
-            use tracing::warn;
-            if let Err(err) = socket.set_tcp_congestion("bbr".as_bytes()) {
+            use nix::sys::socket::{setsockopt, sockopt::TcpFastOpenConnect};
+            use std::os::fd::AsFd;
+            use tracing::{info, warn};
+
+            if let Err(err) = socket.set_tcp_congestion("cubic".as_bytes()) {
                 warn!("failed to set tcp congestion: {}", err);
+            } else {
+                info!("set tcp congestion to cubic");
             }
-            info!("set tcp congestion to bbr");
+
+            if let Err(err) = setsockopt(&socket.as_fd(), TcpFastOpenConnect, &true) {
+                warn!("failed to set tcp fast open: {}", err);
+            } else {
+                info!("set tcp fast open to true");
+            }
         }
 
         socket.bind(&self.addr.into())?;
