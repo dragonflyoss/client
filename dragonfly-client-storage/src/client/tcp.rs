@@ -181,11 +181,14 @@ impl TCPClient {
         )?;
         #[cfg(target_os = "linux")]
         {
+            use nix::sys::socket::{setsockopt, sockopt::TcpFastOpenConnect};
+            use std::os::fd::AsFd;
             use tracing::warn;
-            if let Err(err) = socket.set_tcp_fastopen(true) {
+
+            if let Err(err) = setsockopt(socket.as_fd(), TcpFastOpenConnect, &3) {
                 warn!("failed to set tcp fast open: {}", err);
             } else {
-                info!("set tcp fast open");
+                info!("set tcp fast open to 3");
             }
         }
 
