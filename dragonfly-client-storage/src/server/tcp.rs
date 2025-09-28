@@ -501,3 +501,415 @@ impl TCPServerHandler {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dragonfly_client_config::dfdaemon::Config;
+    use std::time::Duration;
+    use tempfile::tempdir;
+
+    async fn create_test_tcp_server_handler() -> TCPServerHandler {
+        let config = Arc::new(Config::default());
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join("log");
+
+        let storage = Storage::new(config.clone(), dir.path(), log_dir)
+            .await
+            .unwrap();
+        let storage = Arc::new(storage);
+
+        let id_generator = IDGenerator::new(
+            "127.0.0.1".to_string(),
+            config.host.hostname.clone(),
+            config.seed_peer.enable,
+        );
+        let id_generator = Arc::new(id_generator);
+
+        let upload_rate_limiter = Arc::new(
+            RateLimiter::builder()
+                .initial(config.upload.rate_limit.as_u64() as usize)
+                .refill(config.upload.rate_limit.as_u64() as usize)
+                .max(config.upload.rate_limit.as_u64() as usize)
+                .interval(Duration::from_secs(1))
+                .fair(false)
+                .build(),
+        );
+
+        TCPServerHandler {
+            id_generator,
+            storage,
+            upload_rate_limiter,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_header_success() {
+        let handler = create_test_tcp_server_handler().await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (mut reader, _writer) = stream.into_split();
+            handler.read_header(&mut reader).await
+        });
+
+        let client_stream = TcpStream::connect(addr).await.unwrap();
+        let (_reader, mut writer) = client_stream.into_split();
+
+        let header = Header::new(Tag::DownloadPiece, 100);
+        let header_bytes: Bytes = header.into();
+        writer.write_all(&header_bytes).await.unwrap();
+        writer.flush().await.unwrap();
+
+        let result = server_handle.await.unwrap();
+        assert!(result.is_ok());
+        if let Ok(header) = result {
+            assert_eq!(header.tag(), Tag::DownloadPiece);
+            assert_eq!(header.length(), 100);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_header_insufficient_data() {
+        let handler = create_test_tcp_server_handler().await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (mut reader, _writer) = stream.into_split();
+            handler.read_header(&mut reader).await
+        });
+
+        let client_stream = TcpStream::connect(addr).await.unwrap();
+        let (_reader, mut writer) = client_stream.into_split();
+
+        let partial_data = vec![0u8; HEADER_SIZE - 1];
+        writer.write_all(&partial_data).await.unwrap();
+        writer.flush().await.unwrap();
+        drop(writer);
+
+        let result = server_handle.await.unwrap();
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_read_header_connection_closed() {
+        let handler = create_test_tcp_server_handler().await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (mut reader, _writer) = stream.into_split();
+            handler.read_header(&mut reader).await
+        });
+
+        let client_stream = TcpStream::connect(addr).await.unwrap();
+        drop(client_stream);
+
+        let result = server_handle.await.unwrap();
+        assert!(result.is_err());
+    }
+
+    const HEADER_LENGTH: usize = 68;
+
+    #[tokio::test]
+    async fn test_read_download_piece_success() {
+        let handler = create_test_tcp_server_handler().await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (mut reader, _writer) = stream.into_split();
+            handler
+                .read_download_piece(&mut reader, HEADER_LENGTH)
+                .await
+        });
+
+        let client_stream = TcpStream::connect(addr).await.unwrap();
+        let (_reader, mut writer) = client_stream.into_split();
+
+        let task_id = "a".repeat(64);
+        let piece_number = 42;
+        let download_piece = DownloadPiece::new(task_id.clone(), piece_number);
+        let bytes: Bytes = download_piece.into();
+        writer.write_all(&bytes).await.unwrap();
+        writer.flush().await.unwrap();
+
+        let result: ClientResult<DownloadPiece> = server_handle.await.unwrap();
+        assert!(result.is_ok());
+        if let Ok(download_piece) = result {
+            assert_eq!(download_piece.task_id(), task_id);
+            assert_eq!(download_piece.piece_number(), piece_number);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_download_piece_insufficient_data() {
+        let handler = create_test_tcp_server_handler().await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (mut reader, _writer) = stream.into_split();
+            handler
+                .read_download_piece(&mut reader, HEADER_LENGTH)
+                .await
+        });
+
+        let client_stream = TcpStream::connect(addr).await.unwrap();
+        let (_reader, mut writer) = client_stream.into_split();
+
+        let partial_data = vec![0u8; HEADER_LENGTH - 1];
+        writer.write_all(&partial_data).await.unwrap();
+        writer.flush().await.unwrap();
+        drop(writer);
+
+        let result: ClientResult<DownloadPiece> = server_handle.await.unwrap();
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_read_download_piece_connection_closed() {
+        let handler = create_test_tcp_server_handler().await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (mut reader, _writer) = stream.into_split();
+            handler
+                .read_download_piece(&mut reader, HEADER_LENGTH)
+                .await
+        });
+
+        let client_stream = TcpStream::connect(addr).await.unwrap();
+        drop(client_stream);
+
+        let result: ClientResult<DownloadPiece> = server_handle.await.unwrap();
+        assert!(result.is_err());
+    }
+
+    async fn create_test_tcp_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let client_task = tokio::spawn(async move { TcpStream::connect(addr).await.unwrap() });
+
+        let (server_stream, _) = listener.accept().await.unwrap();
+        let client_stream = client_task.await.unwrap();
+
+        (server_stream, client_stream)
+    }
+
+    #[tokio::test]
+    async fn test_write_response_success() {
+        let handler = create_test_tcp_server_handler().await;
+        let (server_stream, mut client_stream) = create_test_tcp_pair().await;
+        let (_server_reader, mut server_writer) = server_stream.into_split();
+
+        let test_data = Bytes::from("Hello from server!");
+
+        let write_task = tokio::spawn(async move {
+            handler
+                .write_response(test_data.clone(), &mut server_writer)
+                .await
+        });
+
+        let mut response_buffer = vec![0u8; 1024];
+        let bytes_read = client_stream.read(&mut response_buffer).await.unwrap();
+
+        assert_eq!(&response_buffer[..bytes_read], b"Hello from server!");
+        assert!(write_task.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_write_response_large_data() {
+        let handler = create_test_tcp_server_handler().await;
+        let (server_stream, mut client_stream) = create_test_tcp_pair().await;
+        let (_server_reader, mut server_writer) = server_stream.into_split();
+
+        let large_data = Bytes::from(vec![42u8; 1024 * 1024]);
+
+        let write_task = tokio::spawn(async move {
+            handler
+                .write_response(large_data.clone(), &mut server_writer)
+                .await
+        });
+
+        let mut total_received = 0;
+        let mut buffer = vec![0u8; 8192];
+
+        while total_received < 1024 * 1024 {
+            match client_stream.read(&mut buffer).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    total_received += n;
+                    assert!(buffer[..n].iter().all(|&b| b == 42));
+                }
+                Err(e) => panic!("Read error: {}", e),
+            }
+        }
+
+        assert_eq!(total_received, 1024 * 1024);
+        assert!(write_task.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_write_response_client_slow_read() {
+        let handler = create_test_tcp_server_handler().await;
+        let (server_stream, mut client_stream) = create_test_tcp_pair().await;
+        let (_server_reader, mut server_writer) = server_stream.into_split();
+
+        let test_data = Bytes::from(vec![1u8; 64 * 1024]);
+
+        let write_task =
+            tokio::spawn(
+                async move { handler.write_response(test_data, &mut server_writer).await },
+            );
+
+        tokio::spawn(async move {
+            let mut buffer = vec![0u8; 1024];
+            let mut total_read = 0;
+
+            while total_read < 64 * 1024 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                match client_stream.read(&mut buffer).await {
+                    Ok(0) => break,
+                    Ok(n) => total_read += n,
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let result = tokio::time::timeout(Duration::from_secs(5), write_task).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_write_stream_success() {
+        let handler = create_test_tcp_server_handler().await;
+        let (server_stream, mut client_stream) = create_test_tcp_pair().await;
+        let (_server_reader, mut server_writer) = server_stream.into_split();
+
+        let test_data = b"Stream content for testing".to_vec();
+        let mut mock_stream = std::io::Cursor::new(test_data.clone());
+
+        let write_task = tokio::spawn(async move {
+            handler
+                .write_stream(&mut mock_stream, &mut server_writer)
+                .await
+        });
+
+        let mut response_buffer = vec![0u8; 1024];
+        let bytes_read = client_stream.read(&mut response_buffer).await.unwrap();
+
+        assert_eq!(&response_buffer[..bytes_read], test_data.as_slice());
+        assert!(write_task.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_write_stream_large_stream() {
+        let handler = create_test_tcp_server_handler().await;
+        let (server_stream, mut client_stream) = create_test_tcp_pair().await;
+        let (_server_reader, mut server_writer) = server_stream.into_split();
+
+        let large_data = vec![123u8; 10 * 1024 * 1024];
+        let mut mock_stream = std::io::Cursor::new(large_data.clone());
+
+        let write_task = tokio::spawn(async move {
+            handler
+                .write_stream(&mut mock_stream, &mut server_writer)
+                .await
+        });
+
+        let mut total_received = 0;
+        let mut buffer = vec![0u8; 64 * 1024];
+
+        while total_received < 10 * 1024 * 1024 {
+            match tokio::time::timeout(Duration::from_secs(1), client_stream.read(&mut buffer))
+                .await
+            {
+                Ok(Ok(0)) => break,
+                Ok(Ok(n)) => {
+                    total_received += n;
+                    assert!(buffer[..n].iter().all(|&b| b == 123));
+                }
+                Ok(Err(e)) => panic!("Read error: {}", e),
+                Err(_) => panic!("Read timeout"),
+            }
+        }
+
+        assert_eq!(total_received, 10 * 1024 * 1024);
+        assert!(write_task.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_write_stream_with_slow_source() {
+        let handler = create_test_tcp_server_handler().await;
+        let (server_stream, mut client_stream) = create_test_tcp_pair().await;
+        let (_server_reader, mut server_writer) = server_stream.into_split();
+
+        struct SlowReader {
+            data: std::io::Cursor<Vec<u8>>,
+            delay: Duration,
+        }
+
+        impl AsyncRead for SlowReader {
+            fn poll_read(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+                buf: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                cx.waker().wake_by_ref();
+                std::thread::sleep(self.delay);
+
+                let mut temp_buf = vec![0u8; std::cmp::min(buf.remaining(), 10)];
+                match std::io::Read::read(&mut self.data, &mut temp_buf) {
+                    Ok(0) => std::task::Poll::Ready(Ok(())),
+                    Ok(n) => {
+                        buf.put_slice(&temp_buf[..n]);
+                        std::task::Poll::Ready(Ok(()))
+                    }
+                    Err(e) => std::task::Poll::Ready(Err(e)),
+                }
+            }
+        }
+
+        let test_data = b"Slow stream data".to_vec();
+        let mut slow_stream = SlowReader {
+            data: std::io::Cursor::new(test_data.clone()),
+            delay: Duration::from_millis(5),
+        };
+
+        let write_task = tokio::spawn(async move {
+            handler
+                .write_stream(&mut slow_stream, &mut server_writer)
+                .await
+        });
+
+        let mut response_buffer = vec![0u8; 1024];
+        let bytes_read = tokio::time::timeout(
+            Duration::from_secs(2),
+            client_stream.read(&mut response_buffer),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(&response_buffer[..bytes_read], test_data.as_slice());
+        assert!(write_task.await.unwrap().is_ok());
+    }
+}

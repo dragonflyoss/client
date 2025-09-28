@@ -18,7 +18,9 @@ use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use dragonfly_api::dfdaemon::v2::{DownloadPersistentCachePieceRequest, DownloadPieceRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_storage::{client::quic::QUICClient, client::tcp::TCPClient, metadata};
+use dragonfly_client_storage::{
+    client::quic::QUICClient, client::tcp::TCPClient, client::Client, metadata,
+};
 use dragonfly_client_util::pool::{Builder as PoolBuilder, Entry, Factory, Pool};
 use std::io::Cursor;
 use std::sync::Arc;
