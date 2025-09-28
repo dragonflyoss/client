@@ -45,6 +45,12 @@ const HTTP2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(300);
 /// HTTP2_KEEP_ALIVE_TIMEOUT is the timeout for HTTP2 keep alive.
 const HTTP2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// HTTP2_STREAM_WINDOW_SIZE is the stream window size for HTTP2 connection.
+const HTTP2_STREAM_WINDOW_SIZE: u32 = 16 * 1024 * 1024;
+
+/// HTTP2_CONNECTION_WINDOW_SIZE is the connection window size for HTTP2 connection.
+const HTTP2_CONNECTION_WINDOW_SIZE: u32 = 16 * 1024 * 1024;
+
 /// MAX_RETRY_TIMES is the max retry times for the request.
 const MAX_RETRY_TIMES: u32 = 1;
 
