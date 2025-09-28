@@ -183,7 +183,7 @@ impl TCPClient {
         {
             use nix::sys::socket::{setsockopt, sockopt::TcpFastOpenConnect};
             use std::os::fd::AsFd;
-            use tracing::warn;
+            use tracing::{info, warn};
 
             if let Err(err) = setsockopt(&socket.as_fd(), TcpFastOpenConnect, &true) {
                 warn!("failed to set tcp fast open: {}", err);

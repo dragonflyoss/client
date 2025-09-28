@@ -1014,11 +1014,11 @@ pub struct Storage {
     )]
     pub write_piece_timeout: Duration,
 
-    /// write_buffer_size is the buffer size for writing piece to disk, default is 128KB.
+    /// write_buffer_size is the buffer size for writing piece to disk, default is 4MiB.
     #[serde(default = "default_storage_write_buffer_size")]
     pub write_buffer_size: usize,
 
-    /// read_buffer_size is the buffer size for reading piece from disk, default is 128KB.
+    /// read_buffer_size is the buffer size for reading piece from disk, default is 4MiB.
     #[serde(default = "default_storage_read_buffer_size")]
     pub read_buffer_size: usize,
 

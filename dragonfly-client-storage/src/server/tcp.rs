@@ -101,7 +101,7 @@ impl TCPServer {
         {
             use nix::sys::socket::{setsockopt, sockopt::TcpFastOpenConnect};
             use std::os::fd::AsFd;
-            use tracing::warn;
+            use tracing::{info, warn};
 
             if let Err(err) = socket.set_tcp_congestion("cubic".as_bytes()) {
                 warn!("failed to set tcp congestion: {}", err);
