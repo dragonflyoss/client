@@ -109,7 +109,7 @@ impl TCPServer {
                 info!("set tcp congestion to cubic");
             }
 
-            if let Err(err) = setsockopt(socket.as_fd(), TcpFastOpenConnect, &true) {
+            if let Err(err) = setsockopt(&socket.as_fd(), TcpFastOpenConnect, &true) {
                 warn!("failed to set tcp fast open: {}", err);
             } else {
                 info!("set tcp fast open to true");
