@@ -185,10 +185,10 @@ impl TCPClient {
             use std::os::fd::AsFd;
             use tracing::warn;
 
-            if let Err(err) = setsockopt(socket.as_fd(), TcpFastOpenConnect, &3) {
+            if let Err(err) = setsockopt(socket.as_fd(), TcpFastOpenConnect, &true) {
                 warn!("failed to set tcp fast open: {}", err);
             } else {
-                info!("set tcp fast open to 3");
+                info!("set tcp fast open to true");
             }
         }
 
