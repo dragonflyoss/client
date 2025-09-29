@@ -99,7 +99,7 @@ impl TCPServer {
         )?;
         #[cfg(target_os = "linux")]
         {
-            use nix::sys::socket::{setsockopt, sockopt::TcpFastOpenConnect};
+            use nix::sys::socket::{setsockopt, sockopt::TcpFastOpen};
             use std::os::fd::AsFd;
             use tracing::{info, warn};
 
@@ -109,7 +109,7 @@ impl TCPServer {
                 info!("set tcp congestion to cubic");
             }
 
-            if let Err(err) = setsockopt(&socket.as_fd(), TcpFastOpenConnect, &true) {
+            if let Err(err) = setsockopt(&socket.as_fd(), TcpFastOpen, &3u32) {
                 warn!("failed to set tcp fast open: {}", err);
             } else {
                 info!("set tcp fast open to true");
