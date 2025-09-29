@@ -38,7 +38,6 @@ walkdir = "2.5.0"
 quinn = "0.11.9"
 socket2 = "0.6.0"
 mockall = "0.13.1"
-nix = { version = "0.30.1", features = ["socket", "net"] }
 
 [dev-dependencies]
 tempfile.workspace = true
