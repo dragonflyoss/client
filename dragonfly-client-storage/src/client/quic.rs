@@ -303,7 +303,7 @@ impl QUICClient {
 /// NoVerifier is a verifier for QUIC Client that does not verify the server certificate.
 /// It is used for testing and should not be used in production.
 #[derive(Debug)]
-struct NoVerifier(Arc<quinn::rustls::crypto::CryptoProvider>);
+pub struct NoVerifier(Arc<quinn::rustls::crypto::CryptoProvider>);
 
 /// NoVerifier implements a no-op server certificate verifier.
 impl NoVerifier {
@@ -362,5 +362,41 @@ impl quinn::rustls::client::danger::ServerCertVerifier for NoVerifier {
     /// Returns the supported signature schemes.
     fn supported_verify_schemes(&self) -> Vec<quinn::rustls::SignatureScheme> {
         self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quinn::rustls::client::danger::ServerCertVerifier;
+
+    #[test]
+    fn test_new() {
+        let config = Arc::new(Config::default());
+        let addr = "127.0.0.1:12345".to_string();
+        let client = QUICClient::new(config.clone(), addr.clone());
+        // Verify internal stored values
+        assert_eq!(client.addr, addr);
+        // Ensure the same Arc instance stored
+        assert!(Arc::ptr_eq(&client.config, &config));
+    }
+
+    #[test]
+    fn test_no_verifier() {
+        let verifier = NoVerifier::new();
+
+        // Test verify_server_cert
+        let result = verifier.verify_server_cert(
+            &CertificateDer::from(vec![]),
+            &[],
+            &ServerName::DnsName("d7y.io".try_into().unwrap()),
+            &[],
+            UnixTime::now(),
+        );
+        assert!(result.is_ok());
+
+        // Test supported_verify_schemes
+        let schemes = verifier.supported_verify_schemes();
+        assert!(!schemes.is_empty());
     }
 }
