@@ -32,6 +32,12 @@ use tokio_util::either::Either;
 use tokio_util::io::InspectReader;
 use tracing::{debug, error, info, instrument, warn};
 
+#[cfg(target_os = "linux")]
+mod content_linux;
+
+#[cfg(target_os = "macos")]
+mod content_macos;
+
 pub mod cache;
 pub mod client;
 pub mod content;
@@ -62,7 +68,7 @@ impl Storage {
     /// new returns a new storage.
     pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf) -> Result<Self> {
         let metadata = metadata::Metadata::new(config.clone(), dir, &log_dir)?;
-        let content = content::Content::new(config.clone(), dir).await?;
+        let content = content::new_content(config.clone(), dir).await?;
         let cache = cache::Cache::new(config.clone());
 
         Ok(Storage {
