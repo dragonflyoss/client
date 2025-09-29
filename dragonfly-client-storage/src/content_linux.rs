@@ -21,8 +21,6 @@ use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::fs::fallocate;
 use nix::fcntl::{open, OFlag};
 use nix::sys::stat::Mode;
-use std::os::fd::AsRawFd;
-use std::os::unix::io::FromRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::{self, File, OpenOptions};
@@ -386,24 +384,26 @@ impl Content {
         let (target_offset, target_length) =
             super::content::calculate_piece_range(offset, length, range);
 
-        let owned_fd = open(
-            task_path.as_path(),
-            OFlag::O_RDONLY | OFlag::O_DIRECT,
-            Mode::empty(),
-        )
-        .inspect_err(|err| {
-            error!("open {:?} failed: {}", task_path, err);
-        })?;
+        use std::os::unix::fs::OpenOptionsExt;
+        use tokio_uring::fs::OpenOptions;
 
-        let std_fd = std::fs::File::from(owned_fd);
-        let mut f = File::from_std(std_fd);
-        f.seek(SeekFrom::Start(target_offset))
+        let f = OpenOptions::new()
+            .read(true)
+            .custom_flags(OFlag::O_DIRECT.bits())
+            .open(task_path.as_path())
             .await
             .inspect_err(|err| {
-                error!("seek {:?} failed: {}", task_path, err);
+                error!("open {:?} failed: {}", task_path, err);
             })?;
 
-        Ok(Box::new(f.take(target_length)))
+        // Ensure the buffer is aligned for O_DIRECT
+        let aligned_buffer = super::content::AlignedBuffer::new(target_length as usize, 4096)?;
+
+        // Submit the read operation with io_uring
+        let (_, aligned_buffer) = f.read_at(aligned_buffer, target_offset as u64).await;
+
+        // Box the result to return it as an AsyncRead
+        Ok(Box::new(aligned_buffer.take(target_length)))
     }
 
     /// write_piece writes the piece to the content and calculates the hash of the piece by crc32.
