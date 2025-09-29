@@ -951,11 +951,14 @@ async fn download(
                         response,
                     )) => {
                         if let Some(f) = &f {
-                            fallocate(f, response.content_length)
-                                .await
-                                .inspect_err(|err| {
-                                    error!("fallocate {:?} failed: {}", args.output, err);
+                            if let Err(err) = fallocate(f, response.content_length).await {
+                                error!("fallocate {:?} failed: {}", args.output, err);
+                                fs::remove_file(&args.output).await.inspect_err(|err| {
+                                    error!("remove file {:?} failed: {}", args.output, err);
                                 })?;
+
+                                return Err(err);
+                            }
                         }
 
                         progress_bar.set_length(response.content_length);
@@ -963,32 +966,61 @@ async fn download(
                     Some(download_task_response::Response::DownloadPieceFinishedResponse(
                         response,
                     )) => {
-                        let piece =
-                            response
-                                .piece
-                                .ok_or(Error::InvalidParameter)
-                                .inspect_err(|_err| {
-                                    error!("response piece is missing");
+                        let piece = match response.piece {
+                            Some(piece) => piece,
+                            None => {
+                                error!("response piece is missing");
+                                fs::remove_file(&args.output).await.inspect_err(|err| {
+                                    error!("remove file {:?} failed: {}", args.output, err);
                                 })?;
+
+                                return Err(Error::InvalidParameter);
+                            }
+                        };
 
                         // Dfget needs to write the piece content to the output file.
                         if let Some(f) = &mut f {
-                            f.seek(SeekFrom::Start(piece.offset))
-                                .await
-                                .inspect_err(|err| {
-                                    error!("seek {:?} failed: {}", args.output, err);
+                            if let Err(err) = f.seek(SeekFrom::Start(piece.offset)).await {
+                                error!("seek {:?} failed: {}", args.output, err);
+                                fs::remove_file(&args.output).await.inspect_err(|err| {
+                                    error!("remove file {:?} failed: {}", args.output, err);
                                 })?;
 
-                            let content = piece
-                                .content
-                                .ok_or(Error::InvalidParameter)
-                                .inspect_err(|_err| {
+                                return Err(Error::IO(err));
+                            }
+
+                            let content = match piece.content {
+                                Some(content) => content,
+                                None => {
                                     error!("piece content is missing");
+                                    fs::remove_file(&args.output).await.inspect_err(|err| {
+                                        error!("remove file {:?} failed: {}", args.output, err);
+                                    })?;
+
+                                    return Err(Error::InvalidParameter);
+                                }
+                            };
+
+                            if let Err(err) = f.write_all(&content).await {
+                                error!(
+                                    "write piece {} to {:?} failed: {}",
+                                    piece.number, args.output, err
+                                );
+                                fs::remove_file(&args.output).await.inspect_err(|err| {
+                                    error!("remove file {:?} failed: {}", args.output, err);
                                 })?;
 
-                            f.write_all(&content).await.inspect_err(|err| {
-                                error!("write {:?} failed: {}", args.output, err);
-                            })?;
+                                return Err(Error::IO(err));
+                            }
+
+                            if let Err(err) = f.flush().await {
+                                error!("flush {:?} failed: {}", args.output, err);
+                                fs::remove_file(&args.output).await.inspect_err(|err| {
+                                    error!("remove file {:?} failed: {}", args.output, err);
+                                })?;
+
+                                return Err(Error::IO(err));
+                            }
 
                             debug!("copy piece {} to {:?} success", piece.number, args.output);
                         }
