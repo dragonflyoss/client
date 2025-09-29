@@ -584,8 +584,7 @@ mod tests {
         let mut server_config = ServerConfig::with_single_cert(cert, key).unwrap();
         let transport = Arc::new(TransportConfig::default());
         server_config.transport_config(transport);
-        let endpoint = Endpoint::server(server_config, addr).unwrap();
-        endpoint
+        Endpoint::server(server_config, addr).unwrap()
     }
 
     async fn create_test_client_endpoint(addr: SocketAddr) -> Endpoint {
