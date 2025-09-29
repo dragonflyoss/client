@@ -212,6 +212,12 @@ fn default_storage_keep() -> bool {
     false
 }
 
+/// default_storage_directio is the default whether enable direct I/O when reading or writing piece to storage.
+#[inline]
+fn default_storage_directio() -> bool {
+    false
+}
+
 /// default_storage_write_piece_timeout is the default timeout for writing a piece to storage(e.g., disk
 /// or cache).
 #[inline]
@@ -1006,6 +1012,10 @@ pub struct Storage {
     #[serde(default = "default_storage_keep")]
     pub keep: bool,
 
+    /// directio indicates whether enable direct I/O when reading or writing piece to storage.
+    #[serde(default = "default_storage_directio")]
+    pub directio: bool,
+
     /// write_piece_timeout is the timeout for writing a piece to storage(e.g., disk
     /// or cache).
     #[serde(
@@ -1063,6 +1073,7 @@ impl Default for Storage {
             server: StorageServer::default(),
             dir: crate::default_storage_dir(),
             keep: default_storage_keep(),
+            directio: default_storage_directio(),
             write_piece_timeout: default_storage_write_piece_timeout(),
             write_buffer_size: default_storage_write_buffer_size(),
             read_buffer_size: default_storage_read_buffer_size(),

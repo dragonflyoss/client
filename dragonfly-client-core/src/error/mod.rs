@@ -170,6 +170,10 @@ pub enum DFError {
     #[error(transparent)]
     VortexProtocolError(#[from] vortex_protocol::error::Error),
 
+    /// NixError is the error for nix.
+    #[error(transparent)]
+    NixError(#[from] nix::Error),
+
     /// TonicStatus is the error for tonic status.
     #[error(transparent)]
     TonicStatus(#[from] tonic::Status),

@@ -284,52 +284,6 @@ impl Content {
         Ok(f_reader.take(target_length))
     }
 
-    /// read_piece_with_dual_read return two readers, one is the range reader, and the other is the
-    /// full reader of the piece. It is used for cache the piece content to the proxy cache.
-    #[instrument(skip_all)]
-    pub async fn read_piece_with_dual_read(
-        &self,
-        task_id: &str,
-        offset: u64,
-        length: u64,
-        range: Option<Range>,
-    ) -> Result<(impl AsyncRead, impl AsyncRead)> {
-        let task_path = self.get_task_path(task_id);
-
-        // Calculate the target offset and length based on the range.
-        let (target_offset, target_length) =
-            super::content::calculate_piece_range(offset, length, range);
-
-        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
-            error!("open {:?} failed: {}", task_path, err);
-        })?;
-        let mut f_range_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
-
-        f_range_reader
-            .seek(SeekFrom::Start(target_offset))
-            .await
-            .inspect_err(|err| {
-                error!("seek {:?} failed: {}", task_path, err);
-            })?;
-        let range_reader = f_range_reader.take(target_length);
-
-        // Create full reader of the piece.
-        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
-            error!("open {:?} failed: {}", task_path, err);
-        })?;
-        let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
-
-        f_reader
-            .seek(SeekFrom::Start(offset))
-            .await
-            .inspect_err(|err| {
-                error!("seek {:?} failed: {}", task_path, err);
-            })?;
-        let reader = f_reader.take(length);
-
-        Ok((range_reader, reader))
-    }
-
     /// write_piece writes the piece to the content and calculates the hash of the piece by crc32.
     #[instrument(skip_all)]
     pub async fn write_piece<R: AsyncRead + Unpin + ?Sized>(
@@ -508,52 +462,6 @@ impl Content {
             })?;
 
         Ok(f_reader.take(target_length))
-    }
-
-    /// read_persistent_cache_piece_with_dual_read return two readers, one is the range reader, and the other is the
-    /// full reader of the persistent cache piece. It is used for cache the piece content to the proxy cache.
-    #[instrument(skip_all)]
-    pub async fn read_persistent_cache_piece_with_dual_read(
-        &self,
-        task_id: &str,
-        offset: u64,
-        length: u64,
-        range: Option<Range>,
-    ) -> Result<(impl AsyncRead, impl AsyncRead)> {
-        let task_path = self.get_persistent_cache_task_path(task_id);
-
-        // Calculate the target offset and length based on the range.
-        let (target_offset, target_length) =
-            super::content::calculate_piece_range(offset, length, range);
-
-        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
-            error!("open {:?} failed: {}", task_path, err);
-        })?;
-        let mut f_range_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
-
-        f_range_reader
-            .seek(SeekFrom::Start(target_offset))
-            .await
-            .inspect_err(|err| {
-                error!("seek {:?} failed: {}", task_path, err);
-            })?;
-        let range_reader = f_range_reader.take(target_length);
-
-        // Create full reader of the piece.
-        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
-            error!("open {:?} failed: {}", task_path, err);
-        })?;
-        let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
-
-        f_reader
-            .seek(SeekFrom::Start(offset))
-            .await
-            .inspect_err(|err| {
-                error!("seek {:?} failed: {}", task_path, err);
-            })?;
-        let reader = f_reader.take(length);
-
-        Ok((range_reader, reader))
     }
 
     /// write_persistent_cache_piece writes the persistent cache piece to the content and
