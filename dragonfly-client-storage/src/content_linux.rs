@@ -19,6 +19,7 @@ use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::fs::fallocate;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::{self, File, OpenOptions};
@@ -120,20 +121,8 @@ impl Content {
         let source_metadata = fs::metadata(source).await?;
         let target_metadata = fs::metadata(target).await?;
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            Ok(source_metadata.dev() == target_metadata.dev()
-                && source_metadata.ino() == target_metadata.ino())
-        }
-
-        #[cfg(not(unix))]
-        {
-            Err(Error::IO(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "platform not supported",
-            )))
-        }
+        Ok(source_metadata.dev() == target_metadata.dev()
+            && source_metadata.ino() == target_metadata.ino())
     }
 
     /// is_same_dev_inode_as_task checks if the task and target are the same device and inode.

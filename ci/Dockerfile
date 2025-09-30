@@ -1,4 +1,4 @@
-FROM public.ecr.aws/docker/library/rust:1.85.0 AS builder
+FROM rust:1.85.0 AS builder
 
 WORKDIR /app/client
 
@@ -46,7 +46,7 @@ RUN case "${TARGETPLATFORM}" in \
 
 RUN cargo install tokio-console --version 0.1.13 --locked --root /usr/local
 
-FROM public.ecr.aws/docker/library/alpine:3.20 AS health
+FROM alpine:3.20 AS health
 
 ENV GRPC_HEALTH_PROBE_VERSION=v0.4.24
 
@@ -59,12 +59,12 @@ RUN if [ "$(uname -m)" = "ppc64le" ]; then \
     fi && \
     chmod +x /bin/grpc_health_probe
 
-FROM public.ecr.aws/docker/library/golang:1.24.0-alpine3.20 AS pprof
+FROM golang:1.24.0-alpine3.20 AS pprof
 
 RUN go install github.com/google/pprof@latest
 RUN go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
 
-FROM public.ecr.aws/debian/debian:bookworm-slim
+FROM debian/debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends iperf3 linux-libc-dev libc6-dev \
     iotop sysstat bash-completion procps apache2-utils ca-certificates binutils fio curl \

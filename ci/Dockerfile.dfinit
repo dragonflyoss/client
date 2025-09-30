@@ -1,4 +1,4 @@
-FROM public.ecr.aws/docker/library/rust:1.85.0 AS builder
+FROM rust:1.85.0 AS builder
 
 RUN apt-get update && apt-get install -y \
     openssl libclang-dev pkg-config protobuf-compiler \
@@ -44,7 +44,7 @@ RUN case "${TARGETPLATFORM}" in \
   esac && \
   cargo build --release --verbose --bin dfinit
 
-FROM public.ecr.aws/debian/debian:bookworm-slim
+FROM debian/debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends wget \
     && rm -rf /var/lib/apt/lists/*
