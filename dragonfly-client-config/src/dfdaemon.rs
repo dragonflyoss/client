@@ -965,6 +965,11 @@ pub struct StorageServer {
     #[serde(default = "default_storage_server_tcp_port")]
     pub tcp_port: u16,
 
+    /// tcp_fastopen indicates whether enable tcp fast open, refer to https://datatracker.ietf.org/doc/html/rfc7413.
+    /// Please check `net.ipv4.tcp_fastopen` sysctl is set to `3` to enable tcp fast open for both
+    /// client and server.
+    pub tcp_fastopen: bool,
+
     /// port is the port to the quic server.
     #[serde(default = "default_storage_server_quic_port")]
     pub quic_port: u16,
@@ -976,6 +981,7 @@ impl Default for StorageServer {
         StorageServer {
             ip: None,
             tcp_port: default_storage_server_tcp_port(),
+            tcp_fastopen: false,
             quic_port: default_storage_server_quic_port(),
         }
     }

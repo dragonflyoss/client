@@ -179,6 +179,20 @@ impl TCPClient {
         socket.set_tcp_keepalive(
             &TcpKeepalive::new().with_interval(super::DEFAULT_KEEPALIVE_INTERVAL),
         )?;
+        #[cfg(target_os = "linux")]
+        {
+            use dragonfly_client_util::net::set_tcp_fastopen_connect;
+            use std::os::unix::io::AsRawFd;
+            use tracing::{info, warn};
+
+            if self.config.storage.server.tcp_fastopen {
+                if let Err(err) = set_tcp_fastopen_connect(socket.as_raw_fd()) {
+                    warn!("failed to enable tcp fastopen: {}", err);
+                } else {
+                    info!("enabled tcp fastopen");
+                }
+            }
+        }
 
         let (reader, mut writer) = stream.into_split();
         writer.write_all(&request).await.inspect_err(|err| {

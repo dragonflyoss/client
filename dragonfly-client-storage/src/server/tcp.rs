@@ -17,6 +17,7 @@
 use crate::Storage;
 use bytes::{Bytes, BytesMut};
 use dragonfly_api::common::v2::TrafficType;
+use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_metric::{
     collect_upload_piece_failure_metrics, collect_upload_piece_started_metrics,
@@ -47,6 +48,9 @@ use vortex_protocol::{
 
 /// TCPServer is a TCP-based server for dfdaemon upload service.
 pub struct TCPServer {
+    /// config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
     /// addr is the address of the TCP server.
     addr: SocketAddr,
 
@@ -64,6 +68,7 @@ pub struct TCPServer {
 impl TCPServer {
     /// Creates a new TCPServer.
     pub fn new(
+        config: Arc<Config>,
         addr: SocketAddr,
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
@@ -72,6 +77,7 @@ impl TCPServer {
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
         Self {
+            config,
             addr,
             handler: TCPServerHandler {
                 id_generator,
@@ -99,12 +105,22 @@ impl TCPServer {
         )?;
         #[cfg(target_os = "linux")]
         {
+            use dragonfly_client_util::net::set_tcp_fastopen;
+            use std::os::unix::io::AsRawFd;
             use tracing::{info, warn};
 
             if let Err(err) = socket.set_tcp_congestion("cubic".as_bytes()) {
                 warn!("failed to set tcp congestion: {}", err);
             } else {
                 info!("set tcp congestion to cubic");
+            }
+
+            if self.config.storage.server.tcp_fastopen {
+                if let Err(err) = set_tcp_fastopen(socket.as_raw_fd()) {
+                    warn!("failed to enable tcp fastopen: {}", err);
+                } else {
+                    info!("enabled tcp fastopen");
+                }
             }
         }
 
