@@ -213,15 +213,15 @@ pub fn set_tcp_fastopen_connect(fd: RawFd) -> io::Result<()> {
 /// descriptor.
 #[cfg(target_os = "linux")]
 pub fn set_tcp_fastopen(fd: RawFd) -> io::Result<()> {
-    let enable: libc::c_int = 3;
+    let queue: libc::c_int = 1024;
 
     unsafe {
         let ret = libc::setsockopt(
             fd,
             libc::IPPROTO_TCP,
             libc::TCP_FASTOPEN,
-            &enable as *const _ as *const libc::c_void,
-            mem::size_of_val(&enable) as libc::socklen_t,
+            &queue as *const _ as *const libc::c_void,
+            mem::size_of_val(&queue) as libc::socklen_t,
         );
 
         if ret != 0 {
