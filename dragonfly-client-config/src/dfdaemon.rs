@@ -899,14 +899,6 @@ pub enum HostType {
     #[default]
     #[serde(rename = "super")]
     Super,
-
-    /// Strong indicates the peer is strong seed peer.
-    #[serde(rename = "strong")]
-    Strong,
-
-    /// Weak indicates the peer is weak seed peer.
-    #[serde(rename = "weak")]
-    Weak,
 }
 
 /// HostType implements Display.
@@ -915,8 +907,6 @@ impl fmt::Display for HostType {
         match self {
             HostType::Normal => write!(f, "normal"),
             HostType::Super => write!(f, "super"),
-            HostType::Strong => write!(f, "strong"),
-            HostType::Weak => write!(f, "weak"),
         }
     }
 }
@@ -1984,8 +1974,6 @@ key: /etc/ssl/private/client.pem
         // Test whether the Display implementation is correct.
         assert_eq!(HostType::Normal.to_string(), "normal");
         assert_eq!(HostType::Super.to_string(), "super");
-        assert_eq!(HostType::Strong.to_string(), "strong");
-        assert_eq!(HostType::Weak.to_string(), "weak");
 
         // Test if the default value is HostType::Super.
         let default_host_type: HostType = Default::default();
@@ -1996,26 +1984,18 @@ key: /etc/ssl/private/client.pem
     fn serialize_host_type_correctly() {
         let normal: HostType = serde_json::from_str("\"normal\"").unwrap();
         let super_seed: HostType = serde_json::from_str("\"super\"").unwrap();
-        let strong_seed: HostType = serde_json::from_str("\"strong\"").unwrap();
-        let weak_seed: HostType = serde_json::from_str("\"weak\"").unwrap();
 
         assert_eq!(normal, HostType::Normal);
         assert_eq!(super_seed, HostType::Super);
-        assert_eq!(strong_seed, HostType::Strong);
-        assert_eq!(weak_seed, HostType::Weak);
     }
 
     #[test]
     fn serialize_host_type() {
         let normal_json = serde_json::to_string(&HostType::Normal).unwrap();
         let super_json = serde_json::to_string(&HostType::Super).unwrap();
-        let strong_json = serde_json::to_string(&HostType::Strong).unwrap();
-        let weak_json = serde_json::to_string(&HostType::Weak).unwrap();
 
         assert_eq!(normal_json, "\"normal\"");
         assert_eq!(super_json, "\"super\"");
-        assert_eq!(strong_json, "\"strong\"");
-        assert_eq!(weak_json, "\"weak\"");
     }
 
     #[test]
@@ -2029,7 +2009,7 @@ key: /etc/ssl/private/client.pem
     fn validate_seed_peer() {
         let valid_seed_peer = SeedPeer {
             enable: true,
-            kind: HostType::Weak,
+            kind: HostType::Super,
         };
 
         assert!(valid_seed_peer.validate().is_ok());
