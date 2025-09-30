@@ -15,10 +15,6 @@
  */
 
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
-use crate::metrics::{
-    collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
-    collect_backend_request_started_metrics,
-};
 use crate::resource::parent_selector::ParentSelector;
 use crate::resource::piece_collector::CollectedParent;
 use dragonfly_api::common::v2::{
@@ -109,10 +105,10 @@ impl Task {
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
-        parent_selector: Arc<ParentSelector>,
         download_rate_limiter: Arc<RateLimiter>,
         upload_rate_limiter: Arc<RateLimiter>,
         prefetch_rate_limiter: Arc<RateLimiter>,
+        parent_selector: Arc<ParentSelector>,
     ) -> ClientResult<Self> {
         let piece = piece::Piece::new(
             config.clone(),
@@ -2059,6 +2055,9 @@ impl Task {
             .map(|peer| CollectedParent {
                 id: peer.id,
                 host: peer.host,
+                download_ip: None,
+                download_tcp_port: None,
+                download_quic_port: None,
             })
             .collect();
 
