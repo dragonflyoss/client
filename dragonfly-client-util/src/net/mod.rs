@@ -20,6 +20,7 @@ use std::cmp::min;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{io, mem, os::unix::io::RawFd};
 use sysinfo::Networks;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -182,6 +183,54 @@ impl Interface {
     pub fn bytes_to_bits(size: u64) -> u64 {
         size * 8 // 1 byte = 8 bits
     }
+}
+
+/// set_tcp_fastopen_connect enables TCP Fast Open for client connections on the given socket file
+/// descriptor.
+#[cfg(target_os = "linux")]
+pub fn set_tcp_fastopen_connect(fd: RawFd) -> io::Result<()> {
+    let enable: libc::c_int = 1;
+
+    unsafe {
+        let ret = libc::setsockopt(
+            fd,
+            libc::IPPROTO_TCP,
+            libc::TCP_FASTOPEN_CONNECT,
+            &enable as *const _ as *const libc::c_void,
+            mem::size_of_val(&enable) as libc::socklen_t,
+        );
+
+        if ret != 0 {
+            let err = std::io::Error::last_os_error();
+            return Err(err);
+        }
+    }
+
+    Ok(())
+}
+
+/// set_tcp_fastopen enables TCP Fast Open for server connections on the given socket file
+/// descriptor.
+#[cfg(target_os = "linux")]
+pub fn set_tcp_fastopen(fd: RawFd) -> io::Result<()> {
+    let enable: libc::c_int = 3;
+
+    unsafe {
+        let ret = libc::setsockopt(
+            fd,
+            libc::IPPROTO_TCP,
+            libc::TCP_FASTOPEN,
+            &enable as *const _ as *const libc::c_void,
+            mem::size_of_val(&enable) as libc::socklen_t,
+        );
+
+        if ret != 0 {
+            let err = std::io::Error::last_os_error();
+            return Err(err);
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

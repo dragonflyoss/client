@@ -99,12 +99,19 @@ impl TCPServer {
         )?;
         #[cfg(target_os = "linux")]
         {
+            use dragonfly_client_util::net::set_tcp_fastopen;
             use tracing::{info, warn};
 
             if let Err(err) = socket.set_tcp_congestion("cubic".as_bytes()) {
                 warn!("failed to set tcp congestion: {}", err);
             } else {
                 info!("set tcp congestion to cubic");
+            }
+
+            if let Err(err) = set_tcp_fastopen(&socket) {
+                warn!("failed to enable tcp fastopen: {}", err);
+            } else {
+                info!("enabled tcp fastopen");
             }
         }
 
