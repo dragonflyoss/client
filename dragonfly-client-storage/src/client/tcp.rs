@@ -181,14 +181,16 @@ impl TCPClient {
         )?;
         #[cfg(target_os = "linux")]
         {
-            use nix::sys::socket::{setsockopt, sockopt::TcpFastOpenConnect};
-            use std::os::fd::AsFd;
+            use dragonfly_client_util::net::set_tcp_fastopen_connect;
+            use std::os::unix::io::AsRawFd;
             use tracing::{info, warn};
 
-            if let Err(err) = setsockopt(&socket.as_fd(), TcpFastOpenConnect, &true) {
-                warn!("failed to set tcp fast open: {}", err);
-            } else {
-                info!("set tcp fast open to true");
+            if self.config.storage.server.tcp_fastopen {
+                if let Err(err) = set_tcp_fastopen_connect(socket.as_raw_fd()) {
+                    warn!("failed to enable tcp fastopen: {}", err);
+                } else {
+                    info!("enabled tcp fastopen");
+                }
             }
         }
 

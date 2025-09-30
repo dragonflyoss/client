@@ -52,3 +52,4 @@ RUN apt-get update && apt-get install -y --no-install-recommends wget \
 COPY --from=builder /app/client/target/release/dfinit /usr/local/bin/dfinit
 
 ENTRYPOINT ["/usr/local/bin/dfinit"]
+

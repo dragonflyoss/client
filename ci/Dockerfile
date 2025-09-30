@@ -80,3 +80,4 @@ COPY --from=pprof /go/bin/grpcurl /bin/grpcurl
 COPY --from=health /bin/grpc_health_probe /bin/grpc_health_probe
 
 ENTRYPOINT ["/usr/local/bin/dfdaemon"]
+
