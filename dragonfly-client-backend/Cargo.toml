@@ -27,7 +27,7 @@ percent-encoding.workspace = true
 futures.workspace = true
 reqwest-tracing.workspace = true
 reqwest-retry = "0.7"
-libloading = "0.8.8"
+libloading = "0.8.9"
 
 [dev-dependencies]
 tempfile.workspace = true
