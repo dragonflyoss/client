@@ -185,10 +185,12 @@ impl TCPClient {
             use std::os::unix::io::AsRawFd;
             use tracing::{info, warn};
 
-            if let Err(err) = set_tcp_fastopen_connect(socket.as_raw_fd()) {
-                warn!("failed to enable tcp fastopen: {}", err);
-            } else {
-                info!("enabled tcp fastopen");
+            if self.config.storage.server.tcp_fastopen {
+                if let Err(err) = set_tcp_fastopen_connect(socket.as_raw_fd()) {
+                    warn!("failed to enable tcp fastopen: {}", err);
+                } else {
+                    info!("enabled tcp fastopen");
+                }
             }
         }
 
