@@ -182,9 +182,10 @@ impl TCPClient {
         #[cfg(target_os = "linux")]
         {
             use dragonfly_client_util::net::set_tcp_fastopen_connect;
+            use std::os::unix::io::AsRawFd;
             use tracing::{info, warn};
 
-            if let Err(err) = set_tcp_fastopen_connect(&socket) {
+            if let Err(err) = set_tcp_fastopen_connect(socket.as_raw_fd()) {
                 warn!("failed to enable tcp fastopen: {}", err);
             } else {
                 info!("enabled tcp fastopen");
