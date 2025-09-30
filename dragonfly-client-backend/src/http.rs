@@ -70,6 +70,13 @@ impl HTTP {
             .use_preconfigured_tls(client_config_builder)
             .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
             .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
+            .tcp_nodelay(true)
+            .http2_adaptive_window(true)
+            .http2_initial_stream_window_size(Some(super::HTTP2_STREAM_WINDOW_SIZE))
+            .http2_initial_connection_window_size(Some(super::HTTP2_CONNECTION_WINDOW_SIZE))
+            .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+            .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+            .http2_keep_alive_while_idle(true)
             .build()?;
 
         let retry_policy =
@@ -118,6 +125,13 @@ impl HTTP {
                     .no_deflate()
                     .hickory_dns(true)
                     .use_preconfigured_tls(client_config_builder)
+                    .tcp_nodelay(true)
+                    .http2_adaptive_window(true)
+                    .http2_initial_stream_window_size(Some(super::HTTP2_STREAM_WINDOW_SIZE))
+                    .http2_initial_connection_window_size(Some(super::HTTP2_CONNECTION_WINDOW_SIZE))
+                    .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+                    .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                    .http2_keep_alive_while_idle(true)
                     .build()?;
 
                 let retry_policy =

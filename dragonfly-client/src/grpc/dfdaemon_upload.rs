@@ -14,14 +14,6 @@
  * limitations under the License.
  */
 
-use crate::metrics::{
-    collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
-    collect_download_task_failure_metrics, collect_download_task_finished_metrics,
-    collect_download_task_started_metrics, collect_stat_task_failure_metrics,
-    collect_stat_task_started_metrics, collect_update_task_failure_metrics,
-    collect_update_task_started_metrics, collect_upload_piece_failure_metrics,
-    collect_upload_piece_finished_metrics, collect_upload_piece_started_metrics,
-};
 use crate::resource::{persistent_cache_task, task};
 use dragonfly_api::common::v2::{
     CacheTask, Host, Network, PersistentCacheTask, Piece, Priority, Task, TaskType,
@@ -45,6 +37,14 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error as ClientError, Result as ClientResult,
+};
+use dragonfly_client_metric::{
+    collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
+    collect_download_task_failure_metrics, collect_download_task_finished_metrics,
+    collect_download_task_started_metrics, collect_stat_task_failure_metrics,
+    collect_stat_task_started_metrics, collect_update_task_failure_metrics,
+    collect_update_task_started_metrics, collect_upload_piece_failure_metrics,
+    collect_upload_piece_finished_metrics, collect_upload_piece_started_metrics,
 };
 use dragonfly_client_util::{
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
@@ -489,6 +489,22 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                         {
                                             Ok(true) => {}
                                             Ok(false) => {
+                                                if download_clone.overwrite {
+                                                    if let Err(err) = task_manager_clone
+                                                        .copy_task(
+                                                            task_clone.id.as_str(),
+                                                            output_path,
+                                                        )
+                                                        .await
+                                                    {
+                                                        error!("copy task: {}", err);
+                                                        handle_error(&out_stream_tx, err).await;
+                                                        return;
+                                                    };
+
+                                                    return;
+                                                }
+
                                                 error!(
                                                     "output path {} is already exists",
                                                     output_path.display()
@@ -786,6 +802,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Clone the task.
         let task_manager = self.task.clone();
 
+        // Get the download server info from the config.
+        let download_ip = self.config.host.ip.unwrap().to_string();
+        let download_tcp_port = self.config.storage.server.tcp_port;
+        let download_quic_port = self.config.storage.server.quic_port;
+
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
@@ -832,6 +853,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                         number: piece.number,
                                         offset: piece.offset,
                                         length: piece.length,
+                                        ip: download_ip.clone(),
+                                        tcp_port: Some(download_tcp_port as i32),
+                                        quic_port: Some(download_quic_port as i32),
                                     }),
                                     super::REQUEST_TIMEOUT,
                                 )
@@ -1254,6 +1278,19 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                     {
                                         Ok(true) => {}
                                         Ok(false) => {
+                                            if request_clone.overwrite {
+                                                if let Err(err) = task_manager_clone
+                                                    .copy_task(task_clone.id.as_str(), output_path)
+                                                    .await
+                                                {
+                                                    error!("copy task: {}", err);
+                                                    handle_error(&out_stream_tx, err).await;
+                                                    return;
+                                                };
+
+                                                return;
+                                            }
+
                                             error!(
                                                 "output path {} is already exists",
                                                 output_path.display()
@@ -1486,6 +1523,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Clone the task.
         let task_manager = self.task.clone();
 
+        // Get the download server info from the config.
+        let download_ip = self.config.host.ip.unwrap().to_string();
+        let download_tcp_port = self.config.storage.server.tcp_port;
+        let download_quic_port = self.config.storage.server.quic_port;
+
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
@@ -1528,6 +1570,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                     number: piece.number,
                                     offset: piece.offset,
                                     length: piece.length,
+                                    ip: download_ip.clone(),
+                                    tcp_port: Some(download_tcp_port as i32),
+                                    quic_port: Some(download_quic_port as i32),
                                 }), super::REQUEST_TIMEOUT)
                                 .await
                             {

@@ -29,6 +29,9 @@ COPY dragonfly-client-backend/src ./dragonfly-client-backend/src
 COPY dragonfly-client-backend/examples/plugin/Cargo.toml ./dragonfly-client-backend/examples/plugin/Cargo.toml
 COPY dragonfly-client-backend/examples/plugin/src ./dragonfly-client-backend/examples/plugin/src
 
+COPY dragonfly-client-metric/Cargo.toml ./dragonfly-client-metric/Cargo.toml
+COPY dragonfly-client-metric/src ./dragonfly-client-metric/src
+
 COPY dragonfly-client-util/Cargo.toml ./dragonfly-client-util/Cargo.toml
 COPY dragonfly-client-util/src ./dragonfly-client-util/src
 

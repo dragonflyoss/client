@@ -15,10 +15,6 @@
  */
 
 use crate::grpc::{dfdaemon_download::DfdaemonDownloadClient, REQUEST_TIMEOUT};
-use crate::metrics::{
-    collect_proxy_request_failure_metrics, collect_proxy_request_started_metrics,
-    collect_proxy_request_via_dfdaemon_metrics,
-};
 use crate::resource::{piece::MIN_PIECE_LENGTH, task::Task};
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
@@ -29,6 +25,10 @@ use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_config::dfdaemon::{Config, Rule};
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
+use dragonfly_client_metric::{
+    collect_proxy_request_failure_metrics, collect_proxy_request_started_metrics,
+    collect_proxy_request_via_dfdaemon_metrics,
+};
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
     shutdown,
@@ -1140,6 +1140,7 @@ fn make_download_task_request(
             content_for_calculating_task_id: header::get_content_for_calculating_task_id(&header),
             remote_ip: Some(remote_ip.to_string()),
             concurrent_piece_count: Some(config.download.concurrent_piece_count),
+            overwrite: false,
         }),
     })
 }

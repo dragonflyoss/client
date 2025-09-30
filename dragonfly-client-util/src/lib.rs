@@ -16,8 +16,11 @@
 
 pub mod digest;
 pub mod fs;
+pub mod hashring;
 pub mod http;
 pub mod id_generator;
 pub mod net;
+pub mod pool;
+pub mod request;
 pub mod shutdown;
 pub mod tls;

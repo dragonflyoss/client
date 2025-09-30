@@ -15,25 +15,25 @@
  */
 
 use super::*;
-use crate::metrics::{
-    collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
-    collect_backend_request_started_metrics, collect_download_piece_traffic_metrics,
-    collect_upload_piece_traffic_metrics,
-};
 use chrono::Utc;
 use dragonfly_api::common::v2::{Hdfs, ObjectStorage, Range, TrafficType};
 use dragonfly_client_backend::{BackendFactory, GetRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{error::BackendError, Error, Result};
+use dragonfly_client_metric::{
+    collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
+    collect_backend_request_started_metrics, collect_download_piece_traffic_metrics,
+    collect_upload_piece_traffic_metrics,
+};
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::id_generator::IDGenerator;
 use leaky_bucket::RateLimiter;
 use reqwest::header::{self, HeaderMap};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tracing::{error, info, instrument, Span};
+use tracing::{error, info, instrument, warn, Span};
 
 /// MAX_PIECE_COUNT is the maximum piece count. If the piece count is upper
 /// than MAX_PIECE_COUNT, the piece length will be optimized by the file length.
@@ -67,8 +67,14 @@ pub struct Piece {
     /// storage is the local storage.
     storage: Arc<Storage>,
 
-    /// downloader is the piece downloader.
-    downloader: Arc<dyn piece_downloader::Downloader>,
+    /// grpc_downloader is the gRPC piece downloader.
+    grpc_downloader: Arc<dyn piece_downloader::Downloader>,
+
+    /// tcp_downloader is the TCP piece downloader.
+    tcp_downloader: Arc<dyn piece_downloader::Downloader>,
+
+    /// quic_downloader is the QUIC piece downloader.
+    quic_downloader: Arc<dyn piece_downloader::Downloader>,
 
     /// backend_factory is the backend factory.
     backend_factory: Arc<BackendFactory>,
@@ -91,44 +97,23 @@ impl Piece {
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
         backend_factory: Arc<BackendFactory>,
+        download_rate_limiter: Arc<RateLimiter>,
+        upload_rate_limiter: Arc<RateLimiter>,
+        prefetch_rate_limiter: Arc<RateLimiter>,
     ) -> Result<Self> {
         Ok(Self {
             config: config.clone(),
             id_generator,
             storage,
-            downloader: piece_downloader::DownloaderFactory::new(
-                config.storage.server.protocol.as_str(),
-                config.clone(),
-            )?
-            .build(),
+            grpc_downloader: piece_downloader::DownloaderFactory::new("grpc", config.clone())?
+                .build(),
+            tcp_downloader: piece_downloader::DownloaderFactory::new("tcp", config.clone())?
+                .build(),
+            quic_downloader: piece_downloader::DownloaderFactory::new("quic", config)?.build(),
             backend_factory,
-            download_rate_limiter: Arc::new(
-                RateLimiter::builder()
-                    .initial(config.download.rate_limit.as_u64() as usize)
-                    .refill(config.download.rate_limit.as_u64() as usize)
-                    .max(config.download.rate_limit.as_u64() as usize)
-                    .interval(Duration::from_secs(1))
-                    .fair(false)
-                    .build(),
-            ),
-            upload_rate_limiter: Arc::new(
-                RateLimiter::builder()
-                    .initial(config.upload.rate_limit.as_u64() as usize)
-                    .refill(config.upload.rate_limit.as_u64() as usize)
-                    .max(config.upload.rate_limit.as_u64() as usize)
-                    .interval(Duration::from_secs(1))
-                    .fair(false)
-                    .build(),
-            ),
-            prefetch_rate_limiter: Arc::new(
-                RateLimiter::builder()
-                    .initial(config.proxy.prefetch_rate_limit.as_u64() as usize)
-                    .refill(config.proxy.prefetch_rate_limit.as_u64() as usize)
-                    .max(config.proxy.prefetch_rate_limit.as_u64() as usize)
-                    .interval(Duration::from_secs(1))
-                    .fair(false)
-                    .build(),
-            ),
+            download_rate_limiter,
+            upload_rate_limiter,
+            prefetch_rate_limiter,
         })
     }
 
@@ -441,26 +426,59 @@ impl Piece {
             self.download_rate_limiter.acquire(length as usize).await;
         }
 
-        // Create a dfdaemon client.
-        let host = parent.host.clone().ok_or_else(|| {
-            error!("peer host is empty");
-            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
-                error!("set piece metadata failed: {}", err)
-            };
+        let (mut reader, offset, digest) = match (
+            self.config.download.protocol.as_str(),
+            parent.download_ip,
+            parent.download_tcp_port,
+            parent.download_quic_port,
+        ) {
+            ("tcp", Some(ip), Some(port), _) => {
+                self.tcp_downloader
+                    .download_piece(
+                        format!("{}:{}", ip, port).as_str(),
+                        number,
+                        host_id,
+                        task_id,
+                    )
+                    .await?
+            }
+            ("quic", Some(ip), _, Some(port)) => {
+                self.quic_downloader
+                    .download_piece(
+                        format!("{}:{}", ip, port).as_str(),
+                        number,
+                        host_id,
+                        task_id,
+                    )
+                    .await?
+            }
+            _ => {
+                warn!("fall back to grpc downloader");
+                let host = parent.host.clone().ok_or_else(|| {
+                    error!("parent host is empty");
+                    if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
+                        error!("set piece metadata failed: {}", err)
+                    };
 
-            Error::InvalidPeer(parent.id.clone())
-        })?;
+                    Error::InvalidPeer(parent.id.clone())
+                })?;
 
-        let (mut reader, offset, digest) = self
-            .downloader
-            .download_piece(host, number, host_id, task_id)
-            .await
-            .inspect_err(|err| {
-                error!("download piece failed: {}", err);
-                if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
-                    error!("set piece metadata failed: {}", err)
-                };
-            })?;
+                self.grpc_downloader
+                    .download_piece(
+                        format!("{}:{}", host.ip, host.port).as_str(),
+                        number,
+                        host_id,
+                        task_id,
+                    )
+                    .await
+                    .inspect_err(|err| {
+                        error!("download piece failed: {}", err);
+                        if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
+                            error!("set piece metadata failed: {}", err)
+                        };
+                    })?
+            }
+        };
 
         // Record the finish of downloading piece.
         match self
@@ -796,34 +814,69 @@ impl Piece {
             return Ok(piece);
         }
 
-        // Create a dfdaemon client.
-        let host = parent.host.clone().ok_or_else(|| {
-            error!("peer host is empty");
-            if let Some(err) = self
-                .storage
-                .download_persistent_cache_piece_failed(piece_id)
-                .err()
-            {
-                error!("set persistent cache piece metadata failed: {}", err)
-            };
+        let (mut reader, offset, digest) = match (
+            self.config.download.protocol.as_str(),
+            parent.download_ip,
+            parent.download_tcp_port,
+            parent.download_quic_port,
+        ) {
+            ("tcp", Some(ip), Some(port), _) => {
+                self.tcp_downloader
+                    .download_persistent_cache_piece(
+                        format!("{}:{}", ip, port).as_str(),
+                        number,
+                        host_id,
+                        task_id,
+                    )
+                    .await?
+            }
+            ("quic", Some(ip), _, Some(port)) => {
+                let quic_downloader =
+                    piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
+                quic_downloader
+                    .download_persistent_cache_piece(
+                        format!("{}:{}", ip, port).as_str(),
+                        number,
+                        host_id,
+                        task_id,
+                    )
+                    .await?
+            }
+            _ => {
+                warn!("fall back to grpc downloader");
+                let host = parent.host.clone().ok_or_else(|| {
+                    error!("parent host is empty");
+                    if let Some(err) = self
+                        .storage
+                        .download_persistent_cache_piece_failed(piece_id)
+                        .err()
+                    {
+                        error!("set persistent cache piece metadata failed: {}", err)
+                    };
 
-            Error::InvalidPeer(parent.id.clone())
-        })?;
+                    Error::InvalidPeer(parent.id.clone())
+                })?;
 
-        let (mut reader, offset, digest) = self
-            .downloader
-            .download_persistent_cache_piece(host, number, host_id, task_id)
-            .await
-            .inspect_err(|err| {
-                error!("download persistent cache piece failed: {}", err);
-                if let Some(err) = self
-                    .storage
-                    .download_persistent_cache_piece_failed(piece_id)
-                    .err()
-                {
-                    error!("set persistent cache piece metadata failed: {}", err)
-                };
-            })?;
+                self.grpc_downloader
+                    .download_persistent_cache_piece(
+                        format!("{}:{}", host.ip, host.port).as_str(),
+                        number,
+                        host_id,
+                        task_id,
+                    )
+                    .await
+                    .inspect_err(|err| {
+                        error!("download persistent cache piece failed: {}", err);
+                        if let Some(err) = self
+                            .storage
+                            .download_persistent_cache_piece_failed(piece_id)
+                            .err()
+                        {
+                            error!("set persistent cache piece metadata failed: {}", err)
+                        };
+                    })?
+            }
+        };
 
         // Record the finish of downloading piece.
         match self
@@ -892,11 +945,18 @@ mod tests {
         let backend_factory = BackendFactory::new(None).unwrap();
         let backend_factory = Arc::new(backend_factory);
 
+        let download_rate_limiter = Arc::new(RateLimiter::builder().build());
+        let upload_rate_limiter = Arc::new(RateLimiter::builder().build());
+        let prefetch_rate_limiter = Arc::new(RateLimiter::builder().build());
+
         let piece = Piece::new(
             config.clone(),
             id_generator.clone(),
             storage.clone(),
             backend_factory.clone(),
+            download_rate_limiter,
+            upload_rate_limiter,
+            prefetch_rate_limiter,
         )
         .unwrap();
 

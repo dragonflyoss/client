@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-use crate::metrics::{
-    collect_prefetch_task_failure_metrics, collect_prefetch_task_started_metrics,
-};
 use dragonfly_api::dfdaemon::v2::DownloadTaskRequest;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
+use dragonfly_client_metric::{
+    collect_prefetch_task_failure_metrics, collect_prefetch_task_started_metrics,
+};
 use std::path::PathBuf;
 use std::time::Duration;
 use tonic::Request;

@@ -1,0 +1,22 @@
+[package]
+name = "dragonfly-client-metric"
+description = "Metric collection for the dragonfly client"
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+
+[dependencies]
+dragonfly-api.workspace = true
+dragonfly-client-config.workspace = true
+dragonfly-client-util.workspace = true
+lazy_static.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+warp.workspace = true
+fs2.workspace = true
+prometheus = { version = "0.13", features = ["process"] }

@@ -21,16 +21,14 @@ use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_metric::{
     collect_upload_piece_failure_metrics, collect_upload_piece_started_metrics,
 };
-use dragonfly_client_util::{id_generator::IDGenerator, shutdown};
+use dragonfly_client_util::{
+    id_generator::IDGenerator, shutdown, tls::generate_simple_self_signed_certs,
+};
 use leaky_bucket::RateLimiter;
-use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
+use quinn::{congestion::BbrConfig, AckFrequencyConfig, Endpoint, ServerConfig, TransportConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{copy, AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::net::{
-    tcp::{OwnedReadHalf, OwnedWriteHalf},
-    TcpListener, TcpStream,
-};
+use tokio::io::{copy, AsyncRead};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, instrument, Span};
 use vortex_protocol::{
@@ -45,24 +43,24 @@ use vortex_protocol::{
     Header, Vortex, HEADER_SIZE,
 };
 
-/// TCPServer is a TCP-based server for dfdaemon upload service.
-pub struct TCPServer {
-    /// addr is the address of the TCP server.
+/// QUICServer is a QUIC-based server for dfdaemon upload service.
+pub struct QUICServer {
+    /// addr is the address of the QUIC server.
     addr: SocketAddr,
 
     /// handler is the request handler.
-    handler: TCPServerHandler,
+    handler: QUICServerHandler,
 
-    /// shutdown is used to shutdown the TCP server.
+    /// shutdown is used to shutdown the QUIC server.
     shutdown: shutdown::Shutdown,
 
-    /// _shutdown_complete is used to notify the TCP server is shutdown.
+    /// _shutdown_complete is used to notify the QUIC server is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-/// TCPServer implements the TCP server.
-impl TCPServer {
-    /// Creates a new TCPServer.
+/// QUICServer implements the QUIC server.
+impl QUICServer {
+    /// Creates a new QUICServer.
     pub fn new(
         addr: SocketAddr,
         id_generator: Arc<IDGenerator>,
@@ -73,7 +71,7 @@ impl TCPServer {
     ) -> Self {
         Self {
             addr,
-            handler: TCPServerHandler {
+            handler: QUICServerHandler {
                 id_generator,
                 storage,
                 upload_rate_limiter,
@@ -83,54 +81,42 @@ impl TCPServer {
         }
     }
 
-    /// Starts the storage tcp server.
+    /// Starts the storage quic server.
     pub async fn run(&mut self) -> ClientResult<()> {
-        let socket = Socket::new(
-            Domain::for_address(self.addr),
-            Type::STREAM,
-            Some(Protocol::TCP),
-        )?;
-        socket.set_tcp_nodelay(true)?;
-        socket.set_nonblocking(true)?;
-        socket.set_send_buffer_size(super::DEFAULT_SEND_BUFFER_SIZE)?;
-        socket.set_recv_buffer_size(super::DEFAULT_RECV_BUFFER_SIZE)?;
-        socket.set_tcp_keepalive(
-            &TcpKeepalive::new().with_interval(super::DEFAULT_KEEPALIVE_INTERVAL),
-        )?;
-        #[cfg(target_os = "linux")]
-        {
-            use tracing::{info, warn};
-
-            if let Err(err) = socket.set_tcp_congestion("cubic".as_bytes()) {
-                warn!("failed to set tcp congestion: {}", err);
-            } else {
-                info!("set tcp congestion to cubic");
-            }
-        }
-
-        socket.bind(&self.addr.into())?;
-        socket.listen(1024)?;
-        let std_listener: std::net::TcpListener = socket.into();
-        let listener = TcpListener::from_std(std_listener).inspect_err(|err| {
-            error!("failed to bind tcp server: {}", err);
+        let (certs, key) = generate_simple_self_signed_certs("d7y", vec!["d7y".into()])?;
+        let mut server_config = ServerConfig::with_single_cert(certs, key).map_err(|err| {
+            ClientError::Unknown(format!("failed to create server config: {}", err))
         })?;
-        info!("storage tcp server listening on {}", self.addr);
+
+        let mut transport = TransportConfig::default();
+        transport.congestion_controller_factory(Arc::new(BbrConfig::default()));
+        transport.keep_alive_interval(Some(super::DEFAULT_KEEPALIVE_INTERVAL));
+        transport.max_idle_timeout(Some(super::DEFAULT_MAX_IDLE_TIMEOUT.try_into().unwrap()));
+        transport.ack_frequency_config(Some(AckFrequencyConfig::default()));
+        transport.send_window(super::DEFAULT_SEND_BUFFER_SIZE as u64);
+        transport.receive_window((super::DEFAULT_RECV_BUFFER_SIZE as u32).into());
+        transport.stream_receive_window((super::DEFAULT_RECV_BUFFER_SIZE as u32).into());
+        server_config.transport_config(Arc::new(transport));
+
+        let endpoint = Endpoint::server(server_config, self.addr)?;
+        info!("storage quic server listening on {}", self.addr);
 
         loop {
             tokio::select! {
-                tcp_accepted = listener.accept() => {
-                    let (tcp, remote_address) = tcp_accepted?;
+                Some(quic_accepted) = endpoint.accept() => {
+                    let quic = quic_accepted.await?;
+                    let remote_address = quic.remote_address();
                     debug!("accepted connection from {}", remote_address);
 
                     let handler = self.handler.clone();
                     tokio::spawn(async move {
-                        if let Err(err) = handler.handle(tcp, remote_address.to_string()).await {
-                           error!("failed to serve connection from {}: {}", remote_address, err);
+                       if let Err(err) = handler.handle(quic, remote_address).await {
+                            error!("failed to handle connection from {}: {}", remote_address, err);
                         }
                     });
                 },
                 _ = self.shutdown.recv() => {
-                    info!("tcp server shutting down");
+                    info!("quic server shutting down");
                     break;
                 }
             }
@@ -140,9 +126,9 @@ impl TCPServer {
     }
 }
 
-/// TCPServerHandler handles TCP connections and requests.
+/// QUICServerHandler handles QUIC connections and requests.
 #[derive(Clone)]
-pub struct TCPServerHandler {
+pub struct QUICServerHandler {
     /// id_generator is the id generator.
     id_generator: Arc<IDGenerator>,
 
@@ -153,17 +139,57 @@ pub struct TCPServerHandler {
     upload_rate_limiter: Arc<RateLimiter>,
 }
 
-/// TCPServerHandler implements the request handler.
-impl TCPServerHandler {
-    /// Handles a single TCP connection for the Dragonfly P2P protocol.
+/// QUICServerHandler implements the request handler.
+impl QUICServerHandler {
+    /// handle handles a single QUIC connection.
+    #[instrument(skip_all)]
+    async fn handle(
+        &self,
+        connection: quinn::Connection,
+        remote_address: SocketAddr,
+    ) -> ClientResult<()> {
+        loop {
+            match connection.accept_bi().await {
+                Ok((send, recv)) => {
+                    let handler = self.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = handler.handle_stream(recv, send, remote_address).await {
+                            error!("failed to handle stream: {}", err);
+                        }
+                    });
+                }
+                Err(err) => {
+                    // Downgrade common close cases to debug to reduce noisy logs.
+                    match err {
+                        quinn::ConnectionError::ApplicationClosed(_)
+                        | quinn::ConnectionError::LocallyClosed => {
+                            debug!("connection closed: {}", err);
+                        }
+                        _ => {
+                            error!("failed to accept bidirectional stream: {}", err);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handles a single QUIC stream for the Dragonfly P2P protocol.
     ///
-    /// This is the main entry point for processing incoming TCP connections.
+    /// This is the main entry point for processing incoming QUIC streams.
     /// It reads the protocol header to determine the request type and dispatches
     /// to the appropriate handler. Supports both regular piece downloads and
     /// persistent cache piece downloads with proper request/response framing.
     #[instrument(skip_all, fields(host_id, remote_address, task_id, piece_id))]
-    async fn handle(&self, stream: TcpStream, remote_address: String) -> ClientResult<()> {
-        let (mut reader, mut writer) = stream.into_split();
+    async fn handle_stream(
+        &self,
+        mut reader: quinn::RecvStream,
+        mut writer: quinn::SendStream,
+        remote_address: SocketAddr,
+    ) -> ClientResult<()> {
         let header = self.read_header(&mut reader).await?;
         match header.tag() {
             Tag::DownloadPiece => {
@@ -184,7 +210,7 @@ impl TCPServerHandler {
                 let piece_id = self.storage.piece_id(task_id, piece_number);
 
                 Span::current().record("host_id", host_id);
-                Span::current().record("remote_address", remote_address.as_str());
+                Span::current().record("remote_address", remote_address.to_string().as_str());
                 Span::current().record("task_id", task_id);
                 Span::current().record("piece_id", piece_id.as_str());
 
@@ -206,6 +232,10 @@ impl TCPServerHandler {
 
                         self.write_response(response.freeze(), &mut writer).await?;
                         self.write_stream(&mut content_reader, &mut writer).await?;
+
+                        if let Err(err) = writer.finish() {
+                            error!("failed to finish stream: {}", err);
+                        }
                     }
                     Err(err) => {
                         // Collect upload piece failure metrics.
@@ -214,6 +244,10 @@ impl TCPServerHandler {
                         let error_response: Bytes =
                             Vortex::Error(Header::new_error(err.len() as u32), err).into();
                         self.write_response(error_response, &mut writer).await?;
+
+                        if let Err(err) = writer.finish() {
+                            error!("failed to finish stream: {}", err);
+                        }
                     }
                 }
 
@@ -237,7 +271,7 @@ impl TCPServerHandler {
                 let piece_id = self.storage.piece_id(task_id, piece_number);
 
                 Span::current().record("host_id", host_id);
-                Span::current().record("remote_address", remote_address.as_str());
+                Span::current().record("remote_address", remote_address.to_string().as_str());
                 Span::current().record("task_id", task_id);
                 Span::current().record("piece_id", piece_id.as_str());
 
@@ -266,6 +300,10 @@ impl TCPServerHandler {
 
                         self.write_response(response.freeze(), &mut writer).await?;
                         self.write_stream(&mut content_reader, &mut writer).await?;
+
+                        if let Err(err) = writer.finish() {
+                            error!("failed to finish stream: {}", err);
+                        }
                     }
                     Err(err) => {
                         // Collect upload piece failure metrics.
@@ -274,6 +312,10 @@ impl TCPServerHandler {
                         let error_response: Bytes =
                             Vortex::Error(Header::new_error(err.len() as u32), err).into();
                         self.write_response(error_response, &mut writer).await?;
+
+                        if let Err(err) = writer.finish() {
+                            error!("failed to finish stream: {}", err);
+                        }
                     }
                 }
 
@@ -414,32 +456,30 @@ impl TCPServerHandler {
         ))
     }
 
-    /// Reads and parses a vortex protocol header from the TCP stream.
+    /// Reads and parses a vortex protocol header from the QUIC stream.
     ///
     /// The header contains metadata about the following message, including
     /// the message type (tag) and payload length. This is critical for
     /// proper protocol message framing.
-    async fn read_header(&self, reader: &mut OwnedReadHalf) -> ClientResult<Header> {
+    async fn read_header(&self, reader: &mut quinn::RecvStream) -> ClientResult<Header> {
         let mut header_bytes = BytesMut::with_capacity(HEADER_SIZE);
         header_bytes.resize(HEADER_SIZE, 0);
         reader
             .read_exact(&mut header_bytes)
             .await
-            .inspect_err(|err| {
-                error!("failed to receive header: {}", err);
-            })?;
+            .inspect_err(|err| error!("failed to receive header: {}", err))?;
 
         Header::try_from(header_bytes.freeze()).map_err(Into::into)
     }
 
-    /// Reads and parses a download piece message from the TCP stream.
+    /// Reads and parses a download piece message from the QUIC stream.
     ///
     /// This function reads a fixed-length payload based on the header length
     /// and attempts to parse it into the specified type T. The type T must
     /// implement TryFrom<Bytes> for deserialization from the raw bytes.
     pub async fn read_download_piece<T>(
         &self,
-        reader: &mut OwnedReadHalf,
+        reader: &mut quinn::RecvStream,
         header_length: usize,
     ) -> ClientResult<T>
     where
@@ -451,14 +491,12 @@ impl TCPServerHandler {
         reader
             .read_exact(&mut download_piece_bytes)
             .await
-            .inspect_err(|err| {
-                error!("failed to receive download piece: {}", err);
-            })?;
+            .inspect_err(|err| error!("failed to receive download piece: {}", err))?;
 
         download_piece_bytes.freeze().try_into().map_err(Into::into)
     }
 
-    /// Writes a complete response message to the TCP stream.
+    /// Writes a complete response message to the QUIC stream.
     ///
     /// This function sends the provided bytes as a response and ensures
     /// all data is flushed to the underlying transport. This is typically
@@ -467,38 +505,31 @@ impl TCPServerHandler {
     async fn write_response(
         &self,
         request: Bytes,
-        writer: &mut OwnedWriteHalf,
+        writer: &mut quinn::SendStream,
     ) -> ClientResult<()> {
-        writer.write_all(&request).await.inspect_err(|err| {
-            error!("failed to send request: {}", err);
-        })?;
-
-        writer.flush().await.inspect_err(|err| {
-            error!("failed to flush request: {}", err);
-        })?;
+        writer
+            .write_all(&request)
+            .await
+            .inspect_err(|err| error!("failed to send request: {}", err))?;
 
         Ok(())
     }
 
-    /// Streams data from a reader directly to the TCP writer.
+    /// Streams data from a reader directly to the QUIC writer.
     ///
     /// This function efficiently copies all data from the provided stream
-    /// to the TCP connection using tokio's copy utility. It's designed for
+    /// to the QUIC connection using tokio's copy utility. It's designed for
     /// streaming large piece content without loading everything into memory.
     /// The operation is flushed to ensure data delivery.
     #[instrument(skip_all)]
     async fn write_stream<R: AsyncRead + Unpin + ?Sized>(
         &self,
         stream: &mut R,
-        writer: &mut OwnedWriteHalf,
+        writer: &mut quinn::SendStream,
     ) -> ClientResult<()> {
-        copy(stream, writer).await.inspect_err(|err| {
-            error!("copy failed: {}", err);
-        })?;
-
-        writer.flush().await.inspect_err(|err| {
-            error!("flush failed: {}", err);
-        })?;
+        copy(stream, writer)
+            .await
+            .inspect_err(|err| error!("copy failed: {}", err))?;
 
         Ok(())
     }

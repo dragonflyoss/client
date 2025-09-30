@@ -16,11 +16,16 @@
 
 use bytes::{Bytes, BytesMut};
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
-use socket2::{SockRef, TcpKeepalive};
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Error as ClientError, Result as ClientResult,
+};
+use quinn::crypto::rustls::QuicClientConfig;
+use quinn::{AckFrequencyConfig, ClientConfig, Endpoint, RecvStream, SendStream, TransportConfig};
+use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
+use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::io::AsyncRead;
 use tokio::time;
 use tracing::{error, instrument};
 use vortex_protocol::{
@@ -32,19 +37,19 @@ use vortex_protocol::{
     Header, Vortex, HEADER_SIZE,
 };
 
-/// TCPClient is a TCP-based client for tcp storage service.
+/// QUICClient is a QUIC-based client for quic storage service.
 #[derive(Clone)]
-pub struct TCPClient {
+pub struct QUICClient {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// addr is the address of the TCP server.
+    /// addr is the address of the QUIC server.
     addr: String,
 }
 
-/// TCPClient implements the TCP-based client for tcp storage service.
-impl TCPClient {
-    /// Creates a new TCPClient instance.
+/// QUICClient implements the QUIC-based client for quic storage service.
+impl QUICClient {
+    /// Creates a new QUICClient instance.
     pub fn new(config: Arc<Config>, addr: String) -> Self {
         Self { config, addr }
     }
@@ -72,7 +77,7 @@ impl TCPClient {
     ///
     /// This method performs the actual protocol communication:
     /// 1. Creates a download piece request.
-    /// 2. Establishes TCP connection and sends the request.
+    /// 2. Establishes QUIC connection and sends the request.
     /// 3. Reads and validates the response header.
     /// 4. Processes the piece content based on the response type.
     #[instrument(skip_all)]
@@ -146,8 +151,8 @@ impl TCPClient {
         match header.tag() {
             Tag::PersistentCachePieceContent => {
                 let persistent_cache_piece_content: persistent_cache_piece_content::PersistentCachePieceContent =
-                    self.read_piece_content(&mut reader, piece_content::METADATA_LENGTH_SIZE)
-                        .await?;
+                self.read_piece_content(&mut reader, persistent_cache_piece_content::METADATA_LENGTH_SIZE)
+                .await?;
 
                 let metadata = persistent_cache_piece_content.metadata();
                 Ok((reader, metadata.offset, metadata.digest))
@@ -160,53 +165,75 @@ impl TCPClient {
         }
     }
 
-    /// Establishes TCP connection and writes a vortex protocol request.
+    /// Establishes QUIC connection and writes a vortex protocol request.
     ///
-    /// This is a low-level utility function that handles the TCP connection
+    /// This is a low-level utility function that handles the QUIC connection
     /// lifecycle and request transmission. It ensures proper error handling
     /// and connection cleanup.
     #[instrument(skip_all)]
     async fn connect_and_write_request(
         &self,
         request: Bytes,
-    ) -> ClientResult<(OwnedReadHalf, OwnedWriteHalf)> {
-        let stream = tokio::net::TcpStream::connect(self.addr.clone()).await?;
-        let socket = SockRef::from(&stream);
-        socket.set_tcp_nodelay(true)?;
-        socket.set_nonblocking(true)?;
-        socket.set_send_buffer_size(super::DEFAULT_SEND_BUFFER_SIZE)?;
-        socket.set_recv_buffer_size(super::DEFAULT_RECV_BUFFER_SIZE)?;
-        socket.set_tcp_keepalive(
-            &TcpKeepalive::new().with_interval(super::DEFAULT_KEEPALIVE_INTERVAL),
-        )?;
+    ) -> ClientResult<(RecvStream, SendStream)> {
+        let mut client_config = ClientConfig::new(Arc::new(
+            QuicClientConfig::try_from(
+                quinn::rustls::ClientConfig::builder()
+                    .dangerous()
+                    .with_custom_certificate_verifier(NoVerifier::new())
+                    .with_no_client_auth(),
+            )
+            .map_err(|err| {
+                ClientError::Unknown(format!("failed to create quic client config: {}", err))
+            })?,
+        ));
 
-        let (reader, mut writer) = stream.into_split();
-        writer.write_all(&request).await.inspect_err(|err| {
-            error!("failed to send request: {}", err);
-        })?;
+        let mut transport = TransportConfig::default();
+        transport.keep_alive_interval(Some(super::DEFAULT_KEEPALIVE_INTERVAL));
+        transport.max_idle_timeout(Some(super::DEFAULT_MAX_IDLE_TIMEOUT.try_into().unwrap()));
+        transport.ack_frequency_config(Some(AckFrequencyConfig::default()));
+        transport.send_window(super::DEFAULT_SEND_BUFFER_SIZE as u64);
+        transport.receive_window((super::DEFAULT_RECV_BUFFER_SIZE as u32).into());
+        transport.stream_receive_window((super::DEFAULT_RECV_BUFFER_SIZE as u32).into());
+        client_config.transport_config(Arc::new(transport));
 
-        writer.flush().await.inspect_err(|err| {
-            error!("failed to flush request: {}", err);
-        })?;
+        // Port is zero to let the OS assign an ephemeral port.
+        let mut endpoint =
+            Endpoint::client(SocketAddr::new(self.config.storage.server.ip.unwrap(), 0))?;
+        endpoint.set_default_client_config(client_config);
+
+        // Connect's server name used for verifying the certificate. Since we used
+        // NoVerifier, it can be anything.
+        let connection = endpoint
+            .connect(self.addr.parse().or_err(ErrorType::ParseError)?, "d7y")?
+            .await
+            .inspect_err(|err| error!("failed to connect to {}: {}", self.addr, err))?;
+
+        let (mut writer, reader) = connection
+            .open_bi()
+            .await
+            .inspect_err(|err| error!("failed to open bi stream: {}", err))?;
+
+        writer
+            .write_all(&request)
+            .await
+            .inspect_err(|err| error!("failed to send request: {}", err))?;
 
         Ok((reader, writer))
     }
 
-    /// Reads and parses a vortex protocol header from the TCP stream.
+    /// Reads and parses a vortex protocol header from the QUIC stream.
     ///
     /// The header contains metadata about the following message, including
     /// the message type (tag) and payload length. This is critical for
     /// proper protocol message framing.
     #[instrument(skip_all)]
-    async fn read_header(&self, reader: &mut OwnedReadHalf) -> ClientResult<Header> {
+    async fn read_header(&self, reader: &mut RecvStream) -> ClientResult<Header> {
         let mut header_bytes = BytesMut::with_capacity(HEADER_SIZE);
         header_bytes.resize(HEADER_SIZE, 0);
         reader
             .read_exact(&mut header_bytes)
             .await
-            .inspect_err(|err| {
-                error!("failed to receive header: {}", err);
-            })?;
+            .inspect_err(|err| error!("failed to receive header: {}", err))?;
 
         Header::try_from(header_bytes.freeze()).map_err(Into::into)
     }
@@ -219,7 +246,7 @@ impl TCPClient {
     #[instrument(skip_all)]
     async fn read_piece_content<T>(
         &self,
-        reader: &mut OwnedReadHalf,
+        reader: &mut RecvStream,
         metadata_length_size: usize,
     ) -> ClientResult<T>
     where
@@ -230,9 +257,7 @@ impl TCPClient {
         reader
             .read_exact(&mut metadata_length_bytes)
             .await
-            .inspect_err(|err| {
-                error!("failed to receive metadata length: {}", err);
-            })?;
+            .inspect_err(|err| error!("failed to receive metadata length: {}", err))?;
         let metadata_length = u32::from_be_bytes(metadata_length_bytes[..].try_into()?) as usize;
 
         let mut metadata_bytes = BytesMut::with_capacity(metadata_length);
@@ -240,9 +265,7 @@ impl TCPClient {
         reader
             .read_exact(&mut metadata_bytes)
             .await
-            .inspect_err(|err| {
-                error!("failed to receive metadata: {}", err);
-            })?;
+            .inspect_err(|err| error!("failed to receive metadata: {}", err))?;
 
         let mut content_bytes = BytesMut::with_capacity(metadata_length_size + metadata_length);
         content_bytes.extend_from_slice(&metadata_length_bytes);
@@ -256,12 +279,12 @@ impl TCPClient {
     /// the error payload and converts it into an appropriate client error.
     /// This provides structured error handling for protocol-level failures.
     #[instrument(skip_all)]
-    async fn read_error(&self, reader: &mut OwnedReadHalf, header_length: usize) -> ClientError {
+    async fn read_error(&self, reader: &mut RecvStream, header_length: usize) -> ClientError {
         let mut error_bytes = BytesMut::with_capacity(header_length);
         error_bytes.resize(header_length, 0);
         if let Err(err) = reader.read_exact(&mut error_bytes).await {
             error!("failed to receive error: {}", err);
-            return ClientError::IO(err);
+            return ClientError::Unknown(err.to_string());
         };
 
         error_bytes
@@ -274,5 +297,70 @@ impl TCPClient {
                 error!("failed to extract error: {}", err);
                 ClientError::Unknown(format!("failed to extract error: {}", err))
             })
+    }
+}
+
+/// NoVerifier is a verifier for QUIC Client that does not verify the server certificate.
+/// It is used for testing and should not be used in production.
+#[derive(Debug)]
+struct NoVerifier(Arc<quinn::rustls::crypto::CryptoProvider>);
+
+/// NoVerifier implements a no-op server certificate verifier.
+impl NoVerifier {
+    /// Creates a new NoVerifier instance.
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self(Arc::new(
+            quinn::rustls::crypto::ring::default_provider(),
+        )))
+    }
+}
+
+/// NoVerifier implements the ServerCertVerifier trait to skip certificate verification.
+impl quinn::rustls::client::danger::ServerCertVerifier for NoVerifier {
+    /// Verifies the server certificate.
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<quinn::rustls::client::danger::ServerCertVerified, quinn::rustls::Error> {
+        Ok(quinn::rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    /// Verifies a TLS 1.2 signature.
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &quinn::rustls::DigitallySignedStruct,
+    ) -> Result<quinn::rustls::client::danger::HandshakeSignatureValid, quinn::rustls::Error> {
+        quinn::rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    /// Verifies a TLS 1.3 signature.
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &quinn::rustls::DigitallySignedStruct,
+    ) -> Result<quinn::rustls::client::danger::HandshakeSignatureValid, quinn::rustls::Error> {
+        quinn::rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    /// Returns the supported signature schemes.
+    fn supported_verify_schemes(&self) -> Vec<quinn::rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
     }
 }

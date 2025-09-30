@@ -51,6 +51,13 @@ pub struct ExportCommand {
     transfer_from_dfdaemon: bool,
 
     #[arg(
+        long = "overwrite",
+        default_value_t = false,
+        help = "Specify whether to overwrite the output file if it already exists. If it is true, dfget will overwrite the output file. If it is false, dfget will return an error if the output file already exists. Cannot be used with `--force-hard-link=true`"
+    )]
+    overwrite: bool,
+
+    #[arg(
         long = "force-hard-link",
         default_value_t = false,
         help = "Specify whether the download file must be hard linked to the output path. If hard link is failed, download will be failed. If it is false, dfdaemon will copy the file to the output path if hard link is failed."
@@ -453,6 +460,7 @@ impl ExportCommand {
                 force_hard_link: self.force_hard_link,
                 digest: self.digest.clone(),
                 remote_ip: Some(local_ip().unwrap().to_string()),
+                overwrite: self.overwrite,
             })
             .await
             .inspect_err(|err| {
@@ -471,7 +479,8 @@ impl ExportCommand {
             }
 
             let f = OpenOptions::new()
-                .create_new(true)
+                .create(true)
+                .truncate(true)
                 .write(true)
                 .mode(dfcache::DEFAULT_OUTPUT_FILE_MODE)
                 .open(&self.output)
@@ -501,54 +510,108 @@ impl ExportCommand {
         //  Download file.
         let mut downloaded = 0;
         let mut out_stream = response.into_inner();
-        while let Some(message) = out_stream.message().await.inspect_err(|err| {
-            error!("get message failed: {}", err);
-        })? {
-            match message.response {
-                Some(download_persistent_cache_task_response::Response::DownloadPersistentCacheTaskStartedResponse(
-                    response,
-                )) => {
-                    if let Some(f) = &f {
-                        fallocate(f, response.content_length)
-                            .await
-                            .inspect_err(|err| {
-                                error!("fallocate {:?} failed: {}", self.output, err);
-                            })?;
-                    }
+        loop {
+            match out_stream.message().await {
+                Ok(Some(message)) => {
+                    match message.response {
+                        Some(download_persistent_cache_task_response::Response::DownloadPersistentCacheTaskStartedResponse(
+                            response,
+                        )) => {
+                            if let Some(f) = &f {
+                                if let Err(err) = fallocate(f, response.content_length).await {
+                                    error!("fallocate {:?} failed: {}", self.output, err);
+                                    fs::remove_file(&self.output).await.inspect_err(|err| {
+                                        error!("remove file {:?} failed: {}", self.output, err);
+                                    })?;
 
-                    progress_bar.set_length(response.content_length);
+                                    return Err(err);
+                                };
+                            }
+
+                            progress_bar.set_length(response.content_length);
+                        }
+                        Some(download_persistent_cache_task_response::Response::DownloadPieceFinishedResponse(
+                            response,
+                        )) => {
+                            let piece = match response.piece {
+                                Some(piece) => piece,
+                                None => {
+                                    error!("response piece is missing");
+                                    fs::remove_file(&self.output).await.inspect_err(|err| {
+                                        error!("remove file {:?} failed: {}", self.output, err);
+                                    })?;
+
+                                    return Err(Error::InvalidParameter);
+                                }
+                            };
+
+                            // Dfcache needs to write the piece content to the output file.
+                            if let Some(f) = &mut f {
+                                if let Err(err) =f.seek(SeekFrom::Start(piece.offset)).await {
+                                    error!("seek {:?} failed: {}", self.output, err);
+                                    fs::remove_file(&self.output).await.inspect_err(|err| {
+                                        error!("remove file {:?} failed: {}", self.output, err);
+                                    })?;
+
+                                    return Err(Error::IO(err));
+                                };
+
+                                let content = match piece.content {
+                                    Some(content) => content,
+                                    None => {
+                                        error!("piece content is missing");
+                                        fs::remove_file(&self.output).await.inspect_err(|err| {
+                                            error!("remove file {:?} failed: {}", self.output, err);
+                                        })?;
+
+                                        return Err(Error::InvalidParameter);
+                                    }
+                                };
+
+                                if let Err(err) =f.write_all(&content).await {
+                                    error!("write {:?} failed: {}", self.output, err);
+                                    fs::remove_file(&self.output).await.inspect_err(|err| {
+                                        error!("remove file {:?} failed: {}", self.output, err);
+                                    })?;
+
+                                    return Err(Error::IO(err));
+                                }
+
+                                if let Err(err) = f.flush().await {
+                                    error!("flush {:?} failed: {}", self.output, err);
+                                    fs::remove_file(&self.output).await.inspect_err(|err| {
+                                        error!("remove file {:?} failed: {}", self.output, err);
+                                    })?;
+
+                                    return Err(Error::IO(err));
+                                }
+
+                                debug!("copy piece {} to {:?} success", piece.number, self.output);
+                            };
+
+                            downloaded += piece.length;
+                            let position = min(downloaded + piece.length, progress_bar.length().unwrap_or(0));
+                            progress_bar.set_position(position);
+                        }
+                        None => {
+                            error!("response is missing");
+                            fs::remove_file(&self.output).await.inspect_err(|err| {
+                                error!("remove file {:?} failed: {}", self.output, err);
+                            })?;
+
+                            return Err(Error::UnexpectedResponse);
+                        }
+                    }
                 }
-                Some(download_persistent_cache_task_response::Response::DownloadPieceFinishedResponse(
-                    response,
-                )) => {
-                    let piece = response.piece.ok_or(Error::InvalidParameter).inspect_err(|_err| {
-                        error!("response piece is missing");
+                Ok(None) => break,
+                Err(err) => {
+                    error!("get message failed: {}", err);
+                    fs::remove_file(&self.output).await.inspect_err(|err| {
+                        error!("remove file {:?} failed: {}", self.output, err);
                     })?;
 
-                    // Dfcache needs to write the piece content to the output file.
-                    if let Some(f) = &mut f {
-                        f.seek(SeekFrom::Start(piece.offset))
-                            .await
-                            .inspect_err(|err| {
-                                error!("seek {:?} failed: {}", self.output, err);
-                            })?;
-
-                        let content = piece.content.ok_or(Error::InvalidParameter).inspect_err(|_err| {
-                            error!("piece content is missing");
-                        })?;
-
-                        f.write_all(&content).await.inspect_err(|err| {
-                            error!("write {:?} failed: {}", self.output, err);
-                        })?;
-
-                        debug!("copy piece {} to {:?} success", piece.number, self.output);
-                    };
-
-                    downloaded += piece.length;
-                    let position = min(downloaded + piece.length, progress_bar.length().unwrap_or(0));
-                    progress_bar.set_position(position);
+                    return Err(Error::TonicStatus(err));
                 }
-                None => {}
             }
         }
 
@@ -581,7 +644,7 @@ impl ExportCommand {
             }
         }
 
-        if absolute_path.exists() {
+        if !self.overwrite && absolute_path.exists() {
             return Err(Error::ValidationError(format!(
                 "output path {} is already exist",
                 self.output.to_string_lossy()

@@ -60,6 +60,12 @@ pub fn default_download_unix_socket_path() -> PathBuf {
     crate::default_root_dir().join("dfdaemon.sock")
 }
 
+/// default_download_protocol is the default protocol of downloading.
+#[inline]
+fn default_download_protocol() -> String {
+    "tcp".to_string()
+}
+
 /// default_download_request_rate_limit is the default rate limit of the download request in the
 /// download grpc server, default is 4000 req/s.
 pub fn default_download_request_rate_limit() -> u64 {
@@ -194,21 +200,15 @@ fn default_dynconfig_refresh_interval() -> Duration {
     Duration::from_secs(300)
 }
 
-/// default_storage_server_protocol is the default protocol of the storage server.
+/// default_storage_server_tcp_port is the default port of the storage tcp server.
 #[inline]
-fn default_storage_server_protocol() -> String {
-    "tcp".to_string()
-}
-
-/// default_tcp_server_port is the default port of the storage tcp server.
-#[inline]
-fn default_tcp_server_port() -> u16 {
+fn default_storage_server_tcp_port() -> u16 {
     4005
 }
 
-/// default_quic_server_port is the default port of the storage quic server.
+/// default_storage_server_quic_port is the default port of the storage quic server.
 #[inline]
-fn default_quic_server_port() -> u16 {
+fn default_storage_server_quic_port() -> u16 {
     4006
 }
 
@@ -494,6 +494,12 @@ pub struct Download {
     /// server is the download server configuration for dfdaemon.
     pub server: DownloadServer,
 
+    /// Protocol that peers use to download piece (e.g., "tcp", "quic").
+    /// When dfdaemon acts as a parent, it announces this protocol so downstream
+    /// peers fetch pieces using it.
+    #[serde(default = "default_download_protocol")]
+    pub protocol: String,
+
     /// parent_selector is the download parent selector configuration for dfdaemon.
     pub parent_selector: ParentSelector,
 
@@ -524,6 +530,7 @@ impl Default for Download {
     fn default() -> Self {
         Download {
             server: DownloadServer::default(),
+            protocol: default_download_protocol(),
             parent_selector: ParentSelector::default(),
             rate_limit: default_download_rate_limit(),
             piece_timeout: default_download_piece_timeout(),
@@ -902,14 +909,6 @@ pub enum HostType {
     #[default]
     #[serde(rename = "super")]
     Super,
-
-    /// Strong indicates the peer is strong seed peer.
-    #[serde(rename = "strong")]
-    Strong,
-
-    /// Weak indicates the peer is weak seed peer.
-    #[serde(rename = "weak")]
-    Weak,
 }
 
 /// HostType implements Display.
@@ -918,8 +917,6 @@ impl fmt::Display for HostType {
         match self {
             HostType::Normal => write!(f, "normal"),
             HostType::Super => write!(f, "super"),
-            HostType::Strong => write!(f, "strong"),
-            HostType::Weak => write!(f, "weak"),
         }
     }
 }
@@ -971,20 +968,15 @@ impl Default for Dynconfig {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct StorageServer {
-    /// protocol is the protocol of the storage server. The protocol used for downloading pieces
-    /// between different peers, now only support gRPC.
-    ///
-    /// gRPC Protocol: The storage server will start a gRPC service in the DfdaemonUploadServer,
-    /// refer to https://github.com/dragonflyoss/api/blob/main/proto/dfdaemon.proto#L185.
-    #[serde(default = "default_storage_server_protocol")]
-    pub protocol: String,
+    /// ip is the listen ip of the storage server.
+    pub ip: Option<IpAddr>,
 
     /// port is the port to the tcp server.
-    #[serde(default = "default_tcp_server_port")]
+    #[serde(default = "default_storage_server_tcp_port")]
     pub tcp_port: u16,
 
     /// port is the port to the quic server.
-    #[serde(default = "default_quic_server_port")]
+    #[serde(default = "default_storage_server_quic_port")]
     pub quic_port: u16,
 }
 
@@ -992,9 +984,9 @@ pub struct StorageServer {
 impl Default for StorageServer {
     fn default() -> Self {
         StorageServer {
-            protocol: default_storage_server_protocol(),
-            tcp_port: default_tcp_server_port(),
-            quic_port: default_quic_server_port(),
+            ip: None,
+            tcp_port: default_storage_server_tcp_port(),
+            quic_port: default_storage_server_quic_port(),
         }
     }
 }
@@ -1022,11 +1014,11 @@ pub struct Storage {
     )]
     pub write_piece_timeout: Duration,
 
-    /// write_buffer_size is the buffer size for writing piece to disk, default is 128KB.
+    /// write_buffer_size is the buffer size for writing piece to disk, default is 4MiB.
     #[serde(default = "default_storage_write_buffer_size")]
     pub write_buffer_size: usize,
 
-    /// read_buffer_size is the buffer size for reading piece from disk, default is 128KB.
+    /// read_buffer_size is the buffer size for reading piece from disk, default is 4MiB.
     #[serde(default = "default_storage_read_buffer_size")]
     pub read_buffer_size: usize,
 
@@ -1625,6 +1617,15 @@ impl Config {
             }
         }
 
+        // Convert storage server listen ip.
+        if self.storage.server.ip.is_none() {
+            self.storage.server.ip = if self.network.enable_ipv6 {
+                Some(Ipv6Addr::UNSPECIFIED.into())
+            } else {
+                Some(Ipv4Addr::UNSPECIFIED.into())
+            }
+        }
+
         // Convert metrics server listen ip.
         if self.health.server.ip.is_none() {
             self.health.server.ip = if self.network.enable_ipv6 {
@@ -1731,6 +1732,7 @@ mod tests {
                 "socketPath": "/var/run/dragonfly/dfdaemon.sock",
                 "requestRateLimit": 4000
             },
+            "protocol": "quic",
             "rateLimit": "50GiB",
             "pieceTimeout": "30s",
             "concurrentPieceCount": 10
@@ -1743,7 +1745,7 @@ mod tests {
             PathBuf::from("/var/run/dragonfly/dfdaemon.sock")
         );
         assert_eq!(download.server.request_rate_limit, 4000);
-
+        assert_eq!(download.protocol, "quic".to_string());
         assert_eq!(download.rate_limit, ByteSize::gib(50));
         assert_eq!(download.piece_timeout, Duration::from_secs(30));
         assert_eq!(download.concurrent_piece_count, 10);
@@ -1982,8 +1984,6 @@ key: /etc/ssl/private/client.pem
         // Test whether the Display implementation is correct.
         assert_eq!(HostType::Normal.to_string(), "normal");
         assert_eq!(HostType::Super.to_string(), "super");
-        assert_eq!(HostType::Strong.to_string(), "strong");
-        assert_eq!(HostType::Weak.to_string(), "weak");
 
         // Test if the default value is HostType::Super.
         let default_host_type: HostType = Default::default();
@@ -1994,26 +1994,18 @@ key: /etc/ssl/private/client.pem
     fn serialize_host_type_correctly() {
         let normal: HostType = serde_json::from_str("\"normal\"").unwrap();
         let super_seed: HostType = serde_json::from_str("\"super\"").unwrap();
-        let strong_seed: HostType = serde_json::from_str("\"strong\"").unwrap();
-        let weak_seed: HostType = serde_json::from_str("\"weak\"").unwrap();
 
         assert_eq!(normal, HostType::Normal);
         assert_eq!(super_seed, HostType::Super);
-        assert_eq!(strong_seed, HostType::Strong);
-        assert_eq!(weak_seed, HostType::Weak);
     }
 
     #[test]
     fn serialize_host_type() {
         let normal_json = serde_json::to_string(&HostType::Normal).unwrap();
         let super_json = serde_json::to_string(&HostType::Super).unwrap();
-        let strong_json = serde_json::to_string(&HostType::Strong).unwrap();
-        let weak_json = serde_json::to_string(&HostType::Weak).unwrap();
 
         assert_eq!(normal_json, "\"normal\"");
         assert_eq!(super_json, "\"super\"");
-        assert_eq!(strong_json, "\"strong\"");
-        assert_eq!(weak_json, "\"weak\"");
     }
 
     #[test]
@@ -2027,7 +2019,7 @@ key: /etc/ssl/private/client.pem
     fn validate_seed_peer() {
         let valid_seed_peer = SeedPeer {
             enable: true,
-            kind: HostType::Weak,
+            kind: HostType::Super,
         };
 
         assert!(valid_seed_peer.validate().is_ok());
@@ -2072,7 +2064,9 @@ key: /etc/ssl/private/client.pem
         let json_data = r#"
         {
             "server": {
-                "protocol": "http"
+                "ip": "128.0.0.1",
+                "tcpPort": 4005,
+                "quicPort": 4006
             },
             "dir": "/tmp/storage",
             "keep": true,
@@ -2084,7 +2078,12 @@ key: /etc/ssl/private/client.pem
 
         let storage: Storage = serde_json::from_str(json_data).unwrap();
 
-        assert_eq!(storage.server.protocol, "http".to_string());
+        assert_eq!(
+            storage.server.ip.unwrap().to_string(),
+            "128.0.0.1".to_string()
+        );
+        assert_eq!(storage.server.tcp_port, 4005);
+        assert_eq!(storage.server.quic_port, 4006);
         assert_eq!(storage.dir, PathBuf::from("/tmp/storage"));
         assert!(storage.keep);
         assert_eq!(storage.write_piece_timeout, Duration::from_secs(20));

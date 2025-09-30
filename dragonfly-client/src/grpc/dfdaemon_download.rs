@@ -14,15 +14,6 @@
  * limitations under the License.
  */
 
-use crate::metrics::{
-    collect_delete_host_failure_metrics, collect_delete_host_started_metrics,
-    collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
-    collect_download_task_failure_metrics, collect_download_task_finished_metrics,
-    collect_download_task_started_metrics, collect_list_task_entries_failure_metrics,
-    collect_list_task_entries_started_metrics, collect_stat_task_failure_metrics,
-    collect_stat_task_started_metrics, collect_upload_task_failure_metrics,
-    collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
-};
 use crate::resource::{persistent_cache_task, task};
 use dragonfly_api::common::v2::{CacheTask, PersistentCacheTask, Priority, Task, TaskType};
 use dragonfly_api::dfdaemon::v2::{
@@ -43,6 +34,15 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error as ClientError, Result as ClientResult,
+};
+use dragonfly_client_metric::{
+    collect_delete_host_failure_metrics, collect_delete_host_started_metrics,
+    collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
+    collect_download_task_failure_metrics, collect_download_task_finished_metrics,
+    collect_download_task_started_metrics, collect_list_task_entries_failure_metrics,
+    collect_list_task_entries_started_metrics, collect_stat_task_failure_metrics,
+    collect_stat_task_started_metrics, collect_upload_task_failure_metrics,
+    collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
 };
 use dragonfly_client_util::{
     digest::{verify_file_digest, Digest},
@@ -70,6 +70,7 @@ use tonic::{
 use tower::{service_fn, ServiceBuilder};
 use tracing::{error, info, instrument, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use url::Url;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 
@@ -492,6 +493,22 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                         {
                                             Ok(true) => {}
                                             Ok(false) => {
+                                                if download_clone.overwrite {
+                                                    if let Err(err) = task_manager_clone
+                                                        .copy_task(
+                                                            task_clone.id.as_str(),
+                                                            output_path,
+                                                        )
+                                                        .await
+                                                    {
+                                                        error!("copy task: {}", err);
+                                                        handle_error(&out_stream_tx, err).await;
+                                                        return;
+                                                    };
+
+                                                    return;
+                                                }
+
                                                 error!(
                                                     "output path {} is already exists",
                                                     output_path.display()
@@ -1062,6 +1079,19 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                     {
                                         Ok(true) => {}
                                         Ok(false) => {
+                                            if request_clone.overwrite {
+                                                if let Err(err) = task_manager_clone
+                                                    .copy_task(task_clone.id.as_str(), output_path)
+                                                    .await
+                                                {
+                                                    error!("copy task: {}", err);
+                                                    handle_error(&out_stream_tx, err).await;
+                                                    return;
+                                                };
+
+                                                return;
+                                            }
+
                                             error!(
                                                 "output path {} is already exists",
                                                 output_path.display()
@@ -1343,7 +1373,61 @@ pub struct DfdaemonDownloadClient {
 
 /// DfdaemonDownloadClient implements the grpc client of the dfdaemon download.
 impl DfdaemonDownloadClient {
-    /// new_unix creates a new DfdaemonDownloadClient with unix domain socket.
+    /// Creates a new DfdaemonDownloadClient.
+    pub async fn new(config: Arc<Config>, addr: String) -> ClientResult<Self> {
+        let domain_name = Url::parse(addr.as_str())?
+            .host_str()
+            .ok_or(ClientError::InvalidParameter)
+            .inspect_err(|_err| {
+                error!("invalid address: {}", addr);
+            })?
+            .to_string();
+
+        let channel = match config
+            .upload
+            .client
+            .load_client_tls_config(domain_name.as_str())
+            .await?
+        {
+            Some(client_tls_config) => {
+                Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
+                    .tls_config(client_tls_config)?
+                    .buffer_size(super::BUFFER_SIZE)
+                    .connect_timeout(super::CONNECT_TIMEOUT)
+                    .timeout(super::REQUEST_TIMEOUT)
+                    .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+                    .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                    .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+                    .connect()
+                    .await
+                    .inspect_err(|err| {
+                        error!("connect to {} failed: {}", addr, err);
+                    })
+                    .or_err(ErrorType::ConnectError)?
+            }
+            None => Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
+                .buffer_size(super::BUFFER_SIZE)
+                .connect_timeout(super::CONNECT_TIMEOUT)
+                .timeout(super::REQUEST_TIMEOUT)
+                .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+                .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+                .connect()
+                .await
+                .inspect_err(|err| {
+                    error!("connect to {} failed: {}", addr, err);
+                })
+                .or_err(ErrorType::ConnectError)?,
+        };
+
+        let client =
+            DfdaemonDownloadGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX);
+        Ok(Self { client })
+    }
+
+    /// Creates a new DfdaemonDownloadClient with unix domain socket.
     pub async fn new_unix(socket_path: PathBuf) -> ClientResult<Self> {
         // Ignore the uri because it is not used.
         let channel = Endpoint::try_from("http://[::]:50051")

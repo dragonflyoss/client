@@ -103,6 +103,13 @@ struct Args {
     transfer_from_dfdaemon: bool,
 
     #[arg(
+        long = "overwrite",
+        default_value_t = false,
+        help = "Specify whether to overwrite the output file if it already exists. If it is true, dfget will overwrite the output file. If it is false, dfget will return an error if the output file already exists. Cannot be used with `--force-hard-link=true`"
+    )]
+    overwrite: bool,
+
+    #[arg(
         long = "force-hard-link",
         default_value_t = false,
         help = "Specify whether the download file must be hard linked to the output path. If hard link is failed, download will be failed. If it is false, dfdaemon will copy the file to the output path if hard link is failed."
@@ -712,7 +719,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
 
 /// Get all entries in the directory with include files filter.
 async fn get_all_entries(
-    url: &Url,
+    base_url: &Url,
     header: Option<Vec<String>>,
     include_files: Option<Vec<String>>,
     object_storage: Option<ObjectStorage>,
@@ -723,7 +730,7 @@ async fn get_all_entries(
         Some(files) => {
             let mut urls = HashSet::with_capacity(files.len());
             for file in files {
-                let url = url.join(&file).or_err(ErrorType::ParseError)?;
+                let url = base_url.join(&file).or_err(ErrorType::ParseError)?;
                 urls.insert(url);
             }
 
@@ -731,7 +738,7 @@ async fn get_all_entries(
         }
         None => {
             let mut urls = HashSet::with_capacity(1);
-            urls.insert(url.clone());
+            urls.insert(base_url.clone());
             urls
         }
     };
@@ -750,7 +757,7 @@ async fn get_all_entries(
             });
 
             let parent = url.join(".").or_err(ErrorType::ParseError)?;
-            if parent.path() != "/" {
+            if parent.path() != base_url.path() {
                 entries.insert(DirEntry {
                     url: parent.to_string(),
                     content_length: 0,
@@ -784,7 +791,7 @@ async fn get_all_entries(
                 .join(".")
                 .or_err(ErrorType::ParseError)?;
 
-            if parent.path() != "/" {
+            if parent.path() != base_url.path() {
                 dir_entries.push(DirEntry {
                     url: parent.to_string(),
                     content_length: 0,
@@ -796,9 +803,10 @@ async fn get_all_entries(
         let mut seen = HashSet::new();
         entries.retain(|entry| seen.insert(entry.clone()));
         entries.extend(dir_entries.clone());
-        info!("add entries {:?} by dir url: {}", dir_entries, url);
+        info!("add entries {:?} by dir url: {}", entries, url);
     }
 
+    info!("get all entries: {:?}", entries);
     Ok(entries.into_iter().collect())
 }
 
@@ -882,6 +890,7 @@ async fn download(
                 content_for_calculating_task_id: args.content_for_calculating_task_id,
                 remote_ip: Some(local_ip().unwrap().to_string()),
                 concurrent_piece_count: None,
+                overwrite: args.overwrite,
             }),
         })
         .await
@@ -901,7 +910,8 @@ async fn download(
         }
 
         let f = OpenOptions::new()
-            .create_new(true)
+            .create(true)
+            .truncate(true)
             .write(true)
             .mode(dfget::DEFAULT_OUTPUT_FILE_MODE)
             .open(&args.output)
@@ -932,60 +942,115 @@ async fn download(
     // Download file.
     let mut downloaded = 0;
     let mut out_stream = response.into_inner();
-    while let Some(message) = out_stream.message().await.inspect_err(|err| {
-        error!("get message failed: {}", err);
-    })? {
-        match message.response {
-            Some(download_task_response::Response::DownloadTaskStartedResponse(response)) => {
-                if let Some(f) = &f {
-                    fallocate(f, response.content_length)
-                        .await
-                        .inspect_err(|err| {
-                            error!("fallocate {:?} failed: {}", args.output, err);
+
+    loop {
+        match out_stream.message().await {
+            Ok(Some(message)) => {
+                match message.response {
+                    Some(download_task_response::Response::DownloadTaskStartedResponse(
+                        response,
+                    )) => {
+                        if let Some(f) = &f {
+                            if let Err(err) = fallocate(f, response.content_length).await {
+                                error!("fallocate {:?} failed: {}", args.output, err);
+                                fs::remove_file(&args.output).await.inspect_err(|err| {
+                                    error!("remove file {:?} failed: {}", args.output, err);
+                                })?;
+
+                                return Err(err);
+                            }
+                        }
+
+                        progress_bar.set_length(response.content_length);
+                    }
+                    Some(download_task_response::Response::DownloadPieceFinishedResponse(
+                        response,
+                    )) => {
+                        let piece = match response.piece {
+                            Some(piece) => piece,
+                            None => {
+                                error!("response piece is missing");
+                                fs::remove_file(&args.output).await.inspect_err(|err| {
+                                    error!("remove file {:?} failed: {}", args.output, err);
+                                })?;
+
+                                return Err(Error::InvalidParameter);
+                            }
+                        };
+
+                        // Dfget needs to write the piece content to the output file.
+                        if let Some(f) = &mut f {
+                            if let Err(err) = f.seek(SeekFrom::Start(piece.offset)).await {
+                                error!("seek {:?} failed: {}", args.output, err);
+                                fs::remove_file(&args.output).await.inspect_err(|err| {
+                                    error!("remove file {:?} failed: {}", args.output, err);
+                                })?;
+
+                                return Err(Error::IO(err));
+                            }
+
+                            let content = match piece.content {
+                                Some(content) => content,
+                                None => {
+                                    error!("piece content is missing");
+                                    fs::remove_file(&args.output).await.inspect_err(|err| {
+                                        error!("remove file {:?} failed: {}", args.output, err);
+                                    })?;
+
+                                    return Err(Error::InvalidParameter);
+                                }
+                            };
+
+                            if let Err(err) = f.write_all(&content).await {
+                                error!(
+                                    "write piece {} to {:?} failed: {}",
+                                    piece.number, args.output, err
+                                );
+                                fs::remove_file(&args.output).await.inspect_err(|err| {
+                                    error!("remove file {:?} failed: {}", args.output, err);
+                                })?;
+
+                                return Err(Error::IO(err));
+                            }
+
+                            if let Err(err) = f.flush().await {
+                                error!("flush {:?} failed: {}", args.output, err);
+                                fs::remove_file(&args.output).await.inspect_err(|err| {
+                                    error!("remove file {:?} failed: {}", args.output, err);
+                                })?;
+
+                                return Err(Error::IO(err));
+                            }
+
+                            debug!("copy piece {} to {:?} success", piece.number, args.output);
+                        }
+
+                        downloaded += piece.length;
+                        let position = min(
+                            downloaded + piece.length,
+                            progress_bar.length().unwrap_or(0),
+                        );
+                        progress_bar.set_position(position);
+                    }
+                    None => {
+                        error!("response is missing");
+                        fs::remove_file(&args.output).await.inspect_err(|err| {
+                            error!("remove file {:?} failed: {}", args.output, err);
                         })?;
+
+                        return Err(Error::UnexpectedResponse);
+                    }
                 }
-
-                progress_bar.set_length(response.content_length);
             }
-            Some(download_task_response::Response::DownloadPieceFinishedResponse(response)) => {
-                let piece = response
-                    .piece
-                    .ok_or(Error::InvalidParameter)
-                    .inspect_err(|_err| {
-                        error!("response piece is missing");
-                    })?;
+            Ok(None) => break,
+            Err(err) => {
+                error!("get message failed: {}", err);
+                fs::remove_file(&args.output).await.inspect_err(|err| {
+                    error!("remove file {:?} failed: {}", args.output, err);
+                })?;
 
-                // Dfget needs to write the piece content to the output file.
-                if let Some(f) = &mut f {
-                    f.seek(SeekFrom::Start(piece.offset))
-                        .await
-                        .inspect_err(|err| {
-                            error!("seek {:?} failed: {}", args.output, err);
-                        })?;
-
-                    let content =
-                        piece
-                            .content
-                            .ok_or(Error::InvalidParameter)
-                            .inspect_err(|_err| {
-                                error!("piece content is missing");
-                            })?;
-
-                    f.write_all(&content).await.inspect_err(|err| {
-                        error!("write {:?} failed: {}", args.output, err);
-                    })?;
-
-                    debug!("copy piece {} to {:?} success", piece.number, args.output);
-                }
-
-                downloaded += piece.length;
-                let position = min(
-                    downloaded + piece.length,
-                    progress_bar.length().unwrap_or(0),
-                );
-                progress_bar.set_position(position);
+                return Err(Error::TonicStatus(err));
             }
-            None => {}
         }
     }
 
@@ -1008,7 +1073,6 @@ async fn get_entries(
     download_client: DfdaemonDownloadClient,
 ) -> Result<Vec<DirEntry>> {
     info!("list task entries: {:?}", url);
-    // List task entries.
     let response = download_client
         .list_task_entries(ListTaskEntriesRequest {
             task_id: Uuid::new_v4().to_string(),
@@ -1025,6 +1089,7 @@ async fn get_entries(
             error!("list task entries failed: {}", err);
         })?;
 
+    info!("list task entries response: {:?}", response.entries);
     Ok(response
         .entries
         .into_iter()
@@ -1127,7 +1192,7 @@ fn validate_args(args: &Args) -> Result<()> {
             }
         }
 
-        if absolute_path.exists() {
+        if !args.overwrite && absolute_path.exists() {
             return Err(Error::ValidationError(format!(
                 "output path {} is already exist",
                 args.output.to_string_lossy()
@@ -1184,6 +1249,9 @@ fn is_normal_relative_path(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dragonfly_api::dfdaemon::v2::{Entry, ListTaskEntriesResponse};
+    use mocktail::prelude::*;
+    use std::collections::HashMap;
     use tempfile::tempdir;
 
     #[test]
@@ -1399,5 +1467,314 @@ mod tests {
 
         let result = make_output_by_entry(url, output, entry);
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn should_get_empty_entries() {
+        let mut mocks = MockSet::new();
+        mocks.mock(|when, then| {
+            when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries");
+            then.pb(ListTaskEntriesResponse {
+                content_length: 0,
+                response_header: HashMap::new(),
+                status_code: None,
+                entries: vec![],
+            });
+        });
+
+        let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
+        server.start().await.unwrap();
+
+        let dfdaemon_download_client = DfdaemonDownloadClient::new(
+            Arc::new(dfdaemon::Config::default()),
+            format!("http://0.0.0.0:{}", server.port().unwrap()),
+        )
+        .await
+        .unwrap();
+
+        let entries = get_all_entries(
+            &Url::parse("http://example.com/root/").unwrap(),
+            None,
+            None,
+            None,
+            None,
+            dfdaemon_download_client,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(entries.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn should_get_all_entries_in_subdir() {
+        let mut mocks = MockSet::new();
+        mocks.mock(|when, then| {
+            when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries");
+            then.pb(ListTaskEntriesResponse {
+                content_length: 0,
+                response_header: HashMap::new(),
+                status_code: None,
+                entries: vec![
+                    Entry {
+                        url: "http://example.com/root/dir1/file1.txt".to_string(),
+                        content_length: 100,
+                        is_dir: false,
+                    },
+                    Entry {
+                        url: "http://example.com/root/dir1/file2.txt".to_string(),
+                        content_length: 100,
+                        is_dir: false,
+                    },
+                    Entry {
+                        url: "http://example.com/root/dir2/file1.txt".to_string(),
+                        content_length: 200,
+                        is_dir: false,
+                    },
+                    Entry {
+                        url: "http://example.com/root/dir2/file2.txt".to_string(),
+                        content_length: 200,
+                        is_dir: false,
+                    },
+                ],
+            });
+        });
+
+        let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
+        server.start().await.unwrap();
+
+        let dfdaemon_download_client = DfdaemonDownloadClient::new(
+            Arc::new(dfdaemon::Config::default()),
+            format!("http://0.0.0.0:{}", server.port().unwrap()),
+        )
+        .await
+        .unwrap();
+
+        let entries = get_all_entries(
+            &Url::parse("http://example.com/root/").unwrap(),
+            None,
+            None,
+            None,
+            None,
+            dfdaemon_download_client,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            entries.into_iter().collect::<HashSet<_>>(),
+            vec![
+                DirEntry {
+                    url: "http://example.com/root/dir1/file1.txt".to_string(),
+                    content_length: 100,
+                    is_dir: false,
+                },
+                DirEntry {
+                    url: "http://example.com/root/dir1/file2.txt".to_string(),
+                    content_length: 100,
+                    is_dir: false,
+                },
+                DirEntry {
+                    url: "http://example.com/root/dir1/".to_string(),
+                    content_length: 0,
+                    is_dir: true,
+                },
+                DirEntry {
+                    url: "http://example.com/root/dir2/file1.txt".to_string(),
+                    content_length: 200,
+                    is_dir: false,
+                },
+                DirEntry {
+                    url: "http://example.com/root/dir2/file2.txt".to_string(),
+                    content_length: 200,
+                    is_dir: false,
+                },
+                DirEntry {
+                    url: "http://example.com/root/dir2/".to_string(),
+                    content_length: 0,
+                    is_dir: true,
+                },
+            ]
+            .into_iter()
+            .collect::<HashSet<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn should_get_all_entries_in_rootdir() {
+        let mut mocks = MockSet::new();
+        mocks.mock(|when, then| {
+            when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries");
+            then.pb(ListTaskEntriesResponse {
+                content_length: 0,
+                response_header: HashMap::new(),
+                status_code: None,
+                entries: vec![
+                    Entry {
+                        url: "http://example.com/root/file1.txt".to_string(),
+                        content_length: 100,
+                        is_dir: false,
+                    },
+                    Entry {
+                        url: "http://example.com/root/file2.txt".to_string(),
+                        content_length: 200,
+                        is_dir: false,
+                    },
+                ],
+            });
+        });
+
+        let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
+        server.start().await.unwrap();
+
+        let dfdaemon_download_client = DfdaemonDownloadClient::new(
+            Arc::new(dfdaemon::Config::default()),
+            format!("http://0.0.0.0:{}", server.port().unwrap()),
+        )
+        .await
+        .unwrap();
+
+        let entries = get_all_entries(
+            &Url::parse("http://example.com/root/").unwrap(),
+            None,
+            None,
+            None,
+            None,
+            dfdaemon_download_client,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            entries.into_iter().collect::<HashSet<_>>(),
+            vec![
+                DirEntry {
+                    url: "http://example.com/root/file1.txt".to_string(),
+                    content_length: 100,
+                    is_dir: false,
+                },
+                DirEntry {
+                    url: "http://example.com/root/file2.txt".to_string(),
+                    content_length: 200,
+                    is_dir: false,
+                },
+            ]
+            .into_iter()
+            .collect::<HashSet<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn should_get_all_entries_in_rootdir_and_subdir() {
+        let mut mocks = MockSet::new();
+        mocks.mock(|when, then| {
+            when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries");
+            then.pb(ListTaskEntriesResponse {
+                content_length: 0,
+                response_header: HashMap::new(),
+                status_code: None,
+                entries: vec![
+                    Entry {
+                        url: "http://example.com/root/file1.txt".to_string(),
+                        content_length: 100,
+                        is_dir: false,
+                    },
+                    Entry {
+                        url: "http://example.com/root/file2.txt".to_string(),
+                        content_length: 200,
+                        is_dir: false,
+                    },
+                    Entry {
+                        url: "http://example.com/root/dir1/file1.txt".to_string(),
+                        content_length: 100,
+                        is_dir: false,
+                    },
+                    Entry {
+                        url: "http://example.com/root/dir1/file2.txt".to_string(),
+                        content_length: 100,
+                        is_dir: false,
+                    },
+                    Entry {
+                        url: "http://example.com/root/dir2/file1.txt".to_string(),
+                        content_length: 200,
+                        is_dir: false,
+                    },
+                    Entry {
+                        url: "http://example.com/root/dir2/file2.txt".to_string(),
+                        content_length: 200,
+                        is_dir: false,
+                    },
+                ],
+            });
+        });
+
+        let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
+        server.start().await.unwrap();
+
+        let dfdaemon_download_client = DfdaemonDownloadClient::new(
+            Arc::new(dfdaemon::Config::default()),
+            format!("http://0.0.0.0:{}", server.port().unwrap()),
+        )
+        .await
+        .unwrap();
+
+        let entries = get_all_entries(
+            &Url::parse("http://example.com/root/").unwrap(),
+            None,
+            None,
+            None,
+            None,
+            dfdaemon_download_client,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            entries.into_iter().collect::<HashSet<_>>(),
+            vec![
+                DirEntry {
+                    url: "http://example.com/root/file1.txt".to_string(),
+                    content_length: 100,
+                    is_dir: false,
+                },
+                DirEntry {
+                    url: "http://example.com/root/file2.txt".to_string(),
+                    content_length: 200,
+                    is_dir: false,
+                },
+                DirEntry {
+                    url: "http://example.com/root/dir1/file1.txt".to_string(),
+                    content_length: 100,
+                    is_dir: false,
+                },
+                DirEntry {
+                    url: "http://example.com/root/dir1/file2.txt".to_string(),
+                    content_length: 100,
+                    is_dir: false,
+                },
+                DirEntry {
+                    url: "http://example.com/root/dir1/".to_string(),
+                    content_length: 0,
+                    is_dir: true,
+                },
+                DirEntry {
+                    url: "http://example.com/root/dir2/file1.txt".to_string(),
+                    content_length: 200,
+                    is_dir: false,
+                },
+                DirEntry {
+                    url: "http://example.com/root/dir2/file2.txt".to_string(),
+                    content_length: 200,
+                    is_dir: false,
+                },
+                DirEntry {
+                    url: "http://example.com/root/dir2/".to_string(),
+                    content_length: 0,
+                    is_dir: true,
+                },
+            ]
+            .into_iter()
+            .collect::<HashSet<_>>()
+        );
     }
 }

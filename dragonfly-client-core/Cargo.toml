@@ -22,3 +22,5 @@ hyper-util.workspace = true
 opendal.workspace = true
 url.workspace = true
 headers.workspace = true
+vortex-protocol.workspace = true
+quinn = "0.11.9"
