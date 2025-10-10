@@ -64,6 +64,7 @@ use tokio::sync::{
 };
 use tokio::task::JoinSet;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tokio_util::sync::CancellationToken;
 use tonic::{Request, Status};
 use tracing::{debug, error, info, instrument, warn, Instrument};
 
@@ -1306,6 +1307,7 @@ impl Task {
 
         // Download the piece from the local.
         let mut join_set = JoinSet::new();
+        let cancel_token = CancellationToken::new();
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.concurrent_piece_count as usize,
         ));
@@ -1442,28 +1444,33 @@ impl Task {
             let in_stream_tx = in_stream_tx.clone();
             let object_storage = request.object_storage.clone();
             let hdfs = request.hdfs.clone();
+            let token = cancel_token.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(async move {
                 let _permit = permit;
-                download_from_source(
-                    task_id,
-                    host_id,
-                    peer_id,
-                    interested_piece.number,
-                    url,
-                    interested_piece.offset,
-                    interested_piece.length,
-                    request_header,
-                    request.is_prefetch,
-                    request.need_piece_content,
-                    piece_manager,
-                    download_progress_tx,
-                    in_stream_tx,
-                    object_storage,
-                    hdfs,
-                )
-                .in_current_span()
-                .await
+                tokio::select! {
+                    result = download_from_source(
+                        task_id,
+                        host_id,
+                        peer_id,
+                        interested_piece.number,
+                        url,
+                        interested_piece.offset,
+                        interested_piece.length,
+                        request_header,
+                        request.is_prefetch,
+                        request.need_piece_content,
+                        piece_manager,
+                        download_progress_tx,
+                        in_stream_tx,
+                        object_storage,
+                        hdfs,
+                    ) => result,
+                    _ = token.cancelled() => {
+                        info!("download piece {} from source is cancelled", interested_piece.number);
+                        Err(Error::Unknown("aaa".to_string()))
+                    }
+                }
             });
         }
 
@@ -1536,7 +1543,14 @@ impl Task {
                     return Ok(finished_pieces);
                 }
                 Err(err) => {
-                    join_set.shutdown().await;
+                    cancel_token.cancel();
+
+                    while let Some(result) = join_set.join_next().await {
+                        if let Ok(Err(ErrorType::Cancelled)) = result {
+                            // 处理已取消的任务
+                            println!("Task cancelled and cleaned up");
+                        }
+                    }
 
                     // Send the download piece failed request.
                     in_stream_tx.send_timeout(AnnouncePeerRequest {
