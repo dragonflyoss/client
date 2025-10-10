@@ -49,6 +49,7 @@ use vortex_protocol::{
 /// TCPServer is a TCP-based server for dfdaemon upload service.
 pub struct TCPServer {
     /// config is the configuration of the dfdaemon.
+    #[allow(dead_code)]
     config: Arc<Config>,
 
     /// addr is the address of the TCP server.
