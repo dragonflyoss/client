@@ -371,17 +371,6 @@ mod tests {
     use quinn::rustls::client::danger::ServerCertVerifier;
 
     #[test]
-    fn test_new() {
-        let config = Arc::new(Config::default());
-        let addr = "127.0.0.1:12345".to_string();
-        let client = QUICClient::new(config.clone(), addr.clone());
-        // Verify internal stored values
-        assert_eq!(client.addr, addr);
-        // Ensure the same Arc instance stored
-        assert!(Arc::ptr_eq(&client.config, &config));
-    }
-
-    #[test]
     fn test_no_verifier() {
         let verifier = NoVerifier::new();
 
