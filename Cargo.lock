@@ -1066,6 +1066,7 @@ dependencies = [
  "rolling-file",
  "rustls 0.22.4",
  "rustls-pki-types",
+ "scopeguard",
  "serde",
  "serde_json",
  "sysinfo",

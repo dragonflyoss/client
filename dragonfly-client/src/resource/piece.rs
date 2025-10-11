@@ -405,6 +405,13 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
+        // Clean up residual piece metadata if error occurred.
+        let guard = scopeguard::guard((), |_| {
+            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
+                error!("set piece metadata failed: {}", err)
+            };
+        });
+
         // Record the start of downloading piece.
         let piece = self
             .storage
@@ -415,6 +422,7 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             info!("finished piece {} from local", piece_id);
+            scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }
 
@@ -456,10 +464,6 @@ impl Piece {
                 warn!("fall back to grpc downloader");
                 let host = parent.host.clone().ok_or_else(|| {
                     error!("parent host is empty");
-                    if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
-                        error!("set piece metadata failed: {}", err)
-                    };
-
                     Error::InvalidPeer(parent.id.clone())
                 })?;
 
@@ -473,9 +477,6 @@ impl Piece {
                     .await
                     .inspect_err(|err| {
                         error!("download piece failed: {}", err);
-                        if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
-                            error!("set piece metadata failed: {}", err)
-                        };
                     })?
             }
         };
@@ -502,14 +503,11 @@ impl Piece {
                     length,
                 );
 
+                scopeguard::ScopeGuard::into_inner(guard);
                 Ok(piece)
             }
             Err(err) => {
                 error!("download piece finished: {}", err);
-                if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
-                    error!("set piece metadata failed: {}", err)
-                };
-
                 Err(err)
             }
         }
@@ -535,6 +533,13 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
+        // Clean up residual piece metadata if error occurred.
+        let guard = scopeguard::guard((), |_| {
+            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
+                error!("set piece metadata failed: {}", err)
+            };
+        });
+
         // Record the start of downloading piece.
         let piece = self
             .storage
@@ -545,6 +550,7 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             info!("finished piece {} from local", piece_id);
+            scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }
 
@@ -568,9 +574,6 @@ impl Piece {
         // Download the piece from the source.
         let backend = self.backend_factory.build(url).inspect_err(|err| {
             error!("build backend failed: {}", err);
-            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
-                error!("set piece metadata failed: {}", err)
-            };
         })?;
 
         // Record the start time.
@@ -606,9 +609,6 @@ impl Piece {
 
                 // if the request is failed.
                 error!("backend get failed: {}", err);
-                if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
-                    error!("set piece metadata failed: {}", err)
-                };
             })?;
 
         if !response.success {
@@ -629,7 +629,6 @@ impl Piece {
             let error_message = response.error_message.unwrap_or_default();
             error!("backend get failed: {} {}", error_message, buffer.as_str());
 
-            self.storage.download_piece_failed(piece_id)?;
             return Err(Error::BackendError(Box::new(BackendError {
                 message: error_message,
                 status_code: Some(response.http_status_code.unwrap_or_default()),
@@ -664,14 +663,11 @@ impl Piece {
                     length,
                 );
 
+                scopeguard::ScopeGuard::into_inner(guard);
                 Ok(piece)
             }
             Err(err) => {
                 error!("download piece finished: {}", err);
-                if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
-                    error!("set piece metadata failed: {}", err)
-                };
-
                 Err(err)
             }
         }
@@ -793,6 +789,17 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
+        // Clean up residual persistent cache metadata if error occurred.
+        let guard = scopeguard::guard((), |_| {
+            if let Some(err) = self
+                .storage
+                .download_persistent_cache_piece_failed(piece_id)
+                .err()
+            {
+                error!("set persistent cache piece metadata failed: {}", err)
+            };
+        });
+
         if is_prefetch {
             // Acquire the prefetch rate limiter.
             self.prefetch_rate_limiter.acquire(length as usize).await;
@@ -811,6 +818,7 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             info!("finished persistent cache piece {} from local", piece_id);
+            scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }
 
@@ -846,14 +854,6 @@ impl Piece {
                 warn!("fall back to grpc downloader");
                 let host = parent.host.clone().ok_or_else(|| {
                     error!("parent host is empty");
-                    if let Some(err) = self
-                        .storage
-                        .download_persistent_cache_piece_failed(piece_id)
-                        .err()
-                    {
-                        error!("set persistent cache piece metadata failed: {}", err)
-                    };
-
                     Error::InvalidPeer(parent.id.clone())
                 })?;
 
@@ -867,13 +867,6 @@ impl Piece {
                     .await
                     .inspect_err(|err| {
                         error!("download persistent cache piece failed: {}", err);
-                        if let Some(err) = self
-                            .storage
-                            .download_persistent_cache_piece_failed(piece_id)
-                            .err()
-                        {
-                            error!("set persistent cache piece metadata failed: {}", err)
-                        };
                     })?
             }
         };
@@ -899,18 +892,11 @@ impl Piece {
                     length,
                 );
 
+                scopeguard::ScopeGuard::into_inner(guard);
                 Ok(piece)
             }
             Err(err) => {
                 error!("download persistent cache piece finished: {}", err);
-                if let Some(err) = self
-                    .storage
-                    .download_persistent_cache_piece_failed(piece_id)
-                    .err()
-                {
-                    error!("set persistent cache piece metadata failed: {}", err)
-                };
-
                 Err(err)
             }
         }
