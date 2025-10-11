@@ -20,10 +20,12 @@ use std::cmp::min;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{io, mem, os::unix::io::RawFd};
 use sysinfo::Networks;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
+
+#[cfg(target_os = "linux")]
+use std::{io, mem, os::unix::io::RawFd};
 
 /// Interface represents a network interface with its information.
 #[derive(Debug, Clone, Default)]

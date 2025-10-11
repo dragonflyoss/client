@@ -23,7 +23,7 @@ use reqwest_tracing::TracingMiddleware;
 use rustls_pki_types::CertificateDer;
 use std::io::{Error as IOError, ErrorKind};
 use tokio_util::io::StreamReader;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, info, instrument};
 
 /// HTTP_SCHEME is the HTTP scheme.
 pub const HTTP_SCHEME: &str = "http";
@@ -166,7 +166,7 @@ impl super::Backend for HTTP {
         );
 
         // The header of the request is required.
-        let header = request
+        let request_header = request
             .http_header
             .ok_or(Error::InvalidParameter)
             .inspect_err(|_err| {
@@ -178,9 +178,9 @@ impl super::Backend for HTTP {
         // through the HEAD method. Use GET request to replace of HEAD request
         // to get header and status code.
         let response = match self
-            .client(request.client_cert)?
+            .client(request.client_cert.clone())?
             .get(&request.url)
-            .headers(header)
+            .headers(request_header.clone())
             // Add Range header to ensure Content-Length is returned in response headers.
             // Some servers (especially when using Transfer-Encoding: chunked,
             // refer to https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Transfer-Encoding.) may not
@@ -192,6 +192,40 @@ impl super::Backend for HTTP {
             .send()
             .await
         {
+            Ok(response) if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE => {
+                // For zero-byte files, some servers return 416 Range Not Satisfiable.
+                // Retry with a GET request without the Range header to retrieve headers.
+                info!(
+                    "head request got 416 Range Not Satisfiable, retrying with HEAD {} {}",
+                    request.task_id, request.url
+                );
+
+                match self
+                    .client(request.client_cert.clone())?
+                    .get(&request.url)
+                    .headers(request_header.clone())
+                    .timeout(request.timeout)
+                    .send()
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(err) => {
+                        error!(
+                            "head request failed {} {}: {}",
+                            request.task_id, request.url, err
+                        );
+
+                        return Ok(super::HeadResponse {
+                            success: false,
+                            content_length: None,
+                            http_header: None,
+                            http_status_code: None,
+                            entries: Vec::new(),
+                            error_message: None,
+                        });
+                    }
+                }
+            }
             Ok(response) => response,
             Err(err) => {
                 error!(
@@ -210,23 +244,26 @@ impl super::Backend for HTTP {
             }
         };
 
-        let header = response.headers().clone();
-        let status_code = response.status();
-        let content_length = response.content_length();
+        let response_header = response.headers().clone();
+        let response_status_code = response.status();
+        let response_content_length = response.content_length();
         debug!(
             "head response {} {}: {:?} {:?} {:?}",
-            request.task_id, request.url, status_code, content_length, header
+            request.task_id,
+            request.url,
+            response_status_code,
+            response_content_length,
+            response_header
         );
 
         // Drop the response body to avoid reading it.
         drop(response);
-
         Ok(super::HeadResponse {
-            success: status_code.is_success(),
-            content_length,
-            http_header: Some(header),
-            http_status_code: Some(status_code),
-            error_message: Some(status_code.to_string()),
+            success: response_status_code.is_success(),
+            content_length: response_content_length,
+            http_header: Some(request_header),
+            http_status_code: Some(response_status_code),
+            error_message: Some(response_status_code.to_string()),
             entries: Vec::new(),
         })
     }
@@ -240,7 +277,7 @@ impl super::Backend for HTTP {
         );
 
         // The header of the request is required.
-        let header = request
+        let request_header = request
             .http_header
             .ok_or(Error::InvalidParameter)
             .inspect_err(|_err| {
@@ -250,7 +287,7 @@ impl super::Backend for HTTP {
         let response = match self
             .client(request.client_cert)?
             .get(&request.url)
-            .headers(header)
+            .headers(request_header)
             .timeout(request.timeout)
             .send()
             .await
@@ -272,9 +309,9 @@ impl super::Backend for HTTP {
             }
         };
 
-        let header = response.headers().clone();
-        let status_code = response.status();
-        let reader = Box::new(StreamReader::new(
+        let response_header = response.headers().clone();
+        let response_status_code = response.status();
+        let response_reader = Box::new(StreamReader::new(
             response
                 .bytes_stream()
                 .map_err(|err| IOError::new(ErrorKind::Other, err)),
@@ -282,15 +319,15 @@ impl super::Backend for HTTP {
 
         debug!(
             "get response {} {}: {:?} {:?}",
-            request.task_id, request.piece_id, status_code, header
+            request.task_id, request.piece_id, response_status_code, response_header
         );
 
         Ok(super::GetResponse {
-            success: status_code.is_success(),
-            http_header: Some(header),
-            http_status_code: Some(status_code),
-            reader,
-            error_message: Some(status_code.to_string()),
+            success: response_status_code.is_success(),
+            http_header: Some(response_header),
+            http_status_code: Some(response_status_code),
+            reader: response_reader,
+            error_message: Some(response_status_code.to_string()),
         })
     }
 }
