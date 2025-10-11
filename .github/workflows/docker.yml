@@ -10,7 +10,9 @@ on:
 jobs:
   push_client_image_to_registry:
     name: Push Client Image
-    runs-on: [self-hosted, Linux, X64]
+    runs-on:
+      group: Default
+      labels: [oracle-24cpu-384gb-x86-64]
     timeout-minutes: 600
     steps:
       - name: Check out code
