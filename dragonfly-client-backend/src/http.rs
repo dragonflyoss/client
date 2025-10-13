@@ -17,6 +17,8 @@
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::tls::NoVerifier;
 use futures::TryStreamExt;
+use moka::future::Cache;
+use reqwest::redirect;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use reqwest_tracing::TracingMiddleware;
@@ -38,6 +40,10 @@ pub struct HTTP {
 
     /// client is the reqwest client.
     client: ClientWithMiddleware,
+
+    permanent_redirect_cache: Cache<String, String>,
+
+    temporary_redirect_cache: Cache<String, String>,
 }
 
 /// HTTP implements the http interface.
@@ -89,6 +95,8 @@ impl HTTP {
         Ok(Self {
             scheme: scheme.to_string(),
             client,
+            permanent_redirect_cache: Cache::builder().build(),
+            temporary_redirect_cache: Cache::builder().time_to_live(duration).build(),
         })
     }
 
@@ -146,6 +154,41 @@ impl HTTP {
             // Default TLS client config with no validation.
             None => Ok(self.client.clone()),
         }
+    }
+
+    pub fn make_redirect_policy(cache: Arc<RedirectCache>) -> redirect::Policy {
+        redirect::Policy::custom(move |attempt| {
+            // attempt.previous(): 历史 URL 列表（含起始）；我们取“上一跳”
+            let from_opt = attempt.previous().last().cloned();
+            let to = attempt.url().clone();
+
+            if let Some(from) = from_opt {
+                // 注意：某些 reqwest 版本返回的 status 可能是 Option<StatusCode>
+                let status_opt = attempt.status();
+
+                if let Some(status) = status_opt {
+                    match status {
+                    StatusCode::MOVED_PERMANENTLY   // 301
+                    | StatusCode::PERMANENT_REDIRECT // 308
+                    => {
+                        cache.insert_permanent(&from, &to);
+                    }
+                    StatusCode::FOUND              // 302
+                    | StatusCode::SEE_OTHER        // 303
+                    | StatusCode::TEMPORARY_REDIRECT // 307
+                    => {
+                        cache.insert_temporary(&from, &to);
+                    }
+                    _ => {
+                        // 其他状态不记录
+                    }
+                }
+                }
+            }
+
+            // 总是跟随（你也可以在此限制最大重定向次数）
+            attempt.follow()
+        })
     }
 }
 

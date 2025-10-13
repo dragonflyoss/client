@@ -28,6 +28,7 @@ futures.workspace = true
 reqwest-tracing.workspace = true
 reqwest-retry = "0.7"
 libloading = "0.8.9"
+moka = { version = "0.12", features = ["future"] }
 
 [dev-dependencies]
 tempfile.workspace = true
