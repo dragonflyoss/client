@@ -1500,7 +1500,6 @@ impl DfdaemonDownloadClient {
         request: ListTaskEntriesRequest,
     ) -> ClientResult<ListTaskEntriesResponse> {
         let request = Self::make_request(request);
-        info!("list task entries request: {:?}", request);
         let response = self.client.clone().list_task_entries(request).await?;
         Ok(response.into_inner())
     }
