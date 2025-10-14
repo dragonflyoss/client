@@ -138,9 +138,8 @@ impl Task {
         id: &str,
         request: Download,
     ) -> ClientResult<metadata::Task> {
-        let task = self.storage.prepare_download_task_started(id).await?;
-
-        if task.content_length.is_some() && task.piece_length.is_some() {
+        let (task, reused) = self.storage.prepare_download_task(id)?;
+        if reused {
             // Attempt to create a hard link from the task file to the output path.
             //
             // Behavior based on force_hard_link setting:
