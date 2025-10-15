@@ -1217,26 +1217,28 @@ impl PersistentCacheTask {
             let finished_pieces = finished_pieces.clone();
             let protocol = self.config.download.protocol.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
-            join_set.spawn(async move {
-                let _permit = permit;
-                download_from_parent(
-                    task_id,
-                    host_id,
-                    peer_id,
-                    collect_piece.number,
-                    collect_piece.length,
-                    need_piece_content,
-                    collect_piece.parent.clone(),
-                    piece_manager,
-                    download_progress_tx,
-                    in_stream_tx,
-                    interrupt,
-                    finished_pieces,
-                    protocol,
-                )
-                .in_current_span()
-                .await
-            });
+            join_set.spawn(
+                async move {
+                    let _permit = permit;
+                    download_from_parent(
+                        task_id,
+                        host_id,
+                        peer_id,
+                        collect_piece.number,
+                        collect_piece.length,
+                        need_piece_content,
+                        collect_piece.parent.clone(),
+                        piece_manager,
+                        download_progress_tx,
+                        in_stream_tx,
+                        interrupt,
+                        finished_pieces,
+                        protocol,
+                    )
+                    .await
+                }
+                .in_current_span(),
+            );
         }
 
         // Wait for the pieces to be downloaded.

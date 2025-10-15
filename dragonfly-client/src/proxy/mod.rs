@@ -1124,9 +1124,7 @@ fn make_download_task_request(
                 rule.filtered_query_params.clone(),
             ),
             request_header: headermap_to_hashmap(&header),
-            content_length: None,
             piece_length,
-            piece_count: None,
             // Need the absolute path.
             output_path: header::get_output_path(&header),
             timeout: None,
@@ -1143,6 +1141,9 @@ fn make_download_task_request(
             remote_ip: Some(remote_ip.to_string()),
             concurrent_piece_count: Some(config.download.concurrent_piece_count),
             overwrite: false,
+            actual_piece_length: None,
+            actual_content_length: None,
+            actual_piece_count: None,
         }),
     })
 }

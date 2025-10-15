@@ -350,10 +350,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
         Span::current().record("content_length", task.content_length().unwrap_or_default());
 
-        // Update the content length, piece length and piece count of the download.
-        download.content_length = task.content_length();
-        download.piece_length = task.piece_length();
-        download.piece_count = task.piece_count();
+        // Update the actual content length, actual piece length and actual
+        // piece count of the download.
+        download.actual_content_length = task.content_length();
+        download.actual_piece_length = task.piece_length();
+        download.actual_piece_count = task.piece_count();
 
         // Download's range priority is higher than the request header's range.
         // If download protocol is http, use the range of the request header.
