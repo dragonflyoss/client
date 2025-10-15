@@ -1124,7 +1124,9 @@ fn make_download_task_request(
                 rule.filtered_query_params.clone(),
             ),
             request_header: headermap_to_hashmap(&header),
+            content_length: None,
             piece_length,
+            piece_count: None,
             // Need the absolute path.
             output_path: header::get_output_path(&header),
             timeout: None,

@@ -872,7 +872,9 @@ async fn download(
                 priority: args.priority,
                 filtered_query_params,
                 request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
+                content_length: None,
                 piece_length: args.piece_length.map(|piece_length| piece_length.as_u64()),
+                piece_count: None,
                 output_path,
                 timeout: Some(
                     prost_wkt_types::Duration::try_from(args.timeout)

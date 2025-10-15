@@ -737,6 +737,7 @@ impl PersistentCacheTask {
                                 output_path: request.output_path.clone(),
                                 timeout: request.timeout,
                                 concurrent_piece_count: Some(self.config.download.concurrent_piece_count),
+                                piece_count: task.piece_count(),
                             },
                         ),
                     ),
@@ -839,9 +840,7 @@ impl PersistentCacheTask {
                                 peer_id: peer_id.to_string(),
                                 request: Some(
                                     announce_persistent_cache_peer_request::Request::DownloadPersistentCachePeerFinishedRequest(
-                                        DownloadPersistentCachePeerFinishedRequest {
-                                            piece_count: 0,
-                                        },
+                                        DownloadPersistentCachePeerFinishedRequest {},
                                     ),
                                 ),
                             },
@@ -946,9 +945,7 @@ impl PersistentCacheTask {
                                     peer_id: peer_id.to_string(),
                                     request: Some(
                                         announce_persistent_cache_peer_request::Request::DownloadPersistentCachePeerFinishedRequest(
-                                            DownloadPersistentCachePeerFinishedRequest {
-                                                piece_count: interested_pieces.len() as u32,
-                                            },
+                                            DownloadPersistentCachePeerFinishedRequest {},
                                         ),
                                     ),
                                 },

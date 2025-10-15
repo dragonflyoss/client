@@ -453,7 +453,6 @@ impl Task {
                 host_id,
                 peer_id,
                 interested_pieces.clone(),
-                content_length,
                 request.clone(),
                 download_progress_tx.clone(),
             )
@@ -546,7 +545,6 @@ impl Task {
         host_id: &str,
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
-        content_length: u64,
         request: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<Vec<metadata::Piece>> {
@@ -671,10 +669,7 @@ impl Task {
                                 peer_id: peer_id.to_string(),
                                 request: Some(
                                     announce_peer_request::Request::DownloadPeerFinishedRequest(
-                                        DownloadPeerFinishedRequest {
-                                            content_length: 0,
-                                            piece_count: 0,
-                                        },
+                                        DownloadPeerFinishedRequest {},
                                     ),
                                 ),
                             },
@@ -778,10 +773,7 @@ impl Task {
                                     peer_id: peer_id.to_string(),
                                     request: Some(
                                         announce_peer_request::Request::DownloadPeerFinishedRequest(
-                                            DownloadPeerFinishedRequest {
-                                                content_length,
-                                                piece_count: interested_pieces.len() as u32,
-                                            },
+                                            DownloadPeerFinishedRequest {},
                                         ),
                                     ),
                                 },
@@ -918,10 +910,7 @@ impl Task {
                                     peer_id: peer_id.to_string(),
                                     request: Some(
                                         announce_peer_request::Request::DownloadPeerBackToSourceFinishedRequest(
-                                            DownloadPeerBackToSourceFinishedRequest {
-                                                content_length,
-                                                piece_count: interested_pieces.len() as u32,
-                                            },
+                                            DownloadPeerBackToSourceFinishedRequest {},
                                         ),
                                     ),
                                 },
