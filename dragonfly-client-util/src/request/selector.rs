@@ -31,7 +31,7 @@ use tonic::transport::{Channel, Endpoint};
 use tonic_health::pb::{
     health_client::HealthClient as HealthGRPCClient, HealthCheckRequest, HealthCheckResponse,
 };
-use tracing::{debug, error, info, instrument, Instrument};
+use tracing::{debug, error, info, Instrument};
 
 /// Selector is the interface for selecting item from a list of items by a specific criteria.
 #[tonic::async_trait]
@@ -111,7 +111,6 @@ impl SeedPeerSelector {
     }
 
     /// refresh updates the seed peers data.
-    #[instrument(skip_all)]
     async fn refresh(&self) -> Result<()> {
         // Only one refresh can be running at a time.
         let Ok(_guard) = self.mutex.try_lock() else {
@@ -169,7 +168,6 @@ impl SeedPeerSelector {
     }
 
     /// list_seed_peers lists the seed peers from scheduler.
-    #[instrument(skip_all)]
     async fn list_seed_peers(&self) -> Result<Vec<Host>> {
         // Filter for seed peer types, seed peer type is 1.
         // refer to dragonfly-client-config/src/dfdaemon.rs#HostType.
@@ -181,7 +179,6 @@ impl SeedPeerSelector {
     }
 
     /// check_health checks the health of each seed peer.
-    #[instrument(skip_all)]
     async fn check_health(addr: &str) -> Result<HealthCheckResponse> {
         let channel = Endpoint::from_shared(addr.to_string())?
             .connect_timeout(SEED_PEERS_HEALTH_CHECK_TIMEOUT)
@@ -200,7 +197,6 @@ impl SeedPeerSelector {
 
 #[tonic::async_trait]
 impl Selector for SeedPeerSelector {
-    #[instrument(skip_all)]
     async fn select(&self, task_id: String, replicas: u32) -> Result<Vec<Host>> {
         // Acquire a read lock and perform all logic within it.
         let seed_peers = self.seed_peers.read().await;
