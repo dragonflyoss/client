@@ -31,7 +31,7 @@ use tonic::transport::{Channel, Endpoint};
 use tonic_health::pb::{
     health_client::HealthClient as HealthGRPCClient, HealthCheckRequest, HealthCheckResponse,
 };
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, Instrument};
 
 /// Selector is the interface for selecting item from a list of items by a specific criteria.
 #[tonic::async_trait]
@@ -128,12 +128,15 @@ impl SeedPeerSelector {
         let mut join_set = JoinSet::new();
         for peer in seed_peers {
             let addr = format!("http://{}:{}", peer.ip, peer.port);
-            join_set.spawn(async move {
-                match Self::check_health(&addr).await {
-                    Ok(_) => Ok(peer),
-                    Err(err) => Err(err),
+            join_set.spawn(
+                async move {
+                    match Self::check_health(&addr).await {
+                        Ok(_) => Ok(peer),
+                        Err(err) => Err(err),
+                    }
                 }
-            });
+                .in_current_span(),
+            );
         }
 
         let mut hosts = HashMap::with_capacity(seed_peers_length);
