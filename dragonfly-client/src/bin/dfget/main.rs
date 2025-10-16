@@ -47,7 +47,7 @@ use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
-use tracing::{debug, error, info, warn, Level};
+use tracing::{debug, error, info, warn, Instrument, Level};
 use url::Url;
 use uuid::Uuid;
 
@@ -690,10 +690,13 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
             let progress_bar = multi_progress_bar.add(ProgressBar::new(0));
             let download_client = download_client.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
-            join_set.spawn(async move {
-                let _permit = permit;
-                download(entry_args, progress_bar, download_client).await
-            });
+            join_set.spawn(
+                async move {
+                    let _permit = permit;
+                    download(entry_args, progress_bar, download_client).await
+                }
+                .in_current_span(),
+            );
         }
     }
 
@@ -891,6 +894,9 @@ async fn download(
                 remote_ip: Some(local_ip().unwrap().to_string()),
                 concurrent_piece_count: None,
                 overwrite: args.overwrite,
+                actual_piece_length: None,
+                actual_content_length: None,
+                actual_piece_count: None,
             }),
         })
         .await

@@ -342,37 +342,19 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 task
             }
         };
-
-        // Clone the task.
-        let task_manager = self.task.clone();
-
-        // Check whether the content length is empty.
-        let Some(content_length) = task.content_length() else {
-            // Download task failed.
-            task_manager
-                .download_failed(task_id.as_str())
-                .await
-                .unwrap_or_else(|err| error!("download task failed: {}", err));
-
-            // Collect download task failure metrics.
-            collect_download_task_failure_metrics(
-                download.r#type,
-                download.tag.clone().unwrap_or_default().as_str(),
-                download.application.clone().unwrap_or_default().as_str(),
-                download.priority.to_string().as_str(),
-            );
-
-            error!("missing content length in the response");
-            return Err(Status::internal("missing content length in the response"));
-        };
-
         info!(
-            "content length {}, piece length {}",
-            content_length,
-            task.piece_length().unwrap_or_default()
+            "content length {:?}, piece length {:?}",
+            task.content_length(),
+            task.piece_length()
         );
 
-        Span::current().record("content_length", content_length);
+        Span::current().record("content_length", task.content_length().unwrap_or_default());
+
+        // Update the actual content length, actual piece length and actual
+        // piece count of the download.
+        download.actual_content_length = task.content_length();
+        download.actual_piece_length = task.piece_length();
+        download.actual_piece_count = task.piece_count();
 
         // Download's range priority is higher than the request header's range.
         // If download protocol is http, use the range of the request header.
@@ -383,7 +365,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 Ok(header) => header,
                 Err(e) => {
                     // Download task failed.
-                    task_manager
+                    self.task
                         .download_failed(task_id.as_str())
                         .await
                         .unwrap_or_else(|err| error!("download task failed: {}", err));
@@ -401,32 +383,33 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 }
             };
 
-            download.range = match get_range(&request_header, content_length) {
-                Ok(range) => range,
-                Err(e) => {
-                    // Download task failed.
-                    task_manager
-                        .download_failed(task_id.as_str())
-                        .await
-                        .unwrap_or_else(|err| error!("download task failed: {}", err));
+            download.range =
+                match get_range(&request_header, task.content_length().unwrap_or_default()) {
+                    Ok(range) => range,
+                    Err(e) => {
+                        // Download task failed.
+                        self.task
+                            .download_failed(task_id.as_str())
+                            .await
+                            .unwrap_or_else(|err| error!("download task failed: {}", err));
 
-                    // Collect download task failure metrics.
-                    collect_download_task_failure_metrics(
-                        download.r#type,
-                        download.tag.clone().unwrap_or_default().as_str(),
-                        download.application.clone().unwrap_or_default().as_str(),
-                        download.priority.to_string().as_str(),
-                    );
+                        // Collect download task failure metrics.
+                        collect_download_task_failure_metrics(
+                            download.r#type,
+                            download.tag.clone().unwrap_or_default().as_str(),
+                            download.application.clone().unwrap_or_default().as_str(),
+                            download.priority.to_string().as_str(),
+                        );
 
-                    error!("get range failed: {}", e);
-                    return Err(Status::failed_precondition(e.to_string()));
-                }
-            };
+                        error!("get range failed: {}", e);
+                        return Err(Status::failed_precondition(e.to_string()));
+                    }
+                };
         }
 
         // Initialize stream channel.
         let download_clone = download.clone();
-        let task_manager_clone = task_manager.clone();
+        let task_manager_clone = self.task.clone();
         let task_clone = task.clone();
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
 
@@ -642,11 +625,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // If prefetch flag is true, prefetch the full task.
         if download.prefetch {
             info!("try to prefetch task");
-            match task_manager.prefetch_task_started(task_id.as_str()).await {
+            match self.task.prefetch_task_started(task_id.as_str()).await {
                 Ok(_) => {
                     info!("prefetch task started");
                     let socket_path = self.socket_path.clone();
-                    let task_manager_clone = task_manager.clone();
+                    let task_manager_clone = self.task.clone();
                     tokio::spawn(
                         async move {
                             if let Err(err) = super::prefetch_task(

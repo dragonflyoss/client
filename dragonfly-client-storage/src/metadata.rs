@@ -122,6 +122,13 @@ impl Task {
     pub fn content_length(&self) -> Option<u64> {
         self.content_length
     }
+
+    /// piece_count returns the piece count of the task.
+    pub fn piece_count(&self) -> Option<u64> {
+        self.content_length()
+            .zip(self.piece_length())
+            .map(|(content_length, piece_length)| content_length.div_ceil(piece_length))
+    }
 }
 
 /// PersistentCacheTask is the metadata of the persistent cache task.
@@ -215,6 +222,11 @@ impl PersistentCacheTask {
     /// content_length returns the content length of the persistent cache task.
     pub fn content_length(&self) -> u64 {
         self.content_length
+    }
+
+    /// piece_count returns the piece count of the persistent cache task.
+    pub fn piece_count(&self) -> u64 {
+        self.content_length.div_ceil(self.piece_length)
     }
 }
 
@@ -310,6 +322,13 @@ impl CacheTask {
     /// content_length returns the content length of the cache task.
     pub fn content_length(&self) -> Option<u64> {
         self.content_length
+    }
+
+    /// piece_count returns the piece count of the cache task.
+    pub fn piece_count(&self) -> Option<u64> {
+        self.content_length()
+            .zip(self.piece_length())
+            .map(|(content_length, piece_length)| content_length.div_ceil(piece_length))
     }
 }
 

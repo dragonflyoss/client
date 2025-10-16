@@ -737,6 +737,7 @@ impl PersistentCacheTask {
                                 output_path: request.output_path.clone(),
                                 timeout: request.timeout,
                                 concurrent_piece_count: Some(self.config.download.concurrent_piece_count),
+                                piece_count: task.piece_count(),
                             },
                         ),
                     ),
@@ -839,9 +840,7 @@ impl PersistentCacheTask {
                                 peer_id: peer_id.to_string(),
                                 request: Some(
                                     announce_persistent_cache_peer_request::Request::DownloadPersistentCachePeerFinishedRequest(
-                                        DownloadPersistentCachePeerFinishedRequest {
-                                            piece_count: 0,
-                                        },
+                                        DownloadPersistentCachePeerFinishedRequest {},
                                     ),
                                 ),
                             },
@@ -946,9 +945,7 @@ impl PersistentCacheTask {
                                     peer_id: peer_id.to_string(),
                                     request: Some(
                                         announce_persistent_cache_peer_request::Request::DownloadPersistentCachePeerFinishedRequest(
-                                            DownloadPersistentCachePeerFinishedRequest {
-                                                piece_count: interested_pieces.len() as u32,
-                                            },
+                                            DownloadPersistentCachePeerFinishedRequest {},
                                         ),
                                     ),
                                 },
@@ -1220,26 +1217,28 @@ impl PersistentCacheTask {
             let finished_pieces = finished_pieces.clone();
             let protocol = self.config.download.protocol.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
-            join_set.spawn(async move {
-                let _permit = permit;
-                download_from_parent(
-                    task_id,
-                    host_id,
-                    peer_id,
-                    collect_piece.number,
-                    collect_piece.length,
-                    need_piece_content,
-                    collect_piece.parent.clone(),
-                    piece_manager,
-                    download_progress_tx,
-                    in_stream_tx,
-                    interrupt,
-                    finished_pieces,
-                    protocol,
-                )
-                .in_current_span()
-                .await
-            });
+            join_set.spawn(
+                async move {
+                    let _permit = permit;
+                    download_from_parent(
+                        task_id,
+                        host_id,
+                        peer_id,
+                        collect_piece.number,
+                        collect_piece.length,
+                        need_piece_content,
+                        collect_piece.parent.clone(),
+                        piece_manager,
+                        download_progress_tx,
+                        in_stream_tx,
+                        interrupt,
+                        finished_pieces,
+                        protocol,
+                    )
+                    .await
+                }
+                .in_current_span(),
+            );
         }
 
         // Wait for the pieces to be downloaded.
