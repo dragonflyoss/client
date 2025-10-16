@@ -38,7 +38,7 @@ use std::time::Duration;
 use tokio::io::AsyncRead;
 use tokio_util::io::StreamReader;
 use tonic::transport::Endpoint;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error};
 
 /// POOL_MAX_IDLE_PER_HOST is the max idle connections per host.
 const POOL_MAX_IDLE_PER_HOST: usize = 1024;
@@ -352,7 +352,6 @@ impl Request for Proxy {
     /// This method is designed for scenarios where the response body is expected to be processed as a
     /// stream, allowing efficient handling of large or continuous data. The response includes metadata
     /// such as status codes and headers, along with a streaming `Body` for accessing the response content.
-    #[instrument(skip_all)]
     async fn get(&self, request: GetRequest) -> Result<GetResponse> {
         let response = self.try_send(&request).await?;
         let header = response.headers().clone();
@@ -378,7 +377,6 @@ impl Request for Proxy {
     /// memory, avoiding the overhead of streaming for smaller or fixed-size responses. The provided
     /// `BytesMut` buffer is used to store the response content, and the response metadata (e.g., status
     /// and headers) is returned separately.
-    #[instrument(skip_all)]
     async fn get_into(&self, request: GetRequest, buf: &mut BytesMut) -> Result<GetResponse> {
         let get_into = async {
             let response = self.try_send(&request).await?;
@@ -411,7 +409,6 @@ impl Request for Proxy {
 /// Proxy implements proxy request logic.
 impl Proxy {
     /// Creates reqwest clients with proxy configuration for the given request.
-    #[instrument(skip_all)]
     async fn client_entries(
         &self,
         request: &GetRequest,
@@ -458,7 +455,6 @@ impl Proxy {
     }
 
     /// Private helper to process requests and handle response headers with retries.
-    #[instrument(skip_all)]
     async fn try_send(&self, request: &GetRequest) -> Result<reqwest::Response> {
         // Create client and send the request.
         let entries = self.client_entries(request).await?;
@@ -491,7 +487,6 @@ impl Proxy {
     }
 
     /// Send a request to the specified URL via client entry with the given headers.
-    #[instrument(skip_all)]
     async fn send(
         &self,
         entry: &Entry<ClientWithMiddleware>,
@@ -545,7 +540,6 @@ impl Proxy {
     }
 
     /// make_request_headers applies p2p related headers to the request headers.
-    #[instrument(skip_all)]
     fn make_request_headers(&self, request: &GetRequest) -> Result<HeaderMap> {
         let mut headers = request.header.clone().unwrap_or_default();
 
