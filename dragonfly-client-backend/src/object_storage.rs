@@ -17,7 +17,7 @@
 use dragonfly_api::common;
 use dragonfly_client_core::error::BackendError;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
-use opendal::{layers::TimeoutLayer, raw::HttpClient, Metakey, Operator};
+use opendal::{layers::TimeoutLayer, raw::HttpClient, Operator};
 use percent_encoding::percent_decode_str;
 use std::fmt;
 use std::result::Result;
@@ -385,7 +385,7 @@ impl ObjectStorage {
         let mut builder = opendal::services::Oss::default();
         builder = builder
             .access_key_id(access_key_id)
-            .access_key_secret(access_key_secret)
+            .access_key_secret(access_key_secret)   
             .endpoint(endpoint)
             .http_client(HttpClient::with(self.client.clone()))
             .root("/")
@@ -517,7 +517,6 @@ impl crate::Backend for ObjectStorage {
             operator
                 .list_with(&parsed_url.key)
                 .recursive(true)
-                .metakey(Metakey::ContentLength | Metakey::Mode)
                 .await // Do the list op here.
                 .map_err(|err| {
                     error!(
@@ -766,7 +765,7 @@ mod tests {
                 ObjectStorageInfo {
                     endpoint: Some("test-endpoint.local".into()),
                     access_key_id: Some("access-key-id".into()),
-                    access_key_secret: Some("access-key-secret".into()),
+                    access_key_secret: Some("YWNjZXNzLWtleS1zZWNyZXQK".into()),
                     ..Default::default()
                 },
             ),
