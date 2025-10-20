@@ -30,7 +30,10 @@ use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_util::{fs::fallocate, http::header_vec_to_hashmap};
+use dragonfly_client_util::{
+    fs::fallocate, http::header_vec_to_hashmap,
+    http::query_params::default_proxy_rule_filtered_query_params,
+};
 use glob::Pattern;
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
 use local_ip_address::local_ip;
@@ -62,7 +65,7 @@ Examples:
 
   # Download a file from HDFS.
   $ dfget hdfs://<host>:<port>/<path> -O /tmp/file.txt --hdfs-delegation-token=<delegation_token>
-  
+
   # Download a file from Amazon Simple Storage Service(S3).
   $ dfget s3://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret>
 
@@ -850,7 +853,7 @@ async fn download(
     // If the `filtered_query_params` is not provided, then use the default value.
     let filtered_query_params = args
         .filtered_query_params
-        .unwrap_or_else(dfdaemon::default_proxy_rule_filtered_query_params);
+        .unwrap_or_else(default_proxy_rule_filtered_query_params);
 
     // Dfget needs to notify dfdaemon to transfer the piece content of downloading file via unix domain socket
     // when the `transfer_from_dfdaemon` is true. Otherwise, dfdaemon will download the file and hardlink or
