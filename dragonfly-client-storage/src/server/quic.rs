@@ -17,7 +17,10 @@
 use crate::Storage;
 use bytes::{Bytes, BytesMut};
 use dragonfly_api::common::v2::TrafficType;
-use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Error as ClientError, Result as ClientResult,
+};
 use dragonfly_client_metric::{
     collect_upload_piece_failure_metrics, collect_upload_piece_started_metrics,
 };
@@ -104,7 +107,9 @@ impl QUICServer {
         loop {
             tokio::select! {
                 Some(quic_accepted) = endpoint.accept() => {
-                    let quic = quic_accepted.await?;
+                    let quic = quic_accepted.await.or_err(
+                        ErrorType::ConnectError
+                    )?;
                     let remote_address = quic.remote_address();
                     debug!("accepted connection from {}", remote_address);
 
@@ -467,7 +472,8 @@ impl QUICServerHandler {
         reader
             .read_exact(&mut header_bytes)
             .await
-            .inspect_err(|err| error!("failed to receive header: {}", err))?;
+            .inspect_err(|err| error!("failed to receive header: {}", err))
+            .or_err(ErrorType::ConnectError)?;
 
         Header::try_from(header_bytes.freeze()).map_err(Into::into)
     }
@@ -491,7 +497,8 @@ impl QUICServerHandler {
         reader
             .read_exact(&mut download_piece_bytes)
             .await
-            .inspect_err(|err| error!("failed to receive download piece: {}", err))?;
+            .inspect_err(|err| error!("failed to receive download piece: {}", err))
+            .or_err(ErrorType::ConnectError)?;
 
         download_piece_bytes.freeze().try_into().map_err(Into::into)
     }
@@ -510,7 +517,8 @@ impl QUICServerHandler {
         writer
             .write_all(&request)
             .await
-            .inspect_err(|err| error!("failed to send request: {}", err))?;
+            .inspect_err(|err| error!("failed to send request: {}", err))
+            .or_err(ErrorType::ConnectError)?;
 
         Ok(())
     }

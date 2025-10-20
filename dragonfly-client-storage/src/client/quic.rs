@@ -204,19 +204,23 @@ impl QUICClient {
         // Connect's server name used for verifying the certificate. Since we used
         // NoVerifier, it can be anything.
         let connection = endpoint
-            .connect(self.addr.parse().or_err(ErrorType::ParseError)?, "d7y")?
+            .connect(self.addr.parse().or_err(ErrorType::ParseError)?, "d7y")
+            .or_err(ErrorType::ConnectError)?
             .await
-            .inspect_err(|err| error!("failed to connect to {}: {}", self.addr, err))?;
+            .inspect_err(|err| error!("failed to connect to {}: {}", self.addr, err))
+            .or_err(ErrorType::ConnectError)?;
 
         let (mut writer, reader) = connection
             .open_bi()
             .await
-            .inspect_err(|err| error!("failed to open bi stream: {}", err))?;
+            .inspect_err(|err| error!("failed to open bi stream: {}", err))
+            .or_err(ErrorType::ConnectError)?;
 
         writer
             .write_all(&request)
             .await
-            .inspect_err(|err| error!("failed to send request: {}", err))?;
+            .inspect_err(|err| error!("failed to send request: {}", err))
+            .or_err(ErrorType::ConnectError)?;
 
         Ok((reader, writer))
     }
@@ -233,7 +237,8 @@ impl QUICClient {
         reader
             .read_exact(&mut header_bytes)
             .await
-            .inspect_err(|err| error!("failed to receive header: {}", err))?;
+            .inspect_err(|err| error!("failed to receive header: {}", err))
+            .or_err(ErrorType::ConnectError)?;
 
         Header::try_from(header_bytes.freeze()).map_err(Into::into)
     }
@@ -257,7 +262,8 @@ impl QUICClient {
         reader
             .read_exact(&mut metadata_length_bytes)
             .await
-            .inspect_err(|err| error!("failed to receive metadata length: {}", err))?;
+            .inspect_err(|err| error!("failed to receive metadata length: {}", err))
+            .or_err(ErrorType::ConnectError)?;
         let metadata_length = u32::from_be_bytes(metadata_length_bytes[..].try_into()?) as usize;
 
         let mut metadata_bytes = BytesMut::with_capacity(metadata_length);
@@ -265,7 +271,8 @@ impl QUICClient {
         reader
             .read_exact(&mut metadata_bytes)
             .await
-            .inspect_err(|err| error!("failed to receive metadata: {}", err))?;
+            .inspect_err(|err| error!("failed to receive metadata: {}", err))
+            .or_err(ErrorType::ConnectError)?;
 
         let mut content_bytes = BytesMut::with_capacity(metadata_length_size + metadata_length);
         content_bytes.extend_from_slice(&metadata_length_bytes);
