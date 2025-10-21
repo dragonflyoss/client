@@ -22,7 +22,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::time;
-use tracing::{error, instrument};
+use tracing::{error, instrument, Span};
 use vortex_protocol::{
     tlv::{
         download_persistent_cache_piece::DownloadPersistentCachePiece,
@@ -53,12 +53,14 @@ impl TCPClient {
     ///
     /// This is the main entry point for downloading a piece. It applies
     /// a timeout based on the configuration and handles connection timeouts gracefully.
-    #[instrument(skip_all)]
+    #[instrument(skip_all, fields(parent_addr))]
     pub async fn download_piece(
         &self,
         number: u32,
         task_id: &str,
     ) -> ClientResult<(impl AsyncRead, u64, String)> {
+        Span::current().record("parent_addr", self.addr.as_str());
+
         time::timeout(
             self.config.download.piece_timeout,
             self.handle_download_piece(number, task_id),
