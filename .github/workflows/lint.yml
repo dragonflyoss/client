@@ -28,14 +28,8 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt, clippy, llvm-tools-preview
           toolchain: 1.85.0
-
-      - name: Set up Clang
-        uses: egor-tensin/setup-clang@v1
-        with:
-          version: latest
-          platform: x64
 
       - name: Run cargo fmt
         run: |
