@@ -31,12 +31,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Set up Clang
-        uses: egor-tensin/setup-clang@v1
         with:
-          version: latest
-          platform: x64
+          components: llvm-tools-preview
 
       - name: Run cargo check
         run: |
@@ -47,6 +43,17 @@ jobs:
     timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -62,12 +69,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Set up Clang
-        uses: egor-tensin/setup-clang@v1
         with:
-          version: latest
-          platform: x64
+          components: llvm-tools-preview
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2
