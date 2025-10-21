@@ -17,7 +17,7 @@
 pub mod errors;
 mod selector;
 
-use crate::http::headermap_to_hashmap;
+use crate::http::{headermap_to_hashmap, query_params::default_proxy_rule_filtered_query_params};
 use crate::id_generator::{IDGenerator, TaskIDParameter};
 use crate::pool::{Builder as PoolBuilder, Entry, Factory, Pool};
 use bytes::BytesMut;
@@ -413,6 +413,12 @@ impl Proxy {
         &self,
         request: &GetRequest,
     ) -> Result<Vec<Entry<ClientWithMiddleware>>> {
+        let filtered_query_params = if request.filtered_query_params.is_empty() {
+            default_proxy_rule_filtered_query_params()
+        } else {
+            request.filtered_query_params.clone()
+        };
+
         // Generate task id for selecting seed peer.
         let task_id = self
             .id_generator
@@ -423,7 +429,7 @@ impl Proxy {
                     piece_length: request.piece_length,
                     tag: request.tag.clone(),
                     application: request.application.clone(),
-                    filtered_query_params: request.filtered_query_params.clone(),
+                    filtered_query_params,
                 },
             })
             .map_err(|err| Error::Internal(format!("failed to generate task id: {}", err)))?;
@@ -431,7 +437,7 @@ impl Proxy {
         // Select seed peers for downloading.
         let seed_peers = self
             .seed_peer_selector
-            .select(task_id, self.max_retries as u32)
+            .select(task_id.clone(), self.max_retries as u32)
             .await
             .map_err(|err| {
                 Error::Internal(format!(
@@ -439,7 +445,8 @@ impl Proxy {
                     err
                 ))
             })?;
-        debug!("selected seed peers: {:?}", seed_peers);
+
+        debug!("task {} selected seed peers: {:?}", task_id, seed_peers);
 
         let mut client_entries = Vec::with_capacity(seed_peers.len());
         for peer in seed_peers.iter() {
