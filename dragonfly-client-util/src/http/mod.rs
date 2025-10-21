@@ -23,6 +23,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::collections::HashMap;
 
 pub mod basic_auth;
+pub mod query_params;
 
 /// headermap_to_hashmap converts a headermap to a hashmap.
 pub fn headermap_to_hashmap(header: &HeaderMap<HeaderValue>) -> HashMap<String, String> {

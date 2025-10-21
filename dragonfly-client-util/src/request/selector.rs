@@ -206,7 +206,7 @@ impl Selector for SeedPeerSelector {
 
         // The number of replicas cannot exceed the total number of seed peers.
         let expected_replicas = std::cmp::min(replicas as usize, seed_peers.hashring.len());
-        debug!("expected replicas: {}", expected_replicas);
+        debug!("task {} expected replicas: {}", task_id, expected_replicas);
 
         // Get replica nodes from the hash ring.
         let vnodes = seed_peers
