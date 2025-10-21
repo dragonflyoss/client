@@ -427,6 +427,17 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
         }
 
+        // Define the backend error handler to send the error to the stream.
+        async fn handle_backend_error(
+            out_stream_tx: &Sender<Result<DownloadTaskResponse, Status>>,
+            err: Status,
+        ) {
+            out_stream_tx
+                .send_timeout(Err(err), super::REQUEST_TIMEOUT)
+                .await
+                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+        }
+
         tokio::spawn(
             async move {
                 match task_manager_clone
@@ -552,7 +563,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             status_code: err.status_code.map(|code| code.as_u16() as i32),
                         }) {
                             Ok(json) => {
-                                handle_error(
+                                handle_backend_error(
                                     &out_stream_tx,
                                     Status::with_details(
                                         Code::Internal,
