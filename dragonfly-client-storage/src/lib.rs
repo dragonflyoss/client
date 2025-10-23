@@ -370,6 +370,12 @@ impl Storage {
             });
     }
 
+    /// prepare_download_cache_task prepares the metadata of the cache task when the cache task downloads
+    /// started.
+    pub fn prepare_download_cache_task(&self, id: &str) -> Result<(metadata::CacheTask, bool)> {
+        self.metadata.prepare_download_cache_task(id)
+    }
+
     /// download_cache_task_started updates the metadata of the cache task and create cache task content
     /// when the cache task downloads started.
     #[instrument(skip_all)]
