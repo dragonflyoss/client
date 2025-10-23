@@ -66,7 +66,7 @@ RUN go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
 
 FROM public.ecr.aws/debian/debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends iperf3 linux-libc-dev libc6-dev \
+RUN apt-get update && apt-get install -y --no-install-recommends iperf3 iperf linux-libc-dev libc6-dev \
     iotop sysstat bash-completion procps apache2-utils ca-certificates binutils fio curl \
     dnsutils iputils-ping llvm graphviz lsof strace dstat net-tools bpftrace \
     && rm -rf /var/lib/apt/lists/*
