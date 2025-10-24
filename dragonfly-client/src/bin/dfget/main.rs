@@ -242,6 +242,12 @@ struct Args {
 
     #[arg(
         long,
+        help = "Specify the security token for the Object Storage Service"
+    )]
+    storage_security_token: Option<String>,
+
+    #[arg(
+        long,
         help = "Specify the session token for Amazon Simple Storage Service(S3)"
     )]
     storage_session_token: Option<String>,
@@ -633,6 +639,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
     let object_storage = Some(ObjectStorage {
         access_key_id: args.storage_access_key_id.clone(),
         access_key_secret: args.storage_access_key_secret.clone(),
+        security_token: args.storage_security_token.clone(),
         session_token: args.storage_session_token.clone(),
         region: args.storage_region.clone(),
         endpoint: args.storage_endpoint.clone(),
@@ -833,6 +840,7 @@ async fn download(
         Ok(_) => Some(ObjectStorage {
             access_key_id: args.storage_access_key_id.clone(),
             access_key_secret: args.storage_access_key_secret.clone(),
+            security_token: args.storage_security_token.clone(),
             session_token: args.storage_session_token.clone(),
             region: args.storage_region.clone(),
             endpoint: args.storage_endpoint.clone(),
