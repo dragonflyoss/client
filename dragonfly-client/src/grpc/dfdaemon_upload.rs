@@ -2010,8 +2010,11 @@ impl DfdaemonUploadClient {
     pub async fn sync_pieces(
         &self,
         request: SyncPiecesRequest,
+        collected_piece_timeout: Duration,
     ) -> ClientResult<tonic::Response<tonic::codec::Streaming<SyncPiecesResponse>>> {
-        let request = Self::make_request(request);
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(collected_piece_timeout);
+
         let response = self.client.clone().sync_pieces(request).await?;
         Ok(response)
     }
@@ -2106,9 +2109,12 @@ impl DfdaemonUploadClient {
     pub async fn sync_persistent_cache_pieces(
         &self,
         request: SyncPersistentCachePiecesRequest,
+        collected_piece_timeout: Duration,
     ) -> ClientResult<tonic::Response<tonic::codec::Streaming<SyncPersistentCachePiecesResponse>>>
     {
-        let request = Self::make_request(request);
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(collected_piece_timeout);
+
         let response = self
             .client
             .clone()

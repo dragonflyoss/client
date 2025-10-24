@@ -155,7 +155,7 @@ fn default_download_piece_timeout() -> Duration {
 /// default_collected_download_piece_timeout is the default timeout for collecting one piece from the parent in the stream.
 #[inline]
 fn default_collected_download_piece_timeout() -> Duration {
-    Duration::from_secs(10)
+    Duration::from_secs(90)
 }
 
 /// default_download_concurrent_piece_count is the default number of concurrent pieces to download.

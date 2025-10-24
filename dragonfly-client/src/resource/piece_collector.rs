@@ -195,11 +195,12 @@ impl PieceCollector {
                     Error::InvalidPeer(parent.id.clone())
                 })?;
 
-                // Create a dfdaemon client.
+                // Create a dfdaemon client used the piece download timeout for waiting the
+                // piece metadata response.
                 let dfdaemon_upload_client = DfdaemonUploadClient::new(
                     config,
                     format!("http://{}:{}", host.ip, host.port),
-                    false,
+                    true,
                 )
                 .await
                 .inspect_err(|err| {
@@ -210,14 +211,17 @@ impl PieceCollector {
                 })?;
 
                 let response = dfdaemon_upload_client
-                    .sync_pieces(SyncPiecesRequest {
-                        host_id: host_id.to_string(),
-                        task_id: task_id.to_string(),
-                        interested_piece_numbers: interested_pieces
-                            .iter()
-                            .map(|piece| piece.number)
-                            .collect(),
-                    })
+                    .sync_pieces(
+                        SyncPiecesRequest {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            interested_piece_numbers: interested_pieces
+                                .iter()
+                                .map(|piece| piece.number)
+                                .collect(),
+                        },
+                        collected_piece_timeout,
+                    )
                     .await
                     .inspect_err(|err| {
                         error!("sync pieces from parent {} failed: {}", parent.id, err);
@@ -467,14 +471,17 @@ impl PersistentCachePieceCollector {
                 })?;
 
                 let response = dfdaemon_upload_client
-                    .sync_persistent_cache_pieces(SyncPersistentCachePiecesRequest {
-                        host_id: host_id.to_string(),
-                        task_id: task_id.to_string(),
-                        interested_piece_numbers: interested_pieces
-                            .iter()
-                            .map(|piece| piece.number)
-                            .collect(),
-                    })
+                    .sync_persistent_cache_pieces(
+                        SyncPersistentCachePiecesRequest {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            interested_piece_numbers: interested_pieces
+                                .iter()
+                                .map(|piece| piece.number)
+                                .collect(),
+                        },
+                        collected_piece_timeout,
+                    )
                     .await
                     .inspect_err(|err| {
                         error!(
