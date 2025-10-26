@@ -149,13 +149,13 @@ fn default_download_rate_limit() -> ByteSize {
 /// default_download_piece_timeout is the default timeout for downloading a piece from source.
 #[inline]
 fn default_download_piece_timeout() -> Duration {
-    Duration::from_secs(120)
+    Duration::from_secs(300)
 }
 
 /// default_collected_download_piece_timeout is the default timeout for collecting one piece from the parent in the stream.
 #[inline]
 fn default_collected_download_piece_timeout() -> Duration {
-    Duration::from_secs(10)
+    Duration::from_secs(300)
 }
 
 /// default_download_concurrent_piece_count is the default number of concurrent pieces to download.
@@ -216,7 +216,7 @@ fn default_storage_keep() -> bool {
 /// or cache).
 #[inline]
 fn default_storage_write_piece_timeout() -> Duration {
-    Duration::from_secs(90)
+    Duration::from_secs(300)
 }
 
 /// default_storage_write_buffer_size is the default buffer size for writing piece to disk, default is 4MB.
