@@ -99,15 +99,15 @@ impl<T> Entry<T> {
 
 /// Factory trait for creating new clients.
 #[tonic::async_trait]
-pub trait Factory<K, T> {
+pub trait Factory<A, T> {
     type Error;
 
     /// Create a new client for the given key.
-    async fn make_client(&self, key: &K) -> Result<T, Self::Error>;
+    async fn make_client(&self, addr: &A) -> Result<T, Self::Error>;
 }
 
 /// Generic client pool for managing reusable clients with automatic cleanup.
-pub struct Pool<K, T, F> {
+pub struct Pool<K, A, T, F> {
     /// factory is the factory for creating new clients.
     factory: F,
 
@@ -124,22 +124,25 @@ pub struct Pool<K, T, F> {
 
     /// cleanup_at is the time when the client is the last cleanup time.
     cleanup_at: Arc<Mutex<Instant>>,
+
+    /// _phantom is the phantom data for the generic types.
+    _phantom: PhantomData<A>,
 }
 
 /// Builder for creating a client pool.
-pub struct Builder<K, T, F> {
+pub struct Builder<K, A, T, F> {
     factory: F,
     capacity: usize,
     idle_timeout: Duration,
-    _phantom: PhantomData<(K, T)>,
+    _phantom: PhantomData<(K, A, T)>,
 }
 
 /// Builder methods for configuring and building the pool.
-impl<K, T, F> Builder<K, T, F>
+impl<K, A, T, F> Builder<K, A, T, F>
 where
     K: Clone + Eq + Hash + std::fmt::Display,
     T: Clone,
-    F: Factory<K, T>,
+    F: Factory<A, T>,
 {
     /// Create a new client pool builder.
     pub fn new(factory: F) -> Self {
@@ -164,13 +167,14 @@ where
     }
 
     /// Build the client pool.
-    pub fn build(self) -> Pool<K, T, F> {
+    pub fn build(self) -> Pool<K, A, T, F> {
         Pool {
             factory: self.factory,
             clients: Arc::new(Mutex::new(HashMap::new())),
             capacity: self.capacity,
             idle_timeout: self.idle_timeout,
             cleanup_at: Arc::new(Mutex::new(Instant::now())),
+            _phantom: PhantomData,
         }
     }
 }
@@ -183,14 +187,15 @@ where
 /// - Automatic Cleanup: Periodically remove idle clients that exceed timeout thresholds.
 /// - Capacity Control: Limit maximum client count to prevent resource exhaustion.
 /// - Thread Safety: Use async locks and atomic operations for high-concurrency access.
-impl<K, T, F> Pool<K, T, F>
+impl<K, A, T, F> Pool<K, A, T, F>
 where
     K: Clone + Eq + Hash + std::fmt::Display,
+    A: Clone + Eq + std::fmt::Display,
     T: Clone,
-    F: Factory<K, T>,
+    F: Factory<A, T>,
 {
     /// Get or create a client entry for the given key.
-    pub async fn entry(&self, key: &K) -> Result<Entry<T>, F::Error> {
+    pub async fn entry(&self, key: &K, addr: &A) -> Result<Entry<T>, F::Error> {
         // Cleanup idle clients first.
         self.cleanup_idle_entries().await;
 
@@ -206,7 +211,7 @@ where
 
         // Create new client.
         debug!("creating client: {}", key);
-        let client = self.factory.make_client(key).await?;
+        let client = self.factory.make_client(addr).await?;
         let mut clients = self.clients.lock().await;
         let entry = clients.entry(key.clone()).or_insert(Entry::new(client));
         entry.set_actived_at(Instant::now());

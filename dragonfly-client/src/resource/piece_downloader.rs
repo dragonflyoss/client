@@ -122,11 +122,14 @@ pub struct GRPCDownloader {
     config: Arc<Config>,
 
     /// client_pool is the pool of the dfdaemon upload clients.
-    client_pool: Pool<String, DfdaemonUploadClient, DfdaemonUploadClientFactory>,
+    client_pool: Pool<String, String, DfdaemonUploadClient, DfdaemonUploadClientFactory>,
 }
 
 /// GRPCDownloader implements the downloader with the gRPC protocol.
 impl GRPCDownloader {
+    /// MAX_CONNECTIONS_PER_ADDRESS is the maximum number of connections per address.
+    const MAX_CONNECTIONS_PER_ADDRESS: usize = 16;
+
     /// new returns a new GRPCDownloader.
     pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
         Self {
@@ -139,13 +142,28 @@ impl GRPCDownloader {
     }
 
     /// get_client_entry returns a client entry by the address.
-    async fn get_client_entry(&self, addr: &str) -> Result<Entry<DfdaemonUploadClient>> {
-        self.client_pool.entry(&addr.to_string()).await
+    async fn get_client_entry(
+        &self,
+        key: String,
+        addr: String,
+    ) -> Result<Entry<DfdaemonUploadClient>> {
+        self.client_pool.entry(&key, &addr).await
     }
 
     /// remove_client_entry removes the client if it is idle.
-    async fn remove_client_entry(&self, addr: &str) {
-        self.client_pool.remove_entry(&addr.to_string()).await;
+    async fn remove_client_entry(&self, key: String) {
+        self.client_pool.remove_entry(&key).await;
+    }
+
+    /// get_entry_key generates a semi-random key by combining the client address with
+    /// a random number. The randomization helps distribute connections across multiple
+    /// slots when the same address attempts to establish multiple concurrent connections.
+    fn get_entry_key(&self, addr: &str) -> String {
+        format!(
+            "{}-{}",
+            addr,
+            fastrand::usize(..Self::MAX_CONNECTIONS_PER_ADDRESS)
+        )
     }
 }
 
@@ -161,7 +179,8 @@ impl Downloader for GRPCDownloader {
         host_id: &str,
         task_id: &str,
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
-        let entry = self.get_client_entry(addr).await?;
+        let key = self.get_entry_key(addr);
+        let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
         let request_guard = entry.request_guard();
 
         let response = match entry
@@ -181,7 +200,7 @@ impl Downloader for GRPCDownloader {
                 // If the request fails, it will drop the request guard and remove the client
                 // entry to avoid using the invalid client.
                 drop(request_guard);
-                self.remove_client_entry(addr).await;
+                self.remove_client_entry(key).await;
                 return Err(err);
             }
         };
@@ -229,7 +248,8 @@ impl Downloader for GRPCDownloader {
         host_id: &str,
         task_id: &str,
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
-        let entry = self.get_client_entry(addr).await?;
+        let key = self.get_entry_key(addr);
+        let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
         let request_guard = entry.request_guard();
 
         let response = match entry
@@ -249,7 +269,7 @@ impl Downloader for GRPCDownloader {
                 // If the request fails, it will drop the request guard and remove the client
                 // entry to avoid using the invalid client.
                 drop(request_guard);
-                self.remove_client_entry(addr).await;
+                self.remove_client_entry(key).await;
                 return Err(err);
             }
         };
@@ -293,7 +313,7 @@ impl Downloader for GRPCDownloader {
 /// peer's address.
 pub struct QUICDownloader {
     /// client_pool is the pool of the quic clients.
-    client_pool: Pool<String, QUICClient, QUICClientFactory>,
+    client_pool: Pool<String, String, QUICClient, QUICClientFactory>,
 }
 
 /// Factory for creating QUICClient instances.
@@ -314,6 +334,9 @@ impl Factory<String, QUICClient> for QUICClientFactory {
 
 /// QUICDownloader implements the downloader with the QUIC protocol.
 impl QUICDownloader {
+    /// MAX_CONNECTIONS_PER_ADDRESS is the maximum number of connections per address.
+    const MAX_CONNECTIONS_PER_ADDRESS: usize = 16;
+
     /// new returns a new QUICDownloader.
     pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
         Self {
@@ -327,13 +350,23 @@ impl QUICDownloader {
     }
 
     /// get_client_entry returns a client entry by the address.
-    async fn get_client_entry(&self, addr: &str) -> Result<Entry<QUICClient>> {
-        self.client_pool.entry(&addr.to_string()).await
+    async fn get_client_entry(&self, key: String, addr: String) -> Result<Entry<QUICClient>> {
+        self.client_pool.entry(&key, &addr).await
     }
 
     /// remove_client_entry removes the client if it is idle.
-    async fn remove_client_entry(&self, addr: &str) {
-        self.client_pool.remove_entry(&addr.to_string()).await;
+    async fn remove_client_entry(&self, key: String) {
+        self.client_pool.remove_entry(&key).await;
+    }
+    /// get_entry_key generates a semi-random key by combining the client address with
+    /// a random number. The randomization helps distribute connections across multiple
+    /// slots when the same address attempts to establish multiple concurrent connections.
+    fn get_entry_key(&self, addr: &str) -> String {
+        format!(
+            "{}-{}",
+            addr,
+            fastrand::usize(..Self::MAX_CONNECTIONS_PER_ADDRESS)
+        )
     }
 }
 
@@ -349,7 +382,8 @@ impl Downloader for QUICDownloader {
         _host_id: &str,
         task_id: &str,
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
-        let entry = self.get_client_entry(addr).await?;
+        let key = self.get_entry_key(addr);
+        let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
         let request_guard = entry.request_guard();
 
         match entry.client.download_piece(number, task_id).await {
@@ -358,7 +392,7 @@ impl Downloader for QUICDownloader {
                 // If the request fails, it will drop the request guard and remove the client
                 // entry to avoid using the invalid client.
                 drop(request_guard);
-                self.remove_client_entry(addr).await;
+                self.remove_client_entry(key).await;
                 Err(err)
             }
         }
@@ -374,7 +408,8 @@ impl Downloader for QUICDownloader {
         _host_id: &str,
         task_id: &str,
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
-        let entry = self.get_client_entry(addr).await?;
+        let key = self.get_entry_key(addr);
+        let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
         let request_guard = entry.request_guard();
 
         match entry
@@ -387,7 +422,7 @@ impl Downloader for QUICDownloader {
                 // If the request fails, it will drop the request guard and remove the client
                 // entry to avoid using the invalid client.
                 drop(request_guard);
-                self.remove_client_entry(addr).await;
+                self.remove_client_entry(key).await;
                 Err(err)
             }
         }
@@ -399,7 +434,7 @@ impl Downloader for QUICDownloader {
 /// peer's address.
 pub struct TCPDownloader {
     /// client_pool is the pool of the tcp clients.
-    client_pool: Pool<String, TCPClient, TCPClientFactory>,
+    client_pool: Pool<String, String, TCPClient, TCPClientFactory>,
 }
 
 /// Factory for creating TCPClient instances.
@@ -420,6 +455,9 @@ impl Factory<String, TCPClient> for TCPClientFactory {
 
 /// TCPDownloader implements the downloader with the TCP protocol.
 impl TCPDownloader {
+    /// MAX_CONNECTIONS_PER_ADDRESS is the maximum number of connections per address.
+    const MAX_CONNECTIONS_PER_ADDRESS: usize = 16;
+
     /// new returns a new TCPDownloader.
     pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
         Self {
@@ -433,13 +471,24 @@ impl TCPDownloader {
     }
 
     /// get_client_entry returns a client entry by the address.
-    async fn get_client_entry(&self, addr: &str) -> Result<Entry<TCPClient>> {
-        self.client_pool.entry(&addr.to_string()).await
+    async fn get_client_entry(&self, key: String, addr: String) -> Result<Entry<TCPClient>> {
+        self.client_pool.entry(&key, &addr).await
     }
 
     /// remove_client_entry removes the client if it is idle.
-    async fn remove_client_entry(&self, addr: &str) {
-        self.client_pool.remove_entry(&addr.to_string()).await;
+    async fn remove_client_entry(&self, key: String) {
+        self.client_pool.remove_entry(&key).await;
+    }
+
+    /// get_entry_key generates a semi-random key by combining the client address with
+    /// a random number. The randomization helps distribute connections across multiple
+    /// slots when the same address attempts to establish multiple concurrent connections.
+    fn get_entry_key(&self, addr: &str) -> String {
+        format!(
+            "{}-{}",
+            addr,
+            fastrand::usize(..Self::MAX_CONNECTIONS_PER_ADDRESS)
+        )
     }
 }
 
@@ -455,7 +504,8 @@ impl Downloader for TCPDownloader {
         _host_id: &str,
         task_id: &str,
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
-        let entry = self.get_client_entry(addr).await?;
+        let key = self.get_entry_key(addr);
+        let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
         let request_guard = entry.request_guard();
 
         match entry.client.download_piece(number, task_id).await {
@@ -464,7 +514,7 @@ impl Downloader for TCPDownloader {
                 // If the request fails, it will drop the request guard and remove the client
                 // entry to avoid using the invalid client.
                 drop(request_guard);
-                self.remove_client_entry(addr).await;
+                self.remove_client_entry(key).await;
                 Err(err)
             }
         }
@@ -480,7 +530,8 @@ impl Downloader for TCPDownloader {
         _host_id: &str,
         task_id: &str,
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
-        let entry = self.get_client_entry(addr).await?;
+        let key = self.get_entry_key(addr);
+        let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
         let request_guard = entry.request_guard();
 
         match entry
@@ -493,7 +544,7 @@ impl Downloader for TCPDownloader {
                 // If the request fails, it will drop the request guard and remove the client
                 // entry to avoid using the invalid client.
                 drop(request_guard);
-                self.remove_client_entry(addr).await;
+                self.remove_client_entry(key).await;
                 Err(err)
             }
         }
