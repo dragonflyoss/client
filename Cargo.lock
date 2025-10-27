@@ -1103,9 +1103,11 @@ dependencies = [
 name = "dragonfly-client-backend"
 version = "1.0.35"
 dependencies = [
+ "dashmap",
  "dragonfly-api",
  "dragonfly-client-core",
  "dragonfly-client-util",
+ "fastrand",
  "futures",
  "hyper 1.6.0",
  "hyper-util",

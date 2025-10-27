@@ -26,6 +26,8 @@ opendal.workspace = true
 percent-encoding.workspace = true
 futures.workspace = true
 reqwest-tracing.workspace = true
+fastrand.workspace = true
+dashmap.workspace = true
 reqwest-retry = "0.7"
 libloading = "0.8.9"
 
