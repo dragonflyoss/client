@@ -160,15 +160,13 @@ impl HTTP {
                 Ok(client)
             }
             // Default TLS client config with no validation.
-            None => {
-                match self
-                    .clients
-                    .entry(fastrand::usize(0..Self::MAX_CONNECTIONS_PER_ADDRESS))
-                {
-                    Entry::Occupied(o) => Ok(o.get().clone()),
-                    Entry::Vacant(_) => Err(Error::Unknown("reqwest client not found".to_string())),
-                }
-            }
+            None => match self
+                .clients
+                .entry(fastrand::usize(..Self::MAX_CONNECTIONS_PER_ADDRESS))
+            {
+                Entry::Occupied(o) => Ok(o.get().clone()),
+                Entry::Vacant(_) => Err(Error::Unknown("reqwest client not found".to_string())),
+            },
         }
     }
 }

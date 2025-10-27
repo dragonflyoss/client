@@ -20,10 +20,10 @@ pub mod tcp;
 use std::time::Duration;
 
 /// DEFAULT_SEND_BUFFER_SIZE is the default size of the send buffer for network connections.
-const DEFAULT_SEND_BUFFER_SIZE: usize = 16 * 1024 * 1024;
+const DEFAULT_SEND_BUFFER_SIZE: usize = 32 * 1024 * 1024;
 
 /// DEFAULT_RECV_BUFFER_SIZE is the default size of the receive buffer for network connections.
-const DEFAULT_RECV_BUFFER_SIZE: usize = 16 * 1024 * 1024;
+const DEFAULT_RECV_BUFFER_SIZE: usize = 32 * 1024 * 1024;
 
 /// DEFAULT_KEEPALIVE_INTERVAL is the default interval for sending keepalive messages.
 const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
