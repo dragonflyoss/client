@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use dashmap::{mapref::entry::Entry, DashMap};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::tls::NoVerifier;
 use futures::TryStreamExt;
@@ -22,6 +23,7 @@ use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use reqwest_tracing::TracingMiddleware;
 use rustls_pki_types::CertificateDer;
 use std::io::{Error as IOError, ErrorKind};
+use std::sync::Arc;
 use tokio_util::io::StreamReader;
 use tracing::{debug, error, info, instrument};
 
@@ -36,20 +38,17 @@ pub struct HTTP {
     /// scheme is the scheme of the HTTP backend.
     scheme: String,
 
-    /// client is the reqwest client.
-    client: ClientWithMiddleware,
+    /// clients is a pool of reqwest clients (each has its own connection pool).
+    clients: Arc<DashMap<usize, ClientWithMiddleware>>,
 }
 
 /// HTTP implements the http interface.
 impl HTTP {
+    /// MAX_CONNECTIONS_PER_ADDRESS is the maximum number of connections per address.
+    const MAX_CONNECTIONS_PER_ADDRESS: usize = 16;
+
     /// new returns a new HTTP.
     pub fn new(scheme: &str) -> Result<HTTP> {
-        // Default TLS client config with no validation.
-        let client_config_builder = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(NoVerifier::new())
-            .with_no_client_auth();
-
         // Disable automatic compression to prevent double-decompression issues.
         //
         // Problem scenario:
@@ -61,34 +60,51 @@ impl HTTP {
         //
         // Solution: Disable all compression formats (gzip, brotli, zstd, deflate) to ensure
         // we receive and store uncompressed content, eliminating the double-decompression issue.
-        let client = reqwest::Client::builder()
-            .no_gzip()
-            .no_brotli()
-            .no_zstd()
-            .no_deflate()
-            .hickory_dns(true)
-            .use_preconfigured_tls(client_config_builder)
-            .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
-            .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
-            .tcp_nodelay(true)
-            .http2_adaptive_window(true)
-            .http2_initial_stream_window_size(Some(super::HTTP2_STREAM_WINDOW_SIZE))
-            .http2_initial_connection_window_size(Some(super::HTTP2_CONNECTION_WINDOW_SIZE))
-            .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
-            .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
-            .http2_keep_alive_while_idle(true)
-            .build()?;
+        let make_reqwest_client = || -> Result<ClientWithMiddleware> {
+            // Default TLS client config with no validation.
+            let client_config_builder = rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(NoVerifier::new())
+                .with_no_client_auth();
 
-        let retry_policy =
-            ExponentialBackoff::builder().build_with_max_retries(super::MAX_RETRY_TIMES);
-        let client = ClientBuilder::new(client)
-            .with(TracingMiddleware::default())
-            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-            .build();
+            let client = reqwest::Client::builder()
+                // Disable automatic compression to prevent double-decompression issues.
+                .no_gzip()
+                .no_brotli()
+                .no_zstd()
+                .no_deflate()
+                .hickory_dns(true)
+                .use_preconfigured_tls(client_config_builder)
+                .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
+                .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
+                .tcp_nodelay(true)
+                .http2_adaptive_window(true)
+                .http2_initial_stream_window_size(Some(super::HTTP2_STREAM_WINDOW_SIZE))
+                .http2_initial_connection_window_size(Some(super::HTTP2_CONNECTION_WINDOW_SIZE))
+                .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+                .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                .http2_keep_alive_while_idle(true)
+                .build()?;
+
+            let retry_policy =
+                ExponentialBackoff::builder().build_with_max_retries(super::MAX_RETRY_TIMES);
+            let client = ClientBuilder::new(client)
+                .with(TracingMiddleware::default())
+                .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+                .build();
+
+            Ok(client)
+        };
+
+        let clients = DashMap::with_capacity(Self::MAX_CONNECTIONS_PER_ADDRESS);
+        for i in 0..Self::MAX_CONNECTIONS_PER_ADDRESS {
+            let client = make_reqwest_client()?;
+            clients.insert(i, client);
+        }
 
         Ok(Self {
             scheme: scheme.to_string(),
-            client,
+            clients: Arc::new(clients),
         })
     }
 
@@ -144,7 +160,15 @@ impl HTTP {
                 Ok(client)
             }
             // Default TLS client config with no validation.
-            None => Ok(self.client.clone()),
+            None => {
+                match self
+                    .clients
+                    .entry(fastrand::usize(0..Self::MAX_CONNECTIONS_PER_ADDRESS))
+                {
+                    Entry::Occupied(o) => Ok(o.get().clone()),
+                    Entry::Vacant(_) => Err(Error::Unknown("reqwest client not found".to_string())),
+                }
+            }
         }
     }
 }

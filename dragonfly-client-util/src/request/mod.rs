@@ -322,7 +322,7 @@ pub struct Proxy {
     max_retries: u8,
 
     /// client_pool is the pool of clients.
-    client_pool: Pool<String, ClientWithMiddleware, HTTPClientFactory>,
+    client_pool: Pool<String, String, ClientWithMiddleware, HTTPClientFactory>,
 
     /// id_generator is the task id generator.
     id_generator: Arc<IDGenerator>,
@@ -451,10 +451,8 @@ impl Proxy {
         let mut client_entries = Vec::with_capacity(seed_peers.len());
         for peer in seed_peers.iter() {
             // TODO(chlins): Support client https scheme.
-            let client_entry = self
-                .client_pool
-                .entry(&format!("http://{}:{}", peer.ip, peer.proxy_port))
-                .await?;
+            let addr = format!("http://{}:{}", peer.ip, peer.proxy_port);
+            let client_entry = self.client_pool.entry(&addr, &addr).await?;
             client_entries.push(client_entry);
         }
 
@@ -707,15 +705,17 @@ mod tests {
         assert_eq!(pool.size().await, 0);
 
         // Get a client for the first time. A new client should be created.
-        let _ = pool.entry(&"http://proxy1.com".to_string()).await.unwrap();
+        let addr = "http://proxy1.com".to_string();
+        let _ = pool.entry(&addr, &addr).await.unwrap();
         assert_eq!(pool.size().await, 1);
 
         // Get a client for the same proxy again. It should be reused, so the count remains 1.
-        let _ = pool.entry(&"http://proxy1.com".to_string()).await.unwrap();
+        let _ = pool.entry(&addr, &addr).await.unwrap();
         assert_eq!(pool.size().await, 1);
 
         // Get a client for a different proxy. A new client should be created, so the count becomes 2.
-        let _ = pool.entry(&"http://proxy2.com".to_string()).await.unwrap();
+        let addr = "http://proxy2.com".to_string();
+        let _ = pool.entry(&addr, &addr).await.unwrap();
         assert_eq!(pool.size().await, 2);
     }
 
@@ -727,14 +727,16 @@ mod tests {
             .build();
 
         // Create a client.
-        let _ = pool.entry(&"http://proxy1.com".to_string()).await.unwrap();
+        let addr = "http://proxy1.com".to_string();
+        let _ = pool.entry(&addr, &addr).await.unwrap();
         assert_eq!(pool.size().await, 1);
 
         // Wait for cleanup above client.
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Create another client.
-        let _ = pool.entry(&"http://proxy2.com".to_string()).await.unwrap();
+        let addr = "http://proxy2.com".to_string();
+        let _ = pool.entry(&addr, &addr).await.unwrap();
 
         // Still should be 1 because the proxy1 client should have been cleaned up.
         assert_eq!(pool.size().await, 1);
