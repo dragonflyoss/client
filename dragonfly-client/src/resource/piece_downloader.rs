@@ -128,7 +128,7 @@ pub struct GRPCDownloader {
 /// GRPCDownloader implements the downloader with the gRPC protocol.
 impl GRPCDownloader {
     /// MAX_CONNECTIONS_PER_ADDRESS is the maximum number of connections per address.
-    const MAX_CONNECTIONS_PER_ADDRESS: usize = 16;
+    const MAX_CONNECTIONS_PER_ADDRESS: usize = 32;
 
     /// new returns a new GRPCDownloader.
     pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
@@ -335,7 +335,7 @@ impl Factory<String, QUICClient> for QUICClientFactory {
 /// QUICDownloader implements the downloader with the QUIC protocol.
 impl QUICDownloader {
     /// MAX_CONNECTIONS_PER_ADDRESS is the maximum number of connections per address.
-    const MAX_CONNECTIONS_PER_ADDRESS: usize = 16;
+    const MAX_CONNECTIONS_PER_ADDRESS: usize = 32;
 
     /// new returns a new QUICDownloader.
     pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
@@ -456,7 +456,7 @@ impl Factory<String, TCPClient> for TCPClientFactory {
 /// TCPDownloader implements the downloader with the TCP protocol.
 impl TCPDownloader {
     /// MAX_CONNECTIONS_PER_ADDRESS is the maximum number of connections per address.
-    const MAX_CONNECTIONS_PER_ADDRESS: usize = 16;
+    const MAX_CONNECTIONS_PER_ADDRESS: usize = 32;
 
     /// new returns a new TCPDownloader.
     pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
