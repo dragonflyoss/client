@@ -45,7 +45,7 @@ pub struct HTTP {
 /// HTTP implements the http interface.
 impl HTTP {
     /// MAX_CONNECTIONS_PER_ADDRESS is the maximum number of connections per address.
-    const MAX_CONNECTIONS_PER_ADDRESS: usize = 16;
+    const MAX_CONNECTIONS_PER_ADDRESS: usize = 32;
 
     /// new returns a new HTTP.
     pub fn new(scheme: &str) -> Result<HTTP> {
@@ -78,12 +78,13 @@ impl HTTP {
                 .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
                 .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
                 .tcp_nodelay(true)
-                .http2_adaptive_window(true)
+                .http2_adaptive_window(false)
                 .http2_initial_stream_window_size(Some(super::HTTP2_STREAM_WINDOW_SIZE))
                 .http2_initial_connection_window_size(Some(super::HTTP2_CONNECTION_WINDOW_SIZE))
                 .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
                 .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
                 .http2_keep_alive_while_idle(true)
+                .http2_max_frame_size(Some(super::HTTP2_MAX_FRAME_SIZE))
                 .build()?;
 
             let retry_policy =
