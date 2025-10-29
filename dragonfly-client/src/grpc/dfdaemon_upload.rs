@@ -889,6 +889,21 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
+                let Ok(Some(_)) = task_manager.get(task_id.as_str()) else {
+                    error!("get task {} not found", task_id);
+                    out_stream_tx
+                        .send_timeout(
+                            Err(Status::internal(format!("task {} not found", task_id))),
+                            super::REQUEST_TIMEOUT,
+                        )
+                        .await
+                        .unwrap_or_else(|err| {
+                            error!("send task {} not found to stream: {}", task_id, err);
+                        });
+
+                    return;
+                };
+
                 loop {
                     let mut finished_piece_numbers = Vec::new();
                     for interested_piece_number in interested_piece_numbers.iter() {
@@ -1598,8 +1613,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Get the interested piece numbers from the request.
         let mut interested_piece_numbers = request.interested_piece_numbers.clone();
 
-        // Clone the task.
-        let task_manager = self.task.clone();
+        // Clone the persistent cache task.
+        let persistent_cache_task_manager = self.persistent_cache_task.clone();
 
         // Get the download server info from the config.
         let download_ip = self.config.host.ip.unwrap().to_string();
@@ -1610,11 +1625,26 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
+                let Ok(Some(_)) = persistent_cache_task_manager.get(task_id.as_str()) else {
+                    error!("get persistent cache task {} not found", task_id);
+                    out_stream_tx
+                        .send_timeout(
+                            Err(Status::internal(format!("task {} not found", task_id))),
+                            super::REQUEST_TIMEOUT,
+                        )
+                        .await
+                        .unwrap_or_else(|err| {
+                            error!("send persistent cache task {} not found to stream: {}", task_id, err);
+                        });
+
+                    return;
+                };
+
                 loop {
                     let mut finished_piece_numbers = Vec::new();
                     for interested_piece_number in interested_piece_numbers.iter() {
-                        let piece = match task_manager.piece.get(
-                            task_manager
+                        let piece = match persistent_cache_task_manager.piece.get(
+                            persistent_cache_task_manager
                                 .piece
                                 .persistent_cache_id(task_id.as_str(), *interested_piece_number)
                                 .as_str(),
