@@ -4,7 +4,7 @@ This is a reference benchmark process document designed to
 assist in performance analysis and optimization for **client**.
 This document provides as general a testing framework as possible,
 allowing developers with needs to adjust it
-according to their specific circumstances across various platform.
+according to their specific circumstances across various platforms.
 
 ## Flow
 
