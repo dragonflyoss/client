@@ -103,7 +103,7 @@ jobs:
           echo "CLIENT_TAR_ASSET=$dirname.tar.gz" >> $GITHUB_ENV
 
       - name: Upload Release Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: release-${{ matrix.target }}
           path: |
