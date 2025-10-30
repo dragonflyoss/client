@@ -2071,6 +2071,16 @@ impl DfdaemonUploadClient {
         Ok(response)
     }
 
+    /// download_cache_piece provides the cache piece content for parent.
+    #[instrument(skip_all)]
+    pub async fn download_cache_piece(
+        &self,
+        _request: DownloadCachePieceRequest,
+        _timeout: Duration,
+    ) -> ClientResult<DownloadCachePieceResponse> {
+        todo!();
+    }
+
     /// download_persistent_cache_task downloads the persistent cache task.
     #[instrument(skip_all)]
     pub async fn download_persistent_cache_task(
