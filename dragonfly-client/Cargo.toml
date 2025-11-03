@@ -75,7 +75,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chron
 tracing-panic = "0.1.2"
 tracing-opentelemetry = "0.30.0"
 opentelemetry = { version = "0.29.1", default-features = false, features = ["trace"] }
-opentelemetry-otlp = { version = "0.29.0", default-features = false, features = ["trace", "grpc-tonic", "http-proto", "reqwest-blocking-client"] }
+opentelemetry-otlp = { version = "0.31.0", default-features = false, features = ["trace", "grpc-tonic", "http-proto", "reqwest-blocking-client"] }
 opentelemetry_sdk = { version = "0.29.0", default-features = false, features = ["trace", "rt-tokio"] }
 opentelemetry-semantic-conventions = { version = "0.31.0", features = ["semconv_experimental"] }
 rolling-file = "0.2.0"
