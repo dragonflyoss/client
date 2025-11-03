@@ -122,6 +122,13 @@ impl Task {
     pub fn content_length(&self) -> Option<u64> {
         self.content_length
     }
+
+    /// piece_count returns the piece count of the task.
+    pub fn piece_count(&self) -> Option<u64> {
+        self.content_length()
+            .zip(self.piece_length())
+            .map(|(content_length, piece_length)| content_length.div_ceil(piece_length))
+    }
 }
 
 /// PersistentCacheTask is the metadata of the persistent cache task.
@@ -215,6 +222,11 @@ impl PersistentCacheTask {
     /// content_length returns the content length of the persistent cache task.
     pub fn content_length(&self) -> u64 {
         self.content_length
+    }
+
+    /// piece_count returns the piece count of the persistent cache task.
+    pub fn piece_count(&self) -> u64 {
+        self.content_length.div_ceil(self.piece_length)
     }
 }
 
@@ -310,6 +322,13 @@ impl CacheTask {
     /// content_length returns the content length of the cache task.
     pub fn content_length(&self) -> Option<u64> {
         self.content_length
+    }
+
+    /// piece_count returns the piece count of the cache task.
+    pub fn piece_count(&self) -> Option<u64> {
+        self.content_length()
+            .zip(self.piece_length())
+            .map(|(content_length, piece_length)| content_length.div_ceil(piece_length))
     }
 }
 
@@ -421,13 +440,49 @@ where
 }
 
 impl<E: StorageEngineOwned> Metadata<E> {
+    /// prepare_download_task prepares the metadata of the download task.
+    #[instrument(skip_all)]
+    pub fn prepare_download_task(&self, id: &str) -> Result<(Task, bool)> {
+        let task = match self.db.get::<Task>(id.as_bytes())? {
+            Some(mut task) => {
+                // Reuse existing task if all conditions are met:
+                // 1. Content length is defined.
+                // 2. Piece length is defined.
+                // 3. Task status is not failed.
+                if task.content_length().is_some()
+                    && task.piece_length().is_some()
+                    && !task.is_failed()
+                {
+                    return Ok((task, true));
+                } else {
+                    // If reuse conditions are not met, update metadata and retry with HEAD request.
+                    task.updated_at = Utc::now().naive_utc();
+                    task.failed_at = None;
+                    task
+                }
+            }
+            None => {
+                // If the task does not exist, create a new task.
+                Task {
+                    id: id.to_string(),
+                    updated_at: Utc::now().naive_utc(),
+                    created_at: Utc::now().naive_utc(),
+                    ..Default::default()
+                }
+            }
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok((task, false))
+    }
+
     /// download_task_started updates the metadata of the task when the task downloads started.
     #[instrument(skip_all)]
     pub fn download_task_started(
         &self,
         id: &str,
-        piece_length: Option<u64>,
-        content_length: Option<u64>,
+        piece_length: u64,
+        content_length: u64,
         response_header: Option<HeaderMap>,
     ) -> Result<Task> {
         // Convert the response header to hashmap.
@@ -441,29 +496,15 @@ impl<E: StorageEngineOwned> Metadata<E> {
                 // If the task exists, update the task metadata.
                 task.updated_at = Utc::now().naive_utc();
                 task.failed_at = None;
-
-                // Protect content length to be overwritten by None.
-                if content_length.is_some() {
-                    task.content_length = content_length;
-                }
-
-                // Protect piece length to be overwritten by None.
-                if piece_length.is_some() {
-                    task.piece_length = piece_length;
-                }
-
-                // If the task has the response header, the response header
-                // will not be covered.
-                if task.response_header.is_empty() {
-                    task.response_header = response_header;
-                }
-
+                task.content_length = Some(content_length);
+                task.piece_length = Some(piece_length);
+                task.response_header = response_header;
                 task
             }
             None => Task {
                 id: id.to_string(),
-                piece_length,
-                content_length,
+                piece_length: Some(piece_length),
+                content_length: Some(content_length),
                 response_header,
                 updated_at: Utc::now().naive_utc(),
                 created_at: Utc::now().naive_utc(),
@@ -853,8 +894,8 @@ impl<E: StorageEngineOwned> Metadata<E> {
     pub fn download_cache_task_started(
         &self,
         id: &str,
-        piece_length: Option<u64>,
-        content_length: Option<u64>,
+        piece_length: u64,
+        content_length: u64,
         response_header: Option<HeaderMap>,
     ) -> Result<CacheTask> {
         // Convert the response header to hashmap.
@@ -868,29 +909,15 @@ impl<E: StorageEngineOwned> Metadata<E> {
                 // If the task exists, update the task metadata.
                 task.updated_at = Utc::now().naive_utc();
                 task.failed_at = None;
-
-                // Protect content length to be overwritten by None.
-                if content_length.is_some() {
-                    task.content_length = content_length;
-                }
-
-                // Protect piece length to be overwritten by None.
-                if piece_length.is_some() {
-                    task.piece_length = piece_length;
-                }
-
-                // If the task has the response header, the response header
-                // will not be covered.
-                if task.response_header.is_empty() {
-                    task.response_header = response_header;
-                }
-
+                task.content_length = Some(content_length);
+                task.piece_length = Some(piece_length);
+                task.response_header = response_header;
                 task
             }
             None => CacheTask {
                 id: id.to_string(),
-                piece_length,
-                content_length,
+                piece_length: Some(piece_length),
+                content_length: Some(content_length),
                 response_header,
                 updated_at: Utc::now().naive_utc(),
                 created_at: Utc::now().naive_utc(),
@@ -1283,7 +1310,7 @@ mod tests {
 
         // Test download_task_started.
         metadata
-            .download_task_started(task_id, Some(1024), Some(1024), None)
+            .download_task_started(task_id, 1024, 1024, None)
             .unwrap();
         let task = metadata
             .get_task(task_id)
@@ -1323,7 +1350,7 @@ mod tests {
         // Test get_tasks.
         let task_id = "a535b115f18d96870f0422ac891f91dd162f2f391e4778fb84279701fcd02dd1";
         metadata
-            .download_task_started(task_id, Some(1024), None, None)
+            .download_task_started(task_id, 1024, 0, None)
             .unwrap();
         let tasks = metadata.get_tasks().unwrap();
         assert_eq!(tasks.len(), 2);
@@ -1343,7 +1370,7 @@ mod tests {
 
         // Test download_task_started.
         metadata
-            .download_cache_task_started(task_id, Some(1024), Some(1024), None)
+            .download_cache_task_started(task_id, 1024, 1024, None)
             .unwrap();
         let task = metadata
             .get_cache_task(task_id)
@@ -1383,7 +1410,7 @@ mod tests {
         // Test get_cache_tasks.
         let task_id = "a535b115f18d96870f0422ac891f91dd162f2f391e4778fb84279701fcd02dd1";
         metadata
-            .download_cache_task_started(task_id, Some(1024), None, None)
+            .download_cache_task_started(task_id, 1024, 0, None)
             .unwrap();
         let tasks = metadata.get_cache_tasks().unwrap();
         assert_eq!(tasks.len(), 2);

@@ -112,10 +112,10 @@ impl Storage {
         self.content.is_same_dev_inode_as_task(id, to).await
     }
 
-    /// prepare_download_task_started prepares the metadata of the task when the task downloads
+    /// prepare_download_task prepares the metadata of the task when the task downloads
     /// started.
-    pub async fn prepare_download_task_started(&self, id: &str) -> Result<metadata::Task> {
-        self.metadata.download_task_started(id, None, None, None)
+    pub fn prepare_download_task(&self, id: &str) -> Result<(metadata::Task, bool)> {
+        self.metadata.prepare_download_task(id)
     }
 
     /// download_task_started updates the metadata of the task and create task content
@@ -130,12 +130,8 @@ impl Storage {
     ) -> Result<metadata::Task> {
         self.content.create_task(id, content_length).await?;
 
-        self.metadata.download_task_started(
-            id,
-            Some(piece_length),
-            Some(content_length),
-            response_header,
-        )
+        self.metadata
+            .download_task_started(id, piece_length, content_length, response_header)
     }
 
     /// download_task_finished updates the metadata of the task when the task downloads finished.
@@ -374,16 +370,6 @@ impl Storage {
             });
     }
 
-    /// prepare_download_cache_task_started prepares the metadata of the cache task when the cache task downloads
-    /// started.
-    pub async fn prepare_download_cache_task_started(
-        &self,
-        id: &str,
-    ) -> Result<metadata::CacheTask> {
-        self.metadata
-            .download_cache_task_started(id, None, None, None)
-    }
-
     /// download_cache_task_started updates the metadata of the cache task and create cache task content
     /// when the cache task downloads started.
     #[instrument(skip_all)]
@@ -397,12 +383,8 @@ impl Storage {
         let mut cache = self.cache.clone();
         cache.put_task(id, content_length).await;
 
-        self.metadata.download_cache_task_started(
-            id,
-            Some(piece_length),
-            Some(content_length),
-            response_header,
-        )
+        self.metadata
+            .download_cache_task_started(id, piece_length, content_length, response_header)
     }
 
     /// download_cache_task_finished updates the metadata of the cache task when the cache task downloads finished.

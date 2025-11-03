@@ -10,7 +10,9 @@ on:
 jobs:
   push_client_image_to_registry:
     name: Push Client Image
-    runs-on: [self-hosted, Linux, X64]
+    runs-on:
+      group: Default
+      labels: [oracle-vm-32cpu-128gb-x86-64]
     timeout-minutes: 600
     steps:
       - name: Check out code
@@ -94,7 +96,7 @@ jobs:
           output: 'trivy-results.sarif'
 
       - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@192325c86100d080feab897ff886c34abd4c83a3
+        uses: github/codeql-action/upload-sarif@16140ae1a102900babc80a33c44059580f687047
         with:
           sarif_file: 'trivy-results.sarif'
 
@@ -105,7 +107,9 @@ jobs:
 
   push_client_debug_image_to_registry:
     name: Push Client Debug Image
-    runs-on: [self-hosted, Linux, X64]
+    runs-on:
+      group: Default
+      labels: [oracle-vm-32cpu-128gb-x86-64]
     timeout-minutes: 600
     steps:
       - name: Check out code
@@ -189,7 +193,7 @@ jobs:
           output: 'trivy-results.sarif'
 
       - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@192325c86100d080feab897ff886c34abd4c83a3
+        uses: github/codeql-action/upload-sarif@16140ae1a102900babc80a33c44059580f687047
         with:
           sarif_file: 'trivy-results.sarif'
 
@@ -200,7 +204,9 @@ jobs:
 
   push_dfinit_image_to_registry:
     name: Push Dfinit Image
-    runs-on: [self-hosted, Linux, X64]
+    runs-on:
+      group: Default
+      labels: [oracle-vm-32cpu-128gb-x86-64]
     timeout-minutes: 600
     steps:
       - name: Check out code
@@ -284,7 +290,7 @@ jobs:
           output: 'trivy-results.sarif'
 
       - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@192325c86100d080feab897ff886c34abd4c83a3
+        uses: github/codeql-action/upload-sarif@16140ae1a102900babc80a33c44059580f687047
         with:
           sarif_file: 'trivy-results.sarif'
 

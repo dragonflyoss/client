@@ -26,13 +26,15 @@ use dragonfly_api::dfdaemon::v2::{
     DownloadCacheTaskResponse, DownloadPersistentCachePieceRequest,
     DownloadPersistentCachePieceResponse, DownloadPersistentCacheTaskRequest,
     DownloadPersistentCacheTaskResponse, DownloadPieceRequest, DownloadPieceResponse,
-    DownloadTaskRequest, DownloadTaskResponse, ExchangeIbVerbsQueuePairEndpointRequest,
-    ExchangeIbVerbsQueuePairEndpointResponse, StatCacheTaskRequest, StatPersistentCacheTaskRequest,
-    StatTaskRequest, SyncCachePiecesRequest, SyncCachePiecesResponse, SyncHostRequest,
-    SyncPersistentCachePiecesRequest, SyncPersistentCachePiecesResponse, SyncPiecesRequest,
-    SyncPiecesResponse, UpdatePersistentCacheTaskRequest,
+    DownloadTaskRequest, DownloadTaskResponse, Entry, ExchangeIbVerbsQueuePairEndpointRequest,
+    ExchangeIbVerbsQueuePairEndpointResponse, ListTaskEntriesRequest, ListTaskEntriesResponse,
+    StatCacheTaskRequest, StatPersistentCacheTaskRequest, StatTaskRequest,
+    StatTaskRequest as DfdaemonStatTaskRequest, SyncCachePiecesRequest, SyncCachePiecesResponse,
+    SyncHostRequest, SyncPersistentCachePiecesRequest, SyncPersistentCachePiecesResponse,
+    SyncPiecesRequest, SyncPiecesResponse, UpdatePersistentCacheTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
+use dragonfly_client_backend::HeadRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -41,7 +43,8 @@ use dragonfly_client_core::{
 use dragonfly_client_metric::{
     collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
     collect_download_task_failure_metrics, collect_download_task_finished_metrics,
-    collect_download_task_started_metrics, collect_stat_task_failure_metrics,
+    collect_download_task_started_metrics, collect_list_task_entries_failure_metrics,
+    collect_list_task_entries_started_metrics, collect_stat_task_failure_metrics,
     collect_stat_task_started_metrics, collect_update_task_failure_metrics,
     collect_update_task_started_metrics, collect_upload_piece_failure_metrics,
     collect_upload_piece_finished_metrics, collect_upload_piece_started_metrics,
@@ -339,36 +342,19 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             }
         };
 
-        // Clone the task.
-        let task_manager = self.task.clone();
-
-        // Check whether the content length is empty.
-        let Some(content_length) = task.content_length() else {
-            // Download task failed.
-            task_manager
-                .download_failed(task_id.as_str())
-                .await
-                .unwrap_or_else(|err| error!("download task failed: {}", err));
-
-            // Collect download task failure metrics.
-            collect_download_task_failure_metrics(
-                download.r#type,
-                download.tag.clone().unwrap_or_default().as_str(),
-                download.application.clone().unwrap_or_default().as_str(),
-                download.priority.to_string().as_str(),
-            );
-
-            error!("missing content length in the response");
-            return Err(Status::internal("missing content length in the response"));
-        };
-
         info!(
-            "content length {}, piece length {}",
-            content_length,
-            task.piece_length().unwrap_or_default()
+            "content length {:?}, piece length {:?}",
+            task.content_length(),
+            task.piece_length()
         );
 
-        Span::current().record("content_length", content_length);
+        Span::current().record("content_length", task.content_length().unwrap_or_default());
+
+        // Update the actual content length, actual piece length and actual
+        // piece count of the download.
+        download.actual_content_length = task.content_length();
+        download.actual_piece_length = task.piece_length();
+        download.actual_piece_count = task.piece_count();
 
         // Download's range priority is higher than the request header's range.
         // If download protocol is http, use the range of the request header.
@@ -379,7 +365,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 Ok(header) => header,
                 Err(e) => {
                     // Download task failed.
-                    task_manager
+                    self.task
                         .download_failed(task_id.as_str())
                         .await
                         .unwrap_or_else(|err| error!("download task failed: {}", err));
@@ -397,32 +383,33 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 }
             };
 
-            download.range = match get_range(&request_header, content_length) {
-                Ok(range) => range,
-                Err(e) => {
-                    // Download task failed.
-                    task_manager
-                        .download_failed(task_id.as_str())
-                        .await
-                        .unwrap_or_else(|err| error!("download task failed: {}", err));
+            download.range =
+                match get_range(&request_header, task.content_length().unwrap_or_default()) {
+                    Ok(range) => range,
+                    Err(e) => {
+                        // Download task failed.
+                        self.task
+                            .download_failed(task_id.as_str())
+                            .await
+                            .unwrap_or_else(|err| error!("download task failed: {}", err));
 
-                    // Collect download task failure metrics.
-                    collect_download_task_failure_metrics(
-                        download.r#type,
-                        download.tag.clone().unwrap_or_default().as_str(),
-                        download.application.clone().unwrap_or_default().as_str(),
-                        download.priority.to_string().as_str(),
-                    );
+                        // Collect download task failure metrics.
+                        collect_download_task_failure_metrics(
+                            download.r#type,
+                            download.tag.clone().unwrap_or_default().as_str(),
+                            download.application.clone().unwrap_or_default().as_str(),
+                            download.priority.to_string().as_str(),
+                        );
 
-                    error!("get range failed: {}", e);
-                    return Err(Status::failed_precondition(e.to_string()));
-                }
-            };
+                        error!("get range failed: {}", e);
+                        return Err(Status::failed_precondition(e.to_string()));
+                    }
+                };
         }
 
         // Initialize stream channel.
         let download_clone = download.clone();
-        let task_manager_clone = task_manager.clone();
+        let task_manager_clone = self.task.clone();
         let task_clone = task.clone();
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
 
@@ -436,6 +423,17 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     Err(Status::internal(err.to_string())),
                     super::REQUEST_TIMEOUT,
                 )
+                .await
+                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+        }
+
+        // Define the backend error handler to send the error to the stream.
+        async fn handle_backend_error(
+            out_stream_tx: &Sender<Result<DownloadTaskResponse, Status>>,
+            err: Status,
+        ) {
+            out_stream_tx
+                .send_timeout(Err(err), super::REQUEST_TIMEOUT)
                 .await
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
         }
@@ -565,7 +563,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             status_code: err.status_code.map(|code| code.as_u16() as i32),
                         }) {
                             Ok(json) => {
-                                handle_error(
+                                handle_backend_error(
                                     &out_stream_tx,
                                     Status::with_details(
                                         Code::Internal,
@@ -614,11 +612,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // If prefetch flag is true, prefetch the full task.
         if download.prefetch {
             info!("try to prefetch task");
-            match task_manager.prefetch_task_started(task_id.as_str()).await {
+            match self.task.prefetch_task_started(task_id.as_str()).await {
                 Ok(_) => {
                     info!("prefetch task started");
                     let socket_path = self.socket_path.clone();
-                    let task_manager_clone = task_manager.clone();
+                    let task_manager_clone = self.task.clone();
                     tokio::spawn(
                         async move {
                             if let Err(err) = super::prefetch_task(
@@ -716,6 +714,86 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         }
     }
 
+    /// list_tasks lists the tasks.
+    #[instrument(skip_all, fields(task_id, url, remote_ip))]
+    async fn list_task_entries(
+        &self,
+        request: Request<ListTaskEntriesRequest>,
+    ) -> Result<Response<ListTaskEntriesResponse>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Span record the task id and url.
+        Span::current().record("task_id", request.task_id.as_str());
+        Span::current().record("url", request.url.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        info!("list tasks in upload server");
+
+        // Collect the list tasks started metrics.
+        collect_list_task_entries_started_metrics(TaskType::Standard as i32);
+
+        // Build the backend.
+        let backend = self
+            .task
+            .backend_factory
+            .build(request.url.as_str())
+            .map_err(|err| {
+                // Collect the list tasks failure metrics.
+                collect_list_task_entries_failure_metrics(TaskType::Standard as i32);
+
+                error!("build backend: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        // Head the task entries.
+        let response = backend
+            .head(HeadRequest {
+                task_id: request.task_id.clone(),
+                url: request.url.clone(),
+                http_header: Some(hashmap_to_headermap(&request.request_header).map_err(
+                    |err| {
+                        error!("parse request header: {}", err);
+                        Status::internal(err.to_string())
+                    },
+                )?),
+                timeout: self.config.download.piece_timeout,
+                client_cert: None,
+                object_storage: request.object_storage.clone(),
+                hdfs: request.hdfs.clone(),
+            })
+            .await
+            .map_err(|err| {
+                // Collect the list tasks failure metrics.
+                collect_list_task_entries_failure_metrics(TaskType::Standard as i32);
+
+                error!("list task entries: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        Ok(Response::new(ListTaskEntriesResponse {
+            content_length: response.content_length.unwrap_or_default(),
+            response_header: headermap_to_hashmap(&response.http_header.unwrap_or_default()),
+            status_code: response.http_status_code.map(|code| code.as_u16().into()),
+            entries: response
+                .entries
+                .into_iter()
+                .map(|dir_entry| Entry {
+                    url: dir_entry.url,
+                    content_length: dir_entry.content_length as u64,
+                    is_dir: dir_entry.is_dir,
+                })
+                .collect(),
+        }))
+    }
+
     /// delete_task deletes the task.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn delete_task(
@@ -811,6 +889,21 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
+                let Ok(Some(_)) = task_manager.get(task_id.as_str()) else {
+                    error!("get task {} not found", task_id);
+                    out_stream_tx
+                        .send_timeout(
+                            Err(Status::internal(format!("task {} not found", task_id))),
+                            super::REQUEST_TIMEOUT,
+                        )
+                        .await
+                        .unwrap_or_else(|err| {
+                            error!("send task {} not found to stream: {}", task_id, err);
+                        });
+
+                    return;
+                };
+
                 loop {
                     let mut finished_piece_numbers = Vec::new();
                     for interested_piece_number in interested_piece_numbers.iter() {
@@ -1520,8 +1613,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Get the interested piece numbers from the request.
         let mut interested_piece_numbers = request.interested_piece_numbers.clone();
 
-        // Clone the task.
-        let task_manager = self.task.clone();
+        // Clone the persistent cache task.
+        let persistent_cache_task_manager = self.persistent_cache_task.clone();
 
         // Get the download server info from the config.
         let download_ip = self.config.host.ip.unwrap().to_string();
@@ -1532,11 +1625,26 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
+                let Ok(Some(_)) = persistent_cache_task_manager.get(task_id.as_str()) else {
+                    error!("get persistent cache task {} not found", task_id);
+                    out_stream_tx
+                        .send_timeout(
+                            Err(Status::internal(format!("task {} not found", task_id))),
+                            super::REQUEST_TIMEOUT,
+                        )
+                        .await
+                        .unwrap_or_else(|err| {
+                            error!("send persistent cache task {} not found to stream: {}", task_id, err);
+                        });
+
+                    return;
+                };
+
                 loop {
                     let mut finished_piece_numbers = Vec::new();
                     for interested_piece_number in interested_piece_numbers.iter() {
-                        let piece = match task_manager.piece.get(
-                            task_manager
+                        let piece = match persistent_cache_task_manager.piece.get(
+                            persistent_cache_task_manager
                                 .piece
                                 .persistent_cache_id(task_id.as_str(), *interested_piece_number)
                                 .as_str(),
@@ -1898,6 +2006,33 @@ impl DfdaemonUploadClient {
 
         let response = self.client.clone().download_task(request).await?;
         Ok(response)
+    }
+
+    /// stat_task gets the status of the task.
+    #[instrument(skip_all)]
+    pub async fn stat_task(&self, request: DfdaemonStatTaskRequest) -> ClientResult<Task> {
+        let request = Self::make_request(request);
+        let response = self.client.clone().stat_task(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// list_task_entries lists the task entries.
+    #[instrument(skip_all)]
+    pub async fn list_task_entries(
+        &self,
+        request: ListTaskEntriesRequest,
+    ) -> ClientResult<ListTaskEntriesResponse> {
+        let request = Self::make_request(request);
+        let response = self.client.clone().list_task_entries(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// delete_task tells the dfdaemon to delete the task.
+    #[instrument(skip_all)]
+    pub async fn delete_task(&self, request: DeleteTaskRequest) -> ClientResult<()> {
+        let request = Self::make_request(request);
+        self.client.clone().delete_task(request).await?;
+        Ok(())
     }
 
     /// sync_pieces provides the piece metadata for parent.

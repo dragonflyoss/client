@@ -308,6 +308,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Initialize storage tcp server.
     let mut storage_tcp_server = TCPServer::new(
+        config.clone(),
         SocketAddr::new(
             config.storage.server.ip.unwrap(),
             config.storage.server.tcp_port,

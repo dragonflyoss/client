@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use dashmap::{mapref::entry::Entry, DashMap};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::tls::NoVerifier;
 use futures::TryStreamExt;
@@ -22,8 +23,9 @@ use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use reqwest_tracing::TracingMiddleware;
 use rustls_pki_types::CertificateDer;
 use std::io::{Error as IOError, ErrorKind};
+use std::sync::Arc;
 use tokio_util::io::StreamReader;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, info, instrument};
 
 /// HTTP_SCHEME is the HTTP scheme.
 pub const HTTP_SCHEME: &str = "http";
@@ -36,20 +38,17 @@ pub struct HTTP {
     /// scheme is the scheme of the HTTP backend.
     scheme: String,
 
-    /// client is the reqwest client.
-    client: ClientWithMiddleware,
+    /// clients is a pool of reqwest clients (each has its own connection pool).
+    clients: Arc<DashMap<usize, ClientWithMiddleware>>,
 }
 
 /// HTTP implements the http interface.
 impl HTTP {
+    /// MAX_CONNECTIONS_PER_ADDRESS is the maximum number of connections per address.
+    const MAX_CONNECTIONS_PER_ADDRESS: usize = 32;
+
     /// new returns a new HTTP.
     pub fn new(scheme: &str) -> Result<HTTP> {
-        // Default TLS client config with no validation.
-        let client_config_builder = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(NoVerifier::new())
-            .with_no_client_auth();
-
         // Disable automatic compression to prevent double-decompression issues.
         //
         // Problem scenario:
@@ -61,34 +60,52 @@ impl HTTP {
         //
         // Solution: Disable all compression formats (gzip, brotli, zstd, deflate) to ensure
         // we receive and store uncompressed content, eliminating the double-decompression issue.
-        let client = reqwest::Client::builder()
-            .no_gzip()
-            .no_brotli()
-            .no_zstd()
-            .no_deflate()
-            .hickory_dns(true)
-            .use_preconfigured_tls(client_config_builder)
-            .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
-            .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
-            .tcp_nodelay(true)
-            .http2_adaptive_window(true)
-            .http2_initial_stream_window_size(Some(super::HTTP2_STREAM_WINDOW_SIZE))
-            .http2_initial_connection_window_size(Some(super::HTTP2_CONNECTION_WINDOW_SIZE))
-            .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
-            .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
-            .http2_keep_alive_while_idle(true)
-            .build()?;
+        let make_reqwest_client = || -> Result<ClientWithMiddleware> {
+            // Default TLS client config with no validation.
+            let client_config_builder = rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(NoVerifier::new())
+                .with_no_client_auth();
 
-        let retry_policy =
-            ExponentialBackoff::builder().build_with_max_retries(super::MAX_RETRY_TIMES);
-        let client = ClientBuilder::new(client)
-            .with(TracingMiddleware::default())
-            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-            .build();
+            let client = reqwest::Client::builder()
+                // Disable automatic compression to prevent double-decompression issues.
+                .no_gzip()
+                .no_brotli()
+                .no_zstd()
+                .no_deflate()
+                .hickory_dns(true)
+                .use_preconfigured_tls(client_config_builder)
+                .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
+                .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
+                .tcp_nodelay(true)
+                .http2_adaptive_window(false)
+                .http2_initial_stream_window_size(Some(super::HTTP2_STREAM_WINDOW_SIZE))
+                .http2_initial_connection_window_size(Some(super::HTTP2_CONNECTION_WINDOW_SIZE))
+                .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+                .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                .http2_keep_alive_while_idle(true)
+                .http2_max_frame_size(Some(super::HTTP2_MAX_FRAME_SIZE))
+                .build()?;
+
+            let retry_policy =
+                ExponentialBackoff::builder().build_with_max_retries(super::MAX_RETRY_TIMES);
+            let client = ClientBuilder::new(client)
+                .with(TracingMiddleware::default())
+                .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+                .build();
+
+            Ok(client)
+        };
+
+        let clients = DashMap::with_capacity(Self::MAX_CONNECTIONS_PER_ADDRESS);
+        for i in 0..Self::MAX_CONNECTIONS_PER_ADDRESS {
+            let client = make_reqwest_client()?;
+            clients.insert(i, client);
+        }
 
         Ok(Self {
             scheme: scheme.to_string(),
-            client,
+            clients: Arc::new(clients),
         })
     }
 
@@ -144,7 +161,13 @@ impl HTTP {
                 Ok(client)
             }
             // Default TLS client config with no validation.
-            None => Ok(self.client.clone()),
+            None => match self
+                .clients
+                .entry(fastrand::usize(..Self::MAX_CONNECTIONS_PER_ADDRESS))
+            {
+                Entry::Occupied(o) => Ok(o.get().clone()),
+                Entry::Vacant(_) => Err(Error::Unknown("reqwest client not found".to_string())),
+            },
         }
     }
 }
@@ -166,7 +189,7 @@ impl super::Backend for HTTP {
         );
 
         // The header of the request is required.
-        let header = request
+        let request_header = request
             .http_header
             .ok_or(Error::InvalidParameter)
             .inspect_err(|_err| {
@@ -178,9 +201,9 @@ impl super::Backend for HTTP {
         // through the HEAD method. Use GET request to replace of HEAD request
         // to get header and status code.
         let response = match self
-            .client(request.client_cert)?
+            .client(request.client_cert.clone())?
             .get(&request.url)
-            .headers(header)
+            .headers(request_header.clone())
             // Add Range header to ensure Content-Length is returned in response headers.
             // Some servers (especially when using Transfer-Encoding: chunked,
             // refer to https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Transfer-Encoding.) may not
@@ -192,6 +215,40 @@ impl super::Backend for HTTP {
             .send()
             .await
         {
+            Ok(response) if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE => {
+                // For zero-byte files, some servers return 416 Range Not Satisfiable.
+                // Retry with a GET request without the Range header to retrieve headers.
+                info!(
+                    "head request got 416 Range Not Satisfiable, retrying with HEAD {} {}",
+                    request.task_id, request.url
+                );
+
+                match self
+                    .client(request.client_cert.clone())?
+                    .get(&request.url)
+                    .headers(request_header.clone())
+                    .timeout(request.timeout)
+                    .send()
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(err) => {
+                        error!(
+                            "head request failed {} {}: {}",
+                            request.task_id, request.url, err
+                        );
+
+                        return Ok(super::HeadResponse {
+                            success: false,
+                            content_length: None,
+                            http_header: None,
+                            http_status_code: None,
+                            entries: Vec::new(),
+                            error_message: None,
+                        });
+                    }
+                }
+            }
             Ok(response) => response,
             Err(err) => {
                 error!(
@@ -210,23 +267,26 @@ impl super::Backend for HTTP {
             }
         };
 
-        let header = response.headers().clone();
-        let status_code = response.status();
-        let content_length = response.content_length();
+        let response_header = response.headers().clone();
+        let response_status_code = response.status();
+        let response_content_length = response.content_length();
         debug!(
             "head response {} {}: {:?} {:?} {:?}",
-            request.task_id, request.url, status_code, content_length, header
+            request.task_id,
+            request.url,
+            response_status_code,
+            response_content_length,
+            response_header
         );
 
         // Drop the response body to avoid reading it.
         drop(response);
-
         Ok(super::HeadResponse {
-            success: status_code.is_success(),
-            content_length,
-            http_header: Some(header),
-            http_status_code: Some(status_code),
-            error_message: Some(status_code.to_string()),
+            success: response_status_code.is_success(),
+            content_length: response_content_length,
+            http_header: Some(request_header),
+            http_status_code: Some(response_status_code),
+            error_message: Some(response_status_code.to_string()),
             entries: Vec::new(),
         })
     }
@@ -240,7 +300,7 @@ impl super::Backend for HTTP {
         );
 
         // The header of the request is required.
-        let header = request
+        let request_header = request
             .http_header
             .ok_or(Error::InvalidParameter)
             .inspect_err(|_err| {
@@ -250,7 +310,7 @@ impl super::Backend for HTTP {
         let response = match self
             .client(request.client_cert)?
             .get(&request.url)
-            .headers(header)
+            .headers(request_header)
             .timeout(request.timeout)
             .send()
             .await
@@ -272,9 +332,9 @@ impl super::Backend for HTTP {
             }
         };
 
-        let header = response.headers().clone();
-        let status_code = response.status();
-        let reader = Box::new(StreamReader::new(
+        let response_header = response.headers().clone();
+        let response_status_code = response.status();
+        let response_reader = Box::new(StreamReader::new(
             response
                 .bytes_stream()
                 .map_err(|err| IOError::new(ErrorKind::Other, err)),
@@ -282,15 +342,15 @@ impl super::Backend for HTTP {
 
         debug!(
             "get response {} {}: {:?} {:?}",
-            request.task_id, request.piece_id, status_code, header
+            request.task_id, request.piece_id, response_status_code, response_header
         );
 
         Ok(super::GetResponse {
-            success: status_code.is_success(),
-            http_header: Some(header),
-            http_status_code: Some(status_code),
-            reader,
-            error_message: Some(status_code.to_string()),
+            success: response_status_code.is_success(),
+            http_header: Some(response_header),
+            http_status_code: Some(response_status_code),
+            reader: response_reader,
+            error_message: Some(response_status_code.to_string()),
         })
     }
 }

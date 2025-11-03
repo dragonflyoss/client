@@ -27,7 +27,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::AsyncRead;
 use tokio::time;
-use tracing::{error, instrument};
+use tracing::{error, instrument, Span};
 use vortex_protocol::{
     tlv::{
         download_persistent_cache_piece::DownloadPersistentCachePiece,
@@ -58,12 +58,14 @@ impl QUICClient {
     ///
     /// This is the main entry point for downloading a piece. It applies
     /// a timeout based on the configuration and handles connection timeouts gracefully.
-    #[instrument(skip_all)]
+    #[instrument(skip_all, fields(parent_addr))]
     pub async fn download_piece(
         &self,
         number: u32,
         task_id: &str,
     ) -> ClientResult<(impl AsyncRead, u64, String)> {
+        Span::current().record("parent_addr", self.addr.as_str());
+
         time::timeout(
             self.config.download.piece_timeout,
             self.handle_download_piece(number, task_id),
@@ -204,19 +206,23 @@ impl QUICClient {
         // Connect's server name used for verifying the certificate. Since we used
         // NoVerifier, it can be anything.
         let connection = endpoint
-            .connect(self.addr.parse().or_err(ErrorType::ParseError)?, "d7y")?
+            .connect(self.addr.parse().or_err(ErrorType::ParseError)?, "d7y")
+            .or_err(ErrorType::ConnectError)?
             .await
-            .inspect_err(|err| error!("failed to connect to {}: {}", self.addr, err))?;
+            .inspect_err(|err| error!("failed to connect to {}: {}", self.addr, err))
+            .or_err(ErrorType::ConnectError)?;
 
         let (mut writer, reader) = connection
             .open_bi()
             .await
-            .inspect_err(|err| error!("failed to open bi stream: {}", err))?;
+            .inspect_err(|err| error!("failed to open bi stream: {}", err))
+            .or_err(ErrorType::ConnectError)?;
 
         writer
             .write_all(&request)
             .await
-            .inspect_err(|err| error!("failed to send request: {}", err))?;
+            .inspect_err(|err| error!("failed to send request: {}", err))
+            .or_err(ErrorType::ConnectError)?;
 
         Ok((reader, writer))
     }
@@ -233,7 +239,8 @@ impl QUICClient {
         reader
             .read_exact(&mut header_bytes)
             .await
-            .inspect_err(|err| error!("failed to receive header: {}", err))?;
+            .inspect_err(|err| error!("failed to receive header: {}", err))
+            .or_err(ErrorType::ConnectError)?;
 
         Header::try_from(header_bytes.freeze()).map_err(Into::into)
     }
@@ -257,7 +264,8 @@ impl QUICClient {
         reader
             .read_exact(&mut metadata_length_bytes)
             .await
-            .inspect_err(|err| error!("failed to receive metadata length: {}", err))?;
+            .inspect_err(|err| error!("failed to receive metadata length: {}", err))
+            .or_err(ErrorType::ConnectError)?;
         let metadata_length = u32::from_be_bytes(metadata_length_bytes[..].try_into()?) as usize;
 
         let mut metadata_bytes = BytesMut::with_capacity(metadata_length);
@@ -265,7 +273,8 @@ impl QUICClient {
         reader
             .read_exact(&mut metadata_bytes)
             .await
-            .inspect_err(|err| error!("failed to receive metadata: {}", err))?;
+            .inspect_err(|err| error!("failed to receive metadata: {}", err))
+            .or_err(ErrorType::ConnectError)?;
 
         let mut content_bytes = BytesMut::with_capacity(metadata_length_size + metadata_length);
         content_bytes.extend_from_slice(&metadata_length_bytes);
@@ -303,7 +312,7 @@ impl QUICClient {
 /// NoVerifier is a verifier for QUIC Client that does not verify the server certificate.
 /// It is used for testing and should not be used in production.
 #[derive(Debug)]
-struct NoVerifier(Arc<quinn::rustls::crypto::CryptoProvider>);
+pub struct NoVerifier(Arc<quinn::rustls::crypto::CryptoProvider>);
 
 /// NoVerifier implements a no-op server certificate verifier.
 impl NoVerifier {
@@ -362,5 +371,30 @@ impl quinn::rustls::client::danger::ServerCertVerifier for NoVerifier {
     /// Returns the supported signature schemes.
     fn supported_verify_schemes(&self) -> Vec<quinn::rustls::SignatureScheme> {
         self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quinn::rustls::client::danger::ServerCertVerifier;
+
+    #[test]
+    fn test_no_verifier() {
+        let verifier = NoVerifier::new();
+
+        // Test verify_server_cert
+        let result = verifier.verify_server_cert(
+            &CertificateDer::from(vec![]),
+            &[],
+            &ServerName::DnsName("d7y.io".try_into().unwrap()),
+            &[],
+            UnixTime::now(),
+        );
+        assert!(result.is_ok());
+
+        // Test supported_verify_schemes
+        let schemes = verifier.supported_verify_schemes();
+        assert!(!schemes.is_empty());
     }
 }

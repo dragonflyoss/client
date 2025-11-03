@@ -1141,6 +1141,9 @@ fn make_download_task_request(
             remote_ip: Some(remote_ip.to_string()),
             concurrent_piece_count: Some(config.download.concurrent_piece_count),
             overwrite: false,
+            actual_piece_length: None,
+            actual_content_length: None,
+            actual_piece_count: None,
         }),
     })
 }

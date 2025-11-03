@@ -17,7 +17,7 @@
 pub mod errors;
 mod selector;
 
-use crate::http::headermap_to_hashmap;
+use crate::http::{headermap_to_hashmap, query_params::default_proxy_rule_filtered_query_params};
 use crate::id_generator::{IDGenerator, TaskIDParameter};
 use crate::pool::{Builder as PoolBuilder, Entry, Factory, Pool};
 use bytes::BytesMut;
@@ -38,7 +38,7 @@ use std::time::Duration;
 use tokio::io::AsyncRead;
 use tokio_util::io::StreamReader;
 use tonic::transport::Endpoint;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error};
 
 /// POOL_MAX_IDLE_PER_HOST is the max idle connections per host.
 const POOL_MAX_IDLE_PER_HOST: usize = 1024;
@@ -322,7 +322,7 @@ pub struct Proxy {
     max_retries: u8,
 
     /// client_pool is the pool of clients.
-    client_pool: Pool<String, ClientWithMiddleware, HTTPClientFactory>,
+    client_pool: Pool<String, String, ClientWithMiddleware, HTTPClientFactory>,
 
     /// id_generator is the task id generator.
     id_generator: Arc<IDGenerator>,
@@ -352,7 +352,6 @@ impl Request for Proxy {
     /// This method is designed for scenarios where the response body is expected to be processed as a
     /// stream, allowing efficient handling of large or continuous data. The response includes metadata
     /// such as status codes and headers, along with a streaming `Body` for accessing the response content.
-    #[instrument(skip_all)]
     async fn get(&self, request: GetRequest) -> Result<GetResponse> {
         let response = self.try_send(&request).await?;
         let header = response.headers().clone();
@@ -378,7 +377,6 @@ impl Request for Proxy {
     /// memory, avoiding the overhead of streaming for smaller or fixed-size responses. The provided
     /// `BytesMut` buffer is used to store the response content, and the response metadata (e.g., status
     /// and headers) is returned separately.
-    #[instrument(skip_all)]
     async fn get_into(&self, request: GetRequest, buf: &mut BytesMut) -> Result<GetResponse> {
         let get_into = async {
             let response = self.try_send(&request).await?;
@@ -411,11 +409,16 @@ impl Request for Proxy {
 /// Proxy implements proxy request logic.
 impl Proxy {
     /// Creates reqwest clients with proxy configuration for the given request.
-    #[instrument(skip_all)]
     async fn client_entries(
         &self,
         request: &GetRequest,
     ) -> Result<Vec<Entry<ClientWithMiddleware>>> {
+        let filtered_query_params = if request.filtered_query_params.is_empty() {
+            default_proxy_rule_filtered_query_params()
+        } else {
+            request.filtered_query_params.clone()
+        };
+
         // Generate task id for selecting seed peer.
         let task_id = self
             .id_generator
@@ -426,7 +429,7 @@ impl Proxy {
                     piece_length: request.piece_length,
                     tag: request.tag.clone(),
                     application: request.application.clone(),
-                    filtered_query_params: request.filtered_query_params.clone(),
+                    filtered_query_params,
                 },
             })
             .map_err(|err| Error::Internal(format!("failed to generate task id: {}", err)))?;
@@ -434,7 +437,7 @@ impl Proxy {
         // Select seed peers for downloading.
         let seed_peers = self
             .seed_peer_selector
-            .select(task_id, self.max_retries as u32)
+            .select(task_id.clone(), self.max_retries as u32)
             .await
             .map_err(|err| {
                 Error::Internal(format!(
@@ -442,15 +445,14 @@ impl Proxy {
                     err
                 ))
             })?;
-        debug!("selected seed peers: {:?}", seed_peers);
+
+        debug!("task {} selected seed peers: {:?}", task_id, seed_peers);
 
         let mut client_entries = Vec::with_capacity(seed_peers.len());
         for peer in seed_peers.iter() {
             // TODO(chlins): Support client https scheme.
-            let client_entry = self
-                .client_pool
-                .entry(&format!("http://{}:{}", peer.ip, peer.proxy_port))
-                .await?;
+            let addr = format!("http://{}:{}", peer.ip, peer.proxy_port);
+            let client_entry = self.client_pool.entry(&addr, &addr).await?;
             client_entries.push(client_entry);
         }
 
@@ -458,7 +460,6 @@ impl Proxy {
     }
 
     /// Private helper to process requests and handle response headers with retries.
-    #[instrument(skip_all)]
     async fn try_send(&self, request: &GetRequest) -> Result<reqwest::Response> {
         // Create client and send the request.
         let entries = self.client_entries(request).await?;
@@ -491,7 +492,6 @@ impl Proxy {
     }
 
     /// Send a request to the specified URL via client entry with the given headers.
-    #[instrument(skip_all)]
     async fn send(
         &self,
         entry: &Entry<ClientWithMiddleware>,
@@ -545,7 +545,6 @@ impl Proxy {
     }
 
     /// make_request_headers applies p2p related headers to the request headers.
-    #[instrument(skip_all)]
     fn make_request_headers(&self, request: &GetRequest) -> Result<HeaderMap> {
         let mut headers = request.header.clone().unwrap_or_default();
 
@@ -706,15 +705,17 @@ mod tests {
         assert_eq!(pool.size().await, 0);
 
         // Get a client for the first time. A new client should be created.
-        let _ = pool.entry(&"http://proxy1.com".to_string()).await.unwrap();
+        let addr = "http://proxy1.com".to_string();
+        let _ = pool.entry(&addr, &addr).await.unwrap();
         assert_eq!(pool.size().await, 1);
 
         // Get a client for the same proxy again. It should be reused, so the count remains 1.
-        let _ = pool.entry(&"http://proxy1.com".to_string()).await.unwrap();
+        let _ = pool.entry(&addr, &addr).await.unwrap();
         assert_eq!(pool.size().await, 1);
 
         // Get a client for a different proxy. A new client should be created, so the count becomes 2.
-        let _ = pool.entry(&"http://proxy2.com".to_string()).await.unwrap();
+        let addr = "http://proxy2.com".to_string();
+        let _ = pool.entry(&addr, &addr).await.unwrap();
         assert_eq!(pool.size().await, 2);
     }
 
@@ -726,14 +727,16 @@ mod tests {
             .build();
 
         // Create a client.
-        let _ = pool.entry(&"http://proxy1.com".to_string()).await.unwrap();
+        let addr = "http://proxy1.com".to_string();
+        let _ = pool.entry(&addr, &addr).await.unwrap();
         assert_eq!(pool.size().await, 1);
 
         // Wait for cleanup above client.
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Create another client.
-        let _ = pool.entry(&"http://proxy2.com".to_string()).await.unwrap();
+        let addr = "http://proxy2.com".to_string();
+        let _ = pool.entry(&addr, &addr).await.unwrap();
 
         // Still should be 1 because the proxy1 client should have been cleaned up.
         assert_eq!(pool.size().await, 1);

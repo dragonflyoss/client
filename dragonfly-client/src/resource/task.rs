@@ -145,9 +145,8 @@ impl Task {
         id: &str,
         request: Download,
     ) -> ClientResult<metadata::Task> {
-        let task = self.storage.prepare_download_task_started(id).await?;
-
-        if task.content_length.is_some() && task.piece_length.is_some() {
+        let (task, reused) = self.storage.prepare_download_task(id)?;
+        if reused {
             // Attempt to create a hard link from the task file to the output path.
             //
             // Behavior based on force_hard_link setting:
@@ -461,7 +460,6 @@ impl Task {
                 host_id,
                 peer_id,
                 interested_pieces.clone(),
-                content_length,
                 request.clone(),
                 download_progress_tx.clone(),
             )
@@ -554,7 +552,6 @@ impl Task {
         host_id: &str,
         peer_id: &str,
         interested_pieces: Vec<metadata::Piece>,
-        content_length: u64,
         request: Download,
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
     ) -> ClientResult<Vec<metadata::Piece>> {
@@ -679,10 +676,7 @@ impl Task {
                                 peer_id: peer_id.to_string(),
                                 request: Some(
                                     announce_peer_request::Request::DownloadPeerFinishedRequest(
-                                        DownloadPeerFinishedRequest {
-                                            content_length: 0,
-                                            piece_count: 0,
-                                        },
+                                        DownloadPeerFinishedRequest {},
                                     ),
                                 ),
                             },
@@ -817,10 +811,7 @@ impl Task {
                                     peer_id: peer_id.to_string(),
                                     request: Some(
                                         announce_peer_request::Request::DownloadPeerFinishedRequest(
-                                            DownloadPeerFinishedRequest {
-                                                content_length,
-                                                piece_count: interested_pieces.len() as u32,
-                                            },
+                                            DownloadPeerFinishedRequest {},
                                         ),
                                     ),
                                 },
@@ -957,10 +948,7 @@ impl Task {
                                     peer_id: peer_id.to_string(),
                                     request: Some(
                                         announce_peer_request::Request::DownloadPeerBackToSourceFinishedRequest(
-                                            DownloadPeerBackToSourceFinishedRequest {
-                                                content_length,
-                                                piece_count: interested_pieces.len() as u32,
-                                            },
+                                            DownloadPeerBackToSourceFinishedRequest {},
                                         ),
                                     ),
                                 },
@@ -1228,27 +1216,29 @@ impl Task {
             let finished_pieces = finished_pieces.clone();
             let protocol = self.config.download.protocol.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
-            join_set.spawn(async move {
-                let _permit = permit;
-                download_from_parent(
-                    task_id,
-                    host_id,
-                    peer_id,
-                    collect_piece.number,
-                    collect_piece.length,
-                    collect_piece.parent.clone(),
-                    piece_manager,
-                    download_progress_tx,
-                    in_stream_tx,
-                    interrupt,
-                    finished_pieces,
-                    is_prefetch,
-                    need_piece_content,
-                    protocol,
-                )
-                .in_current_span()
-                .await
-            });
+            join_set.spawn(
+                async move {
+                    let _permit = permit;
+                    download_from_parent(
+                        task_id,
+                        host_id,
+                        peer_id,
+                        collect_piece.number,
+                        collect_piece.length,
+                        collect_piece.parent.clone(),
+                        piece_manager,
+                        download_progress_tx,
+                        in_stream_tx,
+                        interrupt,
+                        finished_pieces,
+                        is_prefetch,
+                        need_piece_content,
+                        protocol,
+                    )
+                    .await
+                }
+                .in_current_span(),
+            );
         }
 
         // Wait for the pieces to be downloaded.
@@ -1481,28 +1471,30 @@ impl Task {
             let object_storage = request.object_storage.clone();
             let hdfs = request.hdfs.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
-            join_set.spawn(async move {
-                let _permit = permit;
-                download_from_source(
-                    task_id,
-                    host_id,
-                    peer_id,
-                    interested_piece.number,
-                    url,
-                    interested_piece.offset,
-                    interested_piece.length,
-                    request_header,
-                    request.is_prefetch,
-                    request.need_piece_content,
-                    piece_manager,
-                    download_progress_tx,
-                    in_stream_tx,
-                    object_storage,
-                    hdfs,
-                )
-                .in_current_span()
-                .await
-            });
+            join_set.spawn(
+                async move {
+                    let _permit = permit;
+                    download_from_source(
+                        task_id,
+                        host_id,
+                        peer_id,
+                        interested_piece.number,
+                        url,
+                        interested_piece.offset,
+                        interested_piece.length,
+                        request_header,
+                        request.is_prefetch,
+                        request.need_piece_content,
+                        piece_manager,
+                        download_progress_tx,
+                        in_stream_tx,
+                        object_storage,
+                        hdfs,
+                    )
+                    .await
+                }
+                .in_current_span(),
+            );
         }
 
         // Wait for the pieces to be downloaded.
@@ -1859,27 +1851,29 @@ impl Task {
             let object_storage = request.object_storage.clone();
             let hdfs = request.hdfs.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
-            join_set.spawn(async move {
-                let _permit = permit;
-                download_from_source(
-                    task_id,
-                    host_id,
-                    peer_id,
-                    interested_piece.number,
-                    url,
-                    interested_piece.offset,
-                    interested_piece.length,
-                    request_header,
-                    request.is_prefetch,
-                    request.need_piece_content,
-                    piece_manager,
-                    download_progress_tx,
-                    object_storage,
-                    hdfs,
-                )
-                .in_current_span()
-                .await
-            });
+            join_set.spawn(
+                async move {
+                    let _permit = permit;
+                    download_from_source(
+                        task_id,
+                        host_id,
+                        peer_id,
+                        interested_piece.number,
+                        url,
+                        interested_piece.offset,
+                        interested_piece.length,
+                        request_header,
+                        request.is_prefetch,
+                        request.need_piece_content,
+                        piece_manager,
+                        download_progress_tx,
+                        object_storage,
+                        hdfs,
+                    )
+                    .await
+                }
+                .in_current_span(),
+            );
         }
 
         // Wait for the pieces to be downloaded.

@@ -30,7 +30,10 @@ use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_util::{fs::fallocate, http::header_vec_to_hashmap};
+use dragonfly_client_util::{
+    fs::fallocate, http::header_vec_to_hashmap,
+    http::query_params::default_proxy_rule_filtered_query_params,
+};
 use glob::Pattern;
 use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
 use local_ip_address::local_ip;
@@ -47,7 +50,7 @@ use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
-use tracing::{debug, error, info, warn, Level};
+use tracing::{debug, error, info, warn, Instrument, Level};
 use url::Url;
 use uuid::Uuid;
 
@@ -62,7 +65,7 @@ Examples:
 
   # Download a file from HDFS.
   $ dfget hdfs://<host>:<port>/<path> -O /tmp/file.txt --hdfs-delegation-token=<delegation_token>
-  
+
   # Download a file from Amazon Simple Storage Service(S3).
   $ dfget s3://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret>
 
@@ -236,6 +239,12 @@ struct Args {
         help = "Specify the access key secret for the Object Storage Service"
     )]
     storage_access_key_secret: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the security token for the Object Storage Service"
+    )]
+    storage_security_token: Option<String>,
 
     #[arg(
         long,
@@ -630,6 +639,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
     let object_storage = Some(ObjectStorage {
         access_key_id: args.storage_access_key_id.clone(),
         access_key_secret: args.storage_access_key_secret.clone(),
+        security_token: args.storage_security_token.clone(),
         session_token: args.storage_session_token.clone(),
         region: args.storage_region.clone(),
         endpoint: args.storage_endpoint.clone(),
@@ -690,10 +700,13 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
             let progress_bar = multi_progress_bar.add(ProgressBar::new(0));
             let download_client = download_client.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
-            join_set.spawn(async move {
-                let _permit = permit;
-                download(entry_args, progress_bar, download_client).await
-            });
+            join_set.spawn(
+                async move {
+                    let _permit = permit;
+                    download(entry_args, progress_bar, download_client).await
+                }
+                .in_current_span(),
+            );
         }
     }
 
@@ -827,6 +840,7 @@ async fn download(
         Ok(_) => Some(ObjectStorage {
             access_key_id: args.storage_access_key_id.clone(),
             access_key_secret: args.storage_access_key_secret.clone(),
+            security_token: args.storage_security_token.clone(),
             session_token: args.storage_session_token.clone(),
             region: args.storage_region.clone(),
             endpoint: args.storage_endpoint.clone(),
@@ -847,7 +861,7 @@ async fn download(
     // If the `filtered_query_params` is not provided, then use the default value.
     let filtered_query_params = args
         .filtered_query_params
-        .unwrap_or_else(dfdaemon::default_proxy_rule_filtered_query_params);
+        .unwrap_or_else(default_proxy_rule_filtered_query_params);
 
     // Dfget needs to notify dfdaemon to transfer the piece content of downloading file via unix domain socket
     // when the `transfer_from_dfdaemon` is true. Otherwise, dfdaemon will download the file and hardlink or
@@ -891,6 +905,9 @@ async fn download(
                 remote_ip: Some(local_ip().unwrap().to_string()),
                 concurrent_piece_count: None,
                 overwrite: args.overwrite,
+                actual_piece_length: None,
+                actual_content_length: None,
+                actual_piece_count: None,
             }),
         })
         .await

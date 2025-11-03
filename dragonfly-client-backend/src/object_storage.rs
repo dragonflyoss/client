@@ -17,7 +17,7 @@
 use dragonfly_api::common;
 use dragonfly_client_core::error::BackendError;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
-use opendal::{layers::TimeoutLayer, raw::HttpClient, Metakey, Operator};
+use opendal::{layers::HttpClientLayer, layers::TimeoutLayer, raw::HttpClient, Operator};
 use percent_encoding::percent_decode_str;
 use std::fmt;
 use std::result::Result;
@@ -258,7 +258,6 @@ impl ObjectStorage {
         builder = builder
             .access_key_id(access_key_id)
             .secret_access_key(access_key_secret)
-            .http_client(HttpClient::with(self.client.clone()))
             .bucket(&parsed_url.bucket)
             .region(region);
 
@@ -274,7 +273,8 @@ impl ObjectStorage {
 
         Ok(Operator::new(builder)?
             .finish()
-            .layer(TimeoutLayer::new().with_timeout(timeout)))
+            .layer(TimeoutLayer::new().with_timeout(timeout))
+            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
     }
 
     /// gcs_operator initializes the GCS operator with the parsed URL and object storage.
@@ -286,9 +286,7 @@ impl ObjectStorage {
     ) -> ClientResult<Operator> {
         // Initialize the GCS operator with the object storage.
         let mut builder = opendal::services::Gcs::default();
-        builder = builder
-            .http_client(HttpClient::with(self.client.clone()))
-            .bucket(&parsed_url.bucket);
+        builder = builder.bucket(&parsed_url.bucket);
 
         // Configure the credentials using the local path to the credential file if provided.
         // Otherwise, configure using the Application Default Credentials (ADC).
@@ -308,7 +306,8 @@ impl ObjectStorage {
 
         Ok(Operator::new(builder)?
             .finish()
-            .layer(TimeoutLayer::new().with_timeout(timeout)))
+            .layer(TimeoutLayer::new().with_timeout(timeout))
+            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
     }
 
     /// abs_operator initializes the ABS operator with the parsed URL and object storage.
@@ -344,13 +343,13 @@ impl ObjectStorage {
         builder = builder
             .account_name(access_key_id)
             .account_key(access_key_secret)
-            .http_client(HttpClient::with(self.client.clone()))
             .container(&parsed_url.bucket)
             .endpoint(endpoint);
 
         Ok(Operator::new(builder)?
             .finish()
-            .layer(TimeoutLayer::new().with_timeout(timeout)))
+            .layer(TimeoutLayer::new().with_timeout(timeout))
+            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
     }
 
     /// oss_operator initializes the OSS operator with the parsed URL and object storage.
@@ -383,17 +382,27 @@ impl ObjectStorage {
 
         // Initialize the OSS operator with the object storage.
         let mut builder = opendal::services::Oss::default();
-        builder = builder
-            .access_key_id(access_key_id)
-            .access_key_secret(access_key_secret)
-            .endpoint(endpoint)
-            .http_client(HttpClient::with(self.client.clone()))
-            .root("/")
-            .bucket(&parsed_url.bucket);
+        builder = if let Some(security_token) = &object_storage.security_token {
+            builder
+                .access_key_id(access_key_id)
+                .access_key_secret(access_key_secret)
+                .endpoint(endpoint)
+                .root("/")
+                .bucket(&parsed_url.bucket)
+                .security_token(security_token)
+        } else {
+            builder
+                .access_key_id(access_key_id)
+                .access_key_secret(access_key_secret)
+                .endpoint(endpoint)
+                .root("/")
+                .bucket(&parsed_url.bucket)
+        };
 
         Ok(Operator::new(builder)?
             .finish()
-            .layer(TimeoutLayer::new().with_timeout(timeout)))
+            .layer(TimeoutLayer::new().with_timeout(timeout))
+            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
     }
 
     /// obs_operator initializes the OBS operator with the parsed URL and object storage.
@@ -430,12 +439,12 @@ impl ObjectStorage {
             .access_key_id(access_key_id)
             .secret_access_key(access_key_secret)
             .endpoint(endpoint)
-            .http_client(HttpClient::with(self.client.clone()))
             .bucket(&parsed_url.bucket);
 
         Ok(Operator::new(builder)?
             .finish()
-            .layer(TimeoutLayer::new().with_timeout(timeout)))
+            .layer(TimeoutLayer::new().with_timeout(timeout))
+            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
     }
 
     /// cos_operator initializes the COS operator with the parsed URL and object storage.
@@ -472,12 +481,12 @@ impl ObjectStorage {
             .secret_id(access_key_id)
             .secret_key(access_key_secret)
             .endpoint(endpoint)
-            .http_client(HttpClient::with(self.client.clone()))
             .bucket(&parsed_url.bucket);
 
         Ok(Operator::new(builder)?
             .finish()
-            .layer(TimeoutLayer::new().with_timeout(timeout)))
+            .layer(TimeoutLayer::new().with_timeout(timeout))
+            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
     }
 }
 
@@ -517,7 +526,6 @@ impl crate::Backend for ObjectStorage {
             operator
                 .list_with(&parsed_url.key)
                 .recursive(true)
-                .metakey(Metakey::ContentLength | Metakey::Mode)
                 .await // Do the list op here.
                 .map_err(|err| {
                     error!(
@@ -766,7 +774,7 @@ mod tests {
                 ObjectStorageInfo {
                     endpoint: Some("test-endpoint.local".into()),
                     access_key_id: Some("access-key-id".into()),
-                    access_key_secret: Some("access-key-secret".into()),
+                    access_key_secret: Some("YWNjZXNzLWtleS1zZWNyZXQK".into()),
                     ..Default::default()
                 },
             ),

@@ -31,7 +31,7 @@ use tonic::transport::{Channel, Endpoint};
 use tonic_health::pb::{
     health_client::HealthClient as HealthGRPCClient, HealthCheckRequest, HealthCheckResponse,
 };
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, Instrument};
 
 /// Selector is the interface for selecting item from a list of items by a specific criteria.
 #[tonic::async_trait]
@@ -111,7 +111,6 @@ impl SeedPeerSelector {
     }
 
     /// refresh updates the seed peers data.
-    #[instrument(skip_all)]
     async fn refresh(&self) -> Result<()> {
         // Only one refresh can be running at a time.
         let Ok(_guard) = self.mutex.try_lock() else {
@@ -128,12 +127,15 @@ impl SeedPeerSelector {
         let mut join_set = JoinSet::new();
         for peer in seed_peers {
             let addr = format!("http://{}:{}", peer.ip, peer.port);
-            join_set.spawn(async move {
-                match Self::check_health(&addr).await {
-                    Ok(_) => Ok(peer),
-                    Err(err) => Err(err),
+            join_set.spawn(
+                async move {
+                    match Self::check_health(&addr).await {
+                        Ok(_) => Ok(peer),
+                        Err(err) => Err(err),
+                    }
                 }
-            });
+                .in_current_span(),
+            );
         }
 
         let mut hosts = HashMap::with_capacity(seed_peers_length);
@@ -166,7 +168,6 @@ impl SeedPeerSelector {
     }
 
     /// list_seed_peers lists the seed peers from scheduler.
-    #[instrument(skip_all)]
     async fn list_seed_peers(&self) -> Result<Vec<Host>> {
         // Filter for seed peer types, seed peer type is 1.
         // refer to dragonfly-client-config/src/dfdaemon.rs#HostType.
@@ -178,7 +179,6 @@ impl SeedPeerSelector {
     }
 
     /// check_health checks the health of each seed peer.
-    #[instrument(skip_all)]
     async fn check_health(addr: &str) -> Result<HealthCheckResponse> {
         let channel = Endpoint::from_shared(addr.to_string())?
             .connect_timeout(SEED_PEERS_HEALTH_CHECK_TIMEOUT)
@@ -197,7 +197,6 @@ impl SeedPeerSelector {
 
 #[tonic::async_trait]
 impl Selector for SeedPeerSelector {
-    #[instrument(skip_all)]
     async fn select(&self, task_id: String, replicas: u32) -> Result<Vec<Host>> {
         // Acquire a read lock and perform all logic within it.
         let seed_peers = self.seed_peers.read().await;
@@ -207,7 +206,7 @@ impl Selector for SeedPeerSelector {
 
         // The number of replicas cannot exceed the total number of seed peers.
         let expected_replicas = std::cmp::min(replicas as usize, seed_peers.hashring.len());
-        debug!("expected replicas: {}", expected_replicas);
+        debug!("task {} expected replicas: {}", task_id, expected_replicas);
 
         // Get replica nodes from the hash ring.
         let vnodes = seed_peers
