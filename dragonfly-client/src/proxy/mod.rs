@@ -35,6 +35,7 @@ use dragonfly_client_util::{
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
 use futures::TryStreamExt;
+use http::{HeaderName, HeaderValue};
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, StreamBody};
 use hyper::body::Frame;
 use hyper::client::conn::http1::Builder as ClientBuilder;
@@ -235,7 +236,7 @@ impl Proxy {
 pub async fn handler(
     config: Arc<Config>,
     task: Arc<Task>,
-    request: Request<hyper::body::Incoming>,
+    mut request: Request<hyper::body::Incoming>,
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
@@ -249,6 +250,22 @@ pub async fn handler(
     // Record the proxy request started metrics. The metrics will be recorded
     // when the request is kept alive.
     collect_proxy_request_started_metrics();
+
+    // Add custom headers from config, only if they don't already exist in the original request.
+    if let Some(custom_headers) = &config.proxy.custom_headers {
+        let headers = request.headers_mut();
+        for (key, value) in custom_headers {
+            if let (Ok(header_name), Ok(header_value)) = (
+                HeaderName::from_bytes(key.as_bytes()),
+                HeaderValue::from_str(value),
+            ) {
+                // Only insert if the header doesn't already exist.
+                if !headers.contains_key(&header_name) {
+                    headers.insert(header_name, header_value);
+                }
+            }
+        }
+    }
 
     // If host is not set, it is the mirror request.
     if request.uri().host().is_none() {

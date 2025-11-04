@@ -29,6 +29,7 @@ use rcgen::Certificate;
 use regex::Regex;
 use rustls_pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
@@ -1242,6 +1243,9 @@ pub struct Proxy {
     /// read_buffer_size is the buffer size for reading piece from disk, default is 1KB.
     #[serde(default = "default_proxy_read_buffer_size")]
     pub read_buffer_size: usize,
+
+    /// custom_headers is the custom headers configured by user for the proxy.
+    pub custom_headers: Option<HashMap<String, String>>,
 }
 
 /// Proxy implements Default.
@@ -1255,6 +1259,7 @@ impl Default for Proxy {
             prefetch: false,
             prefetch_rate_limit: default_prefetch_rate_limit(),
             read_buffer_size: default_proxy_read_buffer_size(),
+            custom_headers: None,
         }
     }
 }
@@ -2013,7 +2018,10 @@ key: /etc/ssl/private/client.pem
             "disableBackToSource": true,
             "prefetch": true,
             "prefetchRateLimit": "1GiB",
-            "readBufferSize": 8388608
+            "readBufferSize": 8388608,
+            "customHeaders": {
+                "X-Custom-Header": "custom-value"
+            }
         }"#;
 
         let proxy: Proxy = serde_json::from_str(json_data).unwrap();
@@ -2055,6 +2063,13 @@ key: /etc/ssl/private/client.pem
         assert!(proxy.prefetch);
         assert_eq!(proxy.prefetch_rate_limit, ByteSize::gib(1));
         assert_eq!(proxy.read_buffer_size, 8 * 1024 * 1024);
+
+        let mut headers = HashMap::new();
+        headers.insert("X-Custom-Header", "custom-value");
+        assert!(proxy
+            .custom_headers
+            .as_ref()
+            .is_some_and(|h| { h.get("X-Custom-Header") == Some(&"custom-value".to_string()) }));
     }
 
     #[test]
