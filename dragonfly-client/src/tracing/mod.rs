@@ -99,8 +99,7 @@ pub fn init_tracing(
         .compact();
 
     // Setup env filter for log level.
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::default().add_directive(log_level.into()));
+    let env_filter = EnvFilter::from_default_env().add_directive(log_level.into());
 
     // Enable console subscriber layer for tracing spawn tasks on `127.0.0.1:6669` when log level is TRACE.
     let console_subscriber_layer = if log_level == Level::TRACE {
