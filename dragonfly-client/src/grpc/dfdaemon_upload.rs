@@ -889,20 +889,52 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
-                let Ok(Some(_)) = task_manager.get(task_id.as_str()) else {
-                    error!("get task {} not found", task_id);
-                    out_stream_tx
-                        .send_timeout(
-                            Err(Status::internal(format!("task {} not found", task_id))),
-                            super::REQUEST_TIMEOUT,
-                        )
-                        .await
-                        .unwrap_or_else(|err| {
-                            error!("send task {} not found to stream: {}", task_id, err);
-                        });
+                match task_manager.get(task_id.as_str()) {
+                    Ok(Some(task)) => {
+                        if task.is_failed() {
+                            error!("get task {} failed", task_id);
+                            out_stream_tx
+                                .send_timeout(
+                                    Err(Status::internal(format!("task {} failed", task_id))),
+                                    super::REQUEST_TIMEOUT,
+                                )
+                                .await
+                                .unwrap_or_else(|err| {
+                                    error!("send task {} failed to stream: {}", task_id, err);
+                                });
 
-                    return;
-                };
+                            return;
+                        }
+                    }
+                    Ok(None) => {
+                        error!("get task {} not found", task_id);
+                        out_stream_tx
+                            .send_timeout(
+                                Err(Status::internal(format!("task {} not found", task_id))),
+                                super::REQUEST_TIMEOUT,
+                            )
+                            .await
+                            .unwrap_or_else(|err| {
+                                error!("send task {} not found to stream: {}", task_id, err);
+                            });
+
+                        return;
+                    }
+                    Err(err) => {
+                        error!("get task {}: {}", task_id, err);
+                        out_stream_tx
+                            .send_timeout(
+                                Err(Status::internal(err.to_string())),
+                                super::REQUEST_TIMEOUT,
+                            )
+                            .await
+                            .unwrap_or_else(|err| {
+                                error!("send task {} to stream: {}", task_id, err);
+                            });
+
+                        return;
+                    }
+                }
 
                 loop {
                     let mut finished_piece_numbers = Vec::new();
@@ -1625,20 +1657,52 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
-                let Ok(Some(_)) = persistent_cache_task_manager.get(task_id.as_str()) else {
-                    error!("get persistent cache task {} not found", task_id);
-                    out_stream_tx
-                        .send_timeout(
-                            Err(Status::internal(format!("task {} not found", task_id))),
-                            super::REQUEST_TIMEOUT,
-                        )
-                        .await
-                        .unwrap_or_else(|err| {
-                            error!("send persistent cache task {} not found to stream: {}", task_id, err);
-                        });
+                match persistent_cache_task_manager.get(task_id.as_str()) {
+                    Ok(Some(task)) => {
+                        if task.is_failed() {
+                            error!("get persistent cache task {} failed", task_id);
+                            out_stream_tx
+                                .send_timeout(
+                                    Err(Status::internal(format!("persistent cache task {} failed", task_id))),
+                                    super::REQUEST_TIMEOUT,
+                                )
+                                .await
+                                .unwrap_or_else(|err| {
+                                    error!("send persistent cache task {} failed to stream: {}", task_id, err);
+                                });
 
-                    return;
-                };
+                            return;
+                        }
+                    }
+                    Ok(None) => {
+                        error!("get persistent cache task {} not found", task_id);
+                        out_stream_tx
+                            .send_timeout(
+                                Err(Status::internal(format!("persistent cache task {} not found", task_id))),
+                                super::REQUEST_TIMEOUT,
+                            )
+                            .await
+                            .unwrap_or_else(|err| {
+                                error!("send persistent cache task {} not found to stream: {}", task_id, err);
+                            });
+
+                        return;
+                    }
+                    Err(err) => {
+                        error!("get persistent cache task {}: {}", task_id, err);
+                        out_stream_tx
+                            .send_timeout(
+                                Err(Status::internal(err.to_string())),
+                                super::REQUEST_TIMEOUT,
+                            )
+                            .await
+                            .unwrap_or_else(|err| {
+                                error!("send persistent cache task {} to stream: {}", task_id, err);
+                            });
+
+                        return;
+                    }
+                }
 
                 loop {
                     let mut finished_piece_numbers = Vec::new();
