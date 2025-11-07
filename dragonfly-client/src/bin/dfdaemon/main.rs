@@ -204,10 +204,12 @@ async fn main() -> Result<(), anyhow::Error> {
         })?;
     let scheduler_client = Arc::new(scheduler_client);
 
-    let backend_factory = BackendFactory::new(Some(config.server.plugin_dir.as_path()))
-        .inspect_err(|err| {
-            error!("initialize backend factory failed: {}", err);
-        })?;
+    let backend_factory =
+        BackendFactory::new(config.clone(), Some(config.server.plugin_dir.as_path())).inspect_err(
+            |err| {
+                error!("initialize backend factory failed: {}", err);
+            },
+        )?;
     let backend_factory = Arc::new(backend_factory);
 
     // Initialize download rate limiter.
