@@ -1059,13 +1059,25 @@ fn make_registry_mirror_request(
 ) -> ClientResult<Request<hyper::body::Incoming>> {
     let header = request.headers().clone();
     let registry_mirror_uri = match header::get_registry(&header) {
-        Some(registry) => format!("{}{}", registry, request.uri().path())
-            .parse::<http::Uri>()
-            .or_err(ErrorType::ParseError)?,
+        Some(registry) => format!(
+            "{}{}",
+            registry,
+            request
+                .uri()
+                .path_and_query()
+                .map(|v| v.as_str())
+                .unwrap_or("/")
+        )
+        .parse::<http::Uri>()
+        .or_err(ErrorType::ParseError)?,
         None => format!(
             "{}{}",
             config.proxy.registry_mirror.addr,
-            request.uri().path()
+            request
+                .uri()
+                .path_and_query()
+                .map(|v| v.as_str())
+                .unwrap_or("/")
         )
         .parse::<http::Uri>()
         .or_err(ErrorType::ParseError)?,
