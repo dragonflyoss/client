@@ -194,6 +194,14 @@ pub enum DFError {
     #[error(transparent)]
     HeadersError(#[from] headers::Error),
 
+    // InvalidHeaderName is the error for invalid header name.
+    #[error(transparent)]
+    InvalidHeaderName(#[from] http::header::InvalidHeaderName),
+
+    // InvalidHeaderValue is the error for invalid header value.
+    #[error(transparent)]
+    InvalidHeaderValue(#[from] http::header::InvalidHeaderValue),
+
     /// URLParseError is the error for url parse.
     #[error(transparent)]
     URLParseError(#[from] url::ParseError),
