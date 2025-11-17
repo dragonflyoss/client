@@ -82,7 +82,7 @@ warp = "0.3.5"
 headers = "0.4.1"
 regex = "1.12.2"
 humantime = "2.3.0"
-prost-wkt-types = "0.6"
+prost-wkt-types = "0.7"
 chrono = { version = "0.4.42", features = ["serde", "clock"] }
 openssl = { version = "0.10", features = ["vendored"] }
 opendal = { version = "0.54.1", features = [
