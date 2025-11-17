@@ -39,4 +39,4 @@ hyper.workspace = true
 hyper-util.workspace = true
 tokio-rustls.workspace = true
 rcgen.workspace = true
-wiremock = "0.6.4"
+wiremock = "0.6.5"
