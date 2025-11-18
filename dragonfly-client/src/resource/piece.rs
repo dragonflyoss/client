@@ -928,7 +928,7 @@ mod tests {
         .unwrap();
         let storage = Arc::new(storage);
 
-        let backend_factory = BackendFactory::new(None).unwrap();
+        let backend_factory = BackendFactory::new(config.clone(), None).unwrap();
         let backend_factory = Arc::new(backend_factory);
 
         let download_rate_limiter = Arc::new(RateLimiter::builder().build());
