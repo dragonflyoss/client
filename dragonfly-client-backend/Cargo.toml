@@ -12,7 +12,9 @@ edition.workspace = true
 [dependencies]
 dragonfly-client-core.workspace = true
 dragonfly-client-util.workspace = true
+dragonfly-client-config.workspace = true
 dragonfly-api.workspace = true
+http.workspace = true
 reqwest.workspace = true
 reqwest-middleware.workspace = true
 tokio.workspace = true

@@ -29,6 +29,7 @@ use rcgen::Certificate;
 use regex::Regex;
 use rustls_pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
@@ -1399,10 +1400,22 @@ impl Default for Tracing {
     }
 }
 
+/// Backend is the backend configuration for dfdaemon.
+#[derive(Default, Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Backend {
+    /// request_header is the request header of backend.
+    pub request_header: Option<HashMap<String, String>>,
+}
+
 /// Config is the configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
+    /// backend is the backend configuration for dfdaemon.
+    #[validate]
+    pub backend: Backend,
+
     /// host is the host configuration for dfdaemon.
     #[validate]
     pub host: Host,
@@ -2013,7 +2026,10 @@ key: /etc/ssl/private/client.pem
             "disableBackToSource": true,
             "prefetch": true,
             "prefetchRateLimit": "1GiB",
-            "readBufferSize": 8388608
+            "readBufferSize": 8388608,
+            "customHeaders": {
+                "X-Custom-Header": "custom-value"
+            }
         }"#;
 
         let proxy: Proxy = serde_json::from_str(json_data).unwrap();
@@ -2092,6 +2108,28 @@ key: /etc/ssl/private/client.pem
         assert_eq!(
             metrics.server.ip,
             Some("127.0.0.1".parse::<IpAddr>().unwrap())
+        );
+    }
+
+    #[test]
+    fn deserialize_backend_correctly() {
+        let json_data = r#"
+        {
+            "requestHeader": {
+                "X-Custom-Header": "value"
+            }
+        }"#;
+
+        let backend: Backend = serde_json::from_str(json_data).unwrap();
+
+        assert!(backend.request_header.is_some());
+        assert_eq!(
+            backend
+                .request_header
+                .as_ref()
+                .unwrap()
+                .get("X-Custom-Header"),
+            Some(&"value".to_string())
         );
     }
 }
