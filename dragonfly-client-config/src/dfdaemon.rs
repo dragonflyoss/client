@@ -579,7 +579,7 @@ impl UploadClient {
 /// |                                                +------------+     |
 /// +-------------------------------------------------------------------+
 /// ```
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ParentSelector {
     /// enable indicates whether enable parent selector for downloading.
@@ -604,6 +604,18 @@ pub struct ParentSelector {
     /// in the `ParentSelector`, the default value is 20.
     #[serde(default = "default_parent_selector_capacity")]
     pub capacity: usize,
+}
+
+/// ParentSelector implements Default.
+impl Default for ParentSelector {
+    fn default() -> Self {
+        ParentSelector {
+            enable: false,
+            sync_interval: default_parent_selector_sync_interval(),
+            timeout: default_parent_selector_timeout(),
+            capacity: default_parent_selector_capacity(),
+        }
+    }
 }
 
 /// Upload is the upload configuration for dfdaemon.
@@ -2141,5 +2153,14 @@ key: /etc/ssl/private/client.pem
                 .get("X-Custom-Header"),
             Some(&"value".to_string())
         );
+    }
+
+    #[test]
+    fn parent_selector_default() {
+        let selector = ParentSelector::default();
+        assert_eq!(selector.enable, false);
+        assert_eq!(selector.sync_interval, Duration::from_millis(500));
+        assert_eq!(selector.timeout, Duration::from_secs(3));
+        assert_eq!(selector.capacity, 20);
     }
 }
