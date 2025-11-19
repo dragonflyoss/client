@@ -2158,7 +2158,7 @@ key: /etc/ssl/private/client.pem
     #[test]
     fn parent_selector_default() {
         let selector = ParentSelector::default();
-        assert_eq!(selector.enable, false);
+        assert!(!selector.enable);
         assert_eq!(selector.sync_interval, Duration::from_millis(500));
         assert_eq!(selector.timeout, Duration::from_secs(3));
         assert_eq!(selector.capacity, 20);
