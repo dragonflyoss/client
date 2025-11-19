@@ -1024,7 +1024,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "1.0.37"
+version = "1.0.38"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1102,7 +1102,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "1.0.37"
+version = "1.0.38"
 dependencies = [
  "dashmap",
  "dragonfly-api",
@@ -1135,7 +1135,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "1.0.37"
+version = "1.0.38"
 dependencies = [
  "bytesize",
  "bytesize-serde",
@@ -1165,7 +1165,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "1.0.37"
+version = "1.0.38"
 dependencies = [
  "headers 0.4.1",
  "hyper 1.6.0",
@@ -1184,7 +1184,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "1.0.37"
+version = "1.0.38"
 dependencies = [
  "anyhow",
  "clap",
@@ -1201,7 +1201,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-metric"
-version = "1.0.37"
+version = "1.0.38"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-config",
@@ -1216,7 +1216,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "1.0.37"
+version = "1.0.38"
 dependencies = [
  "bincode",
  "bytes",
@@ -1250,7 +1250,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "1.0.37"
+version = "1.0.38"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -1716,7 +1716,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "1.0.37"
+version = "1.0.38"
 dependencies = [
  "dragonfly-client-backend",
  "dragonfly-client-core",
@@ -2301,9 +2301,9 @@ dependencies = [
 
 [[package]]
 name = "indicatif"
-version = "0.18.0"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70a646d946d06bedbbc4cac4c218acf4bbf2d87757a784857025f4d447e4e1cd"
+checksum = "e2e0ddd45fe8e09ee1a607920b12271f8a5528a41ecaf6e1d1440d6493315b6b"
 dependencies = [
  "console",
  "portable-atomic",
@@ -2357,17 +2357,6 @@ name = "inventory"
 version = "0.3.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f958d3d68f4167080a18141e10381e7634563984a537f2a49a30fd8e53ac5767"
-
-[[package]]
-name = "io-uring"
-version = "0.7.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b86e202f00093dcba4275d4636b93ef9dd75d025ae560d2521b45ea28ab49013"
-dependencies = [
- "bitflags 2.9.4",
- "cfg-if",
- "libc",
-]
 
 [[package]]
 name = "ipconfig"
@@ -5295,30 +5284,27 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.47.1"
+version = "1.48.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89e49afdadebb872d3145a5638b59eb0691ea23e46ca484037cfab3b76b95038"
+checksum = "ff360e02eab121e0bc37a2d3b4d4dc622e6eda3a8e5253d5435ecf5bd4c68408"
 dependencies = [
- "backtrace",
  "bytes",
- "io-uring",
  "libc",
  "mio",
  "parking_lot 0.12.1",
  "pin-project-lite",
  "signal-hook-registry",
- "slab",
  "socket2 0.6.0",
  "tokio-macros",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
 name = "tokio-macros"
-version = "2.5.0"
+version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e06d43f1345a3bcd39f6a56dbb7dcab2ba47e68e8ac134855e7e2bdbaf8cab8"
+checksum = "af407857209536a95c8e56f8231ef2c2e2aff839b22e07a1ffcbc617e9db9fa5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6372,6 +6358,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2f500e4d28234f72040990ec9d39e3a6b950f9f22d3dba18416c35882612bcb"
 dependencies = [
  "windows-targets 0.53.2",
+]
+
+[[package]]
+name = "windows-sys"
+version = "0.61.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f109e41dd4a3c848907eb83d5a42ea98b3769495597450cf6d153507b166f0f"
+dependencies = [
+ "windows-link 0.2.0",
 ]
 
 [[package]]
