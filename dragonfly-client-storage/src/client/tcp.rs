@@ -22,7 +22,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::time;
-use tracing::{error, instrument, Span};
+use tracing::{debug, error, instrument, Span};
 use vortex_protocol::{
     tlv::{
         download_persistent_cache_piece::DownloadPersistentCachePiece,
@@ -96,6 +96,7 @@ impl TCPClient {
                 let piece_content: piece_content::PieceContent = self
                     .read_piece_content(&mut reader, piece_content::METADATA_LENGTH_SIZE)
                     .await?;
+                debug!("received piece content: {:?}", piece_content.metadata());
 
                 let metadata = piece_content.metadata();
                 Ok((reader, metadata.offset, metadata.digest))
@@ -150,6 +151,10 @@ impl TCPClient {
                 let persistent_cache_piece_content: persistent_cache_piece_content::PersistentCachePieceContent =
                     self.read_piece_content(&mut reader, piece_content::METADATA_LENGTH_SIZE)
                         .await?;
+                debug!(
+                    "received piece content: {:?}",
+                    persistent_cache_piece_content.metadata()
+                );
 
                 let metadata = persistent_cache_piece_content.metadata();
                 Ok((reader, metadata.offset, metadata.digest))
@@ -179,7 +184,10 @@ impl TCPClient {
         socket.set_send_buffer_size(super::DEFAULT_SEND_BUFFER_SIZE)?;
         socket.set_recv_buffer_size(super::DEFAULT_RECV_BUFFER_SIZE)?;
         socket.set_tcp_keepalive(
-            &TcpKeepalive::new().with_interval(super::DEFAULT_KEEPALIVE_INTERVAL),
+            &TcpKeepalive::new()
+                .with_interval(super::DEFAULT_KEEPALIVE_INTERVAL)
+                .with_time(super::DEFAULT_KEEPALIVE_TIME)
+                .with_retries(super::DEFAULT_KEEPALIVE_RETRIES),
         )?;
         #[cfg(target_os = "linux")]
         {
