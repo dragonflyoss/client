@@ -24,7 +24,9 @@ use dragonfly_client::grpc::{
 };
 use dragonfly_client::health::Health;
 use dragonfly_client::proxy::Proxy;
-use dragonfly_client::resource::{persistent_cache_task::PersistentCacheTask, task::Task};
+use dragonfly_client::resource::{
+    parent_selector::ParentSelector, persistent_cache_task::PersistentCacheTask, task::Task,
+};
 use dragonfly_client::stats::Stats;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::BackendFactory;
@@ -245,6 +247,16 @@ async fn main() -> Result<(), anyhow::Error> {
             .build(),
     );
 
+    // Initialize parent selector.
+    let parent_selector = ParentSelector::new(
+        config.clone(),
+        id_generator.host_id(),
+        id_generator.peer_id(),
+        shutdown.clone(),
+        shutdown_complete_tx.clone(),
+    );
+    let parent_selector = Arc::new(parent_selector);
+
     // Initialize task manager.
     let task = Task::new(
         config.clone(),
@@ -255,6 +267,7 @@ async fn main() -> Result<(), anyhow::Error> {
         download_rate_limiter.clone(),
         upload_rate_limiter.clone(),
         prefetch_rate_limiter.clone(),
+        parent_selector.clone(),
     )?;
     let task = Arc::new(task);
 
