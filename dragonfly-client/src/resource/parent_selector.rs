@@ -415,11 +415,14 @@ impl ParentSelector {
 mod tests {
     use super::*;
     use dragonfly_api::common::v2::{CacheTask, Host, PersistentCacheTask, Task};
+    use dragonfly_api::dfdaemon::v2::dfdaemon_upload_server::{
+        DfdaemonUpload, DfdaemonUploadServer as DfdaemonUploadGRPCServer,
+    };
     use dragonfly_api::dfdaemon::v2::*;
     use dragonfly_client_config::dfdaemon::Config;
     use dragonfly_client_util::shutdown::Shutdown;
-    use std::pin::Pin;
     use std::io::ErrorKind;
+    use std::pin::Pin;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::mpsc;
@@ -427,9 +430,6 @@ mod tests {
     use tokio_stream::Stream;
     use tonic::transport::Server;
     use tonic::{Request, Response, Status};
-    use dragonfly_api::dfdaemon::v2::dfdaemon_upload_server::{
-        DfdaemonUpload, DfdaemonUploadServer as DfdaemonUploadGRPCServer,
-    };
 
     type GrpcResult<T> = std::result::Result<T, Status>;
     type BoxStream<T> = Pin<Box<dyn Stream<Item = GrpcResult<T>> + Send>>;
