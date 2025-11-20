@@ -401,10 +401,95 @@ impl ParentSelector {
         };
 
         let tx_bandwidth = network.tx_bandwidth.unwrap_or(0);
-        if tx_bandwidth < network.max_rx_bandwidth {
-            network.max_rx_bandwidth - tx_bandwidth
+        let max_tx_bandwidth = network.max_tx_bandwidth;
+
+        if tx_bandwidth < max_tx_bandwidth {
+            max_tx_bandwidth.saturating_sub(tx_bandwidth)
         } else {
             0
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dragonfly_api::common::v2::Host;
+
+    #[test]
+    fn test_get_idle_upload_rate() {
+        struct TestCase {
+            name: &'static str,
+            host: Host,
+            expected: u64,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "no network",
+                host: Host {
+                    network: None,
+                    ..Default::default()
+                },
+                expected: 0,
+            },
+            TestCase {
+                name: "tx_bandwidth none",
+                host: Host {
+                    network: Some(dragonfly_api::common::v2::Network {
+                        tx_bandwidth: None,
+                        max_tx_bandwidth: 100,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                expected: 100,
+            },
+            TestCase {
+                name: "idle bandwidth",
+                host: Host {
+                    network: Some(dragonfly_api::common::v2::Network {
+                        tx_bandwidth: Some(50),
+                        max_tx_bandwidth: 100,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                expected: 50,
+            },
+            TestCase {
+                name: "no idle bandwidth",
+                host: Host {
+                    network: Some(dragonfly_api::common::v2::Network {
+                        tx_bandwidth: Some(100),
+                        max_tx_bandwidth: 100,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                expected: 0,
+            },
+            TestCase {
+                name: "tx greater than max",
+                host: Host {
+                    network: Some(dragonfly_api::common::v2::Network {
+                        tx_bandwidth: Some(150),
+                        max_tx_bandwidth: 100,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                expected: 0,
+            },
+        ];
+
+        for test_case in test_cases {
+            assert_eq!(
+                ParentSelector::get_idle_upload_rate(&test_case.host),
+                test_case.expected,
+                "Failed for test case: {}",
+                test_case.name
+            );
         }
     }
 }
