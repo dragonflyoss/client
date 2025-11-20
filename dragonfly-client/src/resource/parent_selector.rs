@@ -414,7 +414,412 @@ impl ParentSelector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dragonfly_api::common::v2::Host;
+    use dragonfly_api::common::v2::{CacheTask, Host, PersistentCacheTask, Task};
+    use dragonfly_api::dfdaemon::v2::*;
+    use dragonfly_client_config::dfdaemon::Config;
+    use dragonfly_client_util::shutdown::Shutdown;
+    use std::pin::Pin;
+    use std::io::ErrorKind;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::mpsc;
+    use tokio_stream::wrappers::TcpListenerStream;
+    use tokio_stream::Stream;
+    use tonic::transport::Server;
+    use tonic::{Request, Response, Status};
+    use dragonfly_api::dfdaemon::v2::dfdaemon_upload_server::{
+        DfdaemonUpload, DfdaemonUploadServer as DfdaemonUploadGRPCServer,
+    };
+
+    type GrpcResult<T> = std::result::Result<T, Status>;
+    type BoxStream<T> = Pin<Box<dyn Stream<Item = GrpcResult<T>> + Send>>;
+
+    struct MockUploadService {
+        hosts: Vec<Host>,
+    }
+
+    #[tonic::async_trait]
+    impl DfdaemonUpload for MockUploadService {
+        type DownloadTaskStream = BoxStream<DownloadTaskResponse>;
+        type DownloadCacheTaskStream = BoxStream<DownloadCacheTaskResponse>;
+        type SyncCachePiecesStream = BoxStream<SyncCachePiecesResponse>;
+        type SyncPiecesStream = BoxStream<SyncPiecesResponse>;
+        type SyncHostStream = BoxStream<Host>;
+        type DownloadPersistentCacheTaskStream = BoxStream<DownloadPersistentCacheTaskResponse>;
+        type SyncPersistentCachePiecesStream = BoxStream<SyncPersistentCachePiecesResponse>;
+
+        async fn download_task(
+            &self,
+            _request: Request<DownloadTaskRequest>,
+        ) -> GrpcResult<Response<Self::DownloadTaskStream>> {
+            Err(Status::unimplemented("download_task"))
+        }
+
+        async fn stat_task(
+            &self,
+            _request: Request<StatTaskRequest>,
+        ) -> GrpcResult<Response<Task>> {
+            Err(Status::unimplemented("stat_task"))
+        }
+
+        async fn list_task_entries(
+            &self,
+            _request: Request<ListTaskEntriesRequest>,
+        ) -> GrpcResult<Response<ListTaskEntriesResponse>> {
+            Err(Status::unimplemented("list_task_entries"))
+        }
+
+        async fn delete_task(
+            &self,
+            _request: Request<DeleteTaskRequest>,
+        ) -> GrpcResult<Response<()>> {
+            Err(Status::unimplemented("delete_task"))
+        }
+
+        async fn sync_pieces(
+            &self,
+            _request: Request<SyncPiecesRequest>,
+        ) -> GrpcResult<Response<Self::SyncPiecesStream>> {
+            Err(Status::unimplemented("sync_pieces"))
+        }
+
+        async fn download_piece(
+            &self,
+            _request: Request<DownloadPieceRequest>,
+        ) -> GrpcResult<Response<DownloadPieceResponse>> {
+            Err(Status::unimplemented("download_piece"))
+        }
+
+        async fn download_cache_task(
+            &self,
+            _request: Request<DownloadCacheTaskRequest>,
+        ) -> GrpcResult<Response<Self::DownloadCacheTaskStream>> {
+            Err(Status::unimplemented("download_cache_task"))
+        }
+
+        async fn stat_cache_task(
+            &self,
+            _request: Request<StatCacheTaskRequest>,
+        ) -> GrpcResult<Response<CacheTask>> {
+            Err(Status::unimplemented("stat_cache_task"))
+        }
+
+        async fn delete_cache_task(
+            &self,
+            _request: Request<DeleteCacheTaskRequest>,
+        ) -> GrpcResult<Response<()>> {
+            Err(Status::unimplemented("delete_cache_task"))
+        }
+
+        async fn sync_cache_pieces(
+            &self,
+            _request: Request<SyncCachePiecesRequest>,
+        ) -> GrpcResult<Response<Self::SyncCachePiecesStream>> {
+            Err(Status::unimplemented("sync_cache_pieces"))
+        }
+
+        async fn download_cache_piece(
+            &self,
+            _request: Request<DownloadCachePieceRequest>,
+        ) -> GrpcResult<Response<DownloadCachePieceResponse>> {
+            Err(Status::unimplemented("download_cache_piece"))
+        }
+
+        async fn sync_host(
+            &self,
+            _request: Request<SyncHostRequest>,
+        ) -> GrpcResult<Response<Self::SyncHostStream>> {
+            let stream = tokio_stream::iter(self.hosts.clone().into_iter().map(Ok));
+            Ok(Response::new(Box::pin(stream) as Self::SyncHostStream))
+        }
+
+        async fn download_persistent_cache_task(
+            &self,
+            _request: Request<DownloadPersistentCacheTaskRequest>,
+        ) -> GrpcResult<Response<Self::DownloadPersistentCacheTaskStream>> {
+            Err(Status::unimplemented("download_persistent_cache_task"))
+        }
+
+        async fn update_persistent_cache_task(
+            &self,
+            _request: Request<UpdatePersistentCacheTaskRequest>,
+        ) -> GrpcResult<Response<()>> {
+            Err(Status::unimplemented("update_persistent_cache_task"))
+        }
+
+        async fn stat_persistent_cache_task(
+            &self,
+            _request: Request<StatPersistentCacheTaskRequest>,
+        ) -> GrpcResult<Response<PersistentCacheTask>> {
+            Err(Status::unimplemented("stat_persistent_cache_task"))
+        }
+
+        async fn delete_persistent_cache_task(
+            &self,
+            _request: Request<DeletePersistentCacheTaskRequest>,
+        ) -> GrpcResult<Response<()>> {
+            Err(Status::unimplemented("delete_persistent_cache_task"))
+        }
+
+        async fn sync_persistent_cache_pieces(
+            &self,
+            _request: Request<SyncPersistentCachePiecesRequest>,
+        ) -> GrpcResult<Response<Self::SyncPersistentCachePiecesStream>> {
+            Err(Status::unimplemented("sync_persistent_cache_pieces"))
+        }
+
+        async fn download_persistent_cache_piece(
+            &self,
+            _request: Request<DownloadPersistentCachePieceRequest>,
+        ) -> GrpcResult<Response<DownloadPersistentCachePieceResponse>> {
+            Err(Status::unimplemented("download_persistent_cache_piece"))
+        }
+
+        async fn exchange_ib_verbs_queue_pair_endpoint(
+            &self,
+            _request: Request<ExchangeIbVerbsQueuePairEndpointRequest>,
+        ) -> GrpcResult<Response<ExchangeIbVerbsQueuePairEndpointResponse>> {
+            Err(Status::unimplemented(
+                "exchange_ib_verbs_queue_pair_endpoint",
+            ))
+        }
+    }
+
+    fn create_parent_selector() -> ParentSelector {
+        let (shutdown_complete_tx, _shutdown_complete_rx) = mpsc::unbounded_channel();
+        ParentSelector::new(
+            Arc::new(Config::default()),
+            "local-host".to_string(),
+            "peer-id".to_string(),
+            Shutdown::new(),
+            shutdown_complete_tx,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_register_parents() {
+        let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+                eprintln!("register_parents_syncs_weights_and_connections skipped: {err}");
+                return;
+            }
+            Err(err) => panic!("bind listener: {err}"),
+        };
+        let addr = listener.local_addr().unwrap();
+
+        let mock_hosts = vec![Host {
+            network: Some(dragonfly_api::common::v2::Network {
+                max_tx_bandwidth: 100,
+                tx_bandwidth: Some(40),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }];
+
+        tokio::spawn(async move {
+            Server::builder()
+                .add_service(DfdaemonUploadGRPCServer::new(MockUploadService {
+                    hosts: mock_hosts,
+                }))
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+
+        let parent = CollectedParent {
+            id: "parent-grpc".to_string(),
+            host: Some(Host {
+                ip: addr.ip().to_string(),
+                hostname: "grpc-parent".to_string(),
+                port: addr.port() as i32,
+                ..Default::default()
+            }),
+            download_ip: None,
+            download_tcp_port: None,
+            download_quic_port: None,
+        };
+
+        let selector = create_parent_selector();
+
+        selector
+            .register_parents(&[parent.clone()])
+            .await
+            .expect("register parents");
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let host_id = IDGenerator::new(
+            parent.host.as_ref().unwrap().ip.clone(),
+            parent.host.as_ref().unwrap().hostname.clone(),
+            false,
+        )
+        .host_id();
+
+        let weight = selector.weights.get(&host_id).map(|w| *w);
+        assert_eq!(weight, Some(60), "weight should use idle upload rate");
+        assert!(
+            selector.connections.get(&host_id).is_some(),
+            "connection should be tracked"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unregister_parents() {
+        let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+                eprintln!("unregister_parents_cleans_up_connections_and_weights skipped: {err}");
+                return;
+            }
+            Err(err) => panic!("bind listener: {err}"),
+        };
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            Server::builder()
+                .add_service(DfdaemonUploadGRPCServer::new(MockUploadService {
+                    hosts: vec![Host {
+                        network: Some(dragonfly_api::common::v2::Network {
+                            max_tx_bandwidth: 100,
+                            tx_bandwidth: Some(10),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }],
+                }))
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+
+        let parent = CollectedParent {
+            id: "parent-to-clean".to_string(),
+            host: Some(Host {
+                ip: addr.ip().to_string(),
+                hostname: "grpc-parent-clean".to_string(),
+                port: addr.port() as i32,
+                ..Default::default()
+            }),
+            download_ip: None,
+            download_tcp_port: None,
+            download_quic_port: None,
+        };
+
+        let selector = create_parent_selector();
+
+        selector.register_parents(&[parent.clone()]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let peer = Peer {
+            id: parent.id.clone(),
+            host: parent.host.clone(),
+            ..Default::default()
+        };
+        selector.unregister_parents(vec![peer]);
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let host_id = IDGenerator::new(
+            parent.host.as_ref().unwrap().ip.clone(),
+            parent.host.as_ref().unwrap().hostname.clone(),
+            false,
+        )
+        .host_id();
+
+        assert!(
+            selector.weights.get(&host_id).is_none(),
+            "weight should be removed after unregister"
+        );
+        assert!(
+            selector.connections.get(&host_id).is_none(),
+            "connection should be removed after unregister"
+        );
+    }
+
+    #[test]
+    fn test_select_parent() {
+        let parent_a = CollectedParent {
+            id: "parent-a".to_string(),
+            host: Some(Host {
+                ip: "192.168.0.10".to_string(),
+                hostname: "host-a".to_string(),
+                port: 6500,
+                ..Default::default()
+            }),
+            download_ip: None,
+            download_tcp_port: None,
+            download_quic_port: None,
+        };
+        let parent_b = CollectedParent {
+            id: "parent-b".to_string(),
+            host: Some(Host {
+                ip: "192.168.0.11".to_string(),
+                hostname: "host-b".to_string(),
+                port: 6500,
+                ..Default::default()
+            }),
+            download_ip: None,
+            download_tcp_port: None,
+            download_quic_port: None,
+        };
+
+        let parent_b_host_id = IDGenerator::new(
+            parent_b.host.as_ref().unwrap().ip.clone(),
+            parent_b.host.as_ref().unwrap().hostname.clone(),
+            false,
+        )
+        .host_id();
+
+        struct TestCase {
+            name: &'static str,
+            parents: Vec<CollectedParent>,
+            weighted_host: Option<String>,
+            expected_ids: Vec<String>,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "prefers weighted parent_b",
+                parents: vec![parent_a.clone(), parent_b.clone()],
+                weighted_host: Some(parent_b_host_id.clone()),
+                expected_ids: vec![parent_b.id.clone()],
+            },
+            TestCase {
+                name: "falls back when no weights",
+                parents: vec![parent_a.clone(), parent_b.clone()],
+                weighted_host: None,
+                expected_ids: vec![parent_a.id.clone(), parent_b.id.clone()],
+            },
+        ];
+
+        for case in test_cases {
+            let (shutdown_complete_tx, _shutdown_complete_rx) = mpsc::unbounded_channel();
+            let selector = ParentSelector::new(
+                Arc::new(Config::default()),
+                "local-host".to_string(),
+                "peer-id".to_string(),
+                Shutdown::new(),
+                shutdown_complete_tx,
+            );
+
+            if let Some(weighted_host) = case.weighted_host {
+                selector.weights.insert(weighted_host, 100);
+            }
+
+            let selected = selector
+                .select_parent(case.parents.clone())
+                .unwrap_or_else(|| panic!("{}: expected a parent to be selected", case.name));
+
+            assert!(
+                case.expected_ids.contains(&selected.id),
+                "{}: expected selected parent to be in {:?}, got {}",
+                case.name,
+                case.expected_ids,
+                selected.id
+            );
+        }
+    }
 
     #[test]
     fn test_get_idle_upload_rate() {
