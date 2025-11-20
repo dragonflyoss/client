@@ -102,7 +102,10 @@ impl TCPServer {
         socket.set_send_buffer_size(super::DEFAULT_SEND_BUFFER_SIZE)?;
         socket.set_recv_buffer_size(super::DEFAULT_RECV_BUFFER_SIZE)?;
         socket.set_tcp_keepalive(
-            &TcpKeepalive::new().with_interval(super::DEFAULT_KEEPALIVE_INTERVAL),
+            &TcpKeepalive::new()
+                .with_interval(super::DEFAULT_KEEPALIVE_INTERVAL)
+                .with_time(super::DEFAULT_KEEPALIVE_TIME)
+                .with_retries(super::DEFAULT_KEEPALIVE_RETRIES),
         )?;
         #[cfg(target_os = "linux")]
         {
@@ -509,6 +512,7 @@ impl TCPServerHandler {
         stream: &mut R,
         writer: &mut OwnedWriteHalf,
     ) -> ClientResult<()> {
+        debug!("start to write stream to tcp writer");
         copy(stream, writer).await.inspect_err(|err| {
             error!("copy failed: {}", err);
         })?;

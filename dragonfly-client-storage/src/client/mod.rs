@@ -20,13 +20,19 @@ pub mod tcp;
 use std::time::Duration;
 
 /// DEFAULT_SEND_BUFFER_SIZE is the default size of the send buffer for network connections.
-const DEFAULT_SEND_BUFFER_SIZE: usize = 32 * 1024 * 1024;
+const DEFAULT_SEND_BUFFER_SIZE: usize = 16 * 1024 * 1024;
 
 /// DEFAULT_RECV_BUFFER_SIZE is the default size of the receive buffer for network connections.
-const DEFAULT_RECV_BUFFER_SIZE: usize = 32 * 1024 * 1024;
+const DEFAULT_RECV_BUFFER_SIZE: usize = 16 * 1024 * 1024;
 
 /// DEFAULT_KEEPALIVE_INTERVAL is the default interval for sending keepalive messages.
-const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
+const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(3);
+
+/// DEFAULT_KEEPALIVE_TIME is the default time before starting keepalive messages.
+const DEFAULT_KEEPALIVE_TIME: Duration = Duration::from_secs(5);
+
+/// DEFAULT_KEEPALIVE_RETRIES is the default number of keepalive retries.
+const DEFAULT_KEEPALIVE_RETRIES: u32 = 3;
 
 /// DEFAULT_MAX_IDLE_TIMEOUT is the default maximum idle timeout for connections.
-const DEFAULT_MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+const DEFAULT_MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(60);

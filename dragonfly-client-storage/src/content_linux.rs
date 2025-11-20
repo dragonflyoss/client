@@ -27,7 +27,7 @@ use tokio::io::{
     self, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter, SeekFrom,
 };
 use tokio_util::io::InspectReader;
-use tracing::{error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 use walkdir::WalkDir;
 
 /// Content is the content of a piece.
@@ -343,6 +343,7 @@ impl Content {
             error!("seek {:?} failed: {}", task_path, err);
         })?;
 
+        let reader = reader.take(expected_length);
         let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
         let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
 
@@ -352,6 +353,7 @@ impl Content {
             hasher.update(bytes);
         });
 
+        debug!("start to write piece to {:?}", task_path);
         let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
             error!("copy {:?} failed: {}", task_path, err);
         })?;
@@ -570,6 +572,7 @@ impl Content {
             error!("seek {:?} failed: {}", task_path, err);
         })?;
 
+        let reader = reader.take(expected_length);
         let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
         let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
 
@@ -579,6 +582,7 @@ impl Content {
             hasher.update(bytes);
         });
 
+        debug!("start to write piece to {:?}", task_path);
         let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
             error!("copy {:?} failed: {}", task_path, err);
         })?;
