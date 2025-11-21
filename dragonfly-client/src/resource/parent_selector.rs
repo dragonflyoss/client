@@ -148,6 +148,7 @@ impl ParentSelector {
     /// This function performs weighted random selection where parents with higher weights
     /// (better idle bandwidth) have a higher probability of being selected. If weight
     /// calculation fails, falls back to uniform random selection.
+    #[instrument(skip_all)]
     pub fn select(&self, parents: Vec<CollectedParent>) -> CollectedParent {
         let weights: Vec<u32> = parents
             .iter()
@@ -195,6 +196,7 @@ impl ParentSelector {
     /// - Creates a new gRPC connection if one doesn't exist.
     /// - Spawns a background task to continuously sync host metrics (bandwidth, load).
     /// - Updates the connection's request counter.
+    #[instrument(skip_all)]
     pub async fn register(&self, parents: &[Peer]) -> Result<()> {
         let dfdaemon_shutdown = self.shutdown.clone();
         let mut join_set = JoinSet::new();
@@ -265,6 +267,7 @@ impl ParentSelector {
     /// - Triggers connection shutdown.
     /// - Removes the weight entry.
     /// - Removes the connection from the pool.
+    #[instrument(skip_all)]
     pub fn unregister(&self, parents: &[Peer]) {
         for parent in parents {
             info!("unregister parent {}", parent.id);
@@ -352,6 +355,7 @@ impl ParentSelector {
     }
 
     /// Calculates the idle transmission bandwidth of a host.
+    #[instrument(skip_all)]
     fn get_idle_tx_bandwidth(host: &Host) -> u64 {
         let network = match &host.network {
             Some(network) => network,
@@ -443,6 +447,7 @@ impl PersistentCacheParentSelector {
     /// This function performs weighted random selection where parents with higher weights
     /// (better idle bandwidth) have a higher probability of being selected. If weight
     /// calculation fails, falls back to uniform random selection.
+    #[instrument(skip_all)]
     pub fn select(&self, parents: Vec<CollectedParent>) -> CollectedParent {
         let weights: Vec<u32> = parents
             .iter()
@@ -490,6 +495,7 @@ impl PersistentCacheParentSelector {
     /// - Creates a new gRPC connection if one doesn't exist.
     /// - Spawns a background task to continuously sync host metrics (bandwidth, load).
     /// - Updates the connection's request counter.
+    #[instrument(skip_all)]
     pub async fn register(&self, parents: &[PersistentCachePeer]) -> Result<()> {
         let dfdaemon_shutdown = self.shutdown.clone();
         let mut join_set = JoinSet::new();
@@ -563,6 +569,7 @@ impl PersistentCacheParentSelector {
     /// - Triggers connection shutdown.
     /// - Removes the weight entry.
     /// - Removes the connection from the pool.
+    #[instrument(skip_all)]
     pub fn unregister(&self, parents: &[PersistentCachePeer]) {
         for parent in parents {
             info!("unregister persistent cache parent {}", parent.id);
@@ -656,6 +663,7 @@ impl PersistentCacheParentSelector {
     }
 
     /// Calculates the idle transmission bandwidth of a host.
+    #[instrument(skip_all)]
     fn get_idle_tx_bandwidth(host: &Host) -> u64 {
         let network = match &host.network {
             Some(network) => network,
