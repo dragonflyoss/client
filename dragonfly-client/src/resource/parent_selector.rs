@@ -111,7 +111,7 @@ pub struct ParentSelector {
     id_generator: Arc<IDGenerator>,
 
     /// Maps parent host IDs to their current bandwidth weights.
-    weights: Arc<DashMap<String, u32>>,
+    weights: Arc<DashMap<String, u64>>,
 
     /// Active connections indexed by parent host ID and each connection tracks usage and manages its sync task.
     connections: Arc<DashMap<String, Connection>>,
@@ -149,7 +149,7 @@ impl ParentSelector {
     /// (better idle bandwidth) have a higher probability of being selected. If weight
     /// calculation fails, falls back to uniform random selection.
     pub fn select(&self, parents: Vec<CollectedParent>) -> CollectedParent {
-        let weights: Vec<u32> = parents
+        let weights: Vec<u64> = parents
             .iter()
             .map(|parent| {
                 let Some(parent_host) = parent.host.as_ref() else {
@@ -304,7 +304,7 @@ impl ParentSelector {
         host_id: String,
         peer_id: String,
         parent_host_id: String,
-        weights: Arc<DashMap<String, u32>>,
+        weights: Arc<DashMap<String, u64>>,
         dfdaemon_upload_client: DfdaemonUploadClient,
         mut shutdown: Shutdown,
         mut dfdaemon_shutdown: Shutdown,
@@ -332,7 +332,7 @@ impl ParentSelector {
                             let idle_tx_bandwidth = Self::get_idle_tx_bandwidth(&message);
 
                             info!("update host {} idle TX bandwidth to {}", parent_host_id, idle_tx_bandwidth);
-                            weights.insert(parent_host_id.clone(), idle_tx_bandwidth as u32);
+                            weights.insert(parent_host_id.clone(), idle_tx_bandwidth);
                         }
                         None => break,
                     }
@@ -406,7 +406,7 @@ pub struct PersistentCacheParentSelector {
     id_generator: Arc<IDGenerator>,
 
     /// Maps parent host IDs to their current bandwidth weights.
-    weights: Arc<DashMap<String, u32>>,
+    weights: Arc<DashMap<String, u64>>,
 
     /// Active connections indexed by parent host ID and each connection tracks usage and manages its sync task.
     connections: Arc<DashMap<String, Connection>>,
@@ -444,7 +444,7 @@ impl PersistentCacheParentSelector {
     /// (better idle bandwidth) have a higher probability of being selected. If weight
     /// calculation fails, falls back to uniform random selection.
     pub fn select(&self, parents: Vec<CollectedParent>) -> CollectedParent {
-        let weights: Vec<u32> = parents
+        let weights: Vec<u64> = parents
             .iter()
             .map(|parent| {
                 let Some(parent_host) = parent.host.as_ref() else {
@@ -605,7 +605,7 @@ impl PersistentCacheParentSelector {
         host_id: String,
         peer_id: String,
         parent_host_id: String,
-        weights: Arc<DashMap<String, u32>>,
+        weights: Arc<DashMap<String, u64>>,
         dfdaemon_upload_client: DfdaemonUploadClient,
         mut shutdown: Shutdown,
         mut dfdaemon_shutdown: Shutdown,
@@ -636,7 +636,7 @@ impl PersistentCacheParentSelector {
                             let idle_tx_bandwidth = Self::get_idle_tx_bandwidth(&message);
 
                             info!("update host {} idle TX bandwidth to {}", parent_host_id, idle_tx_bandwidth);
-                            weights.insert(parent_host_id.clone(), idle_tx_bandwidth as u32);
+                            weights.insert(parent_host_id.clone(), idle_tx_bandwidth);
                         }
                         None => break,
                     }
