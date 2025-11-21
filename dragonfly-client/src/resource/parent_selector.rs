@@ -17,10 +17,9 @@
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::resource::piece_collector::CollectedParent;
 use dashmap::DashMap;
-use dragonfly_api::common::v2::{Host, Peer};
+use dragonfly_api::common::v2::{Host, Peer, PersistentCachePeer};
 use dragonfly_api::dfdaemon::v2::SyncHostRequest;
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::Error;
 use dragonfly_client_core::Result;
 use dragonfly_client_util::id_generator::IDGenerator;
 use dragonfly_client_util::shutdown::{self, Shutdown};
@@ -28,184 +27,318 @@ use rand::distr::weighted::WeightedIndex;
 use rand::distr::Distribution;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, instrument, warn, Instrument};
 
-/// Connection manages a single parent connection.
+/// Manages a single persistent connection to a parent peer.
+///
+/// This structure tracks the gRPC client, reference count of active requests,
+/// and shutdown signaling for background synchronization tasks.
 struct Connection {
-    /// client is the dfdaemon upload client for this parent.
-    client: DfdaemonUploadClient,
+    /// Number of active requests currently using this connection.
+    /// Used for reference counting to determine when cleanup is safe.
+    active_requests: Arc<AtomicUsize>,
 
-    /// connection_guard tracks how many download tasks are using this connection.
-    connection_guard: ConnectionGuard,
-
-    /// shutdown is used to signal the sync host to stop.
+    /// Shutdown signal to stop the background host sync task.
     shutdown: Shutdown,
 }
 
+/// Implements lifecycle management for parent peer connections.
 impl Connection {
-    /// new creates a new Connection.
-    pub fn new(client: DfdaemonUploadClient) -> Self {
+    /// Creates a new connection wrapper with zero active requests.
+    pub fn new() -> Self {
         Self {
-            client,
-            connection_guard: ConnectionGuard::new(Arc::new(AtomicUsize::new(0))),
+            active_requests: Arc::new(AtomicUsize::new(0)),
             shutdown: Shutdown::new(),
         }
     }
 
-    /// connection_guard increments the reference count.
-    pub fn connection_guard(&self) {
-        self.connection_guard.acquire();
-    }
-
-    /// active_count returns the number of active requests.
+    /// Returns the current number of active requests using this connection.
     pub fn active_requests(&self) -> usize {
-        self.connection_guard.active_requests()
+        self.active_requests.load(Ordering::SeqCst)
     }
 
-    /// release_request decrements the reference count.
-    pub fn release_request(&self) {
-        self.connection_guard.release();
+    /// Increments the active request counter.
+    pub fn increment_request(&self) {
+        self.active_requests.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// shutdown triggers shutdown of the sync host.
+    /// Decrements the active request counter.
+    pub fn decrement_request(&self) {
+        self.active_requests.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    /// Triggers shutdown of the background host synchronization task.
     pub fn shutdown(&self) {
         self.shutdown.trigger();
     }
 }
 
-/// ConnectionGuard automatically manages reference counting for parent connections.
-pub struct ConnectionGuard {
-    active_requests: Arc<AtomicUsize>,
-}
-
-impl ConnectionGuard {
-    fn new(active_connections: Arc<AtomicUsize>) -> Self {
-        Self {
-            active_requests: active_connections,
-        }
-    }
-
-    fn active_requests(&self) -> usize {
-        self.active_requests.load(Ordering::SeqCst)
-    }
-
-    fn acquire(&self) {
-        self.active_requests.fetch_add(1, Ordering::SeqCst);
-    }
-
-    fn release(&self) {
-        self.active_requests.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-impl Drop for ConnectionGuard {
-    fn drop(&mut self) {
-        self.active_requests.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-/// ParentSelector manages parent connections and selects optimal parents.
+/// ParentSelector is the download parent selector configuration for dfdaemon. It will synchronize
+/// the host info in real-time from the parents and then select the parents for downloading.
+///
+/// The workflow diagram is as follows:
+///
+///```text
+///                              +----------+
+///              ----------------|  Parent  |---------------
+///              |               +----------+              |
+///          Host Load Quality                     Piece Metadata
+/// +------------|-----------------------------------------|------------+
+/// |            |                                         |            |
+/// |            |                 Peer                    |            |
+/// |            v                                         v            |
+/// |  +------------------+  Select Best Parent   +------------------+  |
+/// |  |  ParentSelector  | ------------------->  |  PieceCollector  |  |
+/// |  +------------------+                       +------------------+  |
+/// |                                                      |            |
+/// |                                             Download Piece From   |
+/// |                                                  Best Parent      |
+/// |                                                      |            |
+/// |                                                      v            |
+/// |                                                +------------+     |
+/// |                                                |  Download  |     |
+/// |                                                +------------+     |
+/// +-------------------------------------------------------------------+
+/// ```
 pub struct ParentSelector {
-    /// config is the configuration of the dfdaemon.
+    /// Config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// timeout is the timeout for the sync host.
-    timeout: Duration,
+    /// Generator for host and peer identifiers.
+    id_generator: Arc<IDGenerator>,
 
-    /// host_id is the id of the host.
-    host_id: String,
-
-    /// peer_id is the id of the peer.
-    peer_id: String,
-
-    /// weights stores the latest host information and bandwidth weights for different parents.
+    /// Maps parent host IDs to their current bandwidth weights.
     weights: Arc<DashMap<String, u32>>,
 
-    /// connections stores parent connections with reference counting.
+    /// Active connections indexed by parent host ID and each connection tracks usage and manages its sync task.
     connections: Arc<DashMap<String, Connection>>,
 
-    /// shutdown is used to shutdown the garbage collector.
+    /// Global shutdown signal for the entire daemon.
     shutdown: shutdown::Shutdown,
 
     /// _shutdown_complete is used to notify the garbage collector is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-/// ParentSelector implements the parent selector.
+/// Implements parent peer selection and connection management logic.
 impl ParentSelector {
-    /// new returns a ParentSelector.
+    /// Creates a new parent selector instance.
     #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
-        host_id: String,
-        peer_id: String,
+        id_generator: Arc<IDGenerator>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> ParentSelector {
-        let config = config.clone();
-        let timeout = config.download.parent_selector.timeout;
-        let weights = Arc::new(DashMap::new());
-
         Self {
             config,
-            timeout,
-            host_id,
-            peer_id,
-            weights,
+            id_generator,
+            weights: Arc::new(DashMap::new()),
             connections: Arc::new(DashMap::new()),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
     }
 
-    /// sync_host is a sub thread to sync host info from the parent.
+    /// Selects the best parent from a list of candidates based on their load quality weights.
+    ///
+    /// This function performs weighted random selection where parents with higher weights
+    /// (better idle bandwidth) have a higher probability of being selected. If weight
+    /// calculation fails, falls back to uniform random selection.
+    pub fn select(&self, parents: Vec<CollectedParent>) -> CollectedParent {
+        let weights: Vec<u32> = parents
+            .iter()
+            .map(|parent| {
+                let Some(parent_host) = parent.host.as_ref() else {
+                    warn!(
+                        "parent {} has no host info, defaulting weight to 0",
+                        parent.id
+                    );
+
+                    return 0;
+                };
+                let parent_host_id = parent_host.id.clone();
+
+                self.weights
+                    .get(&parent_host_id)
+                    .map(|w| *w)
+                    .unwrap_or_else(|| {
+                        warn!(
+                            "no weight info for parent {} {}, defaulting weight to 0",
+                            parent.id, parent_host_id
+                        );
+
+                        0
+                    })
+            })
+            .collect();
+
+        match WeightedIndex::new(weights) {
+            Ok(dist) => {
+                let mut rng = rand::rng();
+                let index = dist.sample(&mut rng);
+                let selected_parent = &parents[index];
+                debug!("selected parent {}", selected_parent.id);
+
+                selected_parent.clone()
+            }
+            Err(_) => parents[fastrand::usize(..parents.len())].clone(),
+        }
+    }
+
+    /// Registers multiple parents for host information synchronization.
+    ///
+    /// For each parent, this function:
+    /// - Creates a new gRPC connection if one doesn't exist.
+    /// - Spawns a background task to continuously sync host metrics (bandwidth, load).
+    /// - Updates the connection's request counter.
+    pub async fn register(&self, parents: &[Peer]) -> Result<()> {
+        let dfdaemon_shutdown = self.shutdown.clone();
+        let mut join_set = JoinSet::new();
+        for parent in parents {
+            info!("register parent {}", parent.id);
+
+            let Some(parent_host) = parent.host.as_ref() else {
+                warn!("parent {} has no host info, skipping", parent.id);
+                continue;
+            };
+            let parent_host_id = parent_host.id.clone();
+
+            match self.connections.entry(parent_host_id.clone()) {
+                dashmap::mapref::entry::Entry::Occupied(entry) => {
+                    entry.get().increment_request();
+                    continue;
+                }
+                dashmap::mapref::entry::Entry::Vacant(entry) => {
+                    let dfdaemon_upload_client = DfdaemonUploadClient::new(
+                        self.config.clone(),
+                        format!("http://{}:{}", parent_host.ip, parent_host.port),
+                        false,
+                    )
+                    .await?;
+
+                    let connection = Connection::new();
+                    connection.increment_request();
+                    let shutdown = connection.shutdown.clone();
+                    entry.insert(connection);
+
+                    let weights = self.weights.clone();
+                    let host_id = self.id_generator.host_id();
+                    let peer_id = self.id_generator.peer_id();
+                    let dfdaemon_shutdown_clone = dfdaemon_shutdown.clone();
+                    join_set.spawn(
+                        Self::sync_host(
+                            host_id,
+                            peer_id,
+                            parent_host_id.clone(),
+                            weights,
+                            dfdaemon_upload_client,
+                            shutdown,
+                            dfdaemon_shutdown_clone,
+                        )
+                        .in_current_span(),
+                    );
+                }
+            }
+        }
+
+        tokio::spawn(async move {
+            while let Some(message) = join_set.join_next().await {
+                match message {
+                    Ok(Ok(_)) => debug!("sync host info completed"),
+                    Ok(Err(err)) => error!("sync host info failed: {}", err),
+                    Err(err) => error!("task join error: {}", err),
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Unregisters multiple parents and cleans up their connections.
+    ///
+    /// Decrements the request counter for each parent's connection. When a connection's
+    /// active request count reaches zero, it:
+    /// - Triggers connection shutdown.
+    /// - Removes the weight entry.
+    /// - Removes the connection from the pool.
+    pub fn unregister(&self, parents: &[Peer]) {
+        for parent in parents {
+            info!("unregister parent {}", parent.id);
+
+            let Some(parent_host) = parent.host.as_ref() else {
+                warn!("parent {} has no host info, skipping", parent.id);
+                continue;
+            };
+            let parent_host_id = parent_host.id.clone();
+
+            if let Some(connection) = self.connections.get(&parent_host_id) {
+                connection.decrement_request();
+                if connection.active_requests() == 0 {
+                    info!("cleaning up parent {} connection", parent_host_id);
+                    connection.shutdown();
+
+                    // Explicitly drop the reference to avoid holding the borrow
+                    // from self.connections.get() while trying to call remove().
+                    drop(connection);
+                    self.weights.remove(&parent_host_id);
+                    self.connections.remove(&parent_host_id);
+                }
+            }
+        }
+    }
+
+    /// Continuously synchronizes host metrics from a parent peer.
+    ///
+    /// This is a long-running background task that:
+    /// - Establishes a streaming gRPC connection to the parent.
+    /// - Receives periodic host status updates (CPU, bandwidth, etc.).
+    /// - Updates the parent's weight based on idle TX bandwidth.
+    /// - Runs until shutdown signal or connection failure.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn sync_host(
         host_id: String,
         peer_id: String,
-        remote_host_id: String,
+        parent_host_id: String,
         weights: Arc<DashMap<String, u32>>,
-        timeout: Duration,
-        client: DfdaemonUploadClient,
+        dfdaemon_upload_client: DfdaemonUploadClient,
         mut shutdown: Shutdown,
         mut dfdaemon_shutdown: Shutdown,
     ) -> Result<()> {
-        let response = client
+        info!("sync host info from parent {}", parent_host_id);
+        let response = dfdaemon_upload_client
             .sync_host(SyncHostRequest { host_id, peer_id })
             .await
             .inspect_err(|err| {
-                error!("sync host from host {} failed: {}", remote_host_id, err);
+                error!(
+                    "sync host info from parent {} failed: {}",
+                    parent_host_id, err
+                );
             })?;
 
-        let out_stream = response.into_inner().timeout(timeout);
+        let out_stream = response.into_inner();
         tokio::pin!(out_stream);
-
         loop {
             tokio::select! {
                 result = out_stream.try_next() => {
                     match result.inspect_err(|err| {
-                        error!("sync host from host {} failed: {}", remote_host_id, err);
+                        error!("sync host info from parent {} failed: {}", parent_host_id, err);
                     })? {
                         Some(message) => {
-                            debug!("sync host from host {} received message", remote_host_id);
-                            let message = message?;
+                            let idle_tx_bandwidth = Self::get_idle_tx_bandwidth(&message);
 
-                            // Calculate weight from host information.
-                            let weight = Self::get_idle_upload_rate(&message) as u32;
-
-                            // Update the parent's host info with calculated weight.
-                            weights.insert(remote_host_id.clone(), weight);
+                            info!("update host {} idle TX bandwidth to {}", parent_host_id, idle_tx_bandwidth);
+                            weights.insert(parent_host_id.clone(), idle_tx_bandwidth as u32);
                         }
                         None => break,
                     }
                 }
                 _ = shutdown.recv() => {
-                    debug!("parent selector: shutdown signal received for host {}", remote_host_id);
+                    info!("sync host info from parent {} shutting down", parent_host_id);
                     break;
                 }
                 _ = dfdaemon_shutdown.recv() => {
@@ -218,22 +351,124 @@ impl ParentSelector {
         Ok(())
     }
 
-    /// select_parent selects the best parent for the task based on bandwidth.
-    pub fn select_parent(&self, parents: Vec<CollectedParent>) -> Option<CollectedParent> {
-        let remote_hosts: Vec<String> = parents
+    /// Calculates the idle transmission bandwidth of a host.
+    fn get_idle_tx_bandwidth(host: &Host) -> u64 {
+        let network = match &host.network {
+            Some(network) => network,
+            None => return 0,
+        };
+
+        debug!("host {} network info: {:?}", host.id, network);
+        let Some(tx_bandwidth) = network.tx_bandwidth else {
+            return 0;
+        };
+
+        if tx_bandwidth < network.max_tx_bandwidth {
+            network.max_tx_bandwidth - tx_bandwidth
+        } else {
+            0
+        }
+    }
+}
+
+/// PersistentCacheParentSelector is the download persistent cache parent selector configuration for dfdaemon. It will synchronize
+/// the host info in real-time from the parents and then select the parents for downloading.
+///
+/// The workflow diagram is as follows:
+///
+///```text
+///                              +----------+
+///              ----------------|  Parent  |---------------
+///              |               +----------+              |
+///          Host Load Quality                     Piece Metadata
+/// +------------|-----------------------------------------|------------+
+/// |            |                                         |            |
+/// |            |                 Peer                    |            |
+/// |            v                                         v            |
+/// |  +------------------+  Select Best Parent   +------------------+  |
+/// |  |  ParentSelector  | ------------------->  |  PieceCollector  |  |
+/// |  +------------------+                       +------------------+  |
+/// |                                                      |            |
+/// |                                             Download Piece From   |
+/// |                                                  Best Parent      |
+/// |                                                      |            |
+/// |                                                      v            |
+/// |                                                +------------+     |
+/// |                                                |  Download  |     |
+/// |                                                +------------+     |
+/// +-------------------------------------------------------------------+
+/// ```
+pub struct PersistentCacheParentSelector {
+    /// Config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
+    /// Generator for host and peer identifiers.
+    id_generator: Arc<IDGenerator>,
+
+    /// Maps parent host IDs to their current bandwidth weights.
+    weights: Arc<DashMap<String, u32>>,
+
+    /// Active connections indexed by parent host ID and each connection tracks usage and manages its sync task.
+    connections: Arc<DashMap<String, Connection>>,
+
+    /// Global shutdown signal for the entire daemon.
+    shutdown: shutdown::Shutdown,
+
+    /// _shutdown_complete is used to notify the garbage collector is shutdown.
+    _shutdown_complete: mpsc::UnboundedSender<()>,
+}
+
+/// Implements persistent cache parent peer selection and connection management logic.
+impl PersistentCacheParentSelector {
+    /// Creates a new persistent cache parent selector instance.
+    #[instrument(skip_all)]
+    pub fn new(
+        config: Arc<Config>,
+        id_generator: Arc<IDGenerator>,
+        shutdown: shutdown::Shutdown,
+        shutdown_complete_tx: mpsc::UnboundedSender<()>,
+    ) -> PersistentCacheParentSelector {
+        Self {
+            config,
+            id_generator,
+            weights: Arc::new(DashMap::new()),
+            connections: Arc::new(DashMap::new()),
+            shutdown,
+            _shutdown_complete: shutdown_complete_tx,
+        }
+    }
+
+    /// Selects the best persistent cache parent from a list of candidates based on their load quality weights.
+    ///
+    /// This function performs weighted random selection where parents with higher weights
+    /// (better idle bandwidth) have a higher probability of being selected. If weight
+    /// calculation fails, falls back to uniform random selection.
+    pub fn select(&self, parents: Vec<CollectedParent>) -> CollectedParent {
+        let weights: Vec<u32> = parents
             .iter()
             .map(|parent| {
-                IDGenerator::new(
-                    parent.host.as_ref().unwrap().ip.clone(),
-                    parent.host.as_ref().unwrap().hostname.clone(),
-                    false,
-                )
-                .host_id()
+                let Some(parent_host) = parent.host.as_ref() else {
+                    warn!(
+                        "persistent cache parent {} has no host info, defaulting weight to 0",
+                        parent.id
+                    );
+
+                    return 0;
+                };
+                let parent_host_id = parent_host.id.clone();
+
+                self.weights
+                    .get(&parent_host_id)
+                    .map(|w| *w)
+                    .unwrap_or_else(|| {
+                        warn!(
+                            "no weight info for persistent cache parent {} {}, defaulting weight to 0",
+                            parent.id, parent_host_id
+                        );
+
+                        0
+                    })
             })
-            .collect();
-        let weights: Vec<u32> = remote_hosts
-            .iter()
-            .map(|remote_host| self.weights.get(remote_host).map(|w| *w).unwrap_or(0))
             .collect();
 
         match WeightedIndex::new(weights) {
@@ -241,151 +476,79 @@ impl ParentSelector {
                 let mut rng = rand::rng();
                 let index = dist.sample(&mut rng);
                 let selected_parent = &parents[index];
-                debug!("selected parent {}", selected_parent.id);
+                debug!("selected persistent cache parent {}", selected_parent.id);
 
-                Some(selected_parent.clone())
+                selected_parent.clone()
             }
-            Err(_) => parents.get(fastrand::usize(..parents.len())).cloned(),
+            Err(_) => parents[fastrand::usize(..parents.len())].clone(),
         }
     }
 
-    /// unregister_parents triggers shutdown.
-    pub fn unregister_parents(&self, parents: Vec<Peer>) {
-        for parent in parents {
-            let host_id = IDGenerator::new(
-                parent.host.as_ref().unwrap().ip.clone(),
-                parent.host.as_ref().unwrap().hostname.clone(),
-                false,
-            )
-            .host_id();
-
-            if let Some(connection) = self.connections.get(&host_id) {
-                connection.release_request();
-                if connection.active_requests() == 0 {
-                    info!("shutting down sync host for parent {}", host_id);
-                    connection.shutdown();
-                    drop(connection);
-                    self.weights.remove(&host_id);
-                    self.connections.remove(&host_id);
-                }
-            }
-        }
-    }
-
-    /// get_connection_client returns a client for the given parent, creating the connection if needed.
-    pub async fn get_connection_client(
-        &self,
-        parent: &Option<Host>,
-    ) -> Result<DfdaemonUploadClient> {
-        let Some(parent) = parent else {
-            error!("parent is not found");
-            return Err(Error::InvalidPeer(String::new()));
-        };
-
-        let remote_host_id =
-            IDGenerator::new(parent.ip.clone(), parent.hostname.clone(), false).host_id();
-
-        // Try to get existing connection
-        if let Some(connection) = self.connections.get(&remote_host_id) {
-            connection.connection_guard();
-            return Ok(connection.client.clone());
-        }
-
-        let client = DfdaemonUploadClient::new(
-            self.config.clone(),
-            format!("http://{}:{}", parent.ip, parent.port),
-            false,
-        )
-        .await?;
-
-        let connection = Connection::new(client.clone());
-        connection.connection_guard();
-
-        match self.connections.entry(remote_host_id.clone()) {
-            dashmap::mapref::entry::Entry::Vacant(entry) => {
-                entry.insert(connection);
-                Ok(client)
-            }
-            dashmap::mapref::entry::Entry::Occupied(entry) => {
-                let existing_connection = entry.get();
-                existing_connection.connection_guard();
-                let client = existing_connection.client.clone();
-                Ok(client)
-            }
-        }
-    }
-
-    /// register_parents registers multiple parents.
-    pub async fn register_parents(&self, parents: &[CollectedParent]) -> Result<()> {
+    /// Registers multiple persistent cache parents for host information synchronization.
+    ///
+    /// For each parent, this function:
+    /// - Creates a new gRPC connection if one doesn't exist.
+    /// - Spawns a background task to continuously sync host metrics (bandwidth, load).
+    /// - Updates the connection's request counter.
+    pub async fn register(&self, parents: &[PersistentCachePeer]) -> Result<()> {
         let dfdaemon_shutdown = self.shutdown.clone();
-
-        let mut join_set = JoinSet::<Result<()>>::new();
-
+        let mut join_set = JoinSet::new();
         for parent in parents {
-            let remote_host_id = IDGenerator::new(
-                parent.host.as_ref().unwrap().ip.clone(),
-                parent.host.as_ref().unwrap().hostname.clone(),
-                false,
-            )
-            .host_id();
+            info!("register persistent cache parent {}", parent.id);
 
-            // Check if connection already has active requests
-            if let Some(connection) = self.connections.get(&remote_host_id) {
-                if connection.active_requests() > 0 {
-                    debug!("sync host already running for parent {}", parent.id);
+            let Some(parent_host) = parent.host.as_ref() else {
+                warn!(
+                    "persistent cache parent {} has no host info, skipping",
+                    parent.id
+                );
+                continue;
+            };
+            let parent_host_id = parent_host.id.clone();
+
+            match self.connections.entry(parent_host_id.clone()) {
+                dashmap::mapref::entry::Entry::Occupied(entry) => {
+                    entry.get().increment_request();
                     continue;
                 }
-            }
-
-            // Get or create connection for the sync host.
-            let client = self.get_connection_client(&parent.host).await?;
-
-            // Start sync host for this parent.
-            let parent = parent.clone();
-            let weights = self.weights.clone();
-            let timeout = self.timeout;
-            let host_id = self.host_id.clone();
-            let peer_id = self.peer_id.clone();
-            let shutdown = self
-                .connections
-                .get(&remote_host_id)
-                .map(|conn| conn.shutdown.clone())
-                .unwrap_or_default();
-            let dfdaemon_shutdown_clone = dfdaemon_shutdown.clone();
-
-            join_set.spawn(
-                async move {
-                    info!("started sync host for parent {}", parent.id);
-
-                    if let Err(err) = Self::sync_host(
-                        host_id,
-                        peer_id,
-                        remote_host_id.clone(),
-                        weights.clone(),
-                        timeout,
-                        client,
-                        shutdown,
-                        dfdaemon_shutdown_clone,
+                dashmap::mapref::entry::Entry::Vacant(entry) => {
+                    let dfdaemon_upload_client = DfdaemonUploadClient::new(
+                        self.config.clone(),
+                        format!("http://{}:{}", parent_host.ip, parent_host.port),
+                        false,
                     )
-                    .await
-                    {
-                        error!("sync host for parent {} failed: {}", remote_host_id, err);
-                        return Err(err);
-                    }
+                    .await?;
 
-                    Ok(())
+                    let connection = Connection::new();
+                    connection.increment_request();
+                    let shutdown = connection.shutdown.clone();
+                    entry.insert(connection);
+
+                    let weights = self.weights.clone();
+                    let host_id = self.id_generator.host_id();
+                    let peer_id = self.id_generator.peer_id();
+                    let dfdaemon_shutdown_clone = dfdaemon_shutdown.clone();
+                    join_set.spawn(
+                        Self::sync_host(
+                            host_id,
+                            peer_id,
+                            parent_host_id.clone(),
+                            weights,
+                            dfdaemon_upload_client,
+                            shutdown,
+                            dfdaemon_shutdown_clone,
+                        )
+                        .in_current_span(),
+                    );
                 }
-                .in_current_span(),
-            );
+            }
         }
 
-        // Spawn a task to manage this JoinSet.
         tokio::spawn(async move {
-            while let Some(result) = join_set.join_next().await {
-                match result {
-                    Ok(Ok(_)) => debug!("parent sync host completed successfully"),
-                    Ok(Err(_)) => debug!("parent sync host failed"),
-                    Err(err) => debug!("parent sync host join error: {}", err),
+            while let Some(message) = join_set.join_next().await {
+                match message {
+                    Ok(Ok(_)) => debug!("sync host info completed"),
+                    Ok(Err(err)) => error!("sync host info failed: {}", err),
+                    Err(err) => error!("task join error: {}", err),
                 }
             }
         });
@@ -393,18 +556,119 @@ impl ParentSelector {
         Ok(())
     }
 
-    /// get_idle_upload_rate returns the available upload rate of a host.
-    fn get_idle_upload_rate(host: &Host) -> u64 {
+    /// Unregisters multiple persistent cache parents and cleans up their connections.
+    ///
+    /// Decrements the request counter for each parent's connection. When a connection's
+    /// active request count reaches zero, it:
+    /// - Triggers connection shutdown.
+    /// - Removes the weight entry.
+    /// - Removes the connection from the pool.
+    pub fn unregister(&self, parents: &[PersistentCachePeer]) {
+        for parent in parents {
+            info!("unregister persistent cache parent {}", parent.id);
+
+            let Some(parent_host) = parent.host.as_ref() else {
+                warn!(
+                    "persistent cache parent {} has no host info, skipping",
+                    parent.id
+                );
+                continue;
+            };
+            let parent_host_id = parent_host.id.clone();
+
+            if let Some(connection) = self.connections.get(&parent_host_id) {
+                connection.decrement_request();
+                if connection.active_requests() == 0 {
+                    info!("cleaning up parent {} connection", parent_host_id);
+                    connection.shutdown();
+
+                    // Explicitly drop the reference to avoid holding the borrow
+                    // from self.connections.get() while trying to call remove().
+                    drop(connection);
+                    self.weights.remove(&parent_host_id);
+                    self.connections.remove(&parent_host_id);
+                }
+            }
+        }
+    }
+
+    /// Continuously synchronizes host metrics from a persistent cache parent peer.
+    ///
+    /// This is a long-running background task that:
+    /// - Establishes a streaming gRPC connection to the parent.
+    /// - Receives periodic host status updates (CPU, bandwidth, etc.).
+    /// - Updates the parent's weight based on idle TX bandwidth.
+    /// - Runs until shutdown signal or connection failure.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
+    async fn sync_host(
+        host_id: String,
+        peer_id: String,
+        parent_host_id: String,
+        weights: Arc<DashMap<String, u32>>,
+        dfdaemon_upload_client: DfdaemonUploadClient,
+        mut shutdown: Shutdown,
+        mut dfdaemon_shutdown: Shutdown,
+    ) -> Result<()> {
+        info!(
+            "sync host info from persistent cache parent {}",
+            parent_host_id
+        );
+        let response = dfdaemon_upload_client
+            .sync_host(SyncHostRequest { host_id, peer_id })
+            .await
+            .inspect_err(|err| {
+                error!(
+                    "sync host info from persistent cache parent {} failed: {}",
+                    parent_host_id, err
+                );
+            })?;
+
+        let out_stream = response.into_inner();
+        tokio::pin!(out_stream);
+        loop {
+            tokio::select! {
+                result = out_stream.try_next() => {
+                    match result.inspect_err(|err| {
+                        error!("sync host info from persistent cache parent {} failed: {}", parent_host_id, err);
+                    })? {
+                        Some(message) => {
+                            let idle_tx_bandwidth = Self::get_idle_tx_bandwidth(&message);
+
+                            info!("update host {} idle TX bandwidth to {}", parent_host_id, idle_tx_bandwidth);
+                            weights.insert(parent_host_id.clone(), idle_tx_bandwidth as u32);
+                        }
+                        None => break,
+                    }
+                }
+                _ = shutdown.recv() => {
+                    info!("sync host info from persistent cache parent {} shutting down", parent_host_id);
+                    break;
+                }
+                _ = dfdaemon_shutdown.recv() => {
+                    info!("persistent cache parent selector shutting down");
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Calculates the idle transmission bandwidth of a host.
+    fn get_idle_tx_bandwidth(host: &Host) -> u64 {
         let network = match &host.network {
             Some(network) => network,
             None => return 0,
         };
 
-        let tx_bandwidth = network.tx_bandwidth.unwrap_or(0);
-        let max_tx_bandwidth = network.max_tx_bandwidth;
+        debug!("host {} network info: {:?}", host.id, network);
+        let Some(tx_bandwidth) = network.tx_bandwidth else {
+            return 0;
+        };
 
-        if tx_bandwidth < max_tx_bandwidth {
-            max_tx_bandwidth.saturating_sub(tx_bandwidth)
+        if tx_bandwidth < network.max_tx_bandwidth {
+            network.max_tx_bandwidth - tx_bandwidth
         } else {
             0
         }
@@ -585,242 +849,6 @@ mod tests {
         }
     }
 
-    fn create_parent_selector() -> ParentSelector {
-        let (shutdown_complete_tx, _shutdown_complete_rx) = mpsc::unbounded_channel();
-        ParentSelector::new(
-            Arc::new(Config::default()),
-            "local-host".to_string(),
-            "peer-id".to_string(),
-            Shutdown::new(),
-            shutdown_complete_tx,
-        )
-    }
-
-    #[tokio::test]
-    async fn test_register_parents() {
-        let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
-            Ok(listener) => listener,
-            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
-                eprintln!("register_parents_syncs_weights_and_connections skipped: {err}");
-                return;
-            }
-            Err(err) => panic!("bind listener: {err}"),
-        };
-        let addr = listener.local_addr().unwrap();
-
-        let mock_hosts = vec![Host {
-            network: Some(dragonfly_api::common::v2::Network {
-                max_tx_bandwidth: 100,
-                tx_bandwidth: Some(40),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }];
-
-        tokio::spawn(async move {
-            Server::builder()
-                .add_service(DfdaemonUploadGRPCServer::new(MockUploadService {
-                    hosts: mock_hosts,
-                }))
-                .serve_with_incoming(TcpListenerStream::new(listener))
-                .await
-                .unwrap();
-        });
-
-        let parent = CollectedParent {
-            id: "parent-grpc".to_string(),
-            host: Some(Host {
-                ip: addr.ip().to_string(),
-                hostname: "grpc-parent".to_string(),
-                port: addr.port() as i32,
-                ..Default::default()
-            }),
-            download_ip: None,
-            download_tcp_port: None,
-            download_quic_port: None,
-        };
-
-        let selector = create_parent_selector();
-
-        selector
-            .register_parents(&[parent.clone()])
-            .await
-            .expect("register parents");
-
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
-        let host_id = IDGenerator::new(
-            parent.host.as_ref().unwrap().ip.clone(),
-            parent.host.as_ref().unwrap().hostname.clone(),
-            false,
-        )
-        .host_id();
-
-        let weight = selector.weights.get(&host_id).map(|w| *w);
-        assert_eq!(weight, Some(60), "weight should use idle upload rate");
-        assert!(
-            selector.connections.get(&host_id).is_some(),
-            "connection should be tracked"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_unregister_parents() {
-        let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
-            Ok(listener) => listener,
-            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
-                eprintln!("unregister_parents_cleans_up_connections_and_weights skipped: {err}");
-                return;
-            }
-            Err(err) => panic!("bind listener: {err}"),
-        };
-        let addr = listener.local_addr().unwrap();
-
-        tokio::spawn(async move {
-            Server::builder()
-                .add_service(DfdaemonUploadGRPCServer::new(MockUploadService {
-                    hosts: vec![Host {
-                        network: Some(dragonfly_api::common::v2::Network {
-                            max_tx_bandwidth: 100,
-                            tx_bandwidth: Some(10),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    }],
-                }))
-                .serve_with_incoming(TcpListenerStream::new(listener))
-                .await
-                .unwrap();
-        });
-
-        let parent = CollectedParent {
-            id: "parent-to-clean".to_string(),
-            host: Some(Host {
-                ip: addr.ip().to_string(),
-                hostname: "grpc-parent-clean".to_string(),
-                port: addr.port() as i32,
-                ..Default::default()
-            }),
-            download_ip: None,
-            download_tcp_port: None,
-            download_quic_port: None,
-        };
-
-        let selector = create_parent_selector();
-
-        selector.register_parents(&[parent.clone()]).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        let peer = Peer {
-            id: parent.id.clone(),
-            host: parent.host.clone(),
-            ..Default::default()
-        };
-        selector.unregister_parents(vec![peer]);
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        let host_id = IDGenerator::new(
-            parent.host.as_ref().unwrap().ip.clone(),
-            parent.host.as_ref().unwrap().hostname.clone(),
-            false,
-        )
-        .host_id();
-
-        assert!(
-            selector.weights.get(&host_id).is_none(),
-            "weight should be removed after unregister"
-        );
-        assert!(
-            selector.connections.get(&host_id).is_none(),
-            "connection should be removed after unregister"
-        );
-    }
-
-    #[test]
-    fn test_select_parent() {
-        let parent_a = CollectedParent {
-            id: "parent-a".to_string(),
-            host: Some(Host {
-                ip: "192.168.0.10".to_string(),
-                hostname: "host-a".to_string(),
-                port: 6500,
-                ..Default::default()
-            }),
-            download_ip: None,
-            download_tcp_port: None,
-            download_quic_port: None,
-        };
-        let parent_b = CollectedParent {
-            id: "parent-b".to_string(),
-            host: Some(Host {
-                ip: "192.168.0.11".to_string(),
-                hostname: "host-b".to_string(),
-                port: 6500,
-                ..Default::default()
-            }),
-            download_ip: None,
-            download_tcp_port: None,
-            download_quic_port: None,
-        };
-
-        let parent_b_host_id = IDGenerator::new(
-            parent_b.host.as_ref().unwrap().ip.clone(),
-            parent_b.host.as_ref().unwrap().hostname.clone(),
-            false,
-        )
-        .host_id();
-
-        struct TestCase {
-            name: &'static str,
-            parents: Vec<CollectedParent>,
-            weighted_host: Option<String>,
-            expected_ids: Vec<String>,
-        }
-
-        let test_cases = vec![
-            TestCase {
-                name: "prefers weighted parent_b",
-                parents: vec![parent_a.clone(), parent_b.clone()],
-                weighted_host: Some(parent_b_host_id.clone()),
-                expected_ids: vec![parent_b.id.clone()],
-            },
-            TestCase {
-                name: "falls back when no weights",
-                parents: vec![parent_a.clone(), parent_b.clone()],
-                weighted_host: None,
-                expected_ids: vec![parent_a.id.clone(), parent_b.id.clone()],
-            },
-        ];
-
-        for case in test_cases {
-            let (shutdown_complete_tx, _shutdown_complete_rx) = mpsc::unbounded_channel();
-            let selector = ParentSelector::new(
-                Arc::new(Config::default()),
-                "local-host".to_string(),
-                "peer-id".to_string(),
-                Shutdown::new(),
-                shutdown_complete_tx,
-            );
-
-            if let Some(weighted_host) = case.weighted_host {
-                selector.weights.insert(weighted_host, 100);
-            }
-
-            let selected = selector
-                .select_parent(case.parents.clone())
-                .unwrap_or_else(|| panic!("{}: expected a parent to be selected", case.name));
-
-            assert!(
-                case.expected_ids.contains(&selected.id),
-                "{}: expected selected parent to be in {:?}, got {}",
-                case.name,
-                case.expected_ids,
-                selected.id
-            );
-        }
-    }
-
     #[test]
     fn test_get_idle_upload_rate() {
         struct TestCase {
@@ -890,7 +918,7 @@ mod tests {
 
         for test_case in test_cases {
             assert_eq!(
-                ParentSelector::get_idle_upload_rate(&test_case.host),
+                ParentSelector::get_idle_tx_bandwidth(&test_case.host),
                 test_case.expected,
                 "Failed for test case: {}",
                 test_case.name

@@ -972,7 +972,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                         // Send the piece metadata to the stream.
                         if piece.is_finished() {
-                            match out_stream_tx
+                            if let Err(err) = out_stream_tx
                                 .send_timeout(
                                     Ok(SyncPiecesResponse {
                                         number: piece.number,
@@ -986,19 +986,14 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                 )
                                 .await
                             {
-                                Ok(_) => {
-                                    info!("send piece metadata {}-{}", task_id, piece.number);
-                                }
-                                Err(err) => {
-                                    error!(
-                                        "send piece metadata {}-{} to stream: {}",
-                                        task_id, interested_piece_number, err
-                                    );
+                                error!(
+                                    "send piece metadata {}-{} to stream: {}",
+                                    task_id, interested_piece_number, err
+                                );
 
-                                    drop(out_stream_tx);
-                                    return;
-                                }
-                            }
+                                drop(out_stream_tx);
+                                return;
+                            };
 
                             // Add the finished piece number to the finished piece numbers.
                             finished_piece_numbers.push(piece.number);
@@ -1177,18 +1172,12 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Get local interface.
         let interface = self.interface.clone();
 
-        // DEFAULT_HOST_INFO_REFRESH_INTERVAL is the default interval for refreshing the host info.
-        const DEFAULT_HOST_INFO_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
-
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
         tokio::spawn(
             async move {
                 // Start the host info update loop.
                 loop {
-                    // Wait for the host info refresh interval.
-                    tokio::time::sleep(DEFAULT_HOST_INFO_REFRESH_INTERVAL).await;
-
                     // Wait for getting the network data.
                     let network_data = interface.get_network_data().await;
                     debug!(
@@ -1200,7 +1189,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     );
 
                     // Send host info.
-                    match out_stream_tx
+                    if let Err(err) = out_stream_tx
                         .send(Ok(Host {
                             network: Some(Network {
                                 max_rx_bandwidth: network_data.max_rx_bandwidth,
@@ -1213,15 +1202,12 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         }))
                         .await
                     {
-                        Ok(_) => {}
-                        Err(err) => {
-                            error!(
-                                "connection broken from remote host {}, err: {}",
-                                remote_host_id, err
-                            );
+                        error!(
+                            "connection broken from remote host {}, err: {}",
+                            remote_host_id, err
+                        );
 
-                            return;
-                        }
+                        return;
                     };
                 }
             }
