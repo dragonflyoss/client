@@ -59,7 +59,7 @@ pub struct NetworkData {
 /// Interface methods provide functionality to get network interface information.
 impl Interface {
     /// DEFAULT_NETWORKS_REFRESH_INTERVAL is the default interval for refreshing network data.
-    const DEFAULT_NETWORKS_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+    const DEFAULT_NETWORKS_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
     /// new creates a new Interface instance based on the provided IP address and rate limit.
     pub fn new(ip: IpAddr, rate_limit: ByteSize) -> Interface {

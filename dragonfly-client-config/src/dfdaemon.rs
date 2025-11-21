@@ -73,24 +73,6 @@ pub fn default_download_request_rate_limit() -> u64 {
     4000
 }
 
-/// default_parent_selector_sync_interval is the default interval to sync host information.
-#[inline]
-fn default_parent_selector_sync_interval() -> Duration {
-    Duration::from_millis(500)
-}
-
-/// default_parent_selector_timeout is the default timeout for the sync host.
-#[inline]
-fn default_parent_selector_timeout() -> Duration {
-    Duration::from_secs(3)
-}
-
-/// default_parent_selector_capacity is the default capacity of the parent selector's gRPC connections.
-#[inline]
-pub fn default_parent_selector_capacity() -> usize {
-    20
-}
-
 /// default_host_hostname is the default hostname of the host.
 #[inline]
 fn default_host_hostname() -> String {
@@ -398,9 +380,6 @@ pub struct Download {
     #[serde(default = "default_download_protocol")]
     pub protocol: String,
 
-    /// parent_selector is the download parent selector configuration for dfdaemon.
-    pub parent_selector: ParentSelector,
-
     /// rate_limit is the rate limit of the download speed in GiB/Mib/Kib per second.
     #[serde(with = "bytesize_serde", default = "default_download_rate_limit")]
     pub rate_limit: ByteSize,
@@ -429,7 +408,6 @@ impl Default for Download {
         Download {
             server: DownloadServer::default(),
             protocol: default_download_protocol(),
-            parent_selector: ParentSelector::default(),
             rate_limit: default_download_rate_limit(),
             piece_timeout: default_download_piece_timeout(),
             collected_piece_timeout: default_collected_download_piece_timeout(),
@@ -551,59 +529,6 @@ impl UploadClient {
 
         Ok(None)
     }
-}
-
-/// ParentSelector is the download parent selector configuration for dfdaemon. It will synchronize
-/// the host info in real-time from the parents and then select the parents for downloading.
-///
-/// The workflow diagram is as follows:
-///
-///```text
-///                              +----------+
-///              ----------------|  Parent  |---------------
-///              |               +----------+              |
-///          Host Info                                Piece Metadata
-/// +------------|-----------------------------------------|------------+
-/// |            |                                         |            |
-/// |            |                 Peer                    |            |
-/// |            v                                         v            |
-/// |  +------------------+                       +------------------+  |
-/// |  |  ParentSelector  | ---Optimal Parent---> |  PieceCollector  |  |
-/// |  +------------------+                       +------------------+  |
-/// |                                                      |            |
-/// |                                                 Piece Metadata    |
-/// |                                                      |            |
-/// |                                                      v            |
-/// |                                                +------------+     |
-/// |                                                |  Download  |     |
-/// |                                                +------------+     |
-/// +-------------------------------------------------------------------+
-/// ```
-#[derive(Debug, Clone, Default, Validate, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct ParentSelector {
-    /// enable indicates whether enable parent selector for downloading.
-    ///
-    /// If `enable` is true, the `ParentSelector`'s sync loop will start. It will periodically fetch
-    /// host information from parents and use this information to calculate scores for selecting the
-    /// parents for downloading.
-    pub enable: bool,
-
-    /// sync_interval is the interval to sync parents' host info by gRPC streaming.
-    #[serde(
-        default = "default_parent_selector_sync_interval",
-        with = "humantime_serde"
-    )]
-    pub sync_interval: Duration,
-
-    /// timeout is the timeout for the sync host.
-    #[serde(default = "default_parent_selector_timeout", with = "humantime_serde")]
-    pub timeout: Duration,
-
-    /// capacity is the maximum number of gRPC connections that `DfdaemonUpload.SyncHost` maintains
-    /// in the `ParentSelector`, the default value is 20.
-    #[serde(default = "default_parent_selector_capacity")]
-    pub capacity: usize,
 }
 
 /// Upload is the upload configuration for dfdaemon.
