@@ -15,6 +15,7 @@
  */
 
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
+use crate::resource::parent_selector::PersistentCacheParentSelector;
 use chrono::DateTime;
 use dragonfly_api::common::v2::{
     PersistentCachePeer, PersistentCacheTask as CommonPersistentCacheTask, Piece, TrafficType,
@@ -43,7 +44,7 @@ use dragonfly_client_core::{
     Result as ClientResult,
 };
 use dragonfly_client_storage::{metadata, Storage};
-use dragonfly_client_util::id_generator::IDGenerator;
+use dragonfly_client_util::{id_generator::IDGenerator, shutdown};
 use leaky_bucket::RateLimiter;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -80,6 +81,9 @@ pub struct PersistentCacheTask {
 
     /// piece is the piece manager.
     pub piece: Arc<piece::Piece>,
+
+    /// parent_selector is the parent selector.
+    pub parent_selector: Arc<PersistentCacheParentSelector>,
 }
 
 /// PersistentCacheTask is the implementation of PersistentCacheTask.
@@ -95,24 +99,29 @@ impl PersistentCacheTask {
         download_rate_limiter: Arc<RateLimiter>,
         upload_rate_limiter: Arc<RateLimiter>,
         prefetch_rate_limiter: Arc<RateLimiter>,
+        shutdown: shutdown::Shutdown,
+        shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> ClientResult<Self> {
-        let piece = piece::Piece::new(
-            config.clone(),
-            id_generator.clone(),
-            storage.clone(),
-            backend_factory.clone(),
-            download_rate_limiter,
-            upload_rate_limiter,
-            prefetch_rate_limiter,
-        )?;
-        let piece = Arc::new(piece);
-
         Ok(Self {
-            config,
-            id_generator,
-            storage,
+            config: config.clone(),
+            id_generator: id_generator.clone(),
+            storage: storage.clone(),
             scheduler_client,
-            piece,
+            piece: Arc::new(piece::Piece::new(
+                config.clone(),
+                id_generator.clone(),
+                storage.clone(),
+                backend_factory.clone(),
+                download_rate_limiter,
+                upload_rate_limiter,
+                prefetch_rate_limiter,
+            )?),
+            parent_selector: Arc::new(PersistentCacheParentSelector::new(
+                config.clone(),
+                id_generator.clone(),
+                shutdown.clone(),
+                shutdown_complete_tx.clone(),
+            )),
         })
     }
 
@@ -1019,6 +1028,20 @@ impl PersistentCacheTask {
         // Get the id of the task.
         let task_id = task.id.as_str();
 
+        // Register the parents for syncing host info.
+        self.parent_selector
+            .register(&parents)
+            .await
+            .inspect_err(|err| {
+                error!("register parents for syncing host info failed: {:?}", err);
+            })?;
+
+        // Clean up the parents in parent selector when the function returns.
+        let parents_clone = parents.clone();
+        let _guard = scopeguard::guard((), |_| {
+            self.parent_selector.unregister(&parents_clone);
+        });
+
         // Initialize the piece collector.
         let piece_collector = piece_collector::PersistentCachePieceCollector::new(
             self.config.clone(),
@@ -1066,15 +1089,18 @@ impl PersistentCacheTask {
                 number: u32,
                 length: u64,
                 need_piece_content: bool,
-                parent: piece_collector::CollectedParent,
+                parents: Vec<piece_collector::CollectedParent>,
                 piece_manager: Arc<super::piece::Piece>,
                 download_progress_tx: Sender<Result<DownloadPersistentCacheTaskResponse, Status>>,
                 in_stream_tx: Sender<AnnouncePersistentCachePeerRequest>,
                 interrupt: Arc<AtomicBool>,
                 finished_pieces: Arc<Mutex<Vec<metadata::Piece>>>,
                 protocol: String,
+                parent_selector: Arc<PersistentCacheParentSelector>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.persistent_cache_id(task_id.as_str(), number);
+                let parent = parent_selector.select(parents);
+
                 info!(
                     "start to download persistent cache piece {} from parent {:?}",
                     piece_id,
@@ -1216,6 +1242,7 @@ impl PersistentCacheTask {
             let interrupt = interrupt.clone();
             let finished_pieces = finished_pieces.clone();
             let protocol = self.config.download.protocol.clone();
+            let parent_selector = self.parent_selector.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -1227,13 +1254,14 @@ impl PersistentCacheTask {
                         collect_piece.number,
                         collect_piece.length,
                         need_piece_content,
-                        collect_piece.parent.clone(),
+                        collect_piece.parents,
                         piece_manager,
                         download_progress_tx,
                         in_stream_tx,
                         interrupt,
                         finished_pieces,
                         protocol,
+                        parent_selector,
                     )
                     .await
                 }

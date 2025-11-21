@@ -150,12 +150,8 @@ impl SeedPeerSelector {
                     hashring.add(addr);
                     hosts.insert(addr.to_string(), peer);
                 }
-                Ok(Err(err)) => {
-                    error!("health check error: {}", err);
-                }
-                Err(join_err) => {
-                    error!("task join error: {}", join_err);
-                }
+                Ok(Err(err)) => error!("health check failed: {}", err),
+                Err(err) => error!("task join error: {}", err),
             }
         }
 
