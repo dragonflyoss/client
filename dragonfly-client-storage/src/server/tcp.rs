@@ -520,6 +520,7 @@ impl TCPServerHandler {
         writer.flush().await.inspect_err(|err| {
             error!("flush failed: {}", err);
         })?;
+        debug!("finished writing stream to tcp writer");
 
         Ok(())
     }
