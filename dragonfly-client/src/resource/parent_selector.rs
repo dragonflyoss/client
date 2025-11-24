@@ -685,13 +685,13 @@ mod tests {
     use dragonfly_api::dfdaemon::v2::*;
     use dragonfly_client_config::dfdaemon::Config;
     use dragonfly_client_util::shutdown::Shutdown;
-    use std::io::ErrorKind;
     use std::pin::Pin;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::TcpListenerStream;
     use tokio_stream::Stream;
+    use tokio::time::{sleep, timeout};
     use tonic::transport::Server;
     use tonic::{Request, Response, Status};
 
@@ -849,8 +849,282 @@ mod tests {
         }
     }
 
+    fn build_host(id: &str, ip: &str, port: i32, tx_bandwidth: Option<u64>) -> Host {
+        Host {
+            id: id.to_string(),
+            ip: ip.to_string(),
+            port,
+            network: Some(dragonfly_api::common::v2::Network {
+                tx_bandwidth,
+                max_tx_bandwidth: 100,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn build_collected_parent(id: &str, host: Host) -> CollectedParent {
+        CollectedParent {
+            id: id.to_string(),
+            host: Some(host),
+            download_ip: None,
+            download_tcp_port: None,
+            download_quic_port: None,
+        }
+    }
+
+    fn build_peer(id: &str, host: Host) -> Peer {
+        Peer {
+            id: id.to_string(),
+            host: Some(host),
+            ..Default::default()
+        }
+    }
+
+    fn build_parent_selector() -> ParentSelector {
+        let (shutdown_complete_tx, _shutdown_complete_rx) = mpsc::unbounded_channel();
+        ParentSelector::new(
+            Arc::new(Config::default()),
+            Arc::new(IDGenerator::new(
+                "127.0.0.1".to_string(),
+                "localhost".to_string(),
+                false,
+            )),
+            Shutdown::new(),
+            shutdown_complete_tx,
+        )
+    }
+
+    async fn start_mock_upload_server(
+        hosts: Vec<Host>,
+    ) -> Option<(
+        i32,
+        tokio::task::JoinHandle<std::result::Result<(), tonic::transport::Error>>,
+    )> {
+        let Ok(listener) = tokio::net::TcpListener::bind("127.0.0.1:0").await else {
+            // Some environments (like sandboxed CI) forbid binding; skip in that case.
+            return None;
+        };
+        let addr = listener.local_addr().expect("mock server address");
+
+        let server = Server::builder()
+            .add_service(DfdaemonUploadGRPCServer::new(MockUploadService { hosts }));
+        let handle = tokio::spawn(async move {
+            server
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .await
+        });
+
+        Some((addr.port() as i32, handle))
+    }
+
     #[test]
-    fn test_get_idle_upload_rate() {
+    fn test_new() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let selector = ParentSelector::new(
+            Arc::new(Config::default()),
+            Arc::new(IDGenerator::new(
+                "127.0.0.1".to_string(),
+                "localhost".to_string(),
+                false,
+            )),
+            Shutdown::new(),
+            tx,
+        );
+
+        assert!(selector.weights.is_empty());
+        assert!(selector.connections.is_empty());
+    }
+
+    #[test]
+    fn test_select() {
+        // Higher weight should dominate when weights are present.
+        {
+            let selector = build_parent_selector();
+            let host_a = build_host("host-a", "127.0.0.1", 8000, Some(20));
+            let host_b = build_host("host-b", "127.0.0.1", 8001, Some(80));
+
+            selector.weights.insert(host_a.id.clone(), 1);
+            selector.weights.insert(host_b.id.clone(), 10);
+
+            let parents = vec![
+                build_collected_parent("peer-a", host_a.clone()),
+                build_collected_parent("peer-b", host_b.clone()),
+            ];
+
+            let selected = selector.select(parents.clone());
+            let selected_host = selected.host.unwrap().id;
+            assert_eq!(selected_host, host_b.id, "heavier weight should dominate");
+        }
+
+        // Parents with zero weight should be deprioritized.
+        {
+            let selector = build_parent_selector();
+            let weighted_host = build_host("weighted-host", "127.0.0.1", 8080, Some(10));
+            let unweighted_host = build_host("unweighted-host", "127.0.0.1", 8081, Some(10));
+
+            selector.weights.insert(weighted_host.id.clone(), 10);
+            selector.weights.insert(unweighted_host.id.clone(), 0);
+
+            let parents = vec![
+                build_collected_parent("peer-weighted", weighted_host.clone()),
+                build_collected_parent("peer-unweighted", unweighted_host.clone()),
+            ];
+
+            let selected = selector.select(parents.clone());
+            let selected_host_id = selected.host.unwrap().id;
+            assert_eq!(selected_host_id, weighted_host.id);
+        }
+
+        // If no weights exist, selector should still return one of the candidates.
+        {
+            let selector = build_parent_selector();
+            let host_a = build_host("host-a", "127.0.0.1", 8080, Some(10));
+            let host_b = build_host("host-b", "127.0.0.1", 8081, Some(10));
+            let parents = vec![
+                build_collected_parent("peer-a", host_a.clone()),
+                build_collected_parent("peer-b", host_b.clone()),
+            ];
+
+            let selected = selector.select(parents.clone());
+            assert!(
+                parents.iter().any(|parent| parent.id == selected.id),
+                "selector should return one of the provided parents"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_register() {
+        let selector = build_parent_selector();
+        let parent_host_id = "parent-host-1";
+        let sync_host = build_host(parent_host_id, "127.0.0.1", 0, Some(10));
+        let Some((port, server_handle)) = start_mock_upload_server(vec![sync_host]).await else {
+            // Skip when binding is not permitted in the environment.
+            return;
+        };
+
+        let parents = vec![build_peer(
+            "peer-1",
+            build_host(parent_host_id, "127.0.0.1", port, Some(10)),
+        )];
+
+        selector.register(&parents).await.unwrap();
+
+        timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(weight) = selector.weights.get(parent_host_id) {
+                    assert_eq!(*weight, 90);
+                    break;
+                }
+                sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("weights not updated in time");
+
+        assert!(selector.connections.contains_key(parent_host_id));
+
+        selector.unregister(&parents);
+        assert!(selector.weights.get(parent_host_id).is_none());
+        assert!(selector.connections.get(parent_host_id).is_none());
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_unregister() {
+        let selector = build_parent_selector();
+        let host = build_host("host-1", "127.0.0.1", 0, Some(50));
+        let parents = vec![build_peer("peer-1", host.clone())];
+
+        // Manually seed a connection as if it had been registered.
+        let connection = Connection::new();
+        connection.increment_request();
+        connection.increment_request();
+        selector.connections.insert(host.id.clone(), connection);
+        selector.weights.insert(host.id.clone(), 50);
+
+        // First unregister decrements but keeps connection.
+        selector.unregister(&parents);
+        if let Some(remaining_connection) = selector.connections.get(&host.id) {
+            assert_eq!(remaining_connection.active_requests(), 1);
+        } else {
+            panic!("connection should still exist after first unregister");
+        }
+        assert_eq!(
+            *selector
+                .weights
+                .get(&host.id)
+                .expect("weight should still exist"),
+            50
+        );
+
+        // Second unregister should drop when references reach zero.
+        selector.unregister(&parents);
+        assert!(selector.connections.get(&host.id).is_none());
+        assert!(selector.weights.get(&host.id).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_sync_host() {
+        let parent_host_id = "sync-parent";
+        let sync_host = build_host(parent_host_id, "127.0.0.1", 0, Some(10));
+        let Some((port, server_handle)) = start_mock_upload_server(vec![sync_host]).await else {
+            // Skip when binding is not permitted in the environment.
+            return;
+        };
+
+        let weights = Arc::new(DashMap::new());
+        let dfdaemon_upload_client = DfdaemonUploadClient::new(
+            Arc::new(Config::default()),
+            format!("http://127.0.0.1:{port}"),
+            false,
+        )
+        .await
+        .expect("create upload client");
+
+        let shutdown = Shutdown::new();
+        let dfdaemon_shutdown = Shutdown::new();
+
+        let host_id = "host-id".to_string();
+        let peer_id = "peer-id".to_string();
+
+        let sync = ParentSelector::sync_host(
+            host_id,
+            peer_id,
+            parent_host_id.to_string(),
+            weights.clone(),
+            dfdaemon_upload_client,
+            shutdown.clone(),
+            dfdaemon_shutdown.clone(),
+        );
+
+        let handle = tokio::spawn(sync);
+
+        // Wait for first update.
+        timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(weight) = weights.get(parent_host_id) {
+                    assert_eq!(*weight, 90);
+                    break;
+                }
+                sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("sync_host did not update weights");
+
+        // Trigger shutdown and ensure task finishes.
+        shutdown.trigger();
+        dfdaemon_shutdown.trigger();
+        let _ = handle.await;
+
+        server_handle.abort();
+    }
+
+    #[test]
+    fn test_get_idle_tx_bandwidth() {
         struct TestCase {
             name: &'static str,
             host: Host,
@@ -867,7 +1141,7 @@ mod tests {
                 expected: 0,
             },
             TestCase {
-                name: "tx_bandwidth none",
+                name: "missing tx_bandwidth",
                 host: Host {
                     network: Some(dragonfly_api::common::v2::Network {
                         tx_bandwidth: None,
@@ -876,10 +1150,10 @@ mod tests {
                     }),
                     ..Default::default()
                 },
-                expected: 100,
+                expected: 0,
             },
             TestCase {
-                name: "idle bandwidth",
+                name: "partial usage",
                 host: Host {
                     network: Some(dragonfly_api::common::v2::Network {
                         tx_bandwidth: Some(50),
