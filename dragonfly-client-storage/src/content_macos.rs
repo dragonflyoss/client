@@ -361,6 +361,7 @@ impl Content {
         writer.flush().await.inspect_err(|err| {
             error!("flush {:?} failed: {}", task_path, err);
         })?;
+        debug!("finish to write piece to {:?}", task_path);
 
         if length != expected_length {
             return Err(Error::Unknown(format!(
@@ -590,6 +591,7 @@ impl Content {
         writer.flush().await.inspect_err(|err| {
             error!("flush {:?} failed: {}", task_path, err);
         })?;
+        debug!("finish to write piece to {:?}", task_path);
 
         if length != expected_length {
             return Err(Error::Unknown(format!(

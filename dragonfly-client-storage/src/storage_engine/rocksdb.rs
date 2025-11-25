@@ -66,6 +66,9 @@ impl RocksdbStorageEngine {
     /// DEFAULT_LOG_MAX_FILES is the default max log files for rocksdb.
     const DEFAULT_LOG_MAX_FILES: usize = 10;
 
+    /// DEFAULT_BYTES_PER_SYNC is the default bytes per sync for rocksdb.
+    const DEFAULT_BYTES_PER_SYNC: u64 = 2 * 1024 * 1024;
+
     /// open opens a rocksdb storage engine with the given directory and column families.
     pub fn open(dir: &Path, log_dir: &PathBuf, cf_names: &[&str], keep: bool) -> Result<Self> {
         info!("initializing metadata directory: {:?} {:?}", dir, cf_names);
@@ -76,7 +79,7 @@ impl RocksdbStorageEngine {
 
         // Optimize compression.
         options.set_compression_type(rocksdb::DBCompressionType::Lz4);
-        options.set_bottommost_compression_type(rocksdb::DBCompressionType::Zstd);
+        options.set_bottommost_compression_type(rocksdb::DBCompressionType::Lz4);
 
         // Improved parallelism.
         options.increase_parallelism(num_cpus::get() as i32);
@@ -84,6 +87,10 @@ impl RocksdbStorageEngine {
             num_cpus::get() as i32,
             Self::DEFAULT_MAX_BACKGROUND_JOBS,
         ));
+
+        // Set rocksdb sync options.
+        options.set_use_fsync(false);
+        options.set_bytes_per_sync(Self::DEFAULT_BYTES_PER_SYNC);
 
         // Set rocksdb log options.
         options.set_db_log_dir(log_dir);
@@ -155,7 +162,10 @@ impl Operations for RocksdbStorageEngine {
     /// put puts the object by key.
     fn put<O: DatabaseObject>(&self, key: &[u8], value: &O) -> Result<()> {
         let cf = cf_handle::<O>(self)?;
-        self.put_cf(cf, key, value.serialized()?)
+        let mut options = rocksdb::WriteOptions::default();
+        options.set_sync(false);
+
+        self.put_cf_opt(cf, key, value.serialized()?, &options)
             .or_err(ErrorType::StorageError)?;
         Ok(())
     }
