@@ -165,8 +165,6 @@ impl DfdaemonUploadServer {
 
         let server = server_builder
             .max_frame_size(super::MAX_FRAME_SIZE)
-            .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
-            .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))

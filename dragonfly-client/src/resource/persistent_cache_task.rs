@@ -49,14 +49,14 @@ use leaky_bucket::RateLimiter;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc,
 };
 use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom};
 use tokio::sync::{
     mpsc::{self, Sender},
-    Semaphore,
+    Mutex, Semaphore,
 };
 use tokio::task::JoinSet;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
@@ -1227,7 +1227,7 @@ impl PersistentCacheTask {
                     piece_id, metadata.parent_id, protocol,
                 );
 
-                let mut finished_pieces = finished_pieces.lock().unwrap();
+                let mut finished_pieces = finished_pieces.lock().await;
                 finished_pieces.push(metadata.clone());
 
                 Ok(metadata)
@@ -1323,7 +1323,7 @@ impl PersistentCacheTask {
             }
         }
 
-        let finished_pieces = finished_pieces.lock().unwrap().clone();
+        let finished_pieces = finished_pieces.lock().await.clone();
         Ok(finished_pieces)
     }
 

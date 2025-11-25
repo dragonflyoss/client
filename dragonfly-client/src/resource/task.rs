@@ -56,13 +56,13 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc,
 };
 use std::time::Instant;
 use tokio::io::AsyncReadExt;
 use tokio::sync::{
     mpsc::{self, Sender},
-    Semaphore,
+    Mutex, Semaphore,
 };
 use tokio::task::JoinSet;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
@@ -1189,7 +1189,7 @@ impl Task {
                     piece_id, metadata.parent_id, protocol,
                 );
 
-                let mut finished_pieces = finished_pieces.lock().unwrap();
+                let mut finished_pieces = finished_pieces.lock().await;
                 finished_pieces.push(metadata.clone());
 
                 Ok(metadata)
@@ -1282,7 +1282,7 @@ impl Task {
                     // If the send timeout with scheduler or download progress, return the finished pieces.
                     // It will stop the download from the parent with scheduler
                     // and download from the source directly from middle.
-                    let finished_pieces = finished_pieces.lock().unwrap().clone();
+                    let finished_pieces = finished_pieces.lock().await.clone();
                     return Ok(finished_pieces);
                 }
                 Err(err) => {
@@ -1295,7 +1295,7 @@ impl Task {
             }
         }
 
-        let finished_pieces = finished_pieces.lock().unwrap().clone();
+        let finished_pieces = finished_pieces.lock().await.clone();
         Ok(finished_pieces)
     }
 
