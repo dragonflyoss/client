@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use std::collections::HashMap;
+use dashmap::DashMap;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -112,7 +112,7 @@ pub struct Pool<K, A, T, F> {
     factory: F,
 
     /// clients is the map of clients.
-    clients: Arc<Mutex<HashMap<K, Entry<T>>>>,
+    clients: Arc<DashMap<K, Entry<T>>>,
 
     /// capacity is the capacity of the clients. If the number of the
     /// clients exceeds the capacity, it will clean up the idle clients.
@@ -170,7 +170,7 @@ where
     pub fn build(self) -> Pool<K, A, T, F> {
         Pool {
             factory: self.factory,
-            clients: Arc::new(Mutex::new(HashMap::new())),
+            clients: Arc::new(DashMap::new()),
             capacity: self.capacity,
             idle_timeout: self.idle_timeout,
             cleanup_at: Arc::new(Mutex::new(Instant::now())),
@@ -200,20 +200,19 @@ where
         self.cleanup_idle_entries().await;
 
         // Try to get existing client.
-        {
-            let clients = self.clients.lock().await;
-            if let Some(entry) = clients.get(key) {
-                debug!("reusing client: {}", key);
-                entry.set_actived_at(Instant::now());
-                return Ok(entry.clone());
-            }
+        if let Some(entry) = self.clients.get(key) {
+            debug!("reusing client: {}", key);
+            entry.set_actived_at(Instant::now());
+            return Ok(entry.value().clone());
         }
 
         // Create new client.
         debug!("creating client: {}", key);
         let client = self.factory.make_client(addr).await?;
-        let mut clients = self.clients.lock().await;
-        let entry = clients.entry(key.clone()).or_insert(Entry::new(client));
+        let entry = self
+            .clients
+            .entry(key.clone())
+            .or_insert(Entry::new(client));
         entry.set_actived_at(Instant::now());
 
         Ok(entry.clone())
@@ -221,12 +220,8 @@ where
 
     /// Remove a client entry if it has no active requests.
     pub async fn remove_entry(&self, key: &K) {
-        let mut clients = self.clients.lock().await;
-        if let Some(entry) = clients.get(key) {
-            if !entry.has_active_requests() {
-                clients.remove(key);
-            }
-        }
+        self.clients
+            .remove_if(key, |_, entry| !entry.has_active_requests());
     }
 
     /// Cleanup idle entries that exceed capacity or idle timeout.
@@ -243,10 +238,8 @@ where
             }
         }
 
-        let mut clients = self.clients.lock().await;
-        let exceeds_capacity = clients.len() > self.capacity;
-
-        clients.retain(|key, entry| {
+        let exceeds_capacity = self.clients.len() > self.capacity;
+        self.clients.retain(|key, entry| {
             let has_active_requests = entry.has_active_requests();
             let idle_duration = entry.idle_duration();
             let is_recent = idle_duration <= self.idle_timeout;
@@ -269,11 +262,11 @@ where
 
     /// Get current pool size.
     pub async fn size(&self) -> usize {
-        self.clients.lock().await.len()
+        self.clients.len()
     }
 
     /// Clear all clients from the pool.
     pub async fn clear(&self) {
-        self.clients.lock().await.clear();
+        self.clients.clear();
     }
 }
