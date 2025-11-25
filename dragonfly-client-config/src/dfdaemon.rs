@@ -70,7 +70,7 @@ fn default_download_protocol() -> String {
 /// default_download_request_rate_limit is the default rate limit of the download request in the
 /// download grpc server, default is 4000 req/s.
 pub fn default_download_request_rate_limit() -> u64 {
-    4000
+    5000
 }
 
 /// default_host_hostname is the default hostname of the host.
@@ -100,7 +100,7 @@ fn default_upload_grpc_server_port() -> u16 {
 /// default_upload_request_rate_limit is the default rate limit of the upload request in the
 /// upload grpc server, default is 4000 req/s.
 pub fn default_upload_request_rate_limit() -> u64 {
-    4000
+    5000
 }
 
 /// default_upload_rate_limit is the default rate limit of the upload speed in GiB/Mib/Kib per second.
@@ -352,7 +352,7 @@ pub struct DownloadServer {
     pub socket_path: PathBuf,
 
     /// request_rate_limit is the rate limit of the download request in the download grpc server,
-    /// default is 4000 req/s.
+    /// default is 5000 req/s.
     #[serde(default = "default_download_request_rate_limit")]
     pub request_rate_limit: u64,
 }
@@ -440,7 +440,7 @@ pub struct UploadServer {
     pub key: Option<PathBuf>,
 
     /// request_rate_limit is the rate limit of the upload request in the upload grpc server,
-    /// default is 4000 req/s.
+    /// default is 5000 req/s.
     #[serde(default = "default_upload_request_rate_limit")]
     pub request_rate_limit: u64,
 }
