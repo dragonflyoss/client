@@ -689,9 +689,9 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::mpsc;
+    use tokio::time::{sleep, timeout};
     use tokio_stream::wrappers::TcpListenerStream;
     use tokio_stream::Stream;
-    use tokio::time::{sleep, timeout};
     use tonic::transport::Server;
     use tonic::{Request, Response, Status};
 
