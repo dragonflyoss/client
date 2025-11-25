@@ -31,6 +31,31 @@ const SEED_PEER_SUFFIX: &str = "seed";
 /// PERSISTENT_CACHE_TASK_SUFFIX is the suffix of the persistent cache task.
 const PERSISTENT_CACHE_TASK_SUFFIX: &str = "persistent-cache-task";
 
+/// extract_blob_digest_from_url extracts the blob digest from a registry blob URL.
+/// Returns the digest if the URL is a blob URL, otherwise returns None.
+///
+/// Example blob URLs:
+/// - /v2/<name>/blobs/sha256:<digest>
+/// - /v2/<namespace>/<repo>/blobs/sha256:<digest>
+pub fn extract_blob_digest_from_url(path: &str) -> Option<String> {
+    // Check if the path contains /blobs/sha256:
+    if let Some(blobs_idx) = path.find("/blobs/sha256:") {
+        // Extract everything after "/blobs/sha256:"
+        let after_blobs = &path[blobs_idx + "/blobs/sha256:".len()..];
+
+        // The digest should be 64 hex characters (SHA256)
+        // It might be followed by query parameters or nothing
+        let digest = after_blobs.split(&['?', '#'][..]).next().unwrap_or("");
+
+        // Validate that it looks like a SHA256 hash (64 hex characters)
+        if digest.len() == 64 && digest.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Some(format!("sha256:{}", digest));
+        }
+    }
+
+    None
+}
+
 /// TaskIDParameter is the parameter of the task id.
 pub enum TaskIDParameter {
     /// Content uses the content to generate the task id.
@@ -44,6 +69,11 @@ pub enum TaskIDParameter {
         application: Option<String>,
         filtered_query_params: Vec<String>,
     },
+    /// BlobDigestBased uses the blob digest to generate the task id.
+    /// The digest can use other algorithms (like sha256, sha512, etc.),
+    /// but the task ID in Dragonfly must be SHA256.
+    /// Task ID needs to compute a SHA256 hash based on the digest content.
+    BlobDigestBased(String),
 }
 
 /// PersistentCacheTaskIDParameter is the parameter of the persistent cache task id.
@@ -152,6 +182,12 @@ impl IDGenerator {
 
                 // Generate the task id.
                 Ok(hex::encode(hasher.finalize()))
+            }
+            TaskIDParameter::BlobDigestBased(digest) => {
+                // The digest can use other algorithms (sha256, sha512, etc.),
+                // but the task ID in Dragonfly must be SHA256.
+                // Compute SHA256 hash based on the digest content.
+                Ok(hex::encode(Sha256::digest(digest.as_bytes())))
             }
         }
     }
@@ -335,11 +371,55 @@ mod tests {
                 TaskIDParameter::Content("This is a test file".to_string()),
                 "e2d0fe1585a63ec6009c8016ff8dda8b17719a637405a4e23c0ff81339148249",
             ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                TaskIDParameter::BlobDigestBased(
+                    "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+                        .to_string(),
+                ),
+                "719498689c2f5bd76140f3bd2b03bcbc3134890e72b4d5b788d8b41ec0cd0f93",
+            ),
         ];
 
         for (generator, parameter, expected_id) in test_cases {
             let task_id = generator.task_id(parameter).unwrap();
             assert_eq!(task_id, expected_id);
+        }
+    }
+
+    #[test]
+    fn test_extract_blob_digest_from_url() {
+        // Test cases for valid blob URLs
+        let test_cases = vec![
+            (
+                "/v2/library/nginx/blobs/sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+                Some("sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string()),
+            ),
+            (
+                "/v2/myorg/myrepo/blobs/sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+                Some("sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string()),
+            ),
+            (
+                "/v2/namespace/repo/blobs/sha256:0000000000000000000000000000000000000000000000000000000000000000?query=param",
+                Some("sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string()),
+            ),
+        ];
+
+        for (input, expected) in test_cases {
+            assert_eq!(extract_blob_digest_from_url(input), expected);
+        }
+
+        // Test cases for invalid URLs (should return None)
+        let invalid_cases = vec![
+            "/v2/library/nginx/manifests/latest",
+            "/v2/library/nginx/blobs/sha256:short",
+            "/v2/library/nginx/blobs/sha256:xyz", // Not hex
+            "/api/v1/some/other/path",
+            "",
+        ];
+
+        for input in invalid_cases {
+            assert_eq!(extract_blob_digest_from_url(input), None);
         }
     }
 
