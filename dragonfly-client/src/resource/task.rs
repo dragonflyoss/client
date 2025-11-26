@@ -442,7 +442,7 @@ impl Task {
             .piece
             .remove_finished_from_interested(finished_pieces, interested_pieces);
         info!(
-            "interested pieces after removing the finished piece: {:?}",
+            "interested pieces after downloading from local: {:?}",
             interested_pieces
                 .iter()
                 .map(|p| p.number)
@@ -507,7 +507,7 @@ impl Task {
             .piece
             .remove_finished_from_interested(finished_pieces, interested_pieces);
         info!(
-            "interested pieces after removing the finished piece: {:?}",
+            "interested pieces after downloading from scheduler: {:?}",
             interested_pieces
                 .iter()
                 .map(|p| p.number)
@@ -589,7 +589,7 @@ impl Task {
             .inspect_err(|err| {
                 error!("send RegisterPeerRequest failed: {:?}", err);
             })?;
-        info!("sent RegisterPeerRequest");
+        debug!("sent RegisterPeerRequest");
 
         // Initialize the stream.
         let in_stream = ReceiverStream::new(in_stream_rx);
@@ -601,7 +601,7 @@ impl Task {
             .inspect_err(|err| {
                 error!("announce peer failed: {:?}", err);
             })?;
-        info!("announced peer has been connected");
+        debug!("announced peer has been connected");
 
         let out_stream = response
             .into_inner()
@@ -636,7 +636,7 @@ impl Task {
                     .unwrap_or_else(|err| {
                         error!("send DownloadPeerFailedRequest failed: {:?}", err)
                     });
-                info!("sent DownloadPeerFailedRequest");
+                debug!("sent DownloadPeerFailedRequest");
 
                 // Wait for the latest message to be sent.
                 in_stream_tx.closed().await;
@@ -668,7 +668,7 @@ impl Task {
                         .inspect_err(|err| {
                             error!("send DownloadPeerStartedRequest failed: {:?}", err);
                         })?;
-                    info!("sent DownloadPeerStartedRequest");
+                    debug!("sent DownloadPeerStartedRequest");
 
                     // Send the download peer finished request.
                     in_stream_tx
@@ -689,7 +689,7 @@ impl Task {
                         .inspect_err(|err| {
                             error!("send DownloadPeerFinishedRequest failed: {:?}", err);
                         })?;
-                    info!("sent DownloadPeerFinishedRequest");
+                    debug!("sent DownloadPeerFinishedRequest");
 
                     // Wait for the latest message to be sent.
                     in_stream_tx.closed().await;
@@ -723,7 +723,7 @@ impl Task {
                         )
                         .await
                     {
-                        Ok(_) => info!("sent DownloadPeerStartedRequest"),
+                        Ok(_) => debug!("sent DownloadPeerStartedRequest"),
                         Err(err) => {
                             error!("send DownloadPeerStartedRequest failed: {:?}", err);
                             return Ok(finished_pieces);
@@ -752,7 +752,7 @@ impl Task {
                         .await
                     {
                         Ok(partial_finished_pieces) => {
-                            info!(
+                            debug!(
                                 "schedule {} finished {} pieces from parent",
                                 schedule_count,
                                 partial_finished_pieces.len()
@@ -791,7 +791,7 @@ impl Task {
                             )
                             .await
                         {
-                            Ok(_) => info!("sent DownloadPeerFinishedRequest"),
+                            Ok(_) => debug!("sent DownloadPeerFinishedRequest"),
                             Err(err) => {
                                 error!("send DownloadPeerFinishedRequest failed: {:?}", err);
                             }
@@ -825,7 +825,7 @@ impl Task {
                         )
                         .await
                     {
-                        Ok(_) => info!("sent ReschedulePeerRequest"),
+                        Ok(_) => debug!("sent ReschedulePeerRequest"),
                         Err(err) => {
                             error!("send ReschedulePeerRequest failed: {:?}", err);
                             return Ok(finished_pieces);
@@ -851,7 +851,7 @@ impl Task {
                             ),
                         }, REQUEST_TIMEOUT)
                     .await {
-                        Ok(_) => info!("sent DownloadPeerBackToSourceStartedRequest"),
+                        Ok(_) => debug!("sent DownloadPeerBackToSourceStartedRequest"),
                         Err(err) => {
                             error!("send DownloadPeerBackToSourceStartedRequest failed: {:?}", err);
                             return Ok(finished_pieces);
@@ -896,7 +896,7 @@ impl Task {
                                 .unwrap_or_else(|err| {
                                     error!("send DownloadPeerBackToSourceFailedRequest failed: {:?}", err)
                                 });
-                            info!("sent DownloadPeerBackToSourceFailedRequest");
+                            debug!("sent DownloadPeerBackToSourceFailedRequest");
 
                             // Wait for the latest message to be sent.
                             in_stream_tx.closed().await;
@@ -928,7 +928,7 @@ impl Task {
                             )
                             .await
                         {
-                            Ok(_) => info!("sent DownloadPeerBackToSourceFinishedRequest"),
+                            Ok(_) => debug!("sent DownloadPeerBackToSourceFinishedRequest"),
                             Err(err) => {
                                 error!("send DownloadPeerBackToSourceFinishedRequest failed: {:?}", err);
                             }
@@ -953,7 +953,7 @@ impl Task {
                             ),
                         }, REQUEST_TIMEOUT)
                     .await {
-                        Ok(_) => info!("sent DownloadPeerBackToSourceFailedRequest"),
+                        Ok(_) => debug!("sent DownloadPeerBackToSourceFailedRequest"),
                         Err(err) => {
                             error!("send DownloadPeerBackToSourceFailedRequest failed: {:?}", err);
                         }

@@ -289,7 +289,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             "remote_ip",
             download.remote_ip.clone().unwrap_or_default().as_str(),
         );
-        info!("download task in upload server");
 
         // Download task started.
         info!("download task started: {:?}", download);
@@ -339,13 +338,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 task
             }
         };
-
-        info!(
-            "content length {:?}, piece length {:?}",
-            task.content_length(),
-            task.piece_length()
-        );
-
         Span::current().record("content_length", task.content_length().unwrap_or_default());
 
         // Update the actual content length, actual piece length and actual
@@ -609,7 +601,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
         // If prefetch flag is true, prefetch the full task.
         if download.prefetch {
-            info!("try to prefetch task");
             match self.task.prefetch_task_started(task_id.as_str()).await {
                 Ok(_) => {
                     info!("prefetch task started");
@@ -1059,7 +1050,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("remote_host_id", remote_host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("piece_id", piece_id.as_str());
-        info!("download piece content in upload server");
 
         // Get the piece metadata from the local storage.
         let piece = self
@@ -1257,7 +1247,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             "remote_ip",
             request.remote_ip.clone().unwrap_or_default().as_str(),
         );
-        info!("download persistent cache task in download server");
 
         // Download task started.
         info!("download persistent cache task started: {:?}", request);
@@ -1310,13 +1299,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 task
             }
         };
-
-        info!(
-            "content length {}, piece length {}",
-            task.content_length(),
-            task.piece_length()
-        );
-
         Span::current().record("content_length", task.content_length());
 
         // Initialize stream channel.
@@ -1810,7 +1792,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("remote_host_id", remote_host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record("piece_id", piece_id.as_str());
-        info!("download persistent cache piece in upload server");
 
         // Get the piece metadata from the local storage.
         let piece = self

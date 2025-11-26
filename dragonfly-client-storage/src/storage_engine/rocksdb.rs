@@ -132,7 +132,6 @@ impl RocksdbStorageEngine {
         // Open rocksdb.
         let db =
             rocksdb::DB::open_cf_with_opts(&options, &dir, cfs).or_err(ErrorType::StorageError)?;
-        info!("metadata initialized directory: {:?}", dir);
 
         Ok(Self { inner: db })
     }
