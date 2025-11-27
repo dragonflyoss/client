@@ -807,6 +807,12 @@ async fn proxy_via_dfdaemon(
                     error!("writer shutdown error: {}", err);
                 }
 
+                // Send the none response to the client in case if it is empty file.
+                sender
+                    .send_timeout(None, REQUEST_TIMEOUT)
+                    .await
+                    .unwrap_or_default();
+
                 return;
             };
             let mut need_piece_number = first_piece.number;
