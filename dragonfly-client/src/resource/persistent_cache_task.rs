@@ -648,7 +648,7 @@ impl PersistentCacheTask {
             .piece
             .remove_finished_from_interested(finished_pieces, interested_pieces);
         info!(
-            "interested pieces after removing the finished piece: {:?}",
+            "interested pieces after downloading from local: {:?}",
             interested_pieces
                 .iter()
                 .map(|p| p.number)
@@ -757,7 +757,7 @@ impl PersistentCacheTask {
             .inspect_err(|err| {
                 error!("send RegisterPersistentCachePeerRequest failed: {:?}", err);
             })?;
-        info!("sent RegisterPersistentCachePeerRequest");
+        debug!("sent RegisterPersistentCachePeerRequest");
 
         // Initialize the stream.
         let in_stream = ReceiverStream::new(in_stream_rx);
@@ -769,7 +769,7 @@ impl PersistentCacheTask {
             .inspect_err(|err| {
                 error!("announce persistent cache peer failed: {:?}", err);
             })?;
-        info!("announced persistent cache peer has been connected");
+        debug!("announced persistent cache peer has been connected");
 
         let out_stream = response
             .into_inner()
@@ -804,7 +804,7 @@ impl PersistentCacheTask {
                     .unwrap_or_else(|err| {
                         error!("send DownloadPersistentCachePeerFailedRequest failed: {:?}", err)
                     });
-                info!("sent DownloadPersistentCachePeerFailedRequest");
+                debug!("sent DownloadPersistentCachePeerFailedRequest");
 
                 // Wait for the latest message to be sent.
                 in_stream_tx.closed().await;
@@ -838,7 +838,7 @@ impl PersistentCacheTask {
                         .inspect_err(|err| {
                             error!("send DownloadPersistentCachePeerStartedRequest failed: {:?}", err);
                         })?;
-                    info!("sent DownloadPersistentCachePeerStartedRequest");
+                    debug!("sent DownloadPersistentCachePeerStartedRequest");
 
                     // Send the download peer finished request.
                     in_stream_tx
@@ -859,7 +859,7 @@ impl PersistentCacheTask {
                         .inspect_err(|err| {
                             error!("send DownloadPersistentCachePeerFinishedRequest failed: {:?}", err);
                         })?;
-                    info!("sent DownloadPersistentCachePeerFinishedRequest");
+                    debug!("sent DownloadPersistentCachePeerFinishedRequest");
 
                     // Wait for the latest message to be sent.
                     in_stream_tx.closed().await;
@@ -895,7 +895,7 @@ impl PersistentCacheTask {
                         )
                         .await
                     {
-                        Ok(_) => info!("sent DownloadPersistentCachePeerStartedRequest"),
+                        Ok(_) => debug!("sent DownloadPersistentCachePeerStartedRequest"),
                         Err(err) => {
                             error!("send DownloadPersistentCachePeerStartedRequest failed: {:?}", err);
                             return Ok(finished_pieces);
@@ -923,7 +923,7 @@ impl PersistentCacheTask {
                         .await
                     {
                         Ok(partial_finished_pieces) => {
-                            info!(
+                            debug!(
                                 "schedule {} finished {} persistent cache pieces from parent",
                                 schedule_count,
                                 partial_finished_pieces.len()
@@ -962,7 +962,7 @@ impl PersistentCacheTask {
                             )
                             .await
                         {
-                            Ok(_) => info!("sent DownloadPersistentCachePeerFinishedRequest"),
+                            Ok(_) => debug!("sent DownloadPersistentCachePeerFinishedRequest"),
                             Err(err) => {
                                 error!("send DownloadPersistentCachePeerFinishedRequest failed: {:?}", err);
                             }
@@ -996,7 +996,7 @@ impl PersistentCacheTask {
                         )
                         .await
                     {
-                        Ok(_) => info!("sent ReschedulePersistentCachePeerRequest"),
+                        Ok(_) => debug!("sent ReschedulePersistentCachePeerRequest"),
                         Err(err) => {
                             error!("send ReschedulePersistentCachePeerRequest failed: {:?}", err);
                             return Ok(finished_pieces);
@@ -1355,7 +1355,7 @@ impl PersistentCacheTask {
             let piece = match self.piece.get_persistent_cache(piece_id.as_str()) {
                 Ok(Some(piece)) => piece,
                 Ok(None) => {
-                    info!(
+                    debug!(
                         "persistent cache piece {} not found in local storage",
                         piece_id
                     );

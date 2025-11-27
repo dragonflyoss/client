@@ -193,8 +193,9 @@ impl Piece {
             }
 
             info!(
-                "calculate interested pieces by range: {:?}, piece length: {:?}. pieces: {:?}",
+                "calculate interested pieces by range {:?}, content length: {:?}, piece length: {:?}, pieces: {:?}",
                 range,
+                content_length,
                 piece_length,
                 pieces
                     .iter()
@@ -242,7 +243,8 @@ impl Piece {
         }
 
         info!(
-            "calculate interested pieces by content length, piece length: {:?}, pieces: {:?}",
+            "calculate interested pieces by content length: {:?}, piece length: {:?}, pieces: {:?}",
+            content_length,
             piece_length,
             pieces
                 .iter()

@@ -26,7 +26,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
-use tracing::{error, info, instrument, Instrument};
+use tracing::{debug, error, info, instrument, Instrument};
 
 const DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS: Duration = Duration::from_millis(5);
 
@@ -187,7 +187,7 @@ impl PieceCollector {
                 collected_piece_tx: Sender<CollectedPiece>,
                 collected_piece_timeout: Duration,
             ) -> Result<CollectedParent> {
-                info!("sync pieces from parent {}", parent.id);
+                debug!("sync pieces from parent {}", parent.id);
 
                 // If candidate_parent.host is None, skip it.
                 let host = parent.host.clone().ok_or_else(|| {
@@ -249,7 +249,7 @@ impl PieceCollector {
                         None => continue,
                     };
 
-                    info!(
+                    debug!(
                         "receive piece {}-{} metadata from parents {:?}",
                         task_id,
                         message.number,
@@ -290,7 +290,7 @@ impl PieceCollector {
         while let Some(message) = join_set.join_next().await {
             match message {
                 Ok(Ok(peer)) => {
-                    info!("peer {} sync pieces finished", peer.id);
+                    debug!("peer {} sync pieces finished", peer.id);
 
                     // If all pieces are collected, abort all tasks.
                     if collected_pieces.is_empty() {
@@ -432,7 +432,7 @@ impl PersistentCachePieceCollector {
                 collected_piece_tx: Sender<CollectedPiece>,
                 collected_piece_timeout: Duration,
             ) -> Result<CollectedParent> {
-                info!("sync persistent cache pieces from parent {}", parent.id);
+                debug!("sync persistent cache pieces from parent {}", parent.id);
 
                 // If candidate_parent.host is None, skip it.
                 let host = parent.host.clone().ok_or_else(|| {
@@ -499,7 +499,7 @@ impl PersistentCachePieceCollector {
                         None => continue,
                     };
 
-                    info!(
+                    debug!(
                         "receive piece {}-{} metadata from parents {:?}",
                         task_id,
                         message.number,
@@ -540,7 +540,7 @@ impl PersistentCachePieceCollector {
         while let Some(message) = join_set.join_next().await {
             match message {
                 Ok(Ok(peer)) => {
-                    info!("peer {} sync persistent cache pieces finished", peer.id);
+                    debug!("peer {} sync persistent cache pieces finished", peer.id);
 
                     // If all pieces are collected, abort all tasks.
                     if collected_pieces.is_empty() {
