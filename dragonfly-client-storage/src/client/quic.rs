@@ -30,6 +30,7 @@ use tokio::time;
 use tracing::{error, instrument, Span};
 use vortex_protocol::{
     tlv::{
+        cache_piece_content, download_cache_piece::DownloadCachePiece,
         download_persistent_cache_piece::DownloadPersistentCachePiece,
         download_piece::DownloadPiece, error::Error as VortexError, persistent_cache_piece_content,
         piece_content, Tag,
@@ -157,6 +158,63 @@ impl QUICClient {
                 .await?;
 
                 let metadata = persistent_cache_piece_content.metadata();
+                Ok((reader, metadata.offset, metadata.digest))
+            }
+            Tag::Error => Err(self.read_error(&mut reader, header.length() as usize).await),
+            _ => Err(ClientError::Unknown(format!(
+                "unexpected tag: {:?}",
+                header.tag()
+            ))),
+        }
+    }
+
+    /// Downloads a cache piece from the server using the vortex protocol.
+    ///
+    /// This is the main entry point for downloading a piece. It applies
+    /// a timeout based on the configuration and handles connection timeouts gracefully.
+    #[instrument(skip_all)]
+    pub async fn download_cache_piece(
+        &self,
+        number: u32,
+        task_id: &str,
+    ) -> ClientResult<(impl AsyncRead, u64, String)> {
+        time::timeout(
+            self.config.download.piece_timeout,
+            self.handle_download_cache_piece(number, task_id),
+        )
+        .await
+        .inspect_err(|err| {
+            error!("connect timeout to {}: {}", self.addr, err);
+        })?
+    }
+    /// Internal handler for downloading a cache piece.
+    ///
+    /// This method performs the actual protocol communication:
+    /// 1. Creates a download piece request.
+    /// 2. Establishes QUIC connection and sends the request.
+    /// 3. Reads and validates the response header.
+    /// 4. Processes the piece content based on the response type.
+    #[instrument(skip_all)]
+    async fn handle_download_cache_piece(
+        &self,
+        number: u32,
+        task_id: &str,
+    ) -> ClientResult<(impl AsyncRead, u64, String)> {
+        let request: Bytes = Vortex::DownloadCachePiece(
+            Header::new_download_cache_piece(),
+            DownloadCachePiece::new(task_id.to_string(), number),
+        )
+        .into();
+
+        let (mut reader, _writer) = self.connect_and_write_request(request).await?;
+        let header = self.read_header(&mut reader).await?;
+        match header.tag() {
+            Tag::CachePieceContent => {
+                let cache_piece_content: cache_piece_content::CachePieceContent = self
+                    .read_piece_content(&mut reader, cache_piece_content::METADATA_LENGTH_SIZE)
+                    .await?;
+
+                let metadata = cache_piece_content.metadata();
                 Ok((reader, metadata.offset, metadata.digest))
             }
             Tag::Error => Err(self.read_error(&mut reader, header.length() as usize).await),
