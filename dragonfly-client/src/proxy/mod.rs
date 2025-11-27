@@ -358,8 +358,6 @@ pub async fn http_handler(
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
-    info!("handle HTTP request: {:?}", request);
-
     // Authenticate the request with the basic auth.
     if let Some(basic_auth) = config.proxy.server.basic_auth.as_ref() {
         match basic_auth.credentials().verify(request.headers()) {
@@ -390,9 +388,8 @@ pub async fn http_handler(
         request_uri.to_string().as_str(),
     ) {
         info!(
-            "proxy HTTP request via dfdaemon by rule config for method: {}, uri: {}",
-            request.method(),
-            request_uri
+            "proxy HTTP request via dfdaemon by rule config: {:?}",
+            request
         );
         return proxy_via_dfdaemon(
             config,
@@ -409,9 +406,8 @@ pub async fn http_handler(
     // dfdaemon.
     if header::get_use_p2p(request.headers()) {
         info!(
-            "proxy HTTP request via dfdaemon by X-Dragonfly-Use-P2P header for method: {}, uri: {}",
-            request.method(),
-            request_uri
+            "proxy HTTP request via dfdaemon by X-Dragonfly-Use-P2P header: {:?}",
+            request
         );
         return proxy_via_dfdaemon(
             config,
@@ -426,17 +422,15 @@ pub async fn http_handler(
 
     if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
         info!(
-            "proxy HTTPS request directly to remote server for method: {}, uri: {}",
-            request.method(),
-            request.uri()
+            "proxy HTTPS request directly to remote server: {:?}",
+            request
         );
         return proxy_via_https(request, registry_cert).await;
     }
 
     info!(
-        "proxy HTTP request directly to remote server for method: {}, uri: {}",
-        request.method(),
-        request.uri()
+        "proxy HTTP request directly to remote server: {:?}",
+        request
     );
     return proxy_via_http(request).await;
 }
@@ -623,15 +617,13 @@ pub async fn upgraded_handler(
     }
 
     // If find the matching rule, proxy the request via the dfdaemon.
-    let request_uri = request.uri();
     if let Some(rule) = find_matching_rule(
         config.proxy.rules.as_deref(),
-        request_uri.to_string().as_str(),
+        request.uri().to_string().as_str(),
     ) {
         info!(
-            "proxy HTTPS request via dfdaemon by rule config for method: {}, uri: {}",
-            request.method(),
-            request_uri
+            "proxy HTTPS request via dfdaemon by rule config: {:?}",
+            request,
         );
         return proxy_via_dfdaemon(
             config,
@@ -648,9 +640,8 @@ pub async fn upgraded_handler(
     // dfdaemon.
     if header::get_use_p2p(request.headers()) {
         info!(
-            "proxy HTTP request via dfdaemon by X-Dragonfly-Use-P2P header for method: {}, uri: {}",
-            request.method(),
-            request_uri
+            "proxy HTTP request via dfdaemon by X-Dragonfly-Use-P2P header: {:?}",
+            request,
         );
         return proxy_via_dfdaemon(
             config,
@@ -665,17 +656,15 @@ pub async fn upgraded_handler(
 
     if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
         info!(
-            "proxy HTTPS request directly to remote server for method: {}, uri: {}",
-            request.method(),
-            request.uri()
+            "proxy HTTPS request directly to remote server: {:?}",
+            request,
         );
         return proxy_via_https(request, registry_cert).await;
     }
 
     info!(
-        "proxy HTTP request directly to remote server for method: {}, uri: {}",
-        request.method(),
-        request.uri()
+        "proxy HTTP request directly to remote server: {:?}",
+        request,
     );
     return proxy_via_http(request).await;
 }

@@ -114,7 +114,7 @@ impl SeedPeerSelector {
     async fn refresh(&self) -> Result<()> {
         // Only one refresh can be running at a time.
         let Ok(_guard) = self.mutex.try_lock() else {
-            info!("refresh is already running");
+            debug!("refresh is already running");
             return Ok(());
         };
 

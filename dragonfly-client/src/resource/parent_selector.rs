@@ -30,7 +30,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
-use tracing::{debug, error, info, instrument, warn, Instrument};
+use tracing::{debug, error, instrument, warn, Instrument};
 
 /// Manages a single persistent connection to a parent peer.
 ///
@@ -167,7 +167,7 @@ impl ParentSelector {
                     .get(&parent_host_id)
                     .map(|w| *w)
                     .unwrap_or_else(|| {
-                        warn!(
+                        debug!(
                             "no weight info for parent {} {}, defaulting weight to 0",
                             parent.id, parent_host_id
                         );
@@ -201,10 +201,10 @@ impl ParentSelector {
         let dfdaemon_shutdown = self.shutdown.clone();
         let mut join_set = JoinSet::new();
         for parent in parents {
-            info!("register parent {}", parent.id);
+            debug!("register parent {}", parent.id);
 
             let Some(parent_host) = parent.host.as_ref() else {
-                warn!("parent {} has no host info, skipping", parent.id);
+                error!("parent {} has no host info, skipping", parent.id);
                 continue;
             };
             let parent_host_id = parent_host.id.clone();
@@ -270,7 +270,7 @@ impl ParentSelector {
     #[instrument(skip_all)]
     pub fn unregister(&self, parents: &[Peer]) {
         for parent in parents {
-            info!("unregister parent {}", parent.id);
+            debug!("unregister parent {}", parent.id);
 
             let Some(parent_host) = parent.host.as_ref() else {
                 warn!("parent {} has no host info, skipping", parent.id);
@@ -281,7 +281,7 @@ impl ParentSelector {
             if let Some(connection) = self.connections.get(&parent_host_id) {
                 connection.decrement_request();
                 if connection.active_requests() == 0 {
-                    info!("cleaning up parent {} connection", parent_host_id);
+                    debug!("cleaning up parent {} connection", parent_host_id);
                     connection.shutdown();
 
                     // Explicitly drop the reference to avoid holding the borrow
@@ -312,7 +312,7 @@ impl ParentSelector {
         mut shutdown: Shutdown,
         mut dfdaemon_shutdown: Shutdown,
     ) -> Result<()> {
-        info!("sync host info from parent {}", parent_host_id);
+        debug!("sync host info from parent {}", parent_host_id);
         let response = dfdaemon_upload_client
             .sync_host(SyncHostRequest { host_id, peer_id })
             .await
@@ -334,18 +334,18 @@ impl ParentSelector {
                         Some(message) => {
                             let idle_tx_bandwidth = Self::get_idle_tx_bandwidth(&message);
 
-                            info!("update host {} idle TX bandwidth to {}", parent_host_id, idle_tx_bandwidth);
+                            debug!("update host {} idle TX bandwidth to {}", parent_host_id, idle_tx_bandwidth);
                             weights.insert(parent_host_id.clone(), idle_tx_bandwidth);
                         }
                         None => break,
                     }
                 }
                 _ = shutdown.recv() => {
-                    info!("sync host info from parent {} shutting down", parent_host_id);
+                    debug!("sync host info from parent {} shutting down", parent_host_id);
                     break;
                 }
                 _ = dfdaemon_shutdown.recv() => {
-                    info!("parent selector shutting down");
+                    debug!("parent selector shutting down");
                     break;
                 }
             }
@@ -466,7 +466,7 @@ impl PersistentCacheParentSelector {
                     .get(&parent_host_id)
                     .map(|w| *w)
                     .unwrap_or_else(|| {
-                        warn!(
+                        debug!(
                             "no weight info for persistent cache parent {} {}, defaulting weight to 0",
                             parent.id, parent_host_id
                         );
@@ -500,7 +500,7 @@ impl PersistentCacheParentSelector {
         let dfdaemon_shutdown = self.shutdown.clone();
         let mut join_set = JoinSet::new();
         for parent in parents {
-            info!("register persistent cache parent {}", parent.id);
+            debug!("register persistent cache parent {}", parent.id);
 
             let Some(parent_host) = parent.host.as_ref() else {
                 warn!(
@@ -572,7 +572,7 @@ impl PersistentCacheParentSelector {
     #[instrument(skip_all)]
     pub fn unregister(&self, parents: &[PersistentCachePeer]) {
         for parent in parents {
-            info!("unregister persistent cache parent {}", parent.id);
+            debug!("unregister persistent cache parent {}", parent.id);
 
             let Some(parent_host) = parent.host.as_ref() else {
                 warn!(
@@ -586,7 +586,7 @@ impl PersistentCacheParentSelector {
             if let Some(connection) = self.connections.get(&parent_host_id) {
                 connection.decrement_request();
                 if connection.active_requests() == 0 {
-                    info!("cleaning up parent {} connection", parent_host_id);
+                    debug!("cleaning up parent {} connection", parent_host_id);
                     connection.shutdown();
 
                     // Explicitly drop the reference to avoid holding the borrow
@@ -617,7 +617,7 @@ impl PersistentCacheParentSelector {
         mut shutdown: Shutdown,
         mut dfdaemon_shutdown: Shutdown,
     ) -> Result<()> {
-        info!(
+        debug!(
             "sync host info from persistent cache parent {}",
             parent_host_id
         );
@@ -642,18 +642,18 @@ impl PersistentCacheParentSelector {
                         Some(message) => {
                             let idle_tx_bandwidth = Self::get_idle_tx_bandwidth(&message);
 
-                            info!("update host {} idle TX bandwidth to {}", parent_host_id, idle_tx_bandwidth);
+                            debug!("update host {} idle TX bandwidth to {}", parent_host_id, idle_tx_bandwidth);
                             weights.insert(parent_host_id.clone(), idle_tx_bandwidth);
                         }
                         None => break,
                     }
                 }
                 _ = shutdown.recv() => {
-                    info!("sync host info from persistent cache parent {} shutting down", parent_host_id);
+                    debug!("sync host info from persistent cache parent {} shutting down", parent_host_id);
                     break;
                 }
                 _ = dfdaemon_shutdown.recv() => {
-                    info!("persistent cache parent selector shutting down");
+                    debug!("persistent cache parent selector shutting down");
                     break;
                 }
             }

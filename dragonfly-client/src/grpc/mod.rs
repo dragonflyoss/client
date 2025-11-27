@@ -22,7 +22,7 @@ use dragonfly_client_metric::{
 use std::path::PathBuf;
 use std::time::Duration;
 use tonic::Request;
-use tracing::{error, info, instrument, Instrument};
+use tracing::{debug, error, info, instrument, Instrument};
 
 pub mod dfdaemon_download;
 pub mod dfdaemon_upload;
@@ -115,7 +115,7 @@ pub async fn prefetch_task(
             let mut out_stream = response.into_inner();
             loop {
                 match out_stream.message().await {
-                    Ok(Some(_)) => info!("prefetch piece finished"),
+                    Ok(Some(_)) => debug!("prefetch piece finished"),
                     Ok(None) => {
                         info!("prefetch task finished");
                         return;
