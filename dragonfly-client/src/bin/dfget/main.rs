@@ -353,51 +353,8 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     }
 
-    // Get dfdaemon download client.
-    let dfdaemon_download_client =
-        match get_dfdaemon_download_client(args.endpoint.to_path_buf()).await {
-            Ok(client) => client,
-            Err(err) => {
-                println!(
-                    "{}{}{}Connect Dfdaemon Failed!{}",
-                    color::Fg(color::Red),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
-
-                println!(
-                    "{}{}{}****************************************{}",
-                    color::Fg(color::Black),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
-
-                println!(
-                    "{}{}{}Message:{}, can not connect {}, please check the unix socket {}",
-                    color::Fg(color::Cyan),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset,
-                    err,
-                    args.endpoint.to_string_lossy(),
-                );
-
-                println!(
-                    "{}{}{}****************************************{}",
-                    color::Fg(color::Black),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
-
-                std::process::exit(1);
-            }
-        };
-
     // Run dfget command.
-    if let Err(err) = run(args, dfdaemon_download_client).await {
+    if let Err(err) = run(args).await {
         match err {
             Error::TonicStatus(status) => {
                 let details = status.details();
@@ -608,7 +565,7 @@ async fn main() -> anyhow::Result<()> {
 /// It handles both single file downloads and directory downloads based on the URL format.
 /// The function performs path normalization, validates the URL scheme's capabilities,
 /// and delegates to the appropriate download handler.
-async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
+async fn run(mut args: Args) -> Result<()> {
     // Get the absolute path of the output file.
     args.output = Path::new(&args.output).absolutize()?.into();
     info!("download file to: {}", args.output.to_string_lossy());
@@ -621,10 +578,10 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
             return Err(Error::Unsupported(format!("{} download directory", scheme)));
         };
 
-        return download_dir(args, dfdaemon_download_client).await;
+        return download_dir(args).await;
     };
 
-    download(args, ProgressBar::new(0), dfdaemon_download_client).await
+    download(args, ProgressBar::new(0)).await
 }
 
 /// Downloads all files in a directory from various storage backends (object storage, HDFS, etc.).
@@ -634,7 +591,14 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
 /// enforces download limits, and performs concurrent downloads with configurable
 /// concurrency control. The function creates the necessary directory structure
 /// locally and downloads files while preserving the remote directory hierarchy.
-async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Result<()> {
+async fn download_dir(args: Args) -> Result<()> {
+    // Get dfdaemon download client.
+    let download_client = get_dfdaemon_download_client(args.endpoint.clone())
+        .await
+        .inspect_err(|err| {
+            error!("failed to get dfdaemon download client: {}", err);
+        })?;
+
     // Initialize the object storage config and the hdfs config.
     let object_storage = Some(ObjectStorage {
         access_key_id: args.storage_access_key_id.clone(),
@@ -698,12 +662,11 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
             entry_args.url = entry_url;
 
             let progress_bar = multi_progress_bar.add(ProgressBar::new(0));
-            let download_client = download_client.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
                     let _permit = permit;
-                    download(entry_args, progress_bar, download_client).await
+                    download(entry_args, progress_bar).await
                 }
                 .in_current_span(),
             );
@@ -830,11 +793,14 @@ async fn get_all_entries(
 /// two transfer modes: direct download by dfdaemon or streaming piece content through
 /// the client. The function includes progress tracking, file creation, and proper error
 /// handling throughout the download process.
-async fn download(
-    args: Args,
-    progress_bar: ProgressBar,
-    download_client: DfdaemonDownloadClient,
-) -> Result<()> {
+async fn download(args: Args, progress_bar: ProgressBar) -> Result<()> {
+    // Get dfdaemon download client.
+    let download_client = get_dfdaemon_download_client(args.endpoint)
+        .await
+        .inspect_err(|err| {
+            error!("failed to get dfdaemon download client: {}", err);
+        })?;
+
     // Only initialize object storage when the scheme is an object storage protocol.
     let object_storage = match object_storage::Scheme::from_str(args.url.scheme()) {
         Ok(_) => Some(ObjectStorage {
@@ -915,9 +881,8 @@ async fn download(
             error!("download task failed: {}", err);
         })?;
 
-    // If transfer_from_dfdaemon is true, then dfget needs to create the output file and write the
-    // piece content to the output file.
-    let mut f = if args.transfer_from_dfdaemon {
+    // If transfer_from_dfdaemon is true, then dfget needs to create the output directory.
+    if args.transfer_from_dfdaemon {
         if let Some(parent) = args.output.parent() {
             if !parent.exists() {
                 fs::create_dir_all(parent).await.inspect_err(|err| {
@@ -925,21 +890,6 @@ async fn download(
                 })?;
             }
         }
-
-        let f = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .mode(dfget::DEFAULT_OUTPUT_FILE_MODE)
-            .open(&args.output)
-            .await
-            .inspect_err(|err| {
-                error!("open file {:?} failed: {}", args.output, err);
-            })?;
-
-        Some(f)
-    } else {
-        None
     };
 
     // Get actual path rather than percentage encoded path as download path.
@@ -959,7 +909,6 @@ async fn download(
     // Download file.
     let mut downloaded = 0;
     let mut out_stream = response.into_inner();
-
     loop {
         match out_stream.message().await {
             Ok(Some(message)) => {
@@ -967,8 +916,19 @@ async fn download(
                     Some(download_task_response::Response::DownloadTaskStartedResponse(
                         response,
                     )) => {
-                        if let Some(f) = &f {
-                            if let Err(err) = fallocate(f, response.content_length).await {
+                        if args.transfer_from_dfdaemon {
+                            let f = OpenOptions::new()
+                                .create(true)
+                                .truncate(false)
+                                .write(true)
+                                .mode(dfget::DEFAULT_OUTPUT_FILE_MODE)
+                                .open(&args.output)
+                                .await
+                                .inspect_err(|err| {
+                                    error!("open file {:?} failed: {}", args.output, err);
+                                })?;
+
+                            if let Err(err) = fallocate(&f, response.content_length).await {
                                 error!("fallocate {:?} failed: {}", args.output, err);
                                 fs::remove_file(&args.output).await.inspect_err(|err| {
                                     error!("remove file {:?} failed: {}", args.output, err);
@@ -976,7 +936,7 @@ async fn download(
 
                                 return Err(err);
                             }
-                        }
+                        };
 
                         progress_bar.set_length(response.content_length);
                     }
@@ -996,7 +956,17 @@ async fn download(
                         };
 
                         // Dfget needs to write the piece content to the output file.
-                        if let Some(f) = &mut f {
+                        if args.transfer_from_dfdaemon {
+                            let mut f = OpenOptions::new()
+                                .truncate(false)
+                                .write(true)
+                                .mode(dfget::DEFAULT_OUTPUT_FILE_MODE)
+                                .open(&args.output)
+                                .await
+                                .inspect_err(|err| {
+                                    error!("open file {:?} failed: {}", args.output, err);
+                                })?;
+
                             if let Err(err) = f.seek(SeekFrom::Start(piece.offset)).await {
                                 error!("seek {:?} failed: {}", args.output, err);
                                 fs::remove_file(&args.output).await.inspect_err(|err| {
@@ -1040,7 +1010,7 @@ async fn download(
                             }
 
                             debug!("copy piece {} to {:?} success", piece.number, args.output);
-                        }
+                        };
 
                         downloaded += piece.length;
                         let position = min(

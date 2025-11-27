@@ -577,15 +577,6 @@ impl ExportCommand {
                                     return Err(Error::IO(err));
                                 }
 
-                                if let Err(err) = f.flush().await {
-                                    error!("flush {:?} failed: {}", self.output, err);
-                                    fs::remove_file(&self.output).await.inspect_err(|err| {
-                                        error!("remove file {:?} failed: {}", self.output, err);
-                                    })?;
-
-                                    return Err(Error::IO(err));
-                                }
-
                                 debug!("copy piece {} to {:?} success", piece.number, self.output);
                             };
 
@@ -614,6 +605,17 @@ impl ExportCommand {
                 }
             }
         }
+
+        if let Some(f) = &mut f {
+            if let Err(err) = f.flush().await {
+                error!("flush {:?} failed: {}", self.output, err);
+                fs::remove_file(&self.output).await.inspect_err(|err| {
+                    error!("remove file {:?} failed: {}", self.output, err);
+                })?;
+
+                return Err(Error::IO(err));
+            }
+        };
 
         progress_bar.finish_with_message("downloaded");
         Ok(())
