@@ -401,7 +401,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let download_clone = download.clone();
         let task_manager_clone = self.task.clone();
         let task_clone = task.clone();
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(16);
 
         // Define the error handler to send the error to the stream.
         async fn handle_error(
@@ -875,7 +875,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let download_quic_port = self.config.storage.server.quic_port;
 
         // Initialize stream channel.
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
         tokio::spawn(
             async move {
                 match task_manager.get(task_id.as_str()) {
@@ -1161,7 +1161,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let interface = self.interface.clone();
 
         // Initialize stream channel.
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
         tokio::spawn(
             async move {
                 // Start the host info update loop.
@@ -1305,7 +1305,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let request_clone = request.clone();
         let task_manager_clone = self.persistent_cache_task.clone();
         let task_clone = task.clone();
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(16);
 
         // Define the error handler to send the error to the stream.
         async fn handle_error(
@@ -1620,7 +1620,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let download_quic_port = self.config.storage.server.quic_port;
 
         // Initialize stream channel.
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
         tokio::spawn(
             async move {
                 match persistent_cache_task_manager.get(task_id.as_str()) {

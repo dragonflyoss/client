@@ -767,7 +767,7 @@ async fn proxy_via_dfdaemon(
     };
 
     // Write the status code to the writer.
-    let (sender, mut receiver) = mpsc::channel(10 * 1024);
+    let (sender, mut receiver) = mpsc::channel(8);
 
     // Get the read buffer size from the config.
     let read_buffer_size = config.proxy.read_buffer_size;

@@ -50,11 +50,14 @@ pub const HTTP2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(300);
 /// HTTP2_KEEP_ALIVE_TIMEOUT is the timeout for HTTP2 keep alive.
 pub const HTTP2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// MAX_FRAME_SIZE is the max frame size for GRPC, default is 4MB.
+/// MAX_FRAME_SIZE is the max frame size for GRPC, default is 4MiB.
 pub const MAX_FRAME_SIZE: u32 = 4 * 1024 * 1024;
 
-/// BUFFER_SIZE is the buffer size for GRPC, default is 64KB.
-pub const BUFFER_SIZE: usize = 64 * 1024;
+/// BUFFER_SIZE is the buffer size for GRPC, default is 512KiB.
+pub const BUFFER_SIZE: usize = 512 * 1024;
+
+/// INITIAL_WINDOW_SIZE is the initial window size for GRPC, default is 1MiB.
+pub const INITIAL_WINDOW_SIZE: u32 = 1024 * 1024;
 
 /// prefetch_task prefetches the task if prefetch flag is true.
 #[instrument(skip_all)]
