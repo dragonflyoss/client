@@ -547,6 +547,7 @@ impl ExportCommand {
 
                             // Dfcache needs to write the piece content to the output file.
                             if let Some(f) = &mut f {
+                                debug!("copy piece {} to {:?} started", piece.number, self.output);
                                 if let Err(err) =f.seek(SeekFrom::Start(piece.offset)).await {
                                     error!("seek {:?} failed: {}", self.output, err);
                                     fs::remove_file(&self.output).await.inspect_err(|err| {
@@ -616,6 +617,7 @@ impl ExportCommand {
                 return Err(Error::IO(err));
             }
         };
+        info!("flush {:?} success", self.output);
 
         progress_bar.finish_with_message("downloaded");
         Ok(())

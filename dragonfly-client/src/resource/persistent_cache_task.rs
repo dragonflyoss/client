@@ -727,7 +727,7 @@ impl PersistentCacheTask {
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
         // Initialize stream channel.
-        let (in_stream_tx, in_stream_rx) = mpsc::channel(10 * 1024);
+        let (in_stream_tx, in_stream_rx) = mpsc::channel(16);
 
         // Send the register peer request.
         in_stream_tx

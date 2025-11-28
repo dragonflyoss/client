@@ -568,7 +568,7 @@ impl Task {
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
         // Initialize stream channel.
-        let (in_stream_tx, in_stream_rx) = mpsc::channel(10 * 1024);
+        let (in_stream_tx, in_stream_rx) = mpsc::channel(16);
 
         // Send the register peer request.
         in_stream_tx
@@ -1158,7 +1158,6 @@ impl Task {
                         );
                         interrupt.store(true, Ordering::SeqCst);
                     });
-                info!("sent to scheduler");
 
                 // Send the download piece finished request.
                 in_stream_tx
@@ -1183,7 +1182,6 @@ impl Task {
                         );
                         interrupt.store(true, Ordering::SeqCst);
                     });
-                info!("sent to uds");
 
                 info!(
                     "finished piece {} from parent {:?} using protocol {}",
@@ -1427,7 +1425,6 @@ impl Task {
                             piece_id, err
                         );
                     });
-                info!("sent to scheduler");
 
                 // Send the download piece finished request.
                 in_stream_tx
@@ -1449,7 +1446,6 @@ impl Task {
                         .await.unwrap_or_else(|err| {
                             error!("send DownloadPieceBackToSourceFinishedRequest for piece {} failed: {:?}", piece_id, err);
                         });
-                info!("sent to uds");
 
                 info!("finished piece {} from source", piece_id);
                 Ok(metadata)
