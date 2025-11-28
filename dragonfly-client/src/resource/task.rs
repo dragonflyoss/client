@@ -568,7 +568,7 @@ impl Task {
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
         // Initialize stream channel.
-        let (in_stream_tx, in_stream_rx) = mpsc::channel(10 * 1024);
+        let (in_stream_tx, in_stream_rx) = mpsc::channel(16);
 
         // Send the register peer request.
         in_stream_tx
@@ -1094,7 +1094,7 @@ impl Task {
                     })?;
 
                 // Construct the piece.
-                let mut piece = Piece {
+                let piece = Piece {
                     number: metadata.number,
                     parent_id: metadata.parent_id.clone(),
                     offset: metadata.offset,
@@ -1107,6 +1107,7 @@ impl Task {
                 };
 
                 // If need_piece_content is true, read the piece content from the local.
+                let mut response_piece = piece.clone();
                 if need_piece_content {
                     let mut reader = piece_manager
                         .download_from_local_into_async_read(
@@ -1129,34 +1130,8 @@ impl Task {
                         interrupt.store(true, Ordering::SeqCst);
                     })?;
 
-                    piece.content = Some(content);
+                    response_piece.content = Some(content);
                 }
-
-                // Send the download piece finished request.
-                in_stream_tx
-                    .send_timeout(
-                        AnnouncePeerRequest {
-                            host_id: host_id.to_string(),
-                            task_id: task_id.to_string(),
-                            peer_id: peer_id.to_string(),
-                            request: Some(
-                                announce_peer_request::Request::DownloadPieceFinishedRequest(
-                                    DownloadPieceFinishedRequest {
-                                        piece: Some(piece.clone()),
-                                    },
-                                ),
-                            ),
-                        },
-                        REQUEST_TIMEOUT,
-                    )
-                    .await
-                    .unwrap_or_else(|err| {
-                        error!(
-                            "send DownloadPieceFinishedRequest for piece {} failed: {:?}",
-                            piece_id, err
-                        );
-                        interrupt.store(true, Ordering::SeqCst);
-                    });
 
                 // Send the download progress.
                 download_progress_tx
@@ -1168,7 +1143,7 @@ impl Task {
                             response: Some(
                                 download_task_response::Response::DownloadPieceFinishedResponse(
                                     dfdaemon::v2::DownloadPieceFinishedResponse {
-                                        piece: Some(piece.clone()),
+                                        piece: Some(response_piece),
                                     },
                                 ),
                             ),
@@ -1179,6 +1154,30 @@ impl Task {
                     .unwrap_or_else(|err| {
                         error!(
                             "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                            piece_id, err
+                        );
+                        interrupt.store(true, Ordering::SeqCst);
+                    });
+
+                // Send the download piece finished request.
+                in_stream_tx
+                    .send_timeout(
+                        AnnouncePeerRequest {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                            request: Some(
+                                announce_peer_request::Request::DownloadPieceFinishedRequest(
+                                    DownloadPieceFinishedRequest { piece: Some(piece) },
+                                ),
+                            ),
+                        },
+                        REQUEST_TIMEOUT,
+                    )
+                    .await
+                    .unwrap_or_else(|err| {
+                        error!(
+                            "send DownloadPieceFinishedRequest for piece {} failed: {:?}",
                             piece_id, err
                         );
                         interrupt.store(true, Ordering::SeqCst);
@@ -1365,7 +1364,7 @@ impl Task {
                     .await?;
 
                 // Construct the piece.
-                let mut piece = Piece {
+                let piece = Piece {
                     number: metadata.number,
                     parent_id: metadata.parent_id.clone(),
                     offset: metadata.offset,
@@ -1378,6 +1377,7 @@ impl Task {
                 };
 
                 // If need_piece_content is true, read the piece content from the local.
+                let mut response_piece = piece.clone();
                 if need_piece_content {
                     let mut reader = piece_manager
                         .download_from_local_into_async_read(
@@ -1398,29 +1398,8 @@ impl Task {
                         error!("read piece {} failed: {:?}", piece_id, err);
                     })?;
 
-                    piece.content = Some(content);
+                    response_piece.content = Some(content);
                 }
-
-                // Send the download piece finished request.
-                in_stream_tx
-                        .send_timeout(
-                            AnnouncePeerRequest {
-                                host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
-                                peer_id: peer_id.to_string(),
-                                request: Some(
-                                    announce_peer_request::Request::DownloadPieceBackToSourceFinishedRequest(
-                                        DownloadPieceBackToSourceFinishedRequest {
-                                            piece: Some(piece.clone()),
-                                        },
-                                    ),
-                                ),
-                            },
-                            REQUEST_TIMEOUT,
-                        )
-                        .await.unwrap_or_else(|err| {
-                            error!("send DownloadPieceBackToSourceFinishedRequest for piece {} failed: {:?}", piece_id, err);
-                        });
 
                 // Send the download progress.
                 download_progress_tx
@@ -1432,7 +1411,7 @@ impl Task {
                             response: Some(
                                 download_task_response::Response::DownloadPieceFinishedResponse(
                                     dfdaemon::v2::DownloadPieceFinishedResponse {
-                                        piece: Some(piece.clone()),
+                                        piece: Some(response_piece),
                                     },
                                 ),
                             ),
@@ -1446,6 +1425,27 @@ impl Task {
                             piece_id, err
                         );
                     });
+
+                // Send the download piece finished request.
+                in_stream_tx
+                        .send_timeout(
+                            AnnouncePeerRequest {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.to_string(),
+                                peer_id: peer_id.to_string(),
+                                request: Some(
+                                    announce_peer_request::Request::DownloadPieceBackToSourceFinishedRequest(
+                                        DownloadPieceBackToSourceFinishedRequest {
+                                            piece: Some(piece),
+                                        },
+                                    ),
+                                ),
+                            },
+                            REQUEST_TIMEOUT,
+                        )
+                        .await.unwrap_or_else(|err| {
+                            error!("send DownloadPieceBackToSourceFinishedRequest for piece {} failed: {:?}", piece_id, err);
+                        });
 
                 info!("finished piece {} from source", piece_id);
                 Ok(metadata)
@@ -1680,9 +1680,7 @@ impl Task {
                         peer_id: peer_id.to_string(),
                         response: Some(
                             download_task_response::Response::DownloadPieceFinishedResponse(
-                                dfdaemon::v2::DownloadPieceFinishedResponse {
-                                    piece: Some(piece.clone()),
-                                },
+                                dfdaemon::v2::DownloadPieceFinishedResponse { piece: Some(piece) },
                             ),
                         ),
                     }),
@@ -1813,7 +1811,7 @@ impl Task {
                             response: Some(
                                 download_task_response::Response::DownloadPieceFinishedResponse(
                                     dfdaemon::v2::DownloadPieceFinishedResponse {
-                                        piece: Some(piece.clone()),
+                                        piece: Some(piece),
                                     },
                                 ),
                             ),

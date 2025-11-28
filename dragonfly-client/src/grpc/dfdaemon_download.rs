@@ -166,6 +166,8 @@ impl DfdaemonDownloadServer {
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
+            .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
+            .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
             .layer(rate_limit_layer)
             .add_service(reflection)
             .add_service(health_service)
@@ -404,7 +406,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let download_clone = download.clone();
         let task_manager_clone = self.task.clone();
         let task_clone = task.clone();
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(16);
 
         // Define the error handler to send the error to the stream.
         async fn handle_error(
@@ -993,7 +995,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let request_clone = request.clone();
         let task_manager_clone = self.persistent_cache_task.clone();
         let task_clone = task.clone();
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(10 * 1024);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(16);
 
         // Define the error handler to send the error to the stream.
         async fn handle_error(
@@ -1411,6 +1413,8 @@ impl DfdaemonDownloadClient {
             .unwrap()
             .buffer_size(super::BUFFER_SIZE)
             .connect_timeout(super::CONNECT_TIMEOUT)
+            .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
+            .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
             .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)

@@ -547,6 +547,7 @@ impl ExportCommand {
 
                             // Dfcache needs to write the piece content to the output file.
                             if let Some(f) = &mut f {
+                                debug!("copy piece {} to {:?} started", piece.number, self.output);
                                 if let Err(err) =f.seek(SeekFrom::Start(piece.offset)).await {
                                     error!("seek {:?} failed: {}", self.output, err);
                                     fs::remove_file(&self.output).await.inspect_err(|err| {
@@ -570,15 +571,6 @@ impl ExportCommand {
 
                                 if let Err(err) =f.write_all(&content).await {
                                     error!("write {:?} failed: {}", self.output, err);
-                                    fs::remove_file(&self.output).await.inspect_err(|err| {
-                                        error!("remove file {:?} failed: {}", self.output, err);
-                                    })?;
-
-                                    return Err(Error::IO(err));
-                                }
-
-                                if let Err(err) = f.flush().await {
-                                    error!("flush {:?} failed: {}", self.output, err);
                                     fs::remove_file(&self.output).await.inspect_err(|err| {
                                         error!("remove file {:?} failed: {}", self.output, err);
                                     })?;
@@ -614,6 +606,18 @@ impl ExportCommand {
                 }
             }
         }
+
+        if let Some(f) = &mut f {
+            if let Err(err) = f.flush().await {
+                error!("flush {:?} failed: {}", self.output, err);
+                fs::remove_file(&self.output).await.inspect_err(|err| {
+                    error!("remove file {:?} failed: {}", self.output, err);
+                })?;
+
+                return Err(Error::IO(err));
+            }
+        };
+        info!("flush {:?} success", self.output);
 
         progress_bar.finish_with_message("downloaded");
         Ok(())

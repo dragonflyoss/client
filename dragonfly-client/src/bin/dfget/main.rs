@@ -959,7 +959,6 @@ async fn download(
     // Download file.
     let mut downloaded = 0;
     let mut out_stream = response.into_inner();
-
     loop {
         match out_stream.message().await {
             Ok(Some(message)) => {
@@ -997,6 +996,7 @@ async fn download(
 
                         // Dfget needs to write the piece content to the output file.
                         if let Some(f) = &mut f {
+                            debug!("copy piece {} to {:?} started", piece.number, args.output);
                             if let Err(err) = f.seek(SeekFrom::Start(piece.offset)).await {
                                 error!("seek {:?} failed: {}", args.output, err);
                                 fs::remove_file(&args.output).await.inspect_err(|err| {
@@ -1023,15 +1023,6 @@ async fn download(
                                     "write piece {} to {:?} failed: {}",
                                     piece.number, args.output, err
                                 );
-                                fs::remove_file(&args.output).await.inspect_err(|err| {
-                                    error!("remove file {:?} failed: {}", args.output, err);
-                                })?;
-
-                                return Err(Error::IO(err));
-                            }
-
-                            if let Err(err) = f.flush().await {
-                                error!("flush {:?} failed: {}", args.output, err);
                                 fs::remove_file(&args.output).await.inspect_err(|err| {
                                     error!("remove file {:?} failed: {}", args.output, err);
                                 })?;
@@ -1070,6 +1061,18 @@ async fn download(
             }
         }
     }
+
+    if let Some(f) = &mut f {
+        if let Err(err) = f.flush().await {
+            error!("flush {:?} failed: {}", args.output, err);
+            fs::remove_file(&args.output).await.inspect_err(|err| {
+                error!("remove file {:?} failed: {}", args.output, err);
+            })?;
+
+            return Err(Error::IO(err));
+        }
+    };
+    info!("flush {:?} success", args.output);
 
     progress_bar.finish();
     Ok(())
