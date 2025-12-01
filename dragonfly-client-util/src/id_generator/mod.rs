@@ -351,7 +351,7 @@ mod tests {
                     "https://registry.example.com/v2/myorg/myrepo/blobs/sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
                         .to_string(),
                 ),
-                "719498689c2f5bd76140f3bd2b03bcbc3134890e72b4d5b788d8b41ec0cd0f93",
+                "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
             ),
         ];
 
