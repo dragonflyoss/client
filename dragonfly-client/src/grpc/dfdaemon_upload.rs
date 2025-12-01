@@ -16,22 +16,25 @@
 
 use crate::resource::{persistent_cache_task, task};
 use dragonfly_api::common::v2::{
-    CacheTask, Host, Network, PersistentCacheTask, Piece, Priority, Task, TaskType,
+    CacheTask, Host, Network, PersistentCacheTask, PersistentTask, Piece, Priority, Task, TaskType,
 };
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient,
     dfdaemon_upload_server::{DfdaemonUpload, DfdaemonUploadServer as DfdaemonUploadGRPCServer},
-    DeleteCacheTaskRequest, DeletePersistentCacheTaskRequest, DeleteTaskRequest,
-    DownloadCachePieceRequest, DownloadCachePieceResponse, DownloadCacheTaskRequest,
-    DownloadCacheTaskResponse, DownloadPersistentCachePieceRequest,
+    DeleteCacheTaskRequest, DeletePersistentCacheTaskRequest, DeletePersistentTaskRequest,
+    DeleteTaskRequest, DownloadCachePieceRequest, DownloadCachePieceResponse,
+    DownloadCacheTaskRequest, DownloadCacheTaskResponse, DownloadPersistentCachePieceRequest,
     DownloadPersistentCachePieceResponse, DownloadPersistentCacheTaskRequest,
-    DownloadPersistentCacheTaskResponse, DownloadPieceRequest, DownloadPieceResponse,
-    DownloadTaskRequest, DownloadTaskResponse, Entry, ExchangeIbVerbsQueuePairEndpointRequest,
-    ExchangeIbVerbsQueuePairEndpointResponse, ListTaskEntriesRequest, ListTaskEntriesResponse,
-    StatCacheTaskRequest, StatPersistentCacheTaskRequest, StatTaskRequest,
+    DownloadPersistentCacheTaskResponse, DownloadPersistentPieceRequest,
+    DownloadPersistentPieceResponse, DownloadPersistentTaskRequest, DownloadPersistentTaskResponse,
+    DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest, DownloadTaskResponse, Entry,
+    ExchangeIbVerbsQueuePairEndpointRequest, ExchangeIbVerbsQueuePairEndpointResponse,
+    ListTaskEntriesRequest, ListTaskEntriesResponse, StatCacheTaskRequest,
+    StatPersistentCacheTaskRequest, StatPersistentTaskRequest, StatTaskRequest,
     StatTaskRequest as DfdaemonStatTaskRequest, SyncCachePiecesRequest, SyncCachePiecesResponse,
     SyncHostRequest, SyncPersistentCachePiecesRequest, SyncPersistentCachePiecesResponse,
-    SyncPiecesRequest, SyncPiecesResponse, UpdatePersistentCacheTaskRequest,
+    SyncPersistentPiecesRequest, SyncPersistentPiecesResponse, SyncPiecesRequest,
+    SyncPiecesResponse, UpdatePersistentCacheTaskRequest, UpdatePersistentTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_backend::HeadRequest;
@@ -50,6 +53,7 @@ use dragonfly_client_metric::{
     collect_upload_piece_finished_metrics, collect_upload_piece_started_metrics,
 };
 use dragonfly_client_util::{
+    digest::is_blob_url,
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
     id_generator::TaskIDParameter,
     net::Interface,
@@ -259,42 +263,21 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let task_id = self
             .task
             .id_generator
-            .task_id(match download.content_for_calculating_task_id.clone() {
-                Some(content) => {
-                    // Check if the content matches OCI digest format: algorithm:encoded
-                    // See: https://github.com/opencontainers/image-spec/blob/main/descriptor.md#digests
-                    // Format: algorithm can be [a-z0-9+._-]+, encoded can be [a-zA-Z0-9=_-]+
-                    // If it's a digest, use BlobDigestBased to ensure SHA256 hash is calculated
-                    // from the digest content, regardless of the digest algorithm used.
-                    let is_digest = content.split_once(':').is_some_and(|(alg, enc)| {
-                        // Validate algorithm: [a-z0-9+._-]+
-                        !alg.is_empty()
-                            && alg.chars().all(|c| {
-                                c.is_ascii_lowercase()
-                                    || c.is_ascii_digit()
-                                    || matches!(c, '+' | '.' | '_' | '-')
-                            })
-                            // Validate encoded: [a-zA-Z0-9=_-]+ and minimum length
-                            && enc.len() >= 32
-                            && enc.chars().all(|c| {
-                                c.is_ascii_alphanumeric() || matches!(c, '=' | '_' | '-')
-                            })
-                    });
-
-                    if is_digest {
-                        TaskIDParameter::BlobDigestBased(content)
-                    } else {
-                        TaskIDParameter::Content(content)
+            .task_id(
+                if download.enable_task_id_based_blob_digest && is_blob_url(&download.url) {
+                    TaskIDParameter::BlobDigestBased(download.url.clone())
+                } else if let Some(content) = download.content_for_calculating_task_id.clone() {
+                    TaskIDParameter::Content(content)
+                } else {
+                    TaskIDParameter::URLBased {
+                        url: download.url.clone(),
+                        piece_length: download.piece_length,
+                        tag: download.tag.clone(),
+                        application: download.application.clone(),
+                        filtered_query_params: download.filtered_query_params.clone(),
                     }
-                }
-                None => TaskIDParameter::URLBased {
-                    url: download.url.clone(),
-                    piece_length: download.piece_length,
-                    tag: download.tag.clone(),
-                    application: download.application.clone(),
-                    filtered_query_params: download.filtered_query_params.clone(),
                 },
-            })
+            )
             .map_err(|e| {
                 error!("generate task id: {}", e);
                 Status::invalid_argument(e.to_string())
@@ -1231,6 +1214,67 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
+    /// DownloadPersistentTaskStream is the stream of the download persistent task response.
+    type DownloadPersistentTaskStream =
+        ReceiverStream<Result<DownloadPersistentTaskResponse, Status>>;
+
+    /// download_persistent_task downloads the persistent task.
+    #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip, content_length))]
+    async fn download_persistent_task(
+        &self,
+        _request: Request<DownloadPersistentTaskRequest>,
+    ) -> Result<Response<Self::DownloadPersistentTaskStream>, Status> {
+        todo!()
+    }
+
+    /// update_persistent_task update metadata of the persistent task.
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
+    async fn update_persistent_task(
+        &self,
+        _request: Request<UpdatePersistentTaskRequest>,
+    ) -> Result<Response<()>, Status> {
+        todo!()
+    }
+
+    /// stat_persistent_task stats the persistent task.
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
+    async fn stat_persistent_task(
+        &self,
+        _request: Request<StatPersistentTaskRequest>,
+    ) -> Result<Response<PersistentTask>, Status> {
+        todo!()
+    }
+
+    /// delete_persistent_task deletes the persistent task.
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
+    async fn delete_persistent_task(
+        &self,
+        _request: Request<DeletePersistentTaskRequest>,
+    ) -> Result<Response<()>, Status> {
+        todo!()
+    }
+
+    /// SyncPersistentPiecesStream is the stream of the sync pieces response.
+    type SyncPersistentPiecesStream = ReceiverStream<Result<SyncPersistentPiecesResponse, Status>>;
+
+    /// sync_persistent_pieces provides the persistent piece metadata for parent.
+    #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
+    async fn sync_persistent_pieces(
+        &self,
+        _request: Request<SyncPersistentPiecesRequest>,
+    ) -> Result<Response<Self::SyncPersistentPiecesStream>, Status> {
+        todo!()
+    }
+
+    /// download_persistent_piece provides the persistent piece content for parent.
+    #[instrument(skip_all, fields(host_id, remote_host_id, task_id, piece_id))]
+    async fn download_persistent_piece(
+        &self,
+        _request: Request<DownloadPersistentPieceRequest>,
+    ) -> Result<Response<DownloadPersistentPieceResponse>, Status> {
+        todo!()
+    }
+
     /// DownloadPersistentCacheTaskStream is the stream of the download persistent cache task response.
     type DownloadPersistentCacheTaskStream =
         ReceiverStream<Result<DownloadPersistentCacheTaskResponse, Status>>;
@@ -2124,6 +2168,87 @@ impl DfdaemonUploadClient {
         let request = Self::make_request(request);
         let response = self.client.clone().sync_host(request).await?;
         Ok(response)
+    }
+
+    /// download_persistent_task downloads the persistent task.
+    #[instrument(skip_all)]
+    pub async fn download_persistent_task(
+        &self,
+        request: DownloadPersistentTaskRequest,
+    ) -> ClientResult<tonic::Response<tonic::codec::Streaming<DownloadPersistentTaskResponse>>>
+    {
+        // Clone the request.
+        let request_clone = request.clone();
+
+        // Initialize the request.
+        let mut request = tonic::Request::new(request);
+
+        // Set the timeout to the request.
+        if let Some(timeout) = request_clone.timeout {
+            request.set_timeout(
+                Duration::try_from(timeout)
+                    .map_err(|_| tonic::Status::invalid_argument("invalid timeout"))?,
+            );
+        }
+
+        let response = self
+            .client
+            .clone()
+            .download_persistent_task(request)
+            .await?;
+        Ok(response)
+    }
+
+    /// stat_persistent_task stats the persistent task.
+    #[instrument(skip_all)]
+    pub async fn stat_persistent_task(
+        &self,
+        request: StatPersistentTaskRequest,
+    ) -> ClientResult<PersistentTask> {
+        let request = Self::make_request(request);
+        let response = self.client.clone().stat_persistent_task(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// delete_persistent_task deletes the persistent task.
+    #[instrument(skip_all)]
+    pub async fn delete_persistent_task(
+        &self,
+        request: DeletePersistentTaskRequest,
+    ) -> ClientResult<()> {
+        let request = Self::make_request(request);
+        let _response = self.client.clone().delete_persistent_task(request).await?;
+        Ok(())
+    }
+
+    /// sync_persistent_pieces provides the persistent piece metadata for parent.
+    /// If the per-piece collection timeout is exceeded, the stream will be closed.
+    #[instrument(skip_all)]
+    pub async fn sync_persistent_pieces(
+        &self,
+        request: SyncPersistentPiecesRequest,
+    ) -> ClientResult<tonic::Response<tonic::codec::Streaming<SyncPersistentPiecesResponse>>> {
+        let request = Self::make_request(request);
+        let response = self.client.clone().sync_persistent_pieces(request).await?;
+        Ok(response)
+    }
+
+    /// download_persistent_piece provides the persistent piece content for parent.
+    #[instrument(skip_all)]
+    pub async fn download_persistent_piece(
+        &self,
+        request: DownloadPersistentPieceRequest,
+        timeout: Duration,
+    ) -> ClientResult<DownloadPersistentPieceResponse> {
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(timeout);
+
+        let response = self
+            .client
+            .clone()
+            .download_persistent_piece(request)
+            .await?;
+        Ok(response.into_inner())
     }
 
     /// download_persistent_cache_task downloads the persistent cache task.

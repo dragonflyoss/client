@@ -15,6 +15,8 @@
  */
 
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
+use lazy_static::lazy_static;
+use regex::Regex;
 use sha2::Digest as Sha2Digest;
 use std::fmt;
 use std::io::{self, Read};
@@ -24,6 +26,16 @@ use tracing::instrument;
 
 /// SEPARATOR is the separator of digest.
 pub const SEPARATOR: &str = ":";
+
+lazy_static! {
+    /// BLOB_URL_REGEX is the regex for oci blob url, e.g. http(s)://<registry>/v2/<repository>/blobs/<digest>.
+    static ref BLOB_URL_REGEX: Regex = Regex::new(r"^(.*)://(.*)/v2/(.*)/blobs/(.*)$").unwrap();
+}
+
+/// is_blob_url checks if the url is an oci blob url.
+pub fn is_blob_url(url: &str) -> bool {
+    BLOB_URL_REGEX.is_match(url)
+}
 
 /// Algorithm is an enum of the algorithm that is used to generate digest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +91,16 @@ impl Digest {
     /// new returns a new Digest.
     pub fn new(algorithm: Algorithm, encoded: String) -> Self {
         Self { algorithm, encoded }
+    }
+
+    /// extract_from_blob_url extracts the digest from the oci blob url, e.g. http(s)://<registry>/v2/<repository>/blobs/<digest>.
+    pub fn extract_from_blob_url(url: &str) -> Option<Self> {
+        BLOB_URL_REGEX
+            .captures(url)
+            .and_then(|caps| caps.get(4))
+            .map(|m| m.as_str())?
+            .parse()
+            .ok()
     }
 
     /// algorithm returns the algorithm of the digest.
@@ -206,6 +228,54 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::Write;
+
+    #[test]
+    fn test_extract_from_blob_url() {
+        let url = "http://registry.example.com/v2/library/ubuntu/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e";
+        let digest = Digest::extract_from_blob_url(url);
+        assert!(digest.is_some());
+        let digest = digest.unwrap();
+        assert_eq!(digest.algorithm(), Algorithm::Sha256);
+        assert_eq!(
+            digest.encoded(),
+            "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
+        );
+
+        let url = "https://registry.example.com/v2/myorg/myrepo/blobs/sha512:94381a28e8c039fedfa78de025158a068226c3ccd041b22c2c8e73fc993584e9b167d9ae32bc8b372c66701c808ab134e0768c8f16b9a3e61eec1ccf8faa9db8";
+        let digest = Digest::extract_from_blob_url(url);
+        assert!(digest.is_some());
+        let digest = digest.unwrap();
+        assert_eq!(digest.algorithm(), Algorithm::Sha512);
+        assert_eq!(digest.encoded(), "94381a28e8c039fedfa78de025158a068226c3ccd041b22c2c8e73fc993584e9b167d9ae32bc8b372c66701c808ab134e0768c8f16b9a3e61eec1ccf8faa9db8");
+
+        let url = "https://registry.io/v2/org/team/project/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e";
+        let digest = Digest::extract_from_blob_url(url);
+        assert!(digest.is_some());
+
+        let url = "http://localhost:5000/v2/myrepo/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e";
+        let digest = Digest::extract_from_blob_url(url);
+        assert!(digest.is_some());
+        let digest = digest.unwrap();
+        assert_eq!(digest.algorithm(), Algorithm::Sha256);
+        assert_eq!(
+            digest.encoded(),
+            "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
+        );
+
+        let invalid_urls = vec![
+            "http://registry.example.com/blobs/sha256:abc",
+            "http://registry.example.com/v2/repo/manifests/sha256:abc",
+            "registry.example.com/v2/repo/blobs/sha256:abc",
+            "http://registry.example.com/v2/blobs/sha256:abc",
+            "",
+            "not-a-url",
+            "http://registry.example.com/v2/repo/blobs/invalid-digest",
+        ];
+
+        for url in invalid_urls {
+            assert!(Digest::extract_from_blob_url(url).is_none());
+        }
+    }
 
     #[test]
     fn test_algorithm_display() {
