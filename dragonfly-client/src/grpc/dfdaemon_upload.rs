@@ -260,7 +260,33 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             .task
             .id_generator
             .task_id(match download.content_for_calculating_task_id.clone() {
-                Some(content) => TaskIDParameter::Content(content),
+                Some(content) => {
+                    // Check if the content matches OCI digest format: algorithm:encoded
+                    // See: https://github.com/opencontainers/image-spec/blob/main/descriptor.md#digests
+                    // Format: algorithm can be [a-z0-9+._-]+, encoded can be [a-zA-Z0-9=_-]+
+                    // If it's a digest, use BlobDigestBased to ensure SHA256 hash is calculated
+                    // from the digest content, regardless of the digest algorithm used.
+                    let is_digest = content.split_once(':').is_some_and(|(alg, enc)| {
+                        // Validate algorithm: [a-z0-9+._-]+
+                        !alg.is_empty()
+                            && alg.chars().all(|c| {
+                                c.is_ascii_lowercase()
+                                    || c.is_ascii_digit()
+                                    || matches!(c, '+' | '.' | '_' | '-')
+                            })
+                            // Validate encoded: [a-zA-Z0-9=_-]+ and minimum length
+                            && enc.len() >= 32
+                            && enc.chars().all(|c| {
+                                c.is_ascii_alphanumeric() || matches!(c, '=' | '_' | '-')
+                            })
+                    });
+
+                    if is_digest {
+                        TaskIDParameter::BlobDigestBased(content)
+                    } else {
+                        TaskIDParameter::Content(content)
+                    }
+                }
                 None => TaskIDParameter::URLBased {
                     url: download.url.clone(),
                     piece_length: download.piece_length,

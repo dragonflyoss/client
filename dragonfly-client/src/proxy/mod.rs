@@ -31,6 +31,7 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
+    id_generator::extract_blob_digest_from_url,
     shutdown,
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
@@ -1116,6 +1117,25 @@ fn make_download_task_request(
         }
     }
 
+    // Determine the content for calculating task ID.
+    // Priority:
+    // 1. Explicit header value (X-Dragonfly-Content-For-Calculating-Task-ID)
+    // 2. Blob digest from URL (if enable_task_id_based_blob_digest is true)
+    // 3. None (will use URL-based calculation)
+    let content_for_calculating_task_id = header::get_content_for_calculating_task_id(&header)
+        .or_else(|| {
+            if config
+                .proxy
+                .registry_mirror
+                .enable_task_id_based_blob_digest
+            {
+                let path = request.uri().path();
+                extract_blob_digest_from_url(path)
+            } else {
+                None
+            }
+        });
+
     Ok(DownloadTaskRequest {
         download: Some(Download {
             url: make_download_url(request.uri(), rule.use_tls, rule.redirect.clone())?,
@@ -1144,7 +1164,7 @@ fn make_download_task_request(
             is_prefetch: false,
             need_piece_content: false,
             force_hard_link: header::get_force_hard_link(&header),
-            content_for_calculating_task_id: header::get_content_for_calculating_task_id(&header),
+            content_for_calculating_task_id,
             remote_ip: Some(remote_ip.to_string()),
             concurrent_piece_count: Some(config.download.concurrent_piece_count),
             overwrite: false,
