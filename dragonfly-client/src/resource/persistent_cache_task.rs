@@ -195,7 +195,7 @@ impl PersistentCacheTask {
         }
 
         self.storage
-            .create_persistent_cache_task_started(task_id, ttl, piece_length, content_length, false)
+            .create_persistent_cache_task_started(task_id, ttl, piece_length, content_length)
             .await?;
 
         info!("upload persistent cache task started");
@@ -337,17 +337,6 @@ impl PersistentCacheTask {
         content_length: u64,
         path: PathBuf,
     ) -> ClientResult<()> {
-        // Attempt to create a hard link from the task file to the output path.
-        // If successful, return immediately as no further processing is needed.
-        if self
-            .storage
-            .hard_link_to_persistent_cache_task(&path, task_id)
-            .await
-            .is_ok()
-        {
-            return Ok(());
-        }
-
         // Hard link creation failed. Fall back to writing pieces to content storage.
         let interested_pieces =
             match self
@@ -363,6 +352,89 @@ impl PersistentCacheTask {
                     return Err(err);
                 }
             };
+
+        // Attempt to create a hard link from the task file to the output path.
+        // If successful, return immediately as no further processing is needed.
+        if self
+            .storage
+            .hard_link_to_persistent_cache_task(&path, task_id)
+            .await
+            .is_ok()
+        {
+            // Initialize the join set.
+            let mut join_set = JoinSet::new();
+
+            // Import the pieces from the local.
+            for interested_piece in interested_pieces.clone() {
+                async fn register_persistent_cache_piece(
+                    task_id: String,
+                    piece: metadata::Piece,
+                    piece_manager: Arc<piece::Piece>,
+                ) -> ClientResult<metadata::Piece> {
+                    let piece_id =
+                        piece_manager.persistent_cache_id(task_id.as_str(), piece.number);
+                    debug!("start to register persistent cache piece {}", piece_id,);
+
+                    let metadata = piece_manager
+                        .register_persistent_cache(
+                            piece_id.as_str(),
+                            piece.number,
+                            piece.offset,
+                            piece.length,
+                        )
+                        .inspect_err(|err| {
+                            error!("write {:?} failed: {}", piece_id, err);
+                        })?;
+
+                    debug!("finished persistent cache piece {}", piece_id);
+                    Ok(metadata)
+                }
+
+                join_set.spawn(
+                    register_persistent_cache_piece(
+                        task_id.to_string(),
+                        interested_piece,
+                        self.piece.clone(),
+                    )
+                    .in_current_span(),
+                );
+            }
+
+            // Initialize the finished pieces.
+            let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
+
+            // Wait for the pieces to be created.
+            while let Some(message) = join_set
+                .join_next()
+                .await
+                .transpose()
+                .or_err(ErrorType::AsyncRuntimeError)?
+            {
+                match message {
+                    Ok(metadata) => {
+                        // Store the finished piece.
+                        finished_pieces.push(metadata.clone());
+                    }
+                    Err(err) => {
+                        join_set.shutdown().await;
+                        return Err(err);
+                    }
+                }
+            }
+
+            if finished_pieces.len() != interested_pieces.len() {
+                return Err(Error::Unknown(
+                    "not all persistent cache pieces are imported".to_string(),
+                ));
+            }
+
+            return Ok(());
+        }
+
+        // Create and fallocate the persistent cache task in storage.
+        self.storage
+            .create_persistent_cache_task(task_id, content_length)
+            .await?;
 
         // Initialize the join set.
         let mut join_set = JoinSet::new();

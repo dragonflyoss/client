@@ -192,34 +192,6 @@ impl Content {
         Ok(())
     }
 
-    /// Hard links a source file to the task content path.
-    ///
-    /// Behavior:
-    /// 1. If the task path exists:
-    ///    1.1. If source and task share the same inode, return success.
-    ///    1.2. Otherwise, return an error (task content already exists).
-    /// 2. If the task path does not exist:
-    ///    2.1. Create hard link from source to task path.
-    ///    2.2. If hard link fails, return an error.
-    #[instrument(skip_all)]
-    pub async fn hard_link_to_task(&self, from: &Path, task_id: &str) -> Result<()> {
-        let task_path = self.get_task_path(task_id);
-        if let Err(err) = fs::hard_link(from, &task_path).await {
-            if err.kind() == std::io::ErrorKind::AlreadyExists {
-                if let Ok(true) = self.is_same_dev_inode(from, &task_path).await {
-                    info!("hard already exists, no need to operate");
-                    return Ok(());
-                }
-            }
-
-            warn!("hard link {:?} to {:?} failed: {}", task_path, from, err);
-            return Err(Error::IO(err));
-        }
-
-        info!("hard link {:?} to {:?} success", from, task_path);
-        Ok(())
-    }
-
     /// copy_task copies the task content to the destination.
     #[instrument(skip_all)]
     pub async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {

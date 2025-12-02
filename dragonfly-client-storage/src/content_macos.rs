@@ -212,7 +212,7 @@ impl Content {
                 }
             }
 
-            warn!("hard link {:?} to {:?} failed: {}", task_path, from, err);
+            warn!("hard link {:?} to {:?} failed: {}", from, task_path, err);
             return Err(Error::IO(err));
         }
 
@@ -535,7 +535,7 @@ impl Content {
                 }
             }
 
-            warn!("hard link {:?} to {:?} failed: {}", task_path, from, err);
+            warn!("hard link {:?} to {:?} failed: {}", from, task_path, err);
             return Err(Error::IO(err));
         }
 

@@ -100,12 +100,6 @@ impl Storage {
         self.content.hard_link_task(task_id, to).await
     }
 
-    /// hard_link_to_task hard links the source file to the task content.
-    #[instrument(skip_all)]
-    pub async fn hard_link_to_task(&self, from: &Path, task_id: &str) -> Result<()> {
-        self.content.hard_link_to_task(from, task_id).await
-    }
-
     /// copy_task copies the task content to the destination.
     #[instrument(skip_all)]
     pub async fn copy_task(&self, id: &str, to: &Path) -> Result<()> {
@@ -247,9 +241,10 @@ impl Storage {
             .await
     }
 
-    /// create_persistent_cache_task_started creates a new persistent cache task.
+    /// create_persistent_cache_task_started prepares the metadata of the persistent cache task
+    /// and create directory for the persistent cache task.
     #[instrument(skip_all)]
-    pub async fn prepare_persistent_cache_task_started(
+    pub async fn create_persistent_cache_task_started(
         &self,
         id: &str,
         ttl: Duration,
@@ -267,32 +262,13 @@ impl Storage {
         return Ok(metadata);
     }
 
-    /// create_persistent_cache_task_started creates a new persistent cache task.
+    /// create_persistent_cache_task creates and fallocates the persistent cache task content.
     #[instrument(skip_all)]
-    pub async fn create_persistent_cache_task_started(
-        &self,
-        id: &str,
-        ttl: Duration,
-        piece_length: u64,
-        content_length: u64,
-        prepare_only: bool,
-    ) -> Result<metadata::PersistentCacheTask> {
-        let metadata = self.metadata.create_persistent_cache_task_started(
-            id,
-            ttl,
-            piece_length,
-            content_length,
-        )?;
-
-        if prepare_only {
-            self.content.create_persistent_cache_task_dir(id).await?;
-            return Ok(metadata);
-        }
-
+    pub async fn create_persistent_cache_task(&self, id: &str, content_length: u64) -> Result<()> {
         self.content
             .create_persistent_cache_task(id, content_length)
-            .await?;
-        Ok(metadata)
+            .await
+            .map(|_| ())
     }
 
     /// create_persistent_cache_task_finished updates the metadata of the persistent cache task
@@ -522,6 +498,27 @@ impl Storage {
         )
     }
 
+    /// register_persistent_cache_piece registers a persistent cache piece without calculating its digest.
+    /// Used when creating a hardlink from persistent cache to storage. Since the piece
+    /// content is accessed via hardlink, digest calculation is deferred until another
+    /// peer downloads the piece.
+    #[instrument(skip_all)]
+    pub fn register_persistent_cache_piece(
+        &self,
+        piece_id: &str,
+        number: u32,
+        offset: u64,
+        length: u64,
+    ) -> Result<metadata::Piece> {
+        self.metadata.create_persistent_cache_piece(
+            piece_id,
+            number,
+            offset,
+            length,
+            "".to_string().as_str(),
+        )
+    }
+
     /// download_piece_started updates the metadata of the piece and writes
     /// the data of piece to file when the piece downloads started.
     #[instrument(skip_all)]
@@ -631,7 +628,12 @@ impl Storage {
         let digest = Digest::new(Algorithm::Crc32, response.hash);
 
         // Check the digest of the piece.
-        if expected_digest != digest.to_string() {
+        if expected_digest.is_empty() {
+            warn!(
+                "expected digest is empty for piece {} downloaded from parent {}",
+                piece_id, parent_id
+            );
+        } else if expected_digest != digest.to_string() {
             return Err(Error::DigestMismatch(
                 expected_digest.to_string(),
                 digest.to_string(),
@@ -785,7 +787,12 @@ impl Storage {
         let digest = Digest::new(Algorithm::Crc32, response.hash);
 
         // Check the digest of the piece.
-        if expected_digest != digest.to_string() {
+        if expected_digest.is_empty() {
+            warn!(
+                "expected digest is empty for piece {} downloaded from parent {}",
+                piece_id, parent_id
+            );
+        } else if expected_digest != digest.to_string() {
             return Err(Error::DigestMismatch(
                 expected_digest.to_string(),
                 digest.to_string(),
@@ -1068,7 +1075,12 @@ impl Storage {
         let digest = Digest::new(Algorithm::Crc32, hash);
 
         // Check the digest of the piece.
-        if expected_digest != digest.to_string() {
+        if expected_digest.is_empty() {
+            warn!(
+                "expected digest is empty for piece {} downloaded from parent {}",
+                piece_id, parent_id
+            );
+        } else if expected_digest != digest.to_string() {
             return Err(Error::DigestMismatch(
                 expected_digest.to_string(),
                 digest.to_string(),
