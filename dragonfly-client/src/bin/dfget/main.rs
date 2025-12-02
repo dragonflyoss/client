@@ -819,8 +819,13 @@ async fn get_all_entries(
         info!("add entries {:?} by dir url: {}", entries, url);
     }
 
-    info!("get all entries: {:?}", entries);
-    Ok(entries.into_iter().collect())
+    // Sort directories before files to ensure parent directories exist
+    // before attempting to create their children.
+    let mut sorted_entries: Vec<DirEntry> = entries.into_iter().collect();
+    sorted_entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir));
+    info!("get all entries: {:?}", sorted_entries);
+
+    Ok(sorted_entries)
 }
 
 /// Downloads a single file from various storage backends using the dfdaemon service.
