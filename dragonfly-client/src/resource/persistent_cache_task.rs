@@ -131,9 +131,9 @@ impl PersistentCacheTask {
         self.storage.get_persistent_cache_task(task_id)
     }
 
-    /// create_persistent creates a persistent cache task from local.
+    /// upload creates a persistent cache task from local.
     #[instrument(skip_all)]
-    pub async fn create_persistent(
+    pub async fn upload(
         &self,
         task_id: &str,
         host_id: &str,
@@ -199,8 +199,145 @@ impl PersistentCacheTask {
             .await?;
 
         info!("upload persistent cache task started");
+        match self
+            .upload_content(task_id, piece_length, content_length, path)
+            .await
+        {
+            Ok(_) => {
+                info!("upload persistent cache task content finished");
 
-        // Calculate the interested pieces to import.
+                // Create the persistent cache task.
+                match self
+                    .storage
+                    .create_persistent_cache_task_finished(task_id)
+                    .await
+                {
+                    Ok(metadata) => {
+                        let response = match self
+                            .scheduler_client
+                            .upload_persistent_cache_task_finished(
+                                UploadPersistentCacheTaskFinishedRequest {
+                                    host_id: host_id.to_string(),
+                                    task_id: task_id.to_string(),
+                                    peer_id: peer_id.to_string(),
+                                },
+                            )
+                            .await
+                        {
+                            Ok(response) => response,
+                            Err(err) => {
+                                error!("upload persistent cache task failed: {}", err);
+
+                                // Delete the persistent cache task.
+                                self.storage
+                                    .create_persistent_cache_task_failed(task_id)
+                                    .await;
+
+                                // Notify the scheduler that the persistent cache task is failed.
+                                self.scheduler_client
+                                    .upload_persistent_cache_task_failed(
+                                        UploadPersistentCacheTaskFailedRequest {
+                                            host_id: host_id.to_string(),
+                                            task_id: task_id.to_string(),
+                                            peer_id: peer_id.to_string(),
+                                            description: Some(err.to_string()),
+                                        },
+                                    )
+                                    .await
+                                    .inspect_err(|err| {
+                                        error!("upload persistent cache task failed: {}", err);
+                                    })?;
+
+                                return Err(err);
+                            }
+                        };
+
+                        info!("upload persistent cache task finished");
+                        Ok(CommonPersistentCacheTask {
+                            id: task_id.to_string(),
+                            persistent_replica_count: request.persistent_replica_count,
+                            current_persistent_replica_count: response
+                                .current_persistent_replica_count,
+                            current_replica_count: response.current_replica_count,
+                            tag: request.tag,
+                            application: request.application,
+                            piece_length: metadata.piece_length,
+                            content_length: metadata.content_length,
+                            piece_count: response.piece_count,
+                            state: response.state,
+                            ttl: request.ttl,
+                            created_at: response.created_at,
+                            updated_at: response.updated_at,
+                        })
+                    }
+                    Err(err) => {
+                        error!("upload persistent cache task failed: {}", err);
+
+                        // Delete the persistent cache task.
+                        self.storage
+                            .create_persistent_cache_task_failed(task_id)
+                            .await;
+
+                        // Notify the scheduler that the persistent cache task is failed.
+                        self.scheduler_client
+                            .upload_persistent_cache_task_failed(
+                                UploadPersistentCacheTaskFailedRequest {
+                                    host_id: host_id.to_string(),
+                                    task_id: task_id.to_string(),
+                                    peer_id: peer_id.to_string(),
+                                    description: Some(err.to_string()),
+                                },
+                            )
+                            .await
+                            .inspect_err(|err| {
+                                error!("upload persistent cache task failed: {}", err);
+                            })?;
+
+                        Err(err)
+                    }
+                }
+            }
+            Err(err) => {
+                error!("upload persistent cache task failed: {}", err);
+
+                // Delete the persistent cache task.
+                self.storage
+                    .create_persistent_cache_task_failed(task_id)
+                    .await;
+
+                // Notify the scheduler that the persistent cache task is failed.
+                self.scheduler_client
+                    .upload_persistent_cache_task_failed(UploadPersistentCacheTaskFailedRequest {
+                        host_id: host_id.to_string(),
+                        task_id: task_id.to_string(),
+                        peer_id: peer_id.to_string(),
+                        description: Some(err.to_string()),
+                    })
+                    .await
+                    .inspect_err(|err| {
+                        error!("upload persistent cache task failed: {}", err);
+                    })?;
+
+                return Err(err);
+            }
+        }
+    }
+
+    /// Uploads content from a local file path to the persistent cache storage.
+    ///
+    /// This function attempts to optimize the upload process by first trying to create
+    /// a hard link from the source file to the task storage. If the hard link succeeds,
+    /// the function returns immediately without copying data. If the hard link fails
+    /// (e.g., source and destination are on different filesystems), the function falls
+    /// back to reading the file and writing it piece by piece into the content storage.
+    async fn upload_content(
+        &self,
+        task_id: &str,
+        piece_length: u64,
+        content_length: u64,
+        path: PathBuf,
+    ) -> ClientResult<()> {
+        // Hard link creation failed. Fall back to writing pieces to content storage.
         let interested_pieces =
             match self
                 .piece
@@ -215,6 +352,89 @@ impl PersistentCacheTask {
                     return Err(err);
                 }
             };
+
+        // Attempt to create a hard link from the task file to the output path.
+        // If successful, return immediately as no further processing is needed.
+        if self
+            .storage
+            .hard_link_to_persistent_cache_task(&path, task_id)
+            .await
+            .is_ok()
+        {
+            // Initialize the join set.
+            let mut join_set = JoinSet::new();
+
+            // Import the pieces from the local.
+            for interested_piece in interested_pieces.clone() {
+                async fn register_persistent_cache_piece(
+                    task_id: String,
+                    piece: metadata::Piece,
+                    piece_manager: Arc<piece::Piece>,
+                ) -> ClientResult<metadata::Piece> {
+                    let piece_id =
+                        piece_manager.persistent_cache_id(task_id.as_str(), piece.number);
+                    debug!("start to register persistent cache piece {}", piece_id,);
+
+                    let metadata = piece_manager
+                        .register_persistent_cache(
+                            piece_id.as_str(),
+                            piece.number,
+                            piece.offset,
+                            piece.length,
+                        )
+                        .inspect_err(|err| {
+                            error!("write {:?} failed: {}", piece_id, err);
+                        })?;
+
+                    debug!("finished persistent cache piece {}", piece_id);
+                    Ok(metadata)
+                }
+
+                join_set.spawn(
+                    register_persistent_cache_piece(
+                        task_id.to_string(),
+                        interested_piece,
+                        self.piece.clone(),
+                    )
+                    .in_current_span(),
+                );
+            }
+
+            // Initialize the finished pieces.
+            let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
+
+            // Wait for the pieces to be created.
+            while let Some(message) = join_set
+                .join_next()
+                .await
+                .transpose()
+                .or_err(ErrorType::AsyncRuntimeError)?
+            {
+                match message {
+                    Ok(metadata) => {
+                        // Store the finished piece.
+                        finished_pieces.push(metadata.clone());
+                    }
+                    Err(err) => {
+                        join_set.shutdown().await;
+                        return Err(err);
+                    }
+                }
+            }
+
+            if finished_pieces.len() != interested_pieces.len() {
+                return Err(Error::Unknown(
+                    "not all persistent cache pieces are imported".to_string(),
+                ));
+            }
+
+            return Ok(());
+        }
+
+        // Create and fallocate the persistent cache task in storage.
+        self.storage
+            .create_persistent_cache_task(task_id, content_length)
+            .await?;
 
         // Initialize the join set.
         let mut join_set = JoinSet::new();
@@ -290,143 +510,18 @@ impl PersistentCacheTask {
                 }
                 Err(err) => {
                     join_set.shutdown().await;
-
-                    // Delete the persistent cache task.
-                    self.storage
-                        .create_persistent_cache_task_failed(task_id)
-                        .await;
-
-                    // Notify the scheduler that the persistent cache task is failed.
-                    self.scheduler_client
-                        .upload_persistent_cache_task_failed(
-                            UploadPersistentCacheTaskFailedRequest {
-                                host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
-                                peer_id: peer_id.to_string(),
-                                description: Some(err.to_string()),
-                            },
-                        )
-                        .await
-                        .inspect_err(|err| {
-                            error!("upload persistent cache task failed: {}", err);
-                        })?;
-
                     return Err(err);
                 }
             }
         }
 
         if finished_pieces.len() != interested_pieces.len() {
-            // Delete the persistent cache task.
-            self.storage
-                .create_persistent_cache_task_failed(task_id)
-                .await;
-
-            // Notify the scheduler that the persistent cache task is failed.
-            self.scheduler_client
-                .upload_persistent_cache_task_failed(UploadPersistentCacheTaskFailedRequest {
-                    host_id: host_id.to_string(),
-                    task_id: task_id.to_string(),
-                    peer_id: peer_id.to_string(),
-                    description: Some("not all persistent cache pieces are imported".to_string()),
-                })
-                .await
-                .inspect_err(|err| {
-                    error!("upload persistent cache task failed: {}", err);
-                })?;
-
             return Err(Error::Unknown(
                 "not all persistent cache pieces are imported".to_string(),
             ));
         }
 
-        // Create the persistent cache task.
-        match self
-            .storage
-            .create_persistent_cache_task_finished(task_id)
-            .await
-        {
-            Ok(metadata) => {
-                let response = match self
-                    .scheduler_client
-                    .upload_persistent_cache_task_finished(
-                        UploadPersistentCacheTaskFinishedRequest {
-                            host_id: host_id.to_string(),
-                            task_id: task_id.to_string(),
-                            peer_id: peer_id.to_string(),
-                        },
-                    )
-                    .await
-                {
-                    Ok(response) => response,
-                    Err(err) => {
-                        error!("upload persistent cache task finished: {}", err);
-
-                        // Delete the persistent cache task.
-                        self.storage
-                            .create_persistent_cache_task_failed(task_id)
-                            .await;
-
-                        // Notify the scheduler that the persistent cache task is failed.
-                        self.scheduler_client
-                            .upload_persistent_cache_task_failed(
-                                UploadPersistentCacheTaskFailedRequest {
-                                    host_id: host_id.to_string(),
-                                    task_id: task_id.to_string(),
-                                    peer_id: peer_id.to_string(),
-                                    description: Some(err.to_string()),
-                                },
-                            )
-                            .await
-                            .inspect_err(|err| {
-                                error!("upload persistent cache task failed: {}", err);
-                            })?;
-
-                        return Err(err);
-                    }
-                };
-
-                info!("upload persistent cache task finished");
-                Ok(CommonPersistentCacheTask {
-                    id: task_id.to_string(),
-                    persistent_replica_count: request.persistent_replica_count,
-                    current_persistent_replica_count: response.current_persistent_replica_count,
-                    current_replica_count: response.current_replica_count,
-                    tag: request.tag,
-                    application: request.application,
-                    piece_length: metadata.piece_length,
-                    content_length: metadata.content_length,
-                    piece_count: response.piece_count,
-                    state: response.state,
-                    ttl: request.ttl,
-                    created_at: response.created_at,
-                    updated_at: response.updated_at,
-                })
-            }
-            Err(err) => {
-                error!("create persistent cache task finished: {}", err);
-
-                // Delete the persistent cache task.
-                self.storage
-                    .create_persistent_cache_task_failed(task_id)
-                    .await;
-
-                // Notify the scheduler that the persistent cache task is failed.
-                self.scheduler_client
-                    .upload_persistent_cache_task_failed(UploadPersistentCacheTaskFailedRequest {
-                        host_id: host_id.to_string(),
-                        task_id: task_id.to_string(),
-                        peer_id: peer_id.to_string(),
-                        description: Some(err.to_string()),
-                    })
-                    .await
-                    .inspect_err(|err| {
-                        error!("upload persistent cache task failed: {}", err);
-                    })?;
-
-                Err(err)
-            }
-        }
+        Ok(())
     }
 
     /// download_started updates the metadata of the persistent cache task when the persistent cache task downloads started.
