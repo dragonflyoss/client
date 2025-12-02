@@ -283,6 +283,14 @@ fn default_proxy_registry_mirror_addr() -> String {
     "https://index.docker.io".to_string()
 }
 
+/// default_enable_task_id_based_blob_digest is the default value for enable_task_id_based_blob_digest.
+/// It indicates whether to calculate the task ID based on the blob's SHA256 digest for OCI registry
+/// blob download URLs.
+#[inline]
+fn default_enable_task_id_based_blob_digest() -> bool {
+    false
+}
+
 /// Host is the host configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -1105,12 +1113,6 @@ impl Default for Rule {
     }
 }
 
-/// default_enable_task_id_based_blob_digest is the default value for enable_task_id_based_blob_digest.
-#[inline]
-fn default_enable_task_id_based_blob_digest() -> bool {
-    true
-}
-
 /// RegistryMirror is the registry mirror configuration.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -1127,11 +1129,11 @@ pub struct RegistryMirror {
     /// cert for the registry mirror.
     pub cert: Option<PathBuf>,
 
-    /// enable_task_id_based_blob_digest indicates whether to calculate the task ID based on the blob's SHA256 digest
-    /// for OCI registry blob download URLs. When enabled, if the download URL is for an image blob
-    /// (e.g., /v2/<name>/blobs/sha256:<digest>), the task ID will be calculated based on the blob's digest
-    /// instead of the full URL. This allows the same blob from different registries to share the same task ID,
-    /// avoiding redundant downloads and storage.
+    /// enable_task_id_based_blob_digest indicates whether to use the blob digest for task ID calculation
+    /// when downloading from OCI registries. When enabled for OCI blob URLs (e.g., /v2/<name>/blobs/sha256:<digest>),
+    /// the task ID is derived from the blob digest rather than the full URL. This enables deduplication across
+    /// registries - the same blob from different registries shares one task ID, eliminating redundant downloads
+    /// and storage.
     #[serde(default = "default_enable_task_id_based_blob_digest")]
     pub enable_task_id_based_blob_digest: bool,
 }

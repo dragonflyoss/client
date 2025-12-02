@@ -15,17 +15,21 @@
  */
 
 use crate::resource::{persistent_cache_task, task};
-use dragonfly_api::common::v2::{CacheTask, PersistentCacheTask, Priority, Task, TaskType};
+use dragonfly_api::common::v2::{
+    CacheTask, PersistentCacheTask, PersistentTask, Priority, Task, TaskType,
+};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_download_client::DfdaemonDownloadClient as DfdaemonDownloadGRPCClient,
     dfdaemon_download_server::{
         DfdaemonDownload, DfdaemonDownloadServer as DfdaemonDownloadGRPCServer,
     },
     DeleteCacheTaskRequest, DeleteTaskRequest, DownloadCacheTaskRequest, DownloadCacheTaskResponse,
-    DownloadPersistentCacheTaskRequest, DownloadPersistentCacheTaskResponse, DownloadTaskRequest,
+    DownloadPersistentCacheTaskRequest, DownloadPersistentCacheTaskResponse,
+    DownloadPersistentTaskRequest, DownloadPersistentTaskResponse, DownloadTaskRequest,
     DownloadTaskResponse, Entry, ListTaskEntriesRequest, ListTaskEntriesResponse,
     StatCacheTaskRequest as DfdaemonStatCacheTaskRequest, StatPersistentCacheTaskRequest,
     StatTaskRequest as DfdaemonStatTaskRequest, UploadPersistentCacheTaskRequest,
+    UploadPersistentTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::DeleteHostRequest as SchedulerDeleteHostRequest;
@@ -45,7 +49,7 @@ use dragonfly_client_metric::{
     collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
 };
 use dragonfly_client_util::{
-    digest::{verify_file_digest, Digest},
+    digest::{is_blob_url, verify_file_digest, Digest},
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
     id_generator::{PersistentCacheTaskIDParameter, TaskIDParameter},
     shutdown,
@@ -264,42 +268,21 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let task_id = self
             .task
             .id_generator
-            .task_id(match download.content_for_calculating_task_id.clone() {
-                Some(content) => {
-                    // Check if the content matches OCI digest format: algorithm:encoded
-                    // See: https://github.com/opencontainers/image-spec/blob/main/descriptor.md#digests
-                    // Format: algorithm can be [a-z0-9+._-]+, encoded can be [a-zA-Z0-9=_-]+
-                    // If it's a digest, use BlobDigestBased to ensure SHA256 hash is calculated
-                    // from the digest content, regardless of the digest algorithm used.
-                    let is_digest = content.split_once(':').is_some_and(|(alg, enc)| {
-                        // Validate algorithm: [a-z0-9+._-]+
-                        !alg.is_empty()
-                            && alg.chars().all(|c| {
-                                c.is_ascii_lowercase()
-                                    || c.is_ascii_digit()
-                                    || matches!(c, '+' | '.' | '_' | '-')
-                            })
-                            // Validate encoded: [a-zA-Z0-9=_-]+ and minimum length
-                            && enc.len() >= 32
-                            && enc.chars().all(|c| {
-                                c.is_ascii_alphanumeric() || matches!(c, '=' | '_' | '-')
-                            })
-                    });
-
-                    if is_digest {
-                        TaskIDParameter::BlobDigestBased(content)
-                    } else {
-                        TaskIDParameter::Content(content)
+            .task_id(
+                if download.enable_task_id_based_blob_digest && is_blob_url(&download.url) {
+                    TaskIDParameter::BlobDigestBased(download.url.clone())
+                } else if let Some(content) = download.content_for_calculating_task_id.clone() {
+                    TaskIDParameter::Content(content)
+                } else {
+                    TaskIDParameter::URLBased {
+                        url: download.url.clone(),
+                        piece_length: download.piece_length,
+                        tag: download.tag.clone(),
+                        application: download.application.clone(),
+                        filtered_query_params: download.filtered_query_params.clone(),
                     }
-                }
-                None => TaskIDParameter::URLBased {
-                    url: download.url.clone(),
-                    piece_length: download.piece_length,
-                    tag: download.tag.clone(),
-                    application: download.application.clone(),
-                    filtered_query_params: download.filtered_query_params.clone(),
                 },
-            })
+            )
             .map_err(|e| {
                 error!("generate task id: {}", e);
                 Status::invalid_argument(e.to_string())
@@ -921,6 +904,28 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(()))
     }
 
+    /// DownloadPersistentTaskStream is the stream of the download persistent task response.
+    type DownloadPersistentTaskStream =
+        ReceiverStream<Result<DownloadPersistentTaskResponse, Status>>;
+
+    /// download_persistent_task downloads the persistent task.
+    #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip, content_length))]
+    async fn download_persistent_task(
+        &self,
+        _request: Request<DownloadPersistentTaskRequest>,
+    ) -> Result<Response<Self::DownloadPersistentTaskStream>, Status> {
+        todo!();
+    }
+
+    /// upload_persistent_task uploads the persistent task.
+    #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip))]
+    async fn upload_persistent_task(
+        &self,
+        _request: Request<UploadPersistentTaskRequest>,
+    ) -> Result<Response<PersistentTask>, Status> {
+        todo!();
+    }
+
     /// DownloadPersistentCacheTaskStream is the stream of the download persistent cache task response.
     type DownloadPersistentCacheTaskStream =
         ReceiverStream<Result<DownloadPersistentCacheTaskResponse, Status>>;
@@ -1517,6 +1522,59 @@ impl DfdaemonDownloadClient {
         let request = Self::make_request(request);
         self.client.clone().delete_task(request).await?;
         Ok(())
+    }
+
+    /// download_persistent_task downloads the persistent task.
+    #[instrument(skip_all)]
+    pub async fn download_persistent_task(
+        &self,
+        request: DownloadPersistentTaskRequest,
+    ) -> ClientResult<tonic::Response<tonic::codec::Streaming<DownloadPersistentTaskResponse>>>
+    {
+        // Clone the request.
+        let request_clone = request.clone();
+
+        // Initialize the request.
+        let mut request = tonic::Request::new(request);
+
+        // Set the timeout to the request.
+        if let Some(timeout) = request_clone.timeout {
+            request.set_timeout(
+                Duration::try_from(timeout)
+                    .map_err(|_| tonic::Status::invalid_argument("invalid timeout"))?,
+            );
+        }
+
+        let response = self
+            .client
+            .clone()
+            .download_persistent_task(request)
+            .await?;
+        Ok(response)
+    }
+
+    /// upload_persistent_task uploads the persistent task.
+    #[instrument(skip_all)]
+    pub async fn upload_persistent_task(
+        &self,
+        request: UploadPersistentTaskRequest,
+    ) -> ClientResult<PersistentTask> {
+        // Clone the request.
+        let request_clone = request.clone();
+
+        // Initialize the request.
+        let mut request = tonic::Request::new(request);
+
+        // Set the timeout to the request.
+        if let Some(timeout) = request_clone.timeout {
+            request.set_timeout(
+                Duration::try_from(timeout)
+                    .map_err(|_| tonic::Status::invalid_argument("invalid timeout"))?,
+            );
+        }
+
+        let response = self.client.clone().upload_persistent_task(request).await?;
+        Ok(response.into_inner())
     }
 
     /// download_persistent_cache_task downloads the persistent cache task.
