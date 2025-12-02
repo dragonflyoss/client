@@ -100,6 +100,12 @@ impl Storage {
         self.content.hard_link_task(task_id, to).await
     }
 
+    /// hard_link_to_task hard links the source file to the task content.
+    #[instrument(skip_all)]
+    pub async fn hard_link_to_task(&self, from: &Path, task_id: &str) -> Result<()> {
+        self.content.hard_link_to_task(from, task_id).await
+    }
+
     /// copy_task copies the task content to the destination.
     #[instrument(skip_all)]
     pub async fn copy_task(&self, id: &str, to: &Path) -> Result<()> {
@@ -211,6 +217,18 @@ impl Storage {
             .await
     }
 
+    /// hard_link_to_persistent_cache_task hard links the source file to the persistent cache task content.
+    #[instrument(skip_all)]
+    pub async fn hard_link_to_persistent_cache_task(
+        &self,
+        from: &Path,
+        task_id: &str,
+    ) -> Result<()> {
+        self.content
+            .hard_link_to_persistent_cache_task(from, task_id)
+            .await
+    }
+
     /// copy_taskcopy_persistent_cache_taskcopies the persistent cache task content to the destination.
     #[instrument(skip_all)]
     pub async fn copy_persistent_cache_task(&self, id: &str, to: &Path) -> Result<()> {
@@ -231,7 +249,7 @@ impl Storage {
 
     /// create_persistent_cache_task_started creates a new persistent cache task.
     #[instrument(skip_all)]
-    pub async fn create_persistent_cache_task_started(
+    pub async fn prepare_persistent_cache_task_started(
         &self,
         id: &str,
         ttl: Duration,
@@ -244,6 +262,32 @@ impl Storage {
             piece_length,
             content_length,
         )?;
+
+        self.content.create_persistent_cache_task_dir(id).await?;
+        return Ok(metadata);
+    }
+
+    /// create_persistent_cache_task_started creates a new persistent cache task.
+    #[instrument(skip_all)]
+    pub async fn create_persistent_cache_task_started(
+        &self,
+        id: &str,
+        ttl: Duration,
+        piece_length: u64,
+        content_length: u64,
+        prepare_only: bool,
+    ) -> Result<metadata::PersistentCacheTask> {
+        let metadata = self.metadata.create_persistent_cache_task_started(
+            id,
+            ttl,
+            piece_length,
+            content_length,
+        )?;
+
+        if prepare_only {
+            self.content.create_persistent_cache_task_dir(id).await?;
+            return Ok(metadata);
+        }
 
         self.content
             .create_persistent_cache_task(id, content_length)
