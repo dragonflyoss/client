@@ -703,6 +703,19 @@ impl Piece {
             .await
     }
 
+    /// register_persistent_cache registers a new persistent cache piece.
+    #[instrument(skip_all)]
+    pub fn register_persistent_cache(
+        &self,
+        piece_id: &str,
+        number: u32,
+        offset: u64,
+        length: u64,
+    ) -> Result<metadata::Piece> {
+        self.storage
+            .register_persistent_cache_piece(piece_id, number, offset, length)
+    }
+
     /// upload_persistent_cache_from_local_into_async_read uploads a persistent cache piece from local cache.
     #[instrument(skip_all, fields(piece_id))]
     pub async fn upload_persistent_cache_from_local_into_async_read(
