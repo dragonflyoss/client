@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app/client
 
+COPY .git ./.git
 COPY Cargo.toml Cargo.lock ./
 COPY .cargo ./.cargo
 
