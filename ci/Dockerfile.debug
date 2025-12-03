@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     openssl libclang-dev pkg-config protobuf-compiler git \
     && rm -rf /var/lib/apt/lists/*
 
+COPY .git ./.git
 COPY Cargo.toml Cargo.lock ./
 COPY .cargo ./.cargo
 
