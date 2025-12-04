@@ -410,7 +410,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let download_clone = download.clone();
         let task_manager_clone = self.task.clone();
         let task_clone = task.clone();
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(8);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(4);
 
         // Define the error handler to send the error to the stream.
         async fn handle_error(
@@ -1375,7 +1375,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let request_clone = request.clone();
         let task_manager_clone = self.persistent_cache_task.clone();
         let task_clone = task.clone();
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(8);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(4);
 
         // Define the error handler to send the error to the stream.
         async fn handle_error(
