@@ -319,7 +319,7 @@ impl super::Backend for HTTP {
         Ok(super::HeadResponse {
             success: response_status_code.is_success(),
             content_length: response_content_length,
-            http_header: Some(request_header),
+            http_header: Some(response_header),
             http_status_code: Some(response_status_code),
             error_message: Some(response_status_code.to_string()),
             entries: Vec::new(),
