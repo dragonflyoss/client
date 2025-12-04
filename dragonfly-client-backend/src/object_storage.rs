@@ -606,25 +606,11 @@ impl crate::Backend for ObjectStorage {
         })?;
 
         // Initialize the operator with the parsed URL, object storage, and timeout.
-        let operator_reader = self
-            .operator(&parsed_url, request.object_storage, request.timeout)?
-            .reader(&parsed_url.key)
-            .await
-            .map_err(|err| {
-                error!(
-                    "get request failed {} {}: {}",
-                    request.piece_id, request.url, err
-                );
-                ClientError::BackendError(Box::new(BackendError {
-                    message: err.to_string(),
-                    status_code: None,
-                    header: None,
-                }))
-            })?;
-
+        let operator = self.operator(&parsed_url, request.object_storage, request.timeout)?;
         let stream = match request.range {
-            Some(range) => operator_reader
-                .into_bytes_stream(range.start..range.start + range.length)
+            Some(range) => operator
+                .read_with(&parsed_url.key)
+                .range(range.start..range.start + range.length)
                 .await
                 .map_err(|err| {
                     error!(
@@ -637,18 +623,26 @@ impl crate::Backend for ObjectStorage {
                         header: None,
                     }))
                 })?,
-            None => operator_reader.into_bytes_stream(..).await.map_err(|err| {
-                error!(
-                    "get request failed {} {}: {}",
-                    request.piece_id, request.url, err
-                );
-                ClientError::BackendError(Box::new(BackendError {
-                    message: err.to_string(),
-                    status_code: None,
-                    header: None,
-                }))
-            })?,
+            None => operator
+                .read_with(&parsed_url.key)
+                .range(..)
+                .await
+                .map_err(|err| {
+                    error!(
+                        "get request failed {} {}: {}",
+                        request.piece_id, request.url, err
+                    );
+                    ClientError::BackendError(Box::new(BackendError {
+                        message: err.to_string(),
+                        status_code: None,
+                        header: None,
+                    }))
+                })?,
         };
+
+        let stream = futures::StreamExt::map(stream, |res| {
+            res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+        });
 
         Ok(crate::GetResponse {
             success: true,

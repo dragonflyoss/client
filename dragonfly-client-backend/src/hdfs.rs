@@ -193,7 +193,7 @@ impl super::Backend for Hdfs {
         let operator = self.operator(url.clone(), request.hdfs, request.timeout)?;
         let stream = match request.range {
             Some(range) => operator
-                .read_with(decoded_path.as_ref())
+                .read_with(&decoded_path)
                 .range(range.start..range.start + range.length)
                 .await
                 .map_err(|err| {
@@ -208,7 +208,7 @@ impl super::Backend for Hdfs {
                     }))
                 })?,
             None => operator
-                .read_with(decoded_path.as_ref())
+                .read_with(&decoded_path)
                 .range(..)
                 .await
                 .map_err(|err| {
