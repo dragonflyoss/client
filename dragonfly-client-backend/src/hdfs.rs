@@ -189,26 +189,12 @@ impl super::Backend for Hdfs {
             .decode_utf8_lossy()
             .to_string();
 
-        // Initialize the operator with the parsed URL and HDFS config.
-        let operator_reader = self
-            .operator(url.clone(), request.hdfs, request.timeout)?
-            .reader(decoded_path.as_ref())
-            .await
-            .map_err(|err| {
-                error!(
-                    "get request failed {} {}: {}",
-                    request.piece_id, request.url, err
-                );
-                ClientError::BackendError(Box::new(BackendError {
-                    message: err.to_string(),
-                    status_code: None,
-                    header: None,
-                }))
-            })?;
-
+        // Initialize the operator with the parsed URL and HDFS config, and read the file.
+        let operator = self.operator(url.clone(), request.hdfs, request.timeout)?;
         let stream = match request.range {
-            Some(range) => operator_reader
-                .into_bytes_stream(range.start..range.start + range.length)
+            Some(range) => operator
+                .read_with(decoded_path.as_ref())
+                .range(range.start..range.start + range.length)
                 .await
                 .map_err(|err| {
                     error!(
@@ -221,18 +207,26 @@ impl super::Backend for Hdfs {
                         header: None,
                     }))
                 })?,
-            None => operator_reader.into_bytes_stream(..).await.map_err(|err| {
-                error!(
-                    "get request failed {} {}: {}",
-                    request.piece_id, request.url, err
-                );
-                ClientError::BackendError(Box::new(BackendError {
-                    message: err.to_string(),
-                    status_code: None,
-                    header: None,
-                }))
-            })?,
+            None => operator
+                .read_with(decoded_path.as_ref())
+                .range(..)
+                .await
+                .map_err(|err| {
+                    error!(
+                        "get request failed {} {}: {}",
+                        request.piece_id, request.url, err
+                    );
+                    ClientError::BackendError(Box::new(BackendError {
+                        message: err.to_string(),
+                        status_code: None,
+                        header: None,
+                    }))
+                })?,
         };
+
+        let stream = futures::StreamExt::map(stream, |res| {
+            res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+        });
 
         Ok(crate::GetResponse {
             success: true,
