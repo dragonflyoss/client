@@ -1134,7 +1134,10 @@ pub struct RegistryMirror {
     /// the task ID is derived from the blob digest rather than the full URL. This enables deduplication across
     /// registries - the same blob from different registries shares one task ID, eliminating redundant downloads
     /// and storage.
-    #[serde(default = "default_enable_task_id_based_blob_digest")]
+    #[serde(
+        default = "default_enable_task_id_based_blob_digest",
+        rename = "enableTaskIDBasedBlobDigest"
+    )]
     pub enable_task_id_based_blob_digest: bool,
 }
 
@@ -1972,6 +1975,7 @@ key: /etc/ssl/private/client.pem
                 }
             ],
             "registryMirror": {
+                "enableTaskIDBasedBlobDigest": true,
                 "addr": "https://mirror.example.com",
                 "cert": "/path/to/cert.pem"
             },
@@ -2013,6 +2017,7 @@ key: /etc/ssl/private/client.pem
         );
         assert_eq!(rule.filtered_query_params, vec!["Signature", "Expires"]);
 
+        assert_eq!(proxy.registry_mirror.enable_task_id_based_blob_digest, true);
         assert_eq!(proxy.registry_mirror.addr, "https://mirror.example.com");
         assert_eq!(
             proxy.registry_mirror.cert,
