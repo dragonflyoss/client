@@ -131,6 +131,105 @@ impl Task {
     }
 }
 
+/// PersistentTask is the metadata of the persistent task.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistentTask {
+    /// id is the task id.
+    pub id: String,
+
+    /// persistent represents whether the persistent task is persistent.
+    /// If the persistent task is persistent, the persistent peer will
+    /// not be deleted when dfdamon runs garbage collection.
+    pub persistent: bool,
+
+    /// ttl is the time to live of the persistent task.
+    pub ttl: Duration,
+
+    /// piece_length is the length of the piece.
+    pub piece_length: u64,
+
+    /// content_length is the length of the content.
+    pub content_length: u64,
+
+    /// uploading_count is the count of the task being uploaded by other peers.
+    pub uploading_count: u64,
+
+    /// uploaded_count is the count of the task has been uploaded by other peers.
+    pub uploaded_count: u64,
+
+    /// updated_at is the time when the task metadata is updated. If the task is downloaded
+    /// by other peers, it will also update updated_at.
+    pub updated_at: NaiveDateTime,
+
+    /// created_at is the time when the task metadata is created.
+    pub created_at: NaiveDateTime,
+
+    /// failed_at is the time when the task downloads failed.
+    pub failed_at: Option<NaiveDateTime>,
+
+    /// finished_at is the time when the task downloads finished.
+    pub finished_at: Option<NaiveDateTime>,
+}
+
+/// PersistentTask implements the persistent task database object.
+impl DatabaseObject for PersistentTask {
+    /// NAMESPACE is the namespace of [PersistentTask] objects.
+    const NAMESPACE: &'static str = "persistent_task";
+}
+
+/// PersistentTask implements the persistent task metadata.
+impl PersistentTask {
+    /// is_started returns whether the persistent task downloads started.
+    pub fn is_started(&self) -> bool {
+        self.finished_at.is_none()
+    }
+
+    /// is_uploading returns whether the persistent task is uploading.
+    pub fn is_uploading(&self) -> bool {
+        self.uploading_count > 0
+    }
+
+    /// is_expired returns whether the persistent task is expired.
+    pub fn is_expired(&self) -> bool {
+        self.created_at + self.ttl < Utc::now().naive_utc()
+    }
+
+    /// is_failed returns whether the persistent task downloads failed.
+    pub fn is_failed(&self) -> bool {
+        self.failed_at.is_some()
+    }
+
+    /// is_finished returns whether the persistent task downloads finished.
+    pub fn is_finished(&self) -> bool {
+        self.finished_at.is_some()
+    }
+
+    /// is_empty returns whether the persistent task is empty.
+    pub fn is_empty(&self) -> bool {
+        self.content_length == 0
+    }
+
+    /// is_persistent returns whether the persistent task is persistent.
+    pub fn is_persistent(&self) -> bool {
+        self.persistent
+    }
+
+    /// piece_length returns the piece length of the persistent task.
+    pub fn piece_length(&self) -> u64 {
+        self.piece_length
+    }
+
+    /// content_length returns the content length of the persistent task.
+    pub fn content_length(&self) -> u64 {
+        self.content_length
+    }
+
+    /// piece_count returns the piece count of the persistent task.
+    pub fn piece_count(&self) -> u64 {
+        self.content_length.div_ceil(self.piece_length)
+    }
+}
+
 /// PersistentCacheTask is the metadata of the persistent cache task.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersistentCacheTask {
@@ -430,7 +529,7 @@ impl Piece {
     }
 }
 
-/// Metadata manages the metadata of [Task], [Piece] and [PersistentCacheTask].
+/// Metadata manages the metadata of Task, Piece, PersistentCacheTask, etc.
 pub struct Metadata<E = RocksdbStorageEngine>
 where
     E: StorageEngineOwned,
@@ -672,6 +771,221 @@ impl<E: StorageEngineOwned> Metadata<E> {
     pub fn delete_task(&self, id: &str) -> Result<()> {
         info!("delete task metadata {}", id);
         self.db.delete::<Task>(id.as_bytes())
+    }
+
+    /// create_persistent_task creates a new persistent task.
+    #[instrument(skip_all)]
+    pub fn create_persistent_task_started(
+        &self,
+        id: &str,
+        ttl: Duration,
+        piece_length: u64,
+        content_length: u64,
+    ) -> Result<PersistentTask> {
+        let task = PersistentTask {
+            id: id.to_string(),
+            persistent: true,
+            ttl,
+            piece_length,
+            content_length,
+            updated_at: Utc::now().naive_utc(),
+            created_at: Utc::now().naive_utc(),
+            ..Default::default()
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// create_persistent_task_finished updates the metadata of the persistent task
+    /// when the persistent task finished.
+    #[instrument(skip_all)]
+    pub fn create_persistent_task_finished(&self, id: &str) -> Result<PersistentTask> {
+        let task = match self.db.get::<PersistentTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.updated_at = Utc::now().naive_utc();
+                task.failed_at = None;
+
+                // If the persistent task is created by user, the finished_at has been set.
+                if task.finished_at.is_none() {
+                    task.finished_at = Some(Utc::now().naive_utc());
+                }
+
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// download_persistent_task_started updates the metadata of the persistent task when
+    /// the persistent task downloads started. If the persistent task downloaded by scheduler
+    /// to create persistent task, the persistent should be set to true.
+    #[instrument(skip_all)]
+    pub fn download_persistent_task_started(
+        &self,
+        id: &str,
+        ttl: Duration,
+        persistent: bool,
+        piece_length: u64,
+        content_length: u64,
+        created_at: NaiveDateTime,
+    ) -> Result<PersistentTask> {
+        let task = match self.db.get::<PersistentTask>(id.as_bytes())? {
+            Some(mut task) => {
+                // If the task exists, update the task metadata.
+                task.ttl = ttl;
+                task.persistent = persistent;
+                task.piece_length = piece_length;
+                task.updated_at = Utc::now().naive_utc();
+                task.failed_at = None;
+                task
+            }
+            None => PersistentTask {
+                id: id.to_string(),
+                persistent,
+                ttl,
+                piece_length,
+                content_length,
+                updated_at: Utc::now().naive_utc(),
+                created_at,
+                ..Default::default()
+            },
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// download_persistent_task_finished updates the metadata of the persistent task when the persistent task downloads finished.
+    #[instrument(skip_all)]
+    pub fn download_persistent_task_finished(&self, id: &str) -> Result<PersistentTask> {
+        let task = match self.db.get::<PersistentTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.updated_at = Utc::now().naive_utc();
+                task.failed_at = None;
+
+                // If the persistent task is created by user, the finished_at has been set.
+                if task.finished_at.is_none() {
+                    task.finished_at = Some(Utc::now().naive_utc());
+                }
+
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// download_persistent_task_failed updates the metadata of the persistent task when the persistent task downloads failed.
+    #[instrument(skip_all)]
+    pub fn download_persistent_task_failed(&self, id: &str) -> Result<PersistentTask> {
+        let task = match self.db.get::<PersistentTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.updated_at = Utc::now().naive_utc();
+                task.failed_at = Some(Utc::now().naive_utc());
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// upload_persistent_task_started updates the metadata of the persistent task when persistent task uploads started.
+    #[instrument(skip_all)]
+    pub fn upload_persistent_task_started(&self, id: &str) -> Result<PersistentTask> {
+        let task = match self.db.get::<PersistentTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.uploading_count += 1;
+                task.updated_at = Utc::now().naive_utc();
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// upload_persistent_task_finished updates the metadata of the persistent task when persistent task uploads finished.
+    #[instrument(skip_all)]
+    pub fn upload_persistent_task_finished(&self, id: &str) -> Result<PersistentTask> {
+        let task = match self.db.get::<PersistentTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.uploading_count -= 1;
+                task.uploaded_count += 1;
+                task.updated_at = Utc::now().naive_utc();
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// upload_persistent_task_failed updates the metadata of the persistent task when the persistent task uploads failed.
+    #[instrument(skip_all)]
+    pub fn upload_persistent_task_failed(&self, id: &str) -> Result<PersistentTask> {
+        let task = match self.db.get::<PersistentTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.uploading_count -= 1;
+                task.updated_at = Utc::now().naive_utc();
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// persist_persistent_task persists the persistent task metadata.
+    #[instrument(skip_all)]
+    pub fn persist_persistent_task(&self, id: &str) -> Result<PersistentTask> {
+        let task = match self.db.get::<PersistentTask>(id.as_bytes())? {
+            Some(mut task) => {
+                task.persistent = true;
+                task.updated_at = Utc::now().naive_utc();
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
+    }
+
+    /// get_persistent_task gets the persistent task metadata.
+    #[instrument(skip_all)]
+    pub fn get_persistent_task(&self, id: &str) -> Result<Option<PersistentTask>> {
+        self.db.get(id.as_bytes())
+    }
+
+    /// is_persistent_task_exists checks if the persistent task exists.
+    #[instrument(skip_all)]
+    pub fn is_persistent_task_exists(&self, id: &str) -> Result<bool> {
+        self.db.is_exist::<PersistentTask>(id.as_bytes())
+    }
+
+    /// get_persistent_tasks gets the persistent task metadatas.
+    #[instrument(skip_all)]
+    pub fn get_persistent_tasks(&self) -> Result<Vec<PersistentTask>> {
+        let iter = self.db.iter::<PersistentTask>()?;
+        iter.map(|ele| ele.map(|(_, task)| task)).collect()
+    }
+
+    /// delete_persistent_task deletes the persistent task metadata.
+    #[instrument(skip_all)]
+    pub fn delete_persistent_task(&self, id: &str) -> Result<()> {
+        info!("delete persistent task metadata {}", id);
+        self.db.delete::<PersistentTask>(id.as_bytes())
     }
 
     /// create_persistent_cache_task creates a new persistent cache task.
@@ -1085,6 +1399,37 @@ impl<E: StorageEngineOwned> Metadata<E> {
     pub fn delete_cache_task(&self, id: &str) -> Result<()> {
         info!("delete cache task metadata {}", id);
         self.db.delete::<CacheTask>(id.as_bytes())
+    }
+
+    /// create_persistent_piece creates a new persistent piece, which is imported by
+    /// local.
+    #[instrument(skip_all)]
+    pub fn create_persistent_piece(
+        &self,
+        piece_id: &str,
+        number: u32,
+        offset: u64,
+        length: u64,
+        digest: &str,
+    ) -> Result<Piece> {
+        // Construct the piece metadata.
+        let piece = Piece {
+            number,
+            offset,
+            length,
+            digest: digest.to_string(),
+            // Persistent piece does not have parent id, because the piece content is
+            // imported by local.
+            parent_id: None,
+            updated_at: Utc::now().naive_utc(),
+            created_at: Utc::now().naive_utc(),
+            finished_at: Some(Utc::now().naive_utc()),
+            ..Default::default()
+        };
+
+        // Put the piece metadata.
+        self.db.put(piece_id.as_bytes(), &piece)?;
+        Ok(piece)
     }
 
     /// create_persistent_cache_piece creates a new persistent cache piece, which is imported by

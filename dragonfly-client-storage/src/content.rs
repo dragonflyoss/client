@@ -33,6 +33,9 @@ pub const DEFAULT_CONTENT_DIR: &str = "content";
 /// DEFAULT_TASK_DIR is the default directory for store task.
 pub const DEFAULT_TASK_DIR: &str = "tasks";
 
+/// DEFAULT_PERSISTENT_TASK_DIR is the default directory for store persistent task.
+pub const DEFAULT_PERSISTENT_TASK_DIR: &str = "persistent-tasks";
+
 /// DEFAULT_PERSISTENT_CACHE_TASK_DIR is the default directory for store persistent cache task.
 pub const DEFAULT_PERSISTENT_CACHE_TASK_DIR: &str = "persistent-cache-tasks";
 
@@ -42,6 +45,15 @@ pub struct WritePieceResponse {
     pub length: u64,
 
     /// hash is the hash of the piece.
+    pub hash: String,
+}
+
+/// WritePersistentTaskResponse is the response of writing a persistent task.
+pub struct WritePersistentTaskResponse {
+    /// length is the length of the persistent task.
+    pub length: u64,
+
+    /// hash is the hash of the persistent task.
     pub hash: String,
 }
 
