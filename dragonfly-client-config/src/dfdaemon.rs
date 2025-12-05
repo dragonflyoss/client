@@ -2017,7 +2017,7 @@ key: /etc/ssl/private/client.pem
         );
         assert_eq!(rule.filtered_query_params, vec!["Signature", "Expires"]);
 
-        assert_eq!(proxy.registry_mirror.enable_task_id_based_blob_digest, true);
+        assert!(proxy.registry_mirror.enable_task_id_based_blob_digest, true);
         assert_eq!(proxy.registry_mirror.addr, "https://mirror.example.com");
         assert_eq!(
             proxy.registry_mirror.cert,
