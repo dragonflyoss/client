@@ -53,6 +53,7 @@ impl Content {
         }
 
         fs::create_dir_all(&dir.join(super::content::DEFAULT_TASK_DIR)).await?;
+        fs::create_dir_all(&dir.join(super::content::DEFAULT_PERSISTENT_TASK_DIR)).await?;
         fs::create_dir_all(&dir.join(super::content::DEFAULT_PERSISTENT_CACHE_TASK_DIR)).await?;
         info!("content initialized directory: {:?}", dir);
         Ok(Content { config, dir })
@@ -102,7 +103,7 @@ impl Content {
         let available_space = self.available_space()?;
         if available_space < content_length {
             warn!(
-                "not enough space to store the persistent cache task: available_space={}, content_length={}",
+                "not enough space to store the task: available_space={}, content_length={}",
                 available_space, content_length
             );
 
@@ -388,6 +389,244 @@ impl Content {
             .join(task_id)
     }
 
+    /// is_same_dev_inode_as_persistent_task checks if the persistent task and target
+    /// are the same device and inode.
+    pub async fn is_same_dev_inode_as_persistent_task(
+        &self,
+        task_id: &str,
+        to: &Path,
+    ) -> Result<bool> {
+        let task_path = self.get_persistent_task_path(task_id);
+        self.is_same_dev_inode(&task_path, to).await
+    }
+
+    /// create_persistent_task creates a new persistent task content.
+    ///
+    /// Behavior of `create_persistent_task`:
+    /// 1. If the persistent task already exists, return the persistent task path.
+    /// 2. If the persistent task does not exist, create the persistent task directory and file.
+    #[instrument(skip_all)]
+    pub async fn create_persistent_task(&self, task_id: &str, length: u64) -> Result<PathBuf> {
+        let task_path = self.get_persistent_task_path(task_id);
+        if task_path.exists() {
+            return Ok(task_path);
+        }
+
+        let task_dir = self
+            .dir
+            .join(super::content::DEFAULT_PERSISTENT_TASK_DIR)
+            .join(&task_id[..3]);
+        fs::create_dir_all(&task_dir).await.inspect_err(|err| {
+            error!("create {:?} failed: {}", task_dir, err);
+        })?;
+
+        let f = fs::File::create(task_dir.join(task_id))
+            .await
+            .inspect_err(|err| {
+                error!("create {:?} failed: {}", task_dir, err);
+            })?;
+
+        fallocate(&f, length).await.inspect_err(|err| {
+            error!("fallocate {:?} failed: {}", task_dir, err);
+        })?;
+
+        Ok(task_dir.join(task_id))
+    }
+
+    /// create_persistent_task_dir only creates the directory for the persistent task.
+    #[instrument(skip_all)]
+    pub async fn create_persistent_task_dir(&self, task_id: &str) -> Result<PathBuf> {
+        let task_path = self.get_persistent_task_path(task_id);
+        if task_path.exists() {
+            return Ok(task_path);
+        }
+
+        let task_dir = self
+            .dir
+            .join(super::content::DEFAULT_PERSISTENT_TASK_DIR)
+            .join(&task_id[..3]);
+        fs::create_dir_all(&task_dir).await.inspect_err(|err| {
+            error!("create {:?} failed: {}", task_dir, err);
+        })?;
+
+        Ok(task_dir)
+    }
+
+    /// Hard links the persistent task content to the destination.
+    ///
+    /// Behavior of `hard_link_persistent_task`:
+    /// 1. If the destination exists:
+    ///    1.1. If the source and destination share the same device and inode, return immediately.
+    ///    1.2. Otherwise, return an error.
+    /// 2. If the destination does not exist:
+    ///    2.1. If the hard link succeeds, return immediately.
+    ///    2.2. If the hard link fails, copy the persistent task content to the destination once the task is finished, then return immediately.
+    #[instrument(skip_all)]
+    pub async fn hard_link_persistent_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        let task_path = self.get_persistent_task_path(task_id);
+        if let Err(err) = fs::hard_link(task_path.clone(), to).await {
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                if let Ok(true) = self.is_same_dev_inode(&task_path, to).await {
+                    info!("hard already exists, no need to operate");
+                    return Ok(());
+                }
+            }
+
+            warn!("hard link {:?} to {:?} failed: {}", task_path, to, err);
+            return Err(Error::IO(err));
+        }
+
+        info!("hard link {:?} to {:?} success", task_path, to);
+        Ok(())
+    }
+
+    /// Hard links a source file to the persistent task content path.
+    ///
+    /// Behavior:
+    /// 1. If the task path exists:
+    ///    1.1. If source and task share the same inode, return success.
+    ///    1.2. Otherwise, return an error (task content already exists).
+    /// 2. If the task path does not exist:
+    ///    2.1. Create hard link from source to task path.
+    ///    2.2. If hard link fails, return an error.
+    #[instrument(skip_all)]
+    pub async fn hard_link_to_persistent_task(&self, from: &Path, task_id: &str) -> Result<()> {
+        let task_path = self.get_persistent_task_path(task_id);
+        if let Err(err) = fs::hard_link(from, &task_path).await {
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                if let Ok(true) = self.is_same_dev_inode(from, &task_path).await {
+                    info!("hard already exists, no need to operate");
+                    return Ok(());
+                }
+            }
+
+            warn!("hard link {:?} to {:?} failed: {}", task_path, from, err);
+            return Err(Error::IO(err));
+        }
+
+        info!("hard link {:?} to {:?} success", from, task_path);
+        Ok(())
+    }
+
+    /// copy_persistent_task copies the persistent task content to the destination.
+    #[instrument(skip_all)]
+    pub async fn copy_persistent_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        fs::copy(self.get_persistent_task_path(task_id), to).await?;
+        info!("copy to {:?} success", to);
+        Ok(())
+    }
+
+    /// read_persistent_piece reads the persistent piece from the content.
+    #[instrument(skip_all)]
+    pub async fn read_persistent_piece(
+        &self,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+        range: Option<Range>,
+    ) -> Result<impl AsyncRead> {
+        let task_path = self.get_persistent_task_path(task_id);
+
+        // Calculate the target offset and length based on the range.
+        let (target_offset, target_length) =
+            super::content::calculate_piece_range(offset, length, range);
+
+        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
+            error!("open {:?} failed: {}", task_path, err);
+        })?;
+        let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
+
+        f_reader
+            .seek(SeekFrom::Start(target_offset))
+            .await
+            .inspect_err(|err| {
+                error!("seek {:?} failed: {}", task_path, err);
+            })?;
+
+        Ok(f_reader.take(target_length))
+    }
+
+    /// write_persistent_piece writes the persistent piece to the content and
+    /// calculates the hash of the piece by crc32.
+    #[instrument(skip_all)]
+    pub async fn write_persistent_piece<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        task_id: &str,
+        offset: u64,
+        expected_length: u64,
+        reader: &mut R,
+    ) -> Result<super::content::WritePieceResponse> {
+        // Open the file and seek to the offset.
+        let task_path = self.get_persistent_task_path(task_id);
+        let mut f = OpenOptions::new()
+            .truncate(false)
+            .write(true)
+            .open(task_path.as_path())
+            .await
+            .inspect_err(|err| {
+                error!("open {:?} failed: {}", task_path, err);
+            })?;
+
+        f.seek(SeekFrom::Start(offset)).await.inspect_err(|err| {
+            error!("seek {:?} failed: {}", task_path, err);
+        })?;
+
+        let reader = reader.take(expected_length);
+        let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
+        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
+
+        // Copy the piece to the file while updating the CRC32 value.
+        let mut hasher = crc32fast::Hasher::new();
+        let mut tee = InspectReader::new(reader, |bytes| {
+            hasher.update(bytes);
+        });
+
+        debug!("start to write piece to {:?}", task_path);
+        let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
+            error!("copy {:?} failed: {}", task_path, err);
+        })?;
+
+        writer.flush().await.inspect_err(|err| {
+            error!("flush {:?} failed: {}", task_path, err);
+        })?;
+        debug!("finish to write piece to {:?}", task_path);
+
+        if length != expected_length {
+            return Err(Error::Unknown(format!(
+                "expected length {} but got {}",
+                expected_length, length
+            )));
+        }
+
+        // Calculate the hash of the piece.
+        Ok(super::content::WritePieceResponse {
+            length,
+            hash: hasher.finalize().to_string(),
+        })
+    }
+
+    /// delete_task deletes the persistent task content.
+    pub async fn delete_persistent_task(&self, task_id: &str) -> Result<()> {
+        info!("delete persistent task content: {}", task_id);
+        let persistent_task_path = self.get_persistent_task_path(task_id);
+        fs::remove_file(persistent_task_path.as_path())
+            .await
+            .inspect_err(|err| {
+                error!("remove {:?} failed: {}", persistent_task_path, err);
+            })?;
+        Ok(())
+    }
+
+    /// get_persistent_task_path returns the persistent task path by task id.
+    fn get_persistent_task_path(&self, task_id: &str) -> PathBuf {
+        // The persistent task needs split by the first 3 characters of task id(sha256) to
+        // avoid too many files in one directory.
+        self.dir
+            .join(super::content::DEFAULT_PERSISTENT_TASK_DIR)
+            .join(&task_id[..3])
+            .join(task_id)
+    }
+
     /// is_same_dev_inode_as_persistent_cache_task checks if the persistent cache task and target
     /// are the same device and inode.
     pub async fn is_same_dev_inode_as_persistent_cache_task(
@@ -551,52 +790,6 @@ impl Content {
             })?;
 
         Ok(f_reader.take(target_length))
-    }
-
-    /// read_persistent_cache_piece_with_dual_read return two readers, one is the range reader, and the other is the
-    /// full reader of the persistent cache piece. It is used for cache the piece content to the proxy cache.
-    #[instrument(skip_all)]
-    pub async fn read_persistent_cache_piece_with_dual_read(
-        &self,
-        task_id: &str,
-        offset: u64,
-        length: u64,
-        range: Option<Range>,
-    ) -> Result<(impl AsyncRead, impl AsyncRead)> {
-        let task_path = self.get_persistent_cache_task_path(task_id);
-
-        // Calculate the target offset and length based on the range.
-        let (target_offset, target_length) =
-            super::content::calculate_piece_range(offset, length, range);
-
-        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
-            error!("open {:?} failed: {}", task_path, err);
-        })?;
-        let mut f_range_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
-
-        f_range_reader
-            .seek(SeekFrom::Start(target_offset))
-            .await
-            .inspect_err(|err| {
-                error!("seek {:?} failed: {}", task_path, err);
-            })?;
-        let range_reader = f_range_reader.take(target_length);
-
-        // Create full reader of the piece.
-        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
-            error!("open {:?} failed: {}", task_path, err);
-        })?;
-        let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
-
-        f_reader
-            .seek(SeekFrom::Start(offset))
-            .await
-            .inspect_err(|err| {
-                error!("seek {:?} failed: {}", task_path, err);
-            })?;
-        let reader = f_reader.take(length);
-
-        Ok((range_reader, reader))
     }
 
     /// write_persistent_cache_piece writes the persistent cache piece to the content and
@@ -810,6 +1003,135 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_persistent_task() {
+        let temp_dir = tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "c4f108ab1d2b8cfdffe89ea9676af35123fa02e3c25167d62538f630d5d44745";
+        let task_path = content.create_persistent_task(task_id, 0).await.unwrap();
+        assert!(task_path.exists());
+        assert_eq!(task_path, temp_dir.path().join("content/persistent-tasks/c4f/c4f108ab1d2b8cfdffe89ea9676af35123fa02e3c25167d62538f630d5d44745"));
+
+        let task_path_exists = content.create_persistent_task(task_id, 0).await.unwrap();
+        assert_eq!(task_path, task_path_exists);
+    }
+
+    #[tokio::test]
+    async fn test_hard_link_persistent_task() {
+        let temp_dir = tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "5e81970eb2b048910cc84cab026b951f2ceac0a09c72c0717193bb6e466e11cd";
+        content.create_persistent_task(task_id, 0).await.unwrap();
+
+        let to = temp_dir
+            .path()
+            .join("5e81970eb2b048910cc84cab026b951f2ceac0a09c72c0717193bb6e466e11cd");
+        content
+            .hard_link_persistent_task(task_id, &to)
+            .await
+            .unwrap();
+        assert!(to.exists());
+
+        content
+            .hard_link_persistent_task(task_id, &to)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_copy_persistent_task() {
+        let temp_dir = tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "194b9c2018429689fb4e596a506c7e9db564c187b9709b55b33b96881dfb6dd5";
+        content.create_persistent_task(task_id, 64).await.unwrap();
+
+        let to = temp_dir
+            .path()
+            .join("194b9c2018429689fb4e596a506c7e9db564c187b9709b55b33b96881dfb6dd5");
+        content.copy_persistent_task(task_id, &to).await.unwrap();
+        assert!(to.exists());
+    }
+
+    #[tokio::test]
+    async fn test_delete_persistent_task() {
+        let temp_dir = tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "17430ba545c3ce82790e9c9f77e64dca44bb6d6a0c9e18be175037c16c73713d";
+        let task_path = content.create_persistent_task(task_id, 0).await.unwrap();
+        assert!(task_path.exists());
+
+        content.delete_persistent_task(task_id).await.unwrap();
+        assert!(!task_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_read_persistent_piece() {
+        let temp_dir = tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "9cb27a4af09aee4eb9f904170217659683f4a0ea7cd55e1a9fbcb99ddced659a";
+        content.create_persistent_task(task_id, 13).await.unwrap();
+
+        let data = b"hello, world!";
+        let mut reader = Cursor::new(data);
+        content
+            .write_persistent_piece(task_id, 0, 13, &mut reader)
+            .await
+            .unwrap();
+
+        let mut reader = content
+            .read_persistent_piece(task_id, 0, 13, None)
+            .await
+            .unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, data);
+
+        let mut reader = content
+            .read_persistent_piece(
+                task_id,
+                0,
+                13,
+                Some(Range {
+                    start: 0,
+                    length: 5,
+                }),
+            )
+            .await
+            .unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, b"hello");
+    }
+
+    #[tokio::test]
+    async fn test_write_persistent_piece() {
+        let temp_dir = tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "ca1afaf856e8a667fbd48093ca3ca1b8eeb4bf735912fbe551676bc5817a720a";
+        content.create_persistent_task(task_id, 4).await.unwrap();
+
+        let data = b"test";
+        let mut reader = Cursor::new(data);
+        let response = content
+            .write_persistent_piece(task_id, 0, 4, &mut reader)
+            .await
+            .unwrap();
+        assert_eq!(response.length, 4);
+        assert!(!response.hash.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_create_persistent_cache_task() {
         let temp_dir = tempdir().unwrap();
         let config = Arc::new(Config::default());
         let content = Content::new(config, temp_dir.path()).await.unwrap();
