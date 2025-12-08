@@ -94,7 +94,7 @@ clap = { version = "4.5.51", features = ["derive"] }
 anyhow = "1.0.99"
 toml_edit = "0.23.7"
 toml = "0.8.23"
-bytesize = { version = "1.3.3", features = ["serde"] }
+bytesize = { version = "2.3.1", features = ["serde"] }
 bytesize-serde = "0.2.1"
 percent-encoding = "2.3.2"
 tempfile = "3.23.0"

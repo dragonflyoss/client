@@ -419,8 +419,14 @@ name = "bytesize"
 version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e93abca9e28e0a1b9877922aacb20576e05d4679ffa78c3d6dc22a26a216659"
+
+[[package]]
+name = "bytesize"
+version = "2.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bd91ee7b2422bcb158d90ef4d14f75ef67f340943fc4149891dcce8f8b972a3"
 dependencies = [
- "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -429,7 +435,7 @@ version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86d1eb2fd2668859e9785b99700c66b7ea9fdeda35d99f95827a4e5493440178"
 dependencies = [
- "bytesize",
+ "bytesize 1.3.3",
  "serde",
 ]
 
@@ -982,7 +988,7 @@ version = "1.1.7"
 dependencies = [
  "anyhow",
  "bytes",
- "bytesize",
+ "bytesize 2.3.1",
  "chrono",
  "clap",
  "console-subscriber",
@@ -1093,7 +1099,7 @@ dependencies = [
 name = "dragonfly-client-config"
 version = "1.1.7"
 dependencies = [
- "bytesize",
+ "bytesize 2.3.1",
  "bytesize-serde",
  "clap",
  "dragonfly-client-core",
@@ -1177,7 +1183,7 @@ version = "1.1.7"
 dependencies = [
  "bincode",
  "bytes",
- "bytesize",
+ "bytesize 2.3.1",
  "chrono",
  "crc32fast",
  "criterion",
@@ -1211,7 +1217,7 @@ version = "1.1.7"
 dependencies = [
  "base64 0.22.1",
  "bytes",
- "bytesize",
+ "bytesize 2.3.1",
  "crc32fast",
  "dashmap",
  "dragonfly-api",
