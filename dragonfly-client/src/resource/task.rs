@@ -1004,24 +1004,29 @@ impl Task {
         });
 
         // Initialize the piece collector.
-        let piece_collector = piece_collector::PieceCollector::new(
-            self.config.clone(),
-            host_id,
-            task_id,
-            interested_pieces.clone(),
-            parents
-                .into_iter()
-                .map(|peer| piece_collector::CollectedParent {
-                    id: peer.id,
-                    host: peer.host,
-                    download_ip: None,
-                    download_tcp_port: None,
-                    download_quic_port: None,
-                })
-                .collect(),
-        )
-        .await;
+        let piece_collector = Arc::new(
+            piece_collector::PieceCollector::new(
+                self.config.clone(),
+                host_id,
+                task_id,
+                interested_pieces.clone(),
+                parents
+                    .into_iter()
+                    .map(|peer| piece_collector::CollectedParent {
+                        id: peer.id,
+                        host: peer.host,
+                        download_ip: None,
+                        download_tcp_port: None,
+                        download_quic_port: None,
+                    })
+                    .collect(),
+            )
+            .await,
+        );
         let mut piece_collector_rx = piece_collector.run().await;
+        let _piece_collector_guard = scopeguard::guard((), |_| {
+            piece_collector.stop();
+        });
 
         // Initialize the interrupt. If download from parent failed with scheduler or download
         // progress, interrupt the collector and return the finished pieces.
@@ -1059,9 +1064,17 @@ impl Task {
                 need_piece_content: bool,
                 protocol: String,
                 parent_selector: Arc<ParentSelector>,
+                piece_collector: Arc<piece_collector::PieceCollector>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
+                let parents = piece_collector.parents_snapshot(number).unwrap_or(parents);
                 let parent = parent_selector.select(parents);
+                let inflight_parent_id = parent_selector.increment_inflight(&parent);
+                let _inflight_guard = inflight_parent_id.as_ref().map(|parent_host_id| {
+                    scopeguard::guard(parent_host_id.clone(), |parent_host_id| {
+                        parent_selector.decrement_inflight(&parent_host_id);
+                    })
+                });
 
                 info!(
                     "start to download piece {} from parent {:?}",
@@ -1204,6 +1217,7 @@ impl Task {
             let finished_pieces = finished_pieces.clone();
             let protocol = self.config.download.protocol.clone();
             let parent_selector = self.parent_selector.clone();
+            let piece_collector = piece_collector.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -1224,6 +1238,7 @@ impl Task {
                         need_piece_content,
                         protocol,
                         parent_selector,
+                        piece_collector,
                     )
                     .await
                 }

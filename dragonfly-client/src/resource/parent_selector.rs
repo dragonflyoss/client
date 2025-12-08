@@ -17,7 +17,7 @@
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::resource::piece_collector::CollectedParent;
 use dashmap::DashMap;
-use dragonfly_api::common::v2::{Host, Peer, PersistentCachePeer};
+use dragonfly_api::common::v2::{Host, Network, Peer, PersistentCachePeer};
 use dragonfly_api::dfdaemon::v2::SyncHostRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
@@ -30,7 +30,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
-use tracing::{debug, error, instrument, warn, Instrument};
+use tracing::{debug, error, info, instrument, warn, Instrument};
 
 /// Manages a single persistent connection to a parent peer.
 ///
@@ -40,6 +40,9 @@ struct Connection {
     /// Number of active requests currently using this connection.
     /// Used for reference counting to determine when cleanup is safe.
     active_requests: Arc<AtomicUsize>,
+
+    /// Number of inflight piece downloads routed through this parent.
+    inflight_pieces: Arc<AtomicUsize>,
 
     /// Shutdown signal to stop the background host sync task.
     shutdown: Shutdown,
@@ -51,6 +54,7 @@ impl Connection {
     pub fn new() -> Self {
         Self {
             active_requests: Arc::new(AtomicUsize::new(0)),
+            inflight_pieces: Arc::new(AtomicUsize::new(0)),
             shutdown: Shutdown::new(),
         }
     }
@@ -73,6 +77,18 @@ impl Connection {
     /// Triggers shutdown of the background host synchronization task.
     pub fn shutdown(&self) {
         self.shutdown.trigger();
+    }
+
+    pub fn inflight_pieces(&self) -> usize {
+        self.inflight_pieces.load(Ordering::SeqCst)
+    }
+
+    pub fn increment_inflight_piece(&self) {
+        self.inflight_pieces.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn decrement_inflight_piece(&self) {
+        self.inflight_pieces.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -110,8 +126,8 @@ pub struct ParentSelector {
     /// Generator for host and peer identifiers.
     id_generator: Arc<IDGenerator>,
 
-    /// Maps parent host IDs to their current bandwidth weights.
-    weights: Arc<DashMap<String, u64>>,
+    /// Maps parent host IDs to their current network information.
+    networks: Arc<DashMap<String, Network>>,
 
     /// Active connections indexed by parent host ID and each connection tracks usage and manages its sync task.
     connections: Arc<DashMap<String, Connection>>,
@@ -136,7 +152,7 @@ impl ParentSelector {
         Self {
             config,
             id_generator,
-            weights: Arc::new(DashMap::new()),
+            networks: Arc::new(DashMap::new()),
             connections: Arc::new(DashMap::new()),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
@@ -161,28 +177,19 @@ impl ParentSelector {
 
                     return 0;
                 };
-                let parent_host_id = parent_host.id.clone();
-
-                self.weights
-                    .get(&parent_host_id)
-                    .map(|w| *w)
-                    .unwrap_or_else(|| {
-                        debug!(
-                            "no weight info for parent {} {}, defaulting weight to 0",
-                            parent.id, parent_host_id
-                        );
-
-                        0
-                    })
+                self.calculate_weight(parent_host)
             })
             .collect();
 
-        match WeightedIndex::new(weights) {
+        match WeightedIndex::new(weights.clone()) {
             Ok(dist) => {
                 let mut rng = rand::rng();
                 let index = dist.sample(&mut rng);
                 let selected_parent = &parents[index];
-                debug!("selected parent {}", selected_parent.id);
+                info!(
+                    "weights {:?}, selected parent {}",
+                    weights, selected_parent.id
+                );
 
                 selected_parent.clone()
             }
@@ -201,7 +208,7 @@ impl ParentSelector {
         let dfdaemon_shutdown = self.shutdown.clone();
         let mut join_set = JoinSet::new();
         for parent in parents {
-            debug!("register parent {}", parent.id);
+            info!("register parent {}", parent.id);
 
             let Some(parent_host) = parent.host.as_ref() else {
                 error!("parent {} has no host info, skipping", parent.id);
@@ -227,7 +234,7 @@ impl ParentSelector {
                     let shutdown = connection.shutdown.clone();
                     entry.insert(connection);
 
-                    let weights = self.weights.clone();
+                    let weights = self.networks.clone();
                     let host_id = self.id_generator.host_id();
                     let peer_id = self.id_generator.peer_id();
                     let dfdaemon_shutdown_clone = dfdaemon_shutdown.clone();
@@ -250,7 +257,7 @@ impl ParentSelector {
         tokio::spawn(async move {
             while let Some(message) = join_set.join_next().await {
                 match message {
-                    Ok(Ok(_)) => debug!("sync host info completed"),
+                    Ok(Ok(_)) => info!("sync host info completed"),
                     Ok(Err(err)) => error!("sync host info failed: {}", err),
                     Err(err) => error!("task join error: {}", err),
                 }
@@ -270,7 +277,7 @@ impl ParentSelector {
     #[instrument(skip_all)]
     pub fn unregister(&self, parents: &[Peer]) {
         for parent in parents {
-            debug!("unregister parent {}", parent.id);
+            info!("unregister parent {}", parent.id);
 
             let Some(parent_host) = parent.host.as_ref() else {
                 warn!("parent {} has no host info, skipping", parent.id);
@@ -281,13 +288,13 @@ impl ParentSelector {
             if let Some(connection) = self.connections.get(&parent_host_id) {
                 connection.decrement_request();
                 if connection.active_requests() == 0 {
-                    debug!("cleaning up parent {} connection", parent_host_id);
+                    info!("cleaning up parent {} connection", parent_host_id);
                     connection.shutdown();
 
                     // Explicitly drop the reference to avoid holding the borrow
                     // from self.connections.get() while trying to call remove().
                     drop(connection);
-                    self.weights.remove(&parent_host_id);
+                    self.networks.remove(&parent_host_id);
                     self.connections.remove(&parent_host_id);
                 }
             }
@@ -307,12 +314,12 @@ impl ParentSelector {
         host_id: String,
         peer_id: String,
         parent_host_id: String,
-        weights: Arc<DashMap<String, u64>>,
+        weights: Arc<DashMap<String, Network>>,
         dfdaemon_upload_client: DfdaemonUploadClient,
         mut shutdown: Shutdown,
         mut dfdaemon_shutdown: Shutdown,
     ) -> Result<()> {
-        debug!("sync host info from parent {}", parent_host_id);
+        info!("sync host info from parent {}", parent_host_id);
         let response = dfdaemon_upload_client
             .sync_host(SyncHostRequest { host_id, peer_id })
             .await
@@ -334,8 +341,9 @@ impl ParentSelector {
                         Some(message) => {
                             let idle_tx_bandwidth = Self::get_idle_tx_bandwidth(&message);
 
-                            debug!("update host {} idle TX bandwidth to {}", parent_host_id, idle_tx_bandwidth);
-                            weights.insert(parent_host_id.clone(), idle_tx_bandwidth);
+                            info!("update host {} idle TX bandwidth to {}", parent_host_id, idle_tx_bandwidth);
+
+                            weights.insert(parent_host_id.clone(), message.network.as_ref().unwrap_or(&Network::default()).clone());
                         }
                         None => break,
                     }
@@ -356,6 +364,7 @@ impl ParentSelector {
 
     /// Calculates the idle transmission bandwidth of a host.
     #[instrument(skip_all)]
+    #[allow(dead_code)]
     fn get_idle_tx_bandwidth(host: &Host) -> u64 {
         let network = match &host.network {
             Some(network) => network,
@@ -372,6 +381,51 @@ impl ParentSelector {
         } else {
             0
         }
+    }
+
+    /// Increase inflight counter for the selected parent and return host id for later release.
+    pub fn increment_inflight(&self, parent: &CollectedParent) -> Option<String> {
+        let parent_host_id = parent.host.as_ref().map(|host| host.id.clone())?;
+        let connection = self.connections.get(&parent_host_id)?;
+        connection.increment_inflight_piece();
+
+        Some(parent_host_id)
+    }
+
+    /// Decrease inflight counter for the given parent host id.
+    pub fn decrement_inflight(&self, parent_host_id: &str) {
+        if let Some(connection) = self.connections.get(parent_host_id) {
+            connection.decrement_inflight_piece();
+        }
+    }
+
+    fn calculate_weight(&self, host: &Host) -> u64 {
+        let (tx_bw, max_bw) = self
+            .networks
+            .get(&host.id)
+            .map(|w| (w.tx_bandwidth().max(1), w.max_tx_bandwidth.max(1)))
+            .unwrap_or((1, 1));
+
+        // idle bandwidth, at least 10% of max bandwidth.
+        let idle_bw = max_bw.saturating_sub(tx_bw).max(max_bw / 10) as f64;
+
+        // inflight backpressure（γ=3.0）
+        let inflight = self
+            .connections
+            .get(&host.id)
+            .map(|c| c.inflight_pieces() as u64)
+            .unwrap_or(0) as f64;
+
+        let backpressure = 1.0 / (1.0 + inflight.powf(3.0));
+
+        let weight = idle_bw * backpressure;
+
+        info!(
+            "calculate_weight host {}: idle_bw={}, inflight={}, weight={:.2}",
+            host.id, idle_bw, inflight, weight,
+        );
+
+        weight as u64
     }
 }
 
