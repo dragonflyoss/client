@@ -145,8 +145,7 @@ impl HTTP {
         }
 
         let redirect_cache = LruCache::new(
-            NonZeroUsize::new(redirect_cache_max_size)
-                .unwrap_or(NonZeroUsize::new(10000).unwrap()),
+            NonZeroUsize::new(redirect_cache_max_size).unwrap_or(NonZeroUsize::new(10000).unwrap()),
         );
 
         Ok(Self {
@@ -178,12 +177,7 @@ impl HTTP {
     /// cache_redirect stores a redirect target with the configured TTL.
     /// Only caches 307 redirects when redirect_cache_enabled is true.
     /// Uses LRU eviction when cache is full.
-    fn cache_redirect(
-        &self,
-        original_url: &str,
-        target_url: &str,
-        status: reqwest::StatusCode,
-    ) {
+    fn cache_redirect(&self, original_url: &str, target_url: &str, status: reqwest::StatusCode) {
         // Only cache 307 redirects when enabled
         if !self.redirect_cache_enabled {
             return;
@@ -477,11 +471,7 @@ impl super::Backend for HTTP {
             if let Some(location) = response.headers().get(reqwest::header::LOCATION) {
                 if let Ok(location_str) = location.to_str() {
                     // Cache the redirect
-                    self.cache_redirect(
-                        &request.url,
-                        location_str,
-                        response_status_code,
-                    );
+                    self.cache_redirect(&request.url, location_str, response_status_code);
 
                     // Follow the redirect manually
                     debug!(
@@ -513,7 +503,10 @@ impl super::Backend for HTTP {
 
                             debug!(
                                 "redirect response {} {}: {:?} {:?}",
-                                request.task_id, request.piece_id, redirect_status, redirect_headers
+                                request.task_id,
+                                request.piece_id,
+                                redirect_status,
+                                redirect_headers
                             );
 
                             return Ok(super::GetResponse {
@@ -977,7 +970,14 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
         custom_headers.insert("X-Custom-Header".to_string(), "custom-value".to_string());
         custom_headers.insert("Authorization".to_string(), "Bearer token123".to_string());
 
-        let http = HTTP::new(HTTP_SCHEME, Some(custom_headers), false, Duration::from_secs(600), 10000).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            Some(custom_headers),
+            false,
+            Duration::from_secs(600),
+            10000,
+        )
+        .unwrap();
         let mut headers = HeaderMap::new();
         http.make_request_headers(&mut headers).unwrap();
         assert_eq!(
@@ -1013,7 +1013,14 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
         // Return error for invalid header name.
         let mut custom_headers = HashMap::new();
         custom_headers.insert("Invalid Header Name".to_string(), "value".to_string());
-        let http = HTTP::new(HTTP_SCHEME, Some(custom_headers), false, Duration::from_secs(600), 10000).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            Some(custom_headers),
+            false,
+            Duration::from_secs(600),
+            10000,
+        )
+        .unwrap();
         let mut headers = HeaderMap::new();
         assert!(http.make_request_headers(&mut headers).is_err());
 
@@ -1023,7 +1030,14 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             "X-Custom-Header".to_string(),
             "value\nwith\nnewlines".to_string(),
         );
-        let http = HTTP::new(HTTP_SCHEME, Some(custom_headers), false, Duration::from_secs(600), 10000).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            Some(custom_headers),
+            false,
+            Duration::from_secs(600),
+            10000,
+        )
+        .unwrap();
         let mut headers = HeaderMap::new();
         assert!(http.make_request_headers(&mut headers).is_err());
     }
