@@ -203,11 +203,188 @@ impl Storage {
         });
     }
 
+    /// hard_link_persistent_task hard links the persistent task content to the destination.
+    #[instrument(skip_all)]
+    pub async fn hard_link_persistent_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        self.content.hard_link_persistent_task(task_id, to).await
+    }
+
+    /// hard_link_to_persistent_task hard links the source file to the persistent task content.
+    #[instrument(skip_all)]
+    pub async fn hard_link_to_persistent_task(&self, from: &Path, task_id: &str) -> Result<()> {
+        self.content
+            .hard_link_to_persistent_task(from, task_id)
+            .await
+    }
+
+    /// copy_taskcopy_persistent_taskcopies the persistent task content to the destination.
+    #[instrument(skip_all)]
+    pub async fn copy_persistent_task(&self, id: &str, to: &Path) -> Result<()> {
+        self.content.copy_persistent_task(id, to).await
+    }
+
+    /// is_same_dev_inode_as_persistent_task checks if the persistent task content is on the same device inode as the
+    /// destination.
+    pub async fn is_same_dev_inode_as_persistent_task(&self, id: &str, to: &Path) -> Result<bool> {
+        self.content
+            .is_same_dev_inode_as_persistent_task(id, to)
+            .await
+    }
+
+    /// create_persistent_task_started prepares the metadata of the persistent task
+    /// and create directory for the persistent task.
+    #[instrument(skip_all)]
+    pub async fn create_persistent_task_started(
+        &self,
+        id: &str,
+        ttl: Duration,
+        piece_length: u64,
+        content_length: u64,
+    ) -> Result<metadata::PersistentTask> {
+        let metadata =
+            self.metadata
+                .create_persistent_task_started(id, ttl, piece_length, content_length)?;
+
+        self.content.create_persistent_task_dir(id).await?;
+        return Ok(metadata);
+    }
+
+    /// create_persistent_task creates and fallocates the persistent task content.
+    #[instrument(skip_all)]
+    pub async fn create_persistent_task(&self, id: &str, content_length: u64) -> Result<()> {
+        self.content
+            .create_persistent_task(id, content_length)
+            .await
+            .map(|_| ())
+    }
+
+    /// create_persistent_task_finished updates the metadata of the persistent task
+    /// when the persistent task creates finished.
+    #[instrument(skip_all)]
+    pub async fn create_persistent_task_finished(
+        &self,
+        id: &str,
+    ) -> Result<metadata::PersistentTask> {
+        self.metadata.create_persistent_task_finished(id)
+    }
+
+    /// create_persistent_task_failed deletes the persistent task when
+    /// the persistent task creates failed.
+    #[instrument(skip_all)]
+    pub async fn create_persistent_task_failed(&self, id: &str) {
+        self.delete_persistent_task(id).await;
+    }
+
+    /// download_persistent_task_started updates the metadata of the persistent task
+    /// and creates the persistent task content when the persistent task downloads started.
+    #[instrument(skip_all)]
+    pub async fn download_persistent_task_started(
+        &self,
+        id: &str,
+        ttl: Duration,
+        persistent: bool,
+        piece_length: u64,
+        content_length: u64,
+        created_at: NaiveDateTime,
+    ) -> Result<metadata::PersistentTask> {
+        let metadata = self.metadata.download_persistent_task_started(
+            id,
+            ttl,
+            persistent,
+            piece_length,
+            content_length,
+            created_at,
+        )?;
+
+        self.content
+            .create_persistent_task(id, content_length)
+            .await?;
+        Ok(metadata)
+    }
+
+    /// download_persistent_task_finished updates the metadata of the persistent task when the persistent task downloads finished.
+    #[instrument(skip_all)]
+    pub fn download_persistent_task_finished(&self, id: &str) -> Result<metadata::PersistentTask> {
+        self.metadata.download_persistent_task_finished(id)
+    }
+
+    /// download_persistent_task_failed updates the metadata of the persistent task when the persistent task downloads failed.
+    #[instrument(skip_all)]
+    pub async fn download_persistent_task_failed(
+        &self,
+        id: &str,
+    ) -> Result<metadata::PersistentTask> {
+        self.metadata.download_persistent_task_failed(id)
+    }
+
+    /// upload_persistent_task_finished updates the metadata of the cahce task when persistent task uploads finished.
+    #[instrument(skip_all)]
+    pub fn upload_persistent_task_finished(&self, id: &str) -> Result<metadata::PersistentTask> {
+        self.metadata.upload_persistent_task_finished(id)
+    }
+
+    /// get_persistent_task returns the persistent task metadata.
+    #[instrument(skip_all)]
+    pub fn get_persistent_task(&self, id: &str) -> Result<Option<metadata::PersistentTask>> {
+        self.metadata.get_persistent_task(id)
+    }
+
+    /// persist_persistent_task persists the persistent task metadata.
+    #[instrument(skip_all)]
+    pub fn persist_persistent_task(&self, id: &str) -> Result<metadata::PersistentTask> {
+        self.metadata.persist_persistent_task(id)
+    }
+
+    /// is_persistent_task_exists returns whether the persistent task exists.
+    #[instrument(skip_all)]
+    pub fn is_persistent_task_exists(&self, id: &str) -> Result<bool> {
+        self.metadata.is_persistent_task_exists(id)
+    }
+
+    /// get_tasks returns the task metadatas.
+    #[instrument(skip_all)]
+    pub fn get_persistent_tasks(&self) -> Result<Vec<metadata::PersistentTask>> {
+        self.metadata.get_persistent_tasks()
+    }
+
+    /// delete_persistent_task deletes the persistent task metadatas, persistent task content and piece metadatas.
+    #[instrument(skip_all)]
+    pub async fn delete_persistent_task(&self, id: &str) {
+        self.metadata
+            .delete_persistent_task(id)
+            .unwrap_or_else(|err| {
+                error!("delete persistent task metadata failed: {}", err);
+            });
+
+        self.metadata.delete_pieces(id).unwrap_or_else(|err| {
+            error!("delete persistent piece metadatas failed: {}", err);
+        });
+
+        self.content
+            .delete_persistent_task(id)
+            .await
+            .unwrap_or_else(|err| {
+                error!("delete persistent task content failed: {}", err);
+            });
+    }
+
     /// hard_link_persistent_cache_task hard links the persistent cache task content to the destination.
     #[instrument(skip_all)]
     pub async fn hard_link_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
         self.content
             .hard_link_persistent_cache_task(task_id, to)
+            .await
+    }
+
+    /// hard_link_to_persistent_cache_task hard links the source file to the persistent cache task content.
+    #[instrument(skip_all)]
+    pub async fn hard_link_to_persistent_cache_task(
+        &self,
+        from: &Path,
+        task_id: &str,
+    ) -> Result<()> {
+        self.content
+            .hard_link_to_persistent_cache_task(from, task_id)
             .await
     }
 
@@ -229,7 +406,8 @@ impl Storage {
             .await
     }
 
-    /// create_persistent_cache_task_started creates a new persistent cache task.
+    /// create_persistent_cache_task_started prepares the metadata of the persistent cache task
+    /// and create directory for the persistent cache task.
     #[instrument(skip_all)]
     pub async fn create_persistent_cache_task_started(
         &self,
@@ -245,10 +423,17 @@ impl Storage {
             content_length,
         )?;
 
+        self.content.create_persistent_cache_task_dir(id).await?;
+        return Ok(metadata);
+    }
+
+    /// create_persistent_cache_task creates and fallocates the persistent cache task content.
+    #[instrument(skip_all)]
+    pub async fn create_persistent_cache_task(&self, id: &str, content_length: u64) -> Result<()> {
         self.content
             .create_persistent_cache_task(id, content_length)
-            .await?;
-        Ok(metadata)
+            .await
+            .map(|_| ())
     }
 
     /// create_persistent_cache_task_finished updates the metadata of the persistent cache task
@@ -452,6 +637,53 @@ impl Storage {
         });
     }
 
+    /// create_persistent_piece creates a new persistent piece.
+    #[instrument(skip_all)]
+    pub async fn create_persistent_piece<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        number: u32,
+        offset: u64,
+        length: u64,
+        reader: &mut R,
+    ) -> Result<metadata::Piece> {
+        let response = self
+            .content
+            .write_persistent_piece(task_id, offset, length, reader)
+            .await?;
+        let digest = Digest::new(Algorithm::Crc32, response.hash);
+
+        self.metadata.create_persistent_piece(
+            piece_id,
+            number,
+            offset,
+            length,
+            digest.to_string().as_str(),
+        )
+    }
+
+    /// register_persistent_piece registers a persistent piece without calculating its digest.
+    /// Used when creating a hardlink from persistent to storage. Since the piece
+    /// content is accessed via hardlink, digest calculation is deferred until another
+    /// peer downloads the piece.
+    #[instrument(skip_all)]
+    pub fn register_persistent_piece(
+        &self,
+        piece_id: &str,
+        number: u32,
+        offset: u64,
+        length: u64,
+    ) -> Result<metadata::Piece> {
+        self.metadata.create_persistent_piece(
+            piece_id,
+            number,
+            offset,
+            length,
+            "".to_string().as_str(),
+        )
+    }
+
     /// create_persistent_cache_piece creates a new persistent cache piece.
     #[instrument(skip_all)]
     pub async fn create_persistent_cache_piece<R: AsyncRead + Unpin + ?Sized>(
@@ -475,6 +707,27 @@ impl Storage {
             offset,
             length,
             digest.to_string().as_str(),
+        )
+    }
+
+    /// register_persistent_cache_piece registers a persistent cache piece without calculating its digest.
+    /// Used when creating a hardlink from persistent cache to storage. Since the piece
+    /// content is accessed via hardlink, digest calculation is deferred until another
+    /// peer downloads the piece.
+    #[instrument(skip_all)]
+    pub fn register_persistent_cache_piece(
+        &self,
+        piece_id: &str,
+        number: u32,
+        offset: u64,
+        length: u64,
+    ) -> Result<metadata::Piece> {
+        self.metadata.create_persistent_cache_piece(
+            piece_id,
+            number,
+            offset,
+            length,
+            "".to_string().as_str(),
         )
     }
 
@@ -587,7 +840,12 @@ impl Storage {
         let digest = Digest::new(Algorithm::Crc32, response.hash);
 
         // Check the digest of the piece.
-        if expected_digest != digest.to_string() {
+        if expected_digest.is_empty() {
+            warn!(
+                "expected digest is empty for piece {} downloaded from parent {}",
+                piece_id, parent_id
+            );
+        } else if expected_digest != digest.to_string() {
             return Err(Error::DigestMismatch(
                 expected_digest.to_string(),
                 digest.to_string(),
@@ -698,6 +956,142 @@ impl Storage {
         self.metadata.piece_id(task_id, number)
     }
 
+    /// download_persistent_piece_started updates the metadata of the persistent piece and writes
+    /// the data of piece to file when the persistent piece downloads started.
+    #[instrument(skip_all)]
+    pub async fn download_persistent_piece_started(
+        &self,
+        piece_id: &str,
+        number: u32,
+    ) -> Result<metadata::Piece> {
+        // Wait for the piece to be finished.
+        match self.wait_for_persistent_piece_finished(piece_id).await {
+            Ok(piece) => Ok(piece),
+            // If piece is not found or wait timeout, create piece metadata.
+            Err(_) => self.metadata.download_piece_started(piece_id, number),
+        }
+    }
+
+    /// download_persistent_piece_from_parent_finished is used for downloading persistent piece from parent.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
+    pub async fn download_persistent_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+        expected_digest: &str,
+        parent_id: &str,
+        reader: &mut R,
+    ) -> Result<metadata::Piece> {
+        let response = self
+            .content
+            .write_persistent_piece(task_id, offset, length, reader)
+            .await?;
+
+        let length = response.length;
+        let digest = Digest::new(Algorithm::Crc32, response.hash);
+
+        // Check the digest of the piece.
+        if expected_digest.is_empty() {
+            warn!(
+                "expected digest is empty for piece {} downloaded from parent {}",
+                piece_id, parent_id
+            );
+        } else if expected_digest != digest.to_string() {
+            return Err(Error::DigestMismatch(
+                expected_digest.to_string(),
+                digest.to_string(),
+            ));
+        }
+
+        self.metadata.download_piece_finished(
+            piece_id,
+            offset,
+            length,
+            digest.to_string().as_str(),
+            Some(parent_id.to_string()),
+        )
+    }
+
+    /// download_persistent_piece_failed updates the metadata of the persistent piece when the persistent piece downloads failed.
+    #[instrument(skip_all)]
+    pub fn download_persistent_piece_failed(&self, piece_id: &str) -> Result<()> {
+        self.metadata.download_piece_failed(piece_id)
+    }
+
+    /// upload_persistent_piece updates the metadata of the piece and_then
+    /// returns the data of the piece.
+    #[instrument(skip_all)]
+    pub async fn upload_persistent_piece(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        range: Option<Range>,
+    ) -> Result<impl AsyncRead> {
+        // Wait for the persistent piece to be finished.
+        self.wait_for_persistent_piece_finished(piece_id).await?;
+
+        // Start uploading the persistent task.
+        self.metadata.upload_persistent_task_started(task_id)?;
+
+        // Get the persistent piece metadata and return the content of the persistent piece.
+        match self.metadata.get_piece(piece_id) {
+            Ok(Some(piece)) => {
+                match self
+                    .content
+                    .read_persistent_piece(task_id, piece.offset, piece.length, range)
+                    .await
+                {
+                    Ok(reader) => {
+                        // Finish uploading the persistent task.
+                        self.metadata.upload_persistent_task_finished(task_id)?;
+                        Ok(reader)
+                    }
+                    Err(err) => {
+                        // Failed uploading the persistent task.
+                        self.metadata.upload_persistent_task_failed(task_id)?;
+                        Err(err)
+                    }
+                }
+            }
+            Ok(None) => {
+                // Failed uploading the persistent task.
+                self.metadata.upload_persistent_task_failed(task_id)?;
+                Err(Error::PieceNotFound(piece_id.to_string()))
+            }
+            Err(err) => {
+                // Failed uploading the persistent task.
+                self.metadata.upload_persistent_task_failed(task_id)?;
+                Err(err)
+            }
+        }
+    }
+
+    /// get_persistent_piece returns the persistent piece metadata.
+    #[instrument(skip_all)]
+    pub fn get_persistent_piece(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
+        self.metadata.get_piece(piece_id)
+    }
+
+    /// is_persistent_piece_exists returns whether the persistent piece exists.
+    #[instrument(skip_all)]
+    pub fn is_persistent_piece_exists(&self, piece_id: &str) -> Result<bool> {
+        self.metadata.is_piece_exists(piece_id)
+    }
+
+    /// get_persistent_pieces returns the persistent piece metadatas.
+    pub fn get_persistent_pieces(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
+        self.metadata.get_pieces(task_id)
+    }
+
+    /// persistent_piece_id returns the persistent piece id.
+    #[inline]
+    pub fn persistent_piece_id(&self, task_id: &str, number: u32) -> String {
+        self.metadata.piece_id(task_id, number)
+    }
+
     /// download_persistent_cache_piece_started updates the metadata of the persistent cache piece and writes
     /// the data of piece to file when the persistent cache piece downloads started.
     #[instrument(skip_all)]
@@ -741,7 +1135,12 @@ impl Storage {
         let digest = Digest::new(Algorithm::Crc32, response.hash);
 
         // Check the digest of the piece.
-        if expected_digest != digest.to_string() {
+        if expected_digest.is_empty() {
+            warn!(
+                "expected digest is empty for piece {} downloaded from parent {}",
+                piece_id, parent_id
+            );
+        } else if expected_digest != digest.to_string() {
             return Err(Error::DigestMismatch(
                 expected_digest.to_string(),
                 digest.to_string(),
@@ -852,6 +1251,37 @@ impl Storage {
                 _ = interval.tick() => {
                     let piece = self
                         .get_piece(piece_id)?
+                        .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
+
+                    // If the piece is finished, return.
+                    if piece.is_finished() {
+                        debug!("wait piece finished success");
+                        return Ok(piece);
+                    }
+                }
+                _ = &mut wait_timeout => {
+                    self.metadata.wait_for_piece_finished_failed(piece_id).unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
+                    return Err(Error::WaitForPieceFinishedTimeout(piece_id.to_string()));
+                }
+            }
+        }
+    }
+
+    /// wait_for_persistent_piece_finished waits for the persistent piece to be finished.
+    #[instrument(skip_all)]
+    async fn wait_for_persistent_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
+        // Total timeout for downloading a piece, combining the download time and the time to write to storage.
+        let wait_timeout = tokio::time::sleep(
+            self.config.download.piece_timeout + self.config.storage.write_piece_timeout,
+        );
+        tokio::pin!(wait_timeout);
+
+        let mut interval = tokio::time::interval(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL);
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let piece = self
+                        .get_persistent_piece(piece_id)?
                         .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
 
                     // If the piece is finished, return.
@@ -1024,7 +1454,12 @@ impl Storage {
         let digest = Digest::new(Algorithm::Crc32, hash);
 
         // Check the digest of the piece.
-        if expected_digest != digest.to_string() {
+        if expected_digest.is_empty() {
+            warn!(
+                "expected digest is empty for piece {} downloaded from parent {}",
+                piece_id, parent_id
+            );
+        } else if expected_digest != digest.to_string() {
             return Err(Error::DigestMismatch(
                 expected_digest.to_string(),
                 digest.to_string(),
