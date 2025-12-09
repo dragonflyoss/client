@@ -204,12 +204,16 @@ async fn main() -> Result<(), anyhow::Error> {
         })?;
     let scheduler_client = Arc::new(scheduler_client);
 
-    let backend_factory =
-        BackendFactory::new(config.clone(), Some(config.server.plugin_dir.as_path())).inspect_err(
-            |err| {
-                error!("initialize backend factory failed: {}", err);
-            },
-        )?;
+    let backend_factory = BackendFactory::new(
+        config.clone(),
+        Some(config.server.plugin_dir.as_path()),
+        config.backend.enable_cache_temporary_redirect,
+        config.backend.cache_temporary_redirect_ttl,
+        config.backend.cache_temporary_redirect_max_size,
+    )
+    .inspect_err(|err| {
+        error!("initialize backend factory failed: {}", err);
+    })?;
     let backend_factory = Arc::new(backend_factory);
 
     // Initialize download rate limiter.

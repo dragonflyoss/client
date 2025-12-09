@@ -1069,6 +1069,7 @@ dependencies = [
  "hyper 1.8.1",
  "hyper-util",
  "libloading",
+ "lru",
  "opendal",
  "percent-encoding",
  "rcgen",
