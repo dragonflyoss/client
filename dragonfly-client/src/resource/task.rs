@@ -55,7 +55,7 @@ use reqwest::header::HeaderMap;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
 };
 use std::time::Instant;
@@ -1062,52 +1062,37 @@ impl Task {
                 need_piece_content: bool,
                 protocol: String,
                 parent_selector: Arc<ParentSelector>,
+                cumulative_piece_count: Arc<AtomicUsize>,
             ) -> ClientResult<metadata::Piece> {
-                async fn secondary_sync_parents(
-                    config: Arc<Config>,
-                    host_id: &str,
-                    task_id: &str,
-                    interested_piece: metadata::Piece,
-                    parents: Vec<piece_collector::CollectedParent>,
-                ) -> Option<Vec<piece_collector::CollectedParent>> {
-                    let piece_collector = piece_collector::PieceCollector::new(
-                        config,
-                        host_id,
-                        task_id,
-                        vec![interested_piece],
-                        parents,
-                    )
-                    .await;
-                    let mut piece_collector_rx = piece_collector.run().await;
-                    let _piece_collector_guard = scopeguard::guard((), |_| {
-                        piece_collector.stop();
-                    });
-
-                    piece_collector_rx.recv().await.map(|piece| piece.parents)
-                }
-
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 let mut parents = parents;
-                if let Some(interested_piece) = interested_piece {
-                    if let Some(updated_parents) = secondary_sync_parents(
-                        config.clone(),
-                        host_id.as_str(),
-                        task_id.as_str(),
-                        interested_piece,
-                        parents.clone(),
-                    )
-                    .await
-                    {
-                        if !updated_parents.is_empty() {
-                            parents = updated_parents;
+                if cumulative_piece_count.fetch_add(1, Ordering::SeqCst) + 1
+                    > config.download.concurrent_piece_count as usize
+                {
+                    if let Some(interested_piece) = interested_piece {
+                        let piece_collector = piece_collector::PieceCollector::new(
+                            config.clone(),
+                            host_id.as_str(),
+                            task_id.as_str(),
+                            vec![interested_piece],
+                            parents.clone(),
+                        )
+                        .await;
+                        let mut piece_collector_rx = piece_collector.run().await;
+
+                        if let Some(updated_parents) = piece_collector_rx.recv().await {
+                            if !updated_parents.parents.is_empty() {
+                                parents = updated_parents.parents;
+                            }
                         }
                     }
                 }
+
                 let parent = parent_selector.select(parents);
-                let inflight_parent_id = parent_selector.increment_inflight(&parent);
+                let inflight_parent_id = parent_selector.increment_inflight_piece(&parent);
                 let _inflight_guard = inflight_parent_id.as_ref().map(|parent_host_id| {
                     scopeguard::guard(parent_host_id.clone(), |parent_host_id| {
-                        parent_selector.decrement_inflight(&parent_host_id);
+                        parent_selector.decrement_inflight_piece(&parent_host_id);
                     })
                 });
 
@@ -1254,10 +1239,11 @@ impl Task {
             let protocol = self.config.download.protocol.clone();
             let parent_selector = self.parent_selector.clone();
             let interested_piece = interested_pieces.get(1).cloned();
+            let cumulative_piece_count = Arc::new(AtomicUsize::new(0));
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
-                    let _permit = permit;
+                    let _permit: tokio::sync::OwnedSemaphorePermit = permit;
                     download_from_parent(
                         config,
                         task_id,
@@ -1276,6 +1262,7 @@ impl Task {
                         need_piece_content,
                         protocol,
                         parent_selector,
+                        cumulative_piece_count,
                     )
                     .await
                 }

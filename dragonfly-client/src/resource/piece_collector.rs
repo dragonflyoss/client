@@ -15,7 +15,7 @@
  */
 
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use dragonfly_api::common::v2::Host;
 use dragonfly_api::dfdaemon::v2::{SyncPersistentCachePiecesRequest, SyncPiecesRequest};
 use dragonfly_client_config::dfdaemon::Config;
@@ -23,10 +23,7 @@ use dragonfly_client_core::{Error, Result};
 use dragonfly_client_storage::metadata;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{
-    mpsc::{self, Receiver, Sender},
-    watch,
-};
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, instrument, Instrument};
@@ -84,14 +81,6 @@ pub struct PieceCollector {
 
     /// collected_pieces is a map to store the collected pieces from different parents.
     collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
-
-    triggered_pieces: Arc<DashSet<u32>>,
-
-    /// stop_rx is used to signal the collector to stop.
-    stop_rx: watch::Receiver<bool>,
-
-    /// stop_tx is used to trigger stop signal.
-    stop_tx: watch::Sender<bool>,
 }
 
 /// PieceCollector is used to collect pieces from peers.
@@ -105,11 +94,9 @@ impl PieceCollector {
         parents: Vec<CollectedParent>,
     ) -> Self {
         let collected_pieces = Arc::new(DashMap::with_capacity(interested_pieces.len()));
-        let triggered_pieces = Arc::new(DashSet::new());
         for interested_piece in &interested_pieces {
             collected_pieces.insert(interested_piece.number, Vec::new());
         }
-        let (stop_tx, stop_rx) = watch::channel(false);
 
         Self {
             config,
@@ -118,9 +105,6 @@ impl PieceCollector {
             parents,
             interested_pieces,
             collected_pieces,
-            triggered_pieces,
-            stop_rx,
-            stop_tx,
         }
     }
 
@@ -135,8 +119,6 @@ impl PieceCollector {
         let collected_pieces = self.collected_pieces.clone();
         let collected_piece_timeout = self.config.download.collected_piece_timeout;
         let (collected_piece_tx, collected_piece_rx) = mpsc::channel(1024);
-        let triggered_pieces = self.triggered_pieces.clone();
-        let mut stop_rx = self.stop_rx.clone();
         tokio::spawn(
             async move {
                 Self::collect_from_parents(
@@ -148,8 +130,6 @@ impl PieceCollector {
                     collected_pieces,
                     collected_piece_tx,
                     collected_piece_timeout,
-                    triggered_pieces,
-                    &mut stop_rx,
                 )
                 .await
                 .unwrap_or_else(|err| {
@@ -160,18 +140,6 @@ impl PieceCollector {
         );
 
         collected_piece_rx
-    }
-
-    /// Returns the latest parent snapshot for a given piece number.
-    pub fn parents_snapshot(&self, number: u32) -> Option<Vec<CollectedParent>> {
-        self.collected_pieces
-            .get(&number)
-            .map(|parents| parents.clone())
-    }
-
-    /// stop signals the collector to stop collecting pieces.
-    pub fn stop(&self) {
-        let _ = self.stop_tx.send(true);
     }
 
     /// collect_from_parents collects pieces from multiple parents with load balancing strategy.
@@ -204,8 +172,6 @@ impl PieceCollector {
         collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
         collected_piece_tx: Sender<CollectedPiece>,
         collected_piece_timeout: Duration,
-        triggered_pieces: Arc<DashSet<u32>>,
-        stop_rx: &mut watch::Receiver<bool>,
     ) -> Result<()> {
         // Create a task to collect pieces from peers.
         let mut join_set = JoinSet::new();
@@ -220,8 +186,6 @@ impl PieceCollector {
                 collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
                 collected_piece_tx: Sender<CollectedPiece>,
                 collected_piece_timeout: Duration,
-                triggered_pieces: Arc<DashSet<u32>>,
-                mut stop_rx: watch::Receiver<bool>,
             ) -> Result<CollectedParent> {
                 debug!("sync pieces from parent {}", parent.id);
 
@@ -263,65 +227,45 @@ impl PieceCollector {
                 let out_stream = response.into_inner().timeout(collected_piece_timeout);
                 tokio::pin!(out_stream);
 
-                loop {
-                    tokio::select! {
-                        changed = stop_rx.changed() => {
-                            // Stop signal received or channel closed.
-                            if changed.is_ok() && *stop_rx.borrow() || changed.is_err() {
-                                info!("stop syncing pieces from parent {} due to shutdown", parent.id);
-                                break;
-                            }
-                        }
-                        message = out_stream.try_next() => {
-                            let Some(message) = message.inspect_err(|err| {
-                                error!("sync pieces from parent {} failed: {}", parent.id, err);
-                            })? else {
-                                break;
-                            };
-                            let message = message?;
+                while let Some(message) = out_stream.try_next().await.inspect_err(|err| {
+                    error!("sync pieces from parent {} failed: {}", parent.id, err);
+                })? {
+                    let message = message?;
 
-                            if let Some(mut parents) = collected_pieces.get_mut(&message.number) {
-                                parent.download_ip = Some(message.ip);
-                                parent.download_tcp_port = message.tcp_port;
-                                parent.download_quic_port = message.quic_port;
-                                parents.push(parent.clone());
-                            } else {
-                                continue;
-                            }
-
-                            // Wait for collecting the piece from different parents when the first
-                            // piece is collected.
-                            tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS).await;
-                            let parents = match collected_pieces.get(&message.number) {
-                                Some(parents) => parents.clone(),
-                                None => continue,
-                            };
-
-                            debug!(
-                                "receive piece {}-{} metadata from parents {:?}",
-                                task_id,
-                                message.number,
-                                parents.iter().map(|p| &p.id).collect::<Vec<&String>>()
-                            );
-
-                            let is_first_trigger = triggered_pieces.insert(message.number);
-
-                            if is_first_trigger {
-                                collected_piece_tx
-                                    .send(CollectedPiece {
-                                        number: message.number,
-                                        length: message.length,
-                                        parents,
-                                    })
-                                    .await
-                                    .inspect_err(|err| {
-                                        error!("send CollectedPiece failed: {}", err);
-                                    })?;
-                            } else {
-                                continue;
-                            }
-                        }
+                    if let Some(mut parents) = collected_pieces.get_mut(&message.number) {
+                        parent.download_ip = Some(message.ip);
+                        parent.download_tcp_port = message.tcp_port;
+                        parent.download_quic_port = message.quic_port;
+                        parents.push(parent.clone());
+                    } else {
+                        continue;
                     }
+
+                    // Wait for collecting the piece from different parents when the first
+                    // piece is collected.
+                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS).await;
+                    let parents = match collected_pieces.remove(&message.number) {
+                        Some((_, parents)) => parents,
+                        None => continue,
+                    };
+
+                    debug!(
+                        "receive piece {}-{} metadata from parents {:?}",
+                        task_id,
+                        message.number,
+                        parents.iter().map(|p| &p.id).collect::<Vec<&String>>()
+                    );
+
+                    collected_piece_tx
+                        .send(CollectedPiece {
+                            number: message.number,
+                            length: message.length,
+                            parents,
+                        })
+                        .await
+                        .inspect_err(|err| {
+                            error!("send CollectedPiece failed: {}", err);
+                        })?;
                 }
 
                 Ok(parent)
@@ -337,8 +281,6 @@ impl PieceCollector {
                     collected_pieces.clone(),
                     collected_piece_tx.clone(),
                     collected_piece_timeout,
-                    triggered_pieces.clone(),
-                    stop_rx.clone(),
                 )
                 .in_current_span(),
             );
@@ -351,10 +293,10 @@ impl PieceCollector {
                     debug!("peer {} sync pieces finished", peer.id);
 
                     // If all pieces are collected, abort all tasks.
-                    // if collected_pieces.is_empty() {
-                    //     info!("all pieces are collected, abort all tasks");
-                    //     join_set.shutdown().await;
-                    // }
+                    if collected_pieces.is_empty() {
+                        info!("all pieces are collected, abort all tasks");
+                        join_set.shutdown().await;
+                    }
                 }
                 Ok(Err(err)) => error!("sync pieces failed: {}", err),
                 Err(err) => error!("task join error: {}", err),

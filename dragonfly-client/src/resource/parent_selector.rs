@@ -384,7 +384,7 @@ impl ParentSelector {
     }
 
     /// Increase inflight counter for the selected parent and return host id for later release.
-    pub fn increment_inflight(&self, parent: &CollectedParent) -> Option<String> {
+    pub fn increment_inflight_piece(&self, parent: &CollectedParent) -> Option<String> {
         let parent_host_id = parent.host.as_ref().map(|host| host.id.clone())?;
         let connection = self.connections.get(&parent_host_id)?;
         connection.increment_inflight_piece();
@@ -393,12 +393,13 @@ impl ParentSelector {
     }
 
     /// Decrease inflight counter for the given parent host id.
-    pub fn decrement_inflight(&self, parent_host_id: &str) {
+    pub fn decrement_inflight_piece(&self, parent_host_id: &str) {
         if let Some(connection) = self.connections.get(parent_host_id) {
             connection.decrement_inflight_piece();
         }
     }
 
+    /// Calculates the weight of a host based on its idle bandwidth and inflight pieces.
     fn calculate_weight(&self, host: &Host) -> u64 {
         let (tx_bw, max_bw) = self
             .networks
