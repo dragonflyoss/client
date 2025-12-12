@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::io::{Error as IOError, ErrorKind};
 use std::sync::Arc;
 use tokio_util::io::StreamReader;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info};
 
 /// HTTP_SCHEME is the HTTP scheme.
 pub const HTTP_SCHEME: &str = "http";
@@ -213,7 +213,7 @@ impl super::Backend for HTTP {
     }
 
     /// head gets the header of the request.
-    #[instrument(skip_all)]
+
     async fn head(&self, request: super::HeadRequest) -> Result<super::HeadResponse> {
         debug!(
             "head request {} {}: {:?}",
@@ -327,7 +327,7 @@ impl super::Backend for HTTP {
     }
 
     /// get gets the content of the request.
-    #[instrument(skip_all)]
+
     async fn get(&self, request: super::GetRequest) -> Result<super::GetResponse<super::Body>> {
         debug!(
             "get request {} {} {}: {:?}",

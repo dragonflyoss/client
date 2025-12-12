@@ -33,7 +33,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{copy, AsyncRead};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, instrument, Span};
+use tracing::{debug, error, info, Span};
 use vortex_protocol::{
     tlv::{
         download_persistent_cache_piece::DownloadPersistentCachePiece,
@@ -147,7 +147,7 @@ pub struct QUICServerHandler {
 /// QUICServerHandler implements the request handler.
 impl QUICServerHandler {
     /// handle handles a single QUIC connection.
-    #[instrument(skip_all)]
+
     async fn handle(
         &self,
         connection: quinn::Connection,
@@ -188,7 +188,7 @@ impl QUICServerHandler {
     /// It reads the protocol header to determine the request type and dispatches
     /// to the appropriate handler. Supports both regular piece downloads and
     /// persistent cache piece downloads with proper request/response framing.
-    #[instrument(skip_all, fields(host_id, remote_address, task_id, piece_id))]
+
     async fn handle_stream(
         &self,
         mut reader: quinn::RecvStream,
@@ -339,7 +339,7 @@ impl QUICServerHandler {
     /// upload rate limiting, and prepares both the piece metadata and
     /// content stream for transmission. It's the core handler for regular
     /// piece download requests in the P2P network.
-    #[instrument(skip_all)]
+
     async fn handle_piece(
         &self,
         piece_id: &str,
@@ -403,7 +403,7 @@ impl QUICServerHandler {
     /// which have different storage semantics and metadata structure. This
     /// enables efficient serving of frequently accessed content from the
     /// persistent cache layer.
-    #[instrument(skip_all)]
+
     async fn handle_persistent_cache_piece(
         &self,
         piece_id: &str,
@@ -508,7 +508,7 @@ impl QUICServerHandler {
     /// This function sends the provided bytes as a response and ensures
     /// all data is flushed to the underlying transport. This is typically
     /// used for sending headers and small payloads in a single operation.
-    #[instrument(skip_all)]
+
     async fn write_response(
         &self,
         request: Bytes,
@@ -529,7 +529,7 @@ impl QUICServerHandler {
     /// to the QUIC connection using tokio's copy utility. It's designed for
     /// streaming large piece content without loading everything into memory.
     /// The operation is flushed to ensure data delivery.
-    #[instrument(skip_all)]
+
     async fn write_stream<R: AsyncRead + Unpin + ?Sized>(
         &self,
         stream: &mut R,

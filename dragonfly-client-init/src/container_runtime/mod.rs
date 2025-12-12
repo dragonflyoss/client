@@ -16,7 +16,7 @@
 
 use dragonfly_client_config::dfinit::{Config, ContainerRuntimeConfig};
 use dragonfly_client_core::Result;
-use tracing::{info, instrument};
+use tracing::info;
 
 pub mod containerd;
 pub mod crio;
@@ -40,7 +40,7 @@ pub struct ContainerRuntime {
 /// ContainerRuntime implements the container runtime manager.
 impl ContainerRuntime {
     /// new creates a new container runtime manager.
-    #[instrument(skip_all)]
+
     pub fn new(config: &Config) -> Self {
         Self {
             engine: Self::get_engine(config),
@@ -48,7 +48,7 @@ impl ContainerRuntime {
     }
 
     /// run runs the container runtime to initialize runtime environment for the dfdaemon.
-    #[instrument(skip_all)]
+
     pub async fn run(&self) -> Result<()> {
         match &self.engine {
             None => Ok(()),
@@ -60,7 +60,7 @@ impl ContainerRuntime {
     }
 
     /// get_engine returns the runtime engine from the config.
-    #[instrument(skip_all)]
+
     fn get_engine(config: &Config) -> Option<Engine> {
         if let Some(ref container_runtime_config) = config.container_runtime.config {
             let engine = match container_runtime_config {

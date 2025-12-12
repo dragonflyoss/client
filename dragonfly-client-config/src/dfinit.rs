@@ -21,7 +21,7 @@ use serde::{ser::SerializeStruct, Deserialize, Serialize};
 use std::fs;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
-use tracing::{info, instrument};
+use tracing::info;
 use validator::Validate;
 
 /// NAME is the name of dfinit.
@@ -331,7 +331,7 @@ pub struct Config {
 /// Config implements the config operation of dfinit.
 impl Config {
     /// load loads configuration from file.
-    #[instrument(skip_all)]
+
     pub fn load(path: &PathBuf) -> Result<Config> {
         // Load configuration from file.
         let content = fs::read_to_string(path)?;

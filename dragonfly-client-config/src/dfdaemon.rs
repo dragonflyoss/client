@@ -38,7 +38,7 @@ use tokio::fs;
 use tonic::transport::{
     Certificate as TonicCertificate, ClientTlsConfig, Identity, ServerTlsConfig,
 };
-use tracing::{error, instrument};
+use tracing::error;
 use validator::Validate;
 
 /// NAME is the name of dfdaemon.
@@ -1443,7 +1443,7 @@ pub struct Config {
 /// Config implements the config operation of dfdaemon.
 impl Config {
     /// load loads configuration from file.
-    #[instrument(skip_all)]
+
     pub async fn load(path: &PathBuf) -> Result<Config> {
         // Load configuration from file.
         let content = fs::read_to_string(path).await?;
@@ -1458,7 +1458,7 @@ impl Config {
     }
 
     /// convert converts the configuration.
-    #[instrument(skip_all)]
+
     fn convert(&mut self) {
         // Convert advertise ip.
         if self.host.ip.is_none() {

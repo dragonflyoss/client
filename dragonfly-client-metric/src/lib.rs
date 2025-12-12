@@ -29,7 +29,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{error, info, instrument, warn};
+use tracing::{error, info, warn};
 use warp::{Filter, Rejection, Reply};
 
 /// DOWNLOAD_TASK_LEVEL1_DURATION_THRESHOLD is the threshold of download task level1 duration for
@@ -914,7 +914,7 @@ impl Metrics {
     }
 
     /// get_metrics_handler handles the metrics request of getting.
-    #[instrument(skip_all)]
+
     async fn get_metrics_handler(config: Arc<Config>) -> Result<impl Reply, Rejection> {
         // Collect the disk space metrics.
         collect_disk_metrics(config.storage.dir.as_path());
@@ -955,7 +955,7 @@ impl Metrics {
     }
 
     /// delete_metrics_handler handles the metrics request of deleting.
-    #[instrument(skip_all)]
+
     async fn delete_metrics_handler() -> Result<impl Reply, Rejection> {
         reset_custom_metrics();
         Ok(Vec::new())

@@ -21,7 +21,7 @@ use dragonfly_client_core::{
 };
 use serde_json::{json, Value};
 use tokio::{self, fs};
-use tracing::{info, instrument};
+use tracing::info;
 use url::Url;
 
 /// Docker represents the docker runtime manager.
@@ -38,7 +38,7 @@ pub struct Docker {
 /// Docker implements the docker runtime manager.
 impl Docker {
     /// new creates a new docker runtime manager.
-    #[instrument(skip_all)]
+
     pub fn new(config: dfinit::Docker, proxy_config: dfinit::Proxy) -> Self {
         Self {
             config,
@@ -48,7 +48,7 @@ impl Docker {
 
     /// run runs the docker runtime to initialize
     /// runtime environment for the dfdaemon.
-    #[instrument(skip_all)]
+
     pub async fn run(&self) -> Result<()> {
         info!(
             "docker feature is enabled, proxy_addr: {}, config_path: {:?}",

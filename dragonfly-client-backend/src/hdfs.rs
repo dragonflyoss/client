@@ -21,7 +21,7 @@ use opendal::{layers::TimeoutLayer, Operator};
 use percent_encoding::percent_decode_str;
 use std::time::Duration;
 use tokio_util::io::StreamReader;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error};
 use url::Url;
 
 /// HDFS_SCHEME is the scheme of the HDFS.
@@ -88,7 +88,7 @@ impl super::Backend for Hdfs {
     }
 
     /// head gets the header of the request.
-    #[instrument(skip_all)]
+
     async fn head(&self, request: super::HeadRequest) -> ClientResult<super::HeadResponse> {
         debug!(
             "head request {} {}: {:?}",
@@ -172,7 +172,7 @@ impl super::Backend for Hdfs {
     }
 
     /// get returns content of requested file.
-    #[instrument(skip_all)]
+
     async fn get(
         &self,
         request: super::GetRequest,
