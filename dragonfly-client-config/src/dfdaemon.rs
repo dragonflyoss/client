@@ -1443,7 +1443,6 @@ pub struct Config {
 /// Config implements the config operation of dfdaemon.
 impl Config {
     /// load loads configuration from file.
-
     pub async fn load(path: &PathBuf) -> Result<Config> {
         // Load configuration from file.
         let content = fs::read_to_string(path).await?;
@@ -1458,7 +1457,6 @@ impl Config {
     }
 
     /// convert converts the configuration.
-
     fn convert(&mut self) {
         // Convert advertise ip.
         if self.host.ip.is_none() {

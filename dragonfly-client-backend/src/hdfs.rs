@@ -88,7 +88,6 @@ impl super::Backend for Hdfs {
     }
 
     /// head gets the header of the request.
-
     async fn head(&self, request: super::HeadRequest) -> ClientResult<super::HeadResponse> {
         debug!(
             "head request {} {}: {:?}",
@@ -172,7 +171,6 @@ impl super::Backend for Hdfs {
     }
 
     /// get returns content of requested file.
-
     async fn get(
         &self,
         request: super::GetRequest,

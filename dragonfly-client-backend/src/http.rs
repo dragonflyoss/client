@@ -213,7 +213,6 @@ impl super::Backend for HTTP {
     }
 
     /// head gets the header of the request.
-
     async fn head(&self, request: super::HeadRequest) -> Result<super::HeadResponse> {
         debug!(
             "head request {} {}: {:?}",
@@ -327,7 +326,6 @@ impl super::Backend for HTTP {
     }
 
     /// get gets the content of the request.
-
     async fn get(&self, request: super::GetRequest) -> Result<super::GetResponse<super::Body>> {
         debug!(
             "get request {} {} {}: {:?}",

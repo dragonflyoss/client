@@ -914,7 +914,6 @@ impl Metrics {
     }
 
     /// get_metrics_handler handles the metrics request of getting.
-
     async fn get_metrics_handler(config: Arc<Config>) -> Result<impl Reply, Rejection> {
         // Collect the disk space metrics.
         collect_disk_metrics(config.storage.dir.as_path());
@@ -955,7 +954,6 @@ impl Metrics {
     }
 
     /// delete_metrics_handler handles the metrics request of deleting.
-
     async fn delete_metrics_handler() -> Result<impl Reply, Rejection> {
         reset_custom_metrics();
         Ok(Vec::new())

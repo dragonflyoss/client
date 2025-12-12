@@ -331,7 +331,6 @@ pub struct Config {
 /// Config implements the config operation of dfinit.
 impl Config {
     /// load loads configuration from file.
-
     pub fn load(path: &PathBuf) -> Result<Config> {
         // Load configuration from file.
         let content = fs::read_to_string(path)?;

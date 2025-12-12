@@ -110,7 +110,6 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
 /// Generate a CA certificate from PEM format files.
 /// Generate CA by openssl with PEM format files:
 /// openssl req -x509 -sha256 -days 36500 -nodes -newkey rsa:4096 -keyout ca.key -out ca.crt
-
 pub fn generate_ca_cert_from_pem(
     ca_cert_path: &PathBuf,
     ca_key_path: &PathBuf,
@@ -131,7 +130,6 @@ pub fn generate_ca_cert_from_pem(
 }
 
 /// Generate certificates from PEM format files.
-
 pub fn generate_cert_from_pem(cert_path: &PathBuf) -> ClientResult<Vec<CertificateDer<'static>>> {
     let f = fs::File::open(cert_path)?;
     let mut certs_pem_reader = io::BufReader::new(f);
@@ -141,7 +139,6 @@ pub fn generate_cert_from_pem(cert_path: &PathBuf) -> ClientResult<Vec<Certifica
 
 /// generate_self_signed_certs_by_ca_cert generates a self-signed certificates
 /// by given subject alternative names with CA certificate.
-
 pub fn generate_self_signed_certs_by_ca_cert(
     ca_cert: &Certificate,
     host: &str,
@@ -176,7 +173,6 @@ pub fn generate_self_signed_certs_by_ca_cert(
 }
 
 /// generate_simple_self_signed_certs generates a simple self-signed certificates
-
 pub fn generate_simple_self_signed_certs(
     host: &str,
     subject_alt_names: impl Into<Vec<String>>,
@@ -201,7 +197,6 @@ pub fn generate_simple_self_signed_certs(
 }
 
 /// certs_to_raw_certs converts DER format of the certificates to raw certificates.
-
 pub fn certs_to_raw_certs(certs: Vec<CertificateDer<'static>>) -> Vec<Vec<u8>> {
     certs
         .into_iter()
@@ -210,13 +205,11 @@ pub fn certs_to_raw_certs(certs: Vec<CertificateDer<'static>>) -> Vec<Vec<u8>> {
 }
 
 /// raw_certs_to_certs converts raw certificates to DER format of certificates.
-
 pub fn raw_certs_to_certs(raw_certs: Vec<Vec<u8>>) -> Vec<CertificateDer<'static>> {
     raw_certs.into_iter().map(|cert| cert.into()).collect()
 }
 
 /// load_certs_from_pem loads certificates from PEM format string.
-
 pub fn load_certs_from_pem(cert_pem: &str) -> ClientResult<Vec<CertificateDer<'static>>> {
     let certs = rustls_pemfile::certs(&mut cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>()?;
 
@@ -224,7 +217,6 @@ pub fn load_certs_from_pem(cert_pem: &str) -> ClientResult<Vec<CertificateDer<'s
 }
 
 /// load_key_from_pem loads private key from PEM format string.
-
 pub fn load_key_from_pem(key_pem: &str) -> ClientResult<PrivateKeyDer<'static>> {
     let key = rustls_pemfile::private_key(&mut key_pem.as_bytes())?
         .ok_or_else(|| ClientError::Unknown("failed to load private key".to_string()))?;

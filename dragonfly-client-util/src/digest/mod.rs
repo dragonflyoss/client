@@ -171,7 +171,6 @@ impl FromStr for Digest {
 }
 
 /// calculate_file_digest calculates the digest of a file.
-
 pub fn calculate_file_digest(algorithm: Algorithm, path: &Path) -> ClientResult<Digest> {
     let f = std::fs::File::open(path)?;
     let mut reader = io::BufReader::new(f);

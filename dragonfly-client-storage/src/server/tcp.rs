@@ -181,7 +181,6 @@ impl TCPServerHandler {
     /// It reads the protocol header to determine the request type and dispatches
     /// to the appropriate handler. Supports both regular piece downloads and
     /// persistent cache piece downloads with proper request/response framing.
-
     async fn handle(&self, stream: TcpStream, remote_address: String) -> ClientResult<()> {
         let (mut reader, mut writer) = stream.into_split();
         let header = self.read_header(&mut reader).await?;
@@ -312,7 +311,6 @@ impl TCPServerHandler {
     /// upload rate limiting, and prepares both the piece metadata and
     /// content stream for transmission. It's the core handler for regular
     /// piece download requests in the P2P network.
-
     async fn handle_piece(
         &self,
         piece_id: &str,
@@ -376,7 +374,6 @@ impl TCPServerHandler {
     /// which have different storage semantics and metadata structure. This
     /// enables efficient serving of frequently accessed content from the
     /// persistent cache layer.
-
     async fn handle_persistent_cache_piece(
         &self,
         piece_id: &str,
@@ -483,7 +480,6 @@ impl TCPServerHandler {
     /// This function sends the provided bytes as a response and ensures
     /// all data is flushed to the underlying transport. This is typically
     /// used for sending headers and small payloads in a single operation.
-
     async fn write_response(
         &self,
         request: Bytes,
@@ -506,7 +502,6 @@ impl TCPServerHandler {
     /// to the TCP connection using tokio's copy utility. It's designed for
     /// streaming large piece content without loading everything into memory.
     /// The operation is flushed to ensure data delivery.
-
     async fn write_stream<R: AsyncRead + Unpin + ?Sized>(
         &self,
         stream: &mut R,

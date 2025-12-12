@@ -38,7 +38,6 @@ pub struct Podman {
 /// Podman implements the podman runtime manager.
 impl Podman {
     /// new creates a new podman runtime manager.
-
     pub fn new(config: dfinit::Podman, proxy_config: dfinit::Proxy) -> Self {
         Self {
             config,
@@ -48,7 +47,6 @@ impl Podman {
 
     /// run runs the podman runtime to initialize
     /// runtime environment for the dfdaemon.
-
     pub async fn run(&self) -> Result<()> {
         let mut registries_config_table = toml_edit::DocumentMut::new();
         registries_config_table.set_implicit(true);

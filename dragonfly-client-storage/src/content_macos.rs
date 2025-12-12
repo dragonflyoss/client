@@ -136,7 +136,6 @@ impl Content {
     /// Behavior of `create_task`:
     /// 1. If the task already exists, return the task path.
     /// 2. If the task does not exist, create the task directory and file.
-
     pub async fn create_task(&self, task_id: &str, length: u64) -> Result<PathBuf> {
         let task_path = self.get_task_path(task_id);
         if task_path.exists() {
@@ -173,7 +172,6 @@ impl Content {
     /// 2. If the destination does not exist:
     ///    2.1. If the hard link succeeds, return immediately.
     ///    2.2. If the hard link fails, copy the task content to the destination once the task is finished, then return immediately.
-
     pub async fn hard_link_task(&self, task_id: &str, to: &Path) -> Result<()> {
         let task_path = self.get_task_path(task_id);
         if let Err(err) = fs::hard_link(task_path.clone(), to).await {
@@ -201,7 +199,6 @@ impl Content {
     /// 2. If the task path does not exist:
     ///    2.1. Create hard link from source to task path.
     ///    2.2. If hard link fails, return an error.
-
     pub async fn hard_link_to_task(&self, from: &Path, task_id: &str) -> Result<()> {
         let task_path = self.get_task_path(task_id);
         if let Err(err) = fs::hard_link(from, &task_path).await {
@@ -221,7 +218,6 @@ impl Content {
     }
 
     /// copy_task copies the task content to the destination.
-
     pub async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
         fs::copy(self.get_task_path(task_id), to).await?;
         info!("copy to {:?} success", to);
@@ -229,7 +225,6 @@ impl Content {
     }
 
     /// copy_task_by_range copies the task content to the destination by range.
-
     async fn copy_task_by_range(&self, task_id: &str, to: &Path, range: Range) -> Result<()> {
         // Ensure the parent directory of the destination exists.
         if let Some(parent) = to.parent() {
@@ -272,7 +267,6 @@ impl Content {
     }
 
     /// read_piece reads the piece from the content.
-
     pub async fn read_piece(
         &self,
         task_id: &str,
@@ -303,7 +297,6 @@ impl Content {
 
     /// read_piece_with_dual_read return two readers, one is the range reader, and the other is the
     /// full reader of the piece. It is used for cache the piece content to the proxy cache.
-
     pub async fn read_piece_with_dual_read(
         &self,
         task_id: &str,
@@ -348,7 +341,6 @@ impl Content {
     }
 
     /// write_piece writes the piece to the content and calculates the hash of the piece by crc32.
-
     pub async fn write_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
@@ -432,7 +424,6 @@ impl Content {
     /// Behavior of `create_persistent_task`:
     /// 1. If the persistent task already exists, return the persistent task path.
     /// 2. If the persistent task does not exist, create the persistent task directory and file.
-
     pub async fn create_persistent_task(&self, task_id: &str, length: u64) -> Result<PathBuf> {
         let task_path = self.get_persistent_task_path(task_id);
         if task_path.exists() {
@@ -461,7 +452,6 @@ impl Content {
     }
 
     /// create_persistent_task_dir only creates the directory for the persistent task.
-
     pub async fn create_persistent_task_dir(&self, task_id: &str) -> Result<PathBuf> {
         let task_path = self.get_persistent_task_path(task_id);
         if task_path.exists() {
@@ -488,7 +478,6 @@ impl Content {
     /// 2. If the destination does not exist:
     ///    2.1. If the hard link succeeds, return immediately.
     ///    2.2. If the hard link fails, copy the persistent task content to the destination once the task is finished, then return immediately.
-
     pub async fn hard_link_persistent_task(&self, task_id: &str, to: &Path) -> Result<()> {
         let task_path = self.get_persistent_task_path(task_id);
         if let Err(err) = fs::hard_link(task_path.clone(), to).await {
@@ -516,7 +505,6 @@ impl Content {
     /// 2. If the task path does not exist:
     ///    2.1. Create hard link from source to task path.
     ///    2.2. If hard link fails, return an error.
-
     pub async fn hard_link_to_persistent_task(&self, from: &Path, task_id: &str) -> Result<()> {
         let task_path = self.get_persistent_task_path(task_id);
         if let Err(err) = fs::hard_link(from, &task_path).await {
@@ -536,7 +524,6 @@ impl Content {
     }
 
     /// copy_persistent_task copies the persistent task content to the destination.
-
     pub async fn copy_persistent_task(&self, task_id: &str, to: &Path) -> Result<()> {
         fs::copy(self.get_persistent_task_path(task_id), to).await?;
         info!("copy to {:?} success", to);
@@ -544,7 +531,6 @@ impl Content {
     }
 
     /// read_persistent_piece reads the persistent piece from the content.
-
     pub async fn read_persistent_piece(
         &self,
         task_id: &str,
@@ -575,7 +561,6 @@ impl Content {
 
     /// write_persistent_piece writes the persistent piece to the content and
     /// calculates the hash of the piece by crc32.
-
     pub async fn write_persistent_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
@@ -670,7 +655,6 @@ impl Content {
     /// Behavior of `create_persistent_cache_task`:
     /// 1. If the persistent cache task already exists, return the persistent cache task path.
     /// 2. If the persistent cache task does not exist, create the persistent cache task directory and file.
-
     pub async fn create_persistent_cache_task(
         &self,
         task_id: &str,
@@ -703,7 +687,6 @@ impl Content {
     }
 
     /// create_persistent_cache_task_dir only creates the directory for the persistent cache task.
-
     pub async fn create_persistent_cache_task_dir(&self, task_id: &str) -> Result<PathBuf> {
         let task_path = self.get_persistent_cache_task_path(task_id);
         if task_path.exists() {
@@ -730,7 +713,6 @@ impl Content {
     /// 2. If the destination does not exist:
     ///    2.1. If the hard link succeeds, return immediately.
     ///    2.2. If the hard link fails, copy the persistent cache task content to the destination once the task is finished, then return immediately.
-
     pub async fn hard_link_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
         let task_path = self.get_persistent_cache_task_path(task_id);
         if let Err(err) = fs::hard_link(task_path.clone(), to).await {
@@ -758,7 +740,6 @@ impl Content {
     /// 2. If the task path does not exist:
     ///    2.1. Create hard link from source to task path.
     ///    2.2. If hard link fails, return an error.
-
     pub async fn hard_link_to_persistent_cache_task(
         &self,
         from: &Path,
@@ -782,7 +763,6 @@ impl Content {
     }
 
     /// copy_persistent_cache_task copies the persistent cache task content to the destination.
-
     pub async fn copy_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
         fs::copy(self.get_persistent_cache_task_path(task_id), to).await?;
         info!("copy to {:?} success", to);
@@ -790,7 +770,6 @@ impl Content {
     }
 
     /// read_persistent_cache_piece reads the persistent cache piece from the content.
-
     pub async fn read_persistent_cache_piece(
         &self,
         task_id: &str,
@@ -821,7 +800,6 @@ impl Content {
 
     /// write_persistent_cache_piece writes the persistent cache piece to the content and
     /// calculates the hash of the piece by crc32.
-
     pub async fn write_persistent_cache_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,

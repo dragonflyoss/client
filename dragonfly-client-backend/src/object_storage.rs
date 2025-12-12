@@ -499,7 +499,6 @@ impl crate::Backend for ObjectStorage {
     }
 
     /// head gets the header of the request.
-
     async fn head(&self, request: super::HeadRequest) -> ClientResult<super::HeadResponse> {
         debug!(
             "head request {} {}: {:?}",
@@ -583,7 +582,6 @@ impl crate::Backend for ObjectStorage {
     }
 
     /// get returns content of requested file.
-
     async fn get(
         &self,
         request: super::GetRequest,

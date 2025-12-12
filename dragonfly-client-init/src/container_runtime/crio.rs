@@ -38,7 +38,6 @@ pub struct CRIO {
 /// CRIO implements the cri-o runtime manager.
 impl CRIO {
     /// new creates a new cri-o runtime manager.
-
     pub fn new(config: dfinit::CRIO, proxy_config: dfinit::Proxy) -> Self {
         Self {
             config,
@@ -48,7 +47,6 @@ impl CRIO {
 
     /// run runs the cri-o runtime to initialize
     /// runtime environment for the dfdaemon.
-
     pub async fn run(&self) -> Result<()> {
         let mut registries_config_table = toml_edit::DocumentMut::new();
         registries_config_table.set_implicit(true);

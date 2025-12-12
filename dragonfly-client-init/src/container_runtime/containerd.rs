@@ -39,7 +39,6 @@ pub struct Containerd {
 /// Containerd implements the containerd runtime manager.
 impl Containerd {
     /// new creates a new containerd runtime manager.
-
     pub fn new(config: dfinit::Containerd, proxy_config: dfinit::Proxy) -> Self {
         Self {
             config,
@@ -49,7 +48,6 @@ impl Containerd {
 
     /// run runs the containerd runtime to initialize
     /// runtime environment for the dfdaemon.
-
     pub async fn run(&self) -> Result<()> {
         let content = fs::read_to_string(&self.config.config_path).await?;
         let mut containerd_config = content
@@ -131,7 +129,6 @@ impl Containerd {
 
     /// add_registries adds registries to the containerd configuration, when containerd supports
     /// config_path mode and config_path is not empty.
-
     pub async fn add_registries(
         &self,
         config_path: &str,
