@@ -37,9 +37,11 @@ use tracing::{debug, error, info, instrument, Span};
 use vortex_protocol::{
     tlv::{
         download_persistent_cache_piece::DownloadPersistentCachePiece,
+        download_persistent_piece::DownloadPersistentPiece,
         download_piece::DownloadPiece,
         error::{Code, Error},
         persistent_cache_piece_content::PersistentCachePieceContent,
+        persistent_piece_content::PersistentPieceContent,
         piece_content::PieceContent,
         Tag,
     },
@@ -239,6 +241,65 @@ impl TCPServerHandler {
 
                 Ok(())
             }
+            Tag::DownloadPersistentPiece => {
+                let download_persistent_piece: DownloadPersistentPiece = self
+                    .read_download_piece(&mut reader, header.length() as usize)
+                    .await?;
+
+                // Generate the host id.
+                let host_id = self.id_generator.host_id();
+
+                // Get the task id from the request.
+                let task_id = download_persistent_piece.task_id();
+
+                // Get the interested piece number from the request.
+                let piece_number = download_persistent_piece.piece_number();
+
+                // Generate the piece id.
+                let piece_id = self.storage.piece_id(task_id, piece_number);
+
+                Span::current().record("host_id", host_id);
+                Span::current().record("remote_address", remote_address.as_str());
+                Span::current().record("task_id", task_id);
+                Span::current().record("piece_id", piece_id.as_str());
+
+                // Collect upload piece started metrics.
+                collect_upload_piece_started_metrics();
+                info!("start upload persistent piece content");
+
+                match self
+                    .handle_persistent_piece(piece_id.as_str(), task_id)
+                    .await
+                {
+                    Ok((persistent_piece_content, mut content_reader)) => {
+                        let persistent_piece_content_bytes: Bytes = persistent_piece_content.into();
+
+                        let header = Header::new_persistent_piece_content(
+                            persistent_piece_content_bytes.len() as u32,
+                        );
+                        let header_bytes: Bytes = header.into();
+
+                        let mut response = BytesMut::with_capacity(
+                            HEADER_SIZE + persistent_piece_content_bytes.len(),
+                        );
+                        response.extend_from_slice(&header_bytes);
+                        response.extend_from_slice(&persistent_piece_content_bytes);
+
+                        self.write_response(response.freeze(), &mut writer).await?;
+                        self.write_stream(&mut content_reader, &mut writer).await?;
+                    }
+                    Err(err) => {
+                        // Collect upload piece failure metrics.
+                        collect_upload_piece_failure_metrics();
+
+                        let error_response: Bytes =
+                            Vortex::Error(Header::new_error(err.len() as u32), err).into();
+                        self.write_response(error_response, &mut writer).await?;
+                    }
+                }
+
+                Ok(())
+            }
             Tag::DownloadPersistentCachePiece => {
                 let download_persistent_cache_piece: DownloadPersistentCachePiece = self
                     .read_download_piece(&mut reader, header.length() as usize)
@@ -357,6 +418,70 @@ impl TCPServerHandler {
 
         Ok((
             PieceContent::new(
+                piece.number,
+                piece.offset,
+                piece.length,
+                piece.digest.clone(),
+                piece.parent_id.clone().unwrap_or_default(),
+                TrafficType::RemotePeer as u8,
+                piece.cost().unwrap_or_default(),
+                piece.created_at,
+            ),
+            reader,
+        ))
+    }
+
+    /// Handles download persistent piece request and retrieves content.
+    ///
+    /// Similar to handle_piece but specifically for persistent pieces
+    /// which have different storage semantics and metadata structure. This
+    /// enables efficient serving of frequently accessed content from the
+    /// persistent layer.
+    #[instrument(skip_all)]
+    async fn handle_persistent_piece(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+    ) -> Result<(PersistentPieceContent, impl AsyncRead), Error> {
+        // Get the piece metadata from the local storage.
+        let piece = match self.storage.get_persistent_piece(piece_id) {
+            Ok(Some(piece)) => piece,
+            Ok(None) => {
+                error!("piece {} not found in local storage", piece_id);
+                return Err(Error::new(
+                    Code::NotFound,
+                    format!("piece {} not found", piece_id),
+                ));
+            }
+            Err(err) => {
+                error!("get piece {} from local storage error: {:?}", piece_id, err);
+                return Err(Error::new(
+                    Code::Internal,
+                    format!("failed to get piece: {}", err),
+                ));
+            }
+        };
+
+        // Acquire the upload rate limiter.
+        self.upload_rate_limiter
+            .acquire(piece.length as usize)
+            .await;
+
+        // Upload the piece content.
+        let reader = self
+            .storage
+            .upload_persistent_piece(piece_id, task_id, None)
+            .await
+            .map_err(|err| {
+                error!("failed to get piece content: {}", err);
+                Error::new(
+                    Code::Internal,
+                    format!("failed to get piece {} content: {}", piece_id, err),
+                )
+            })?;
+
+        Ok((
+            PersistentPieceContent::new(
                 piece.number,
                 piece.offset,
                 piece.length,
