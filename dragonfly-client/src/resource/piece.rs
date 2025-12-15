@@ -28,7 +28,7 @@ use dragonfly_client_metric::{
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::id_generator::IDGenerator;
 use leaky_bucket::RateLimiter;
-use reqwest::header::{self, HeaderMap};
+use reqwest::header::HeaderMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -563,15 +563,6 @@ impl Piece {
             // Acquire the download rate limiter.
             self.download_rate_limiter.acquire(length as usize).await;
         }
-
-        // Add range header to the request by offset and length.
-        let mut request_header = request_header.clone();
-        request_header.insert(
-            header::RANGE,
-            format!("bytes={}-{}", offset, offset + length - 1)
-                .parse()
-                .unwrap(),
-        );
 
         // Download the piece from the source.
         let backend = self.backend_factory.build(url).inspect_err(|err| {
@@ -1185,14 +1176,7 @@ mod tests {
         .unwrap();
         let storage = Arc::new(storage);
 
-        let backend_factory = BackendFactory::new(
-            config.clone(),
-            None,
-            false,
-            std::time::Duration::from_secs(600),
-            10000,
-        )
-        .unwrap();
+        let backend_factory = BackendFactory::new(config.clone(), None).unwrap();
         let backend_factory = Arc::new(backend_factory);
 
         let download_rate_limiter = Arc::new(RateLimiter::builder().build());

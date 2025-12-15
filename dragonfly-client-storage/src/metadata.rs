@@ -45,7 +45,7 @@ pub struct Task {
     pub response_header: HashMap<String, String>,
 
     /// uploading_count is the count of the task being uploaded by other peers.
-    pub uploading_count: u64,
+    pub uploading_count: i64,
 
     /// uploaded_count is the count of the task has been uploaded by other peers.
     pub uploaded_count: u64,
@@ -152,7 +152,7 @@ pub struct PersistentTask {
     pub content_length: u64,
 
     /// uploading_count is the count of the task being uploaded by other peers.
-    pub uploading_count: u64,
+    pub uploading_count: i64,
 
     /// uploaded_count is the count of the task has been uploaded by other peers.
     pub uploaded_count: u64,
@@ -251,7 +251,7 @@ pub struct PersistentCacheTask {
     pub content_length: u64,
 
     /// uploading_count is the count of the task being uploaded by other peers.
-    pub uploading_count: u64,
+    pub uploading_count: i64,
 
     /// uploaded_count is the count of the task has been uploaded by other peers.
     pub uploaded_count: u64,
@@ -345,7 +345,7 @@ pub struct CacheTask {
     pub response_header: HashMap<String, String>,
 
     /// uploading_count is the count of the task being uploaded by other peers.
-    pub uploading_count: u64,
+    pub uploading_count: i64,
 
     /// uploaded_count is the count of the task has been uploaded by other peers.
     pub uploaded_count: u64,
