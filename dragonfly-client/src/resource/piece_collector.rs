@@ -17,7 +17,9 @@
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use dashmap::DashMap;
 use dragonfly_api::common::v2::Host;
-use dragonfly_api::dfdaemon::v2::{SyncPersistentCachePiecesRequest, SyncPiecesRequest};
+use dragonfly_api::dfdaemon::v2::{
+    SyncPersistentCachePiecesRequest, SyncPersistentPiecesRequest, SyncPiecesRequest,
+};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_storage::metadata;

@@ -17,7 +17,7 @@
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::resource::piece_collector::CollectedParent;
 use dashmap::DashMap;
-use dragonfly_api::common::v2::{Host, Peer, PersistentCachePeer};
+use dragonfly_api::common::v2::{Host, Peer, PersistentCachePeer, PersistentPeer};
 use dragonfly_api::dfdaemon::v2::SyncHostRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
