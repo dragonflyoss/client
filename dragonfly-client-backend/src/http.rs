@@ -19,6 +19,7 @@ use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::tls::NoVerifier;
 use futures::TryStreamExt;
 use http::header::{HeaderName, HeaderValue, USER_AGENT};
+use lru::LruCache;
 use reqwest::header::HeaderMap;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
@@ -26,7 +27,9 @@ use reqwest_tracing::TracingMiddleware;
 use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
 use std::io::{Error as IOError, ErrorKind};
-use std::sync::Arc;
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio_util::io::StreamReader;
 use tracing::{debug, error, info, instrument};
 
@@ -42,6 +45,15 @@ pub const USER_AGENT_HEADER: &str = "user-agent";
 /// DEFAULT_USER_AGENT is the default user agent.
 pub const DEFAULT_USER_AGENT: &str = concat!("dragonfly", "/", env!("CARGO_PKG_VERSION"));
 
+/// RedirectCacheEntry stores a cached redirect target with its expiry time.
+#[derive(Clone, Debug)]
+struct RedirectCacheEntry {
+    /// target_url is the redirect Location URL.
+    target_url: String,
+    /// expires_at is when this cache entry expires.
+    expires_at: Instant,
+}
+
 /// HTTP is the HTTP backend.
 pub struct HTTP {
     /// scheme is the scheme of the HTTP backend.
@@ -53,6 +65,15 @@ pub struct HTTP {
     /// request_header is the custom request headers configurated in the dfdaemon config,
     /// which will insert to the each request if original header is not already set.
     request_header: Option<HashMap<String, String>>,
+
+    /// redirect_cache stores 307 redirect targets with TTL (LRU eviction).
+    redirect_cache: Arc<Mutex<LruCache<String, RedirectCacheEntry>>>,
+
+    /// redirect_cache_enabled controls whether redirect caching is enabled.
+    redirect_cache_enabled: bool,
+
+    /// redirect_cache_ttl is the TTL for cached redirects.
+    redirect_cache_ttl: Duration,
 }
 
 /// HTTP implements the http interface.
@@ -61,7 +82,13 @@ impl HTTP {
     const MAX_CONNECTIONS_PER_ADDRESS: usize = 32;
 
     /// new returns a new HTTP.
-    pub fn new(scheme: &str, request_header: Option<HashMap<String, String>>) -> Result<HTTP> {
+    pub fn new(
+        scheme: &str,
+        request_header: Option<HashMap<String, String>>,
+        redirect_cache_enabled: bool,
+        redirect_cache_ttl: Duration,
+        redirect_cache_max_size: usize,
+    ) -> Result<HTTP> {
         // Disable automatic compression to prevent double-decompression issues.
         //
         // Problem scenario:
@@ -98,6 +125,7 @@ impl HTTP {
                 .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
                 .http2_keep_alive_while_idle(true)
                 .http2_max_frame_size(Some(super::HTTP2_MAX_FRAME_SIZE))
+                .redirect(reqwest::redirect::Policy::none()) // Disable automatic redirects
                 .build()?;
 
             let retry_policy =
@@ -116,11 +144,62 @@ impl HTTP {
             clients.insert(i, client);
         }
 
+        let redirect_cache = LruCache::new(
+            NonZeroUsize::new(redirect_cache_max_size).unwrap_or(NonZeroUsize::new(10000).unwrap()),
+        );
+
         Ok(Self {
             scheme: scheme.to_string(),
             clients: Arc::new(clients),
             request_header,
+            redirect_cache: Arc::new(Mutex::new(redirect_cache)),
+            redirect_cache_enabled,
+            redirect_cache_ttl,
         })
+    }
+
+    /// get_cached_redirect_url checks if we have a valid cached redirect for this URL.
+    fn get_cached_redirect_url(&self, url: &str) -> Option<String> {
+        let mut cache = self.redirect_cache.lock().unwrap();
+        if let Some(entry) = cache.get(url) {
+            if entry.expires_at > Instant::now() {
+                debug!("redirect cache hit for {}", url);
+                return Some(entry.target_url.clone());
+            } else {
+                debug!("redirect cache expired for {}", url);
+                // Entry expired, remove it
+                cache.pop(url);
+            }
+        }
+        None
+    }
+
+    /// cache_redirect stores a redirect target with the configured TTL.
+    /// Only caches 307 redirects when redirect_cache_enabled is true.
+    /// Uses LRU eviction when cache is full.
+    fn cache_redirect(&self, original_url: &str, target_url: &str, status: reqwest::StatusCode) {
+        // Only cache 307 redirects when enabled
+        if !self.redirect_cache_enabled {
+            return;
+        }
+
+        if status != reqwest::StatusCode::TEMPORARY_REDIRECT {
+            // Only cache 307 redirects
+            return;
+        }
+
+        let entry = RedirectCacheEntry {
+            target_url: target_url.to_string(),
+            expires_at: Instant::now() + self.redirect_cache_ttl,
+        };
+
+        debug!(
+            "caching 307 redirect {} -> {} for {:?}",
+            original_url, target_url, self.redirect_cache_ttl
+        );
+
+        let mut cache = self.redirect_cache.lock().unwrap();
+        cache.put(original_url.to_string(), entry);
     }
 
     /// client returns a new reqwest client.
@@ -163,6 +242,7 @@ impl HTTP {
                     .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
                     .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
                     .http2_keep_alive_while_idle(true)
+                    .redirect(reqwest::redirect::Policy::none()) // Disable automatic redirects
                     .build()?;
 
                 let retry_policy =
@@ -345,19 +425,30 @@ impl super::Backend for HTTP {
         // Make the custom request headers.
         self.make_request_headers(&mut request_header)?;
 
-        let response = match self
-            .client(request.client_cert)?
-            .get(&request.url)
-            .headers(request_header)
-            .timeout(request.timeout)
-            .send()
-            .await
-        {
+        // Check if we have a cached redirect for this URL
+        let target_url = self
+            .get_cached_redirect_url(&request.url)
+            .unwrap_or_else(|| request.url.clone());
+
+        // Build the request with redirect policy that doesn't follow redirects automatically
+        let client = self.client(request.client_cert.clone())?;
+        let mut req_builder = client
+            .get(&target_url)
+            .headers(request_header.clone())
+            .timeout(request.timeout);
+
+        // Add Range header if present in the request
+        if let Some(range) = &request.range {
+            let range_header = format!("bytes={}-{}", range.start, range.start + range.length - 1);
+            req_builder = req_builder.header(reqwest::header::RANGE, range_header);
+        }
+
+        let response = match req_builder.send().await {
             Ok(response) => response,
             Err(err) => {
                 error!(
                     "get request failed {} {} {}: {}",
-                    request.task_id, request.piece_id, request.url, err
+                    request.task_id, request.piece_id, target_url, err
                 );
 
                 return Ok(super::GetResponse {
@@ -370,8 +461,82 @@ impl super::Backend for HTTP {
             }
         };
 
-        let response_header = response.headers().clone();
         let response_status_code = response.status();
+        let response_header = response.headers().clone();
+
+        // Handle redirect responses (301, 307)
+        if response_status_code == reqwest::StatusCode::MOVED_PERMANENTLY
+            || response_status_code == reqwest::StatusCode::TEMPORARY_REDIRECT
+        {
+            if let Some(location) = response.headers().get(reqwest::header::LOCATION) {
+                if let Ok(location_str) = location.to_str() {
+                    // Cache the redirect
+                    self.cache_redirect(&request.url, location_str, response_status_code);
+
+                    // Follow the redirect manually
+                    debug!(
+                        "following redirect {} -> {} (status: {})",
+                        request.url, location_str, response_status_code
+                    );
+
+                    let mut redirect_req = client
+                        .get(location_str)
+                        .headers(request_header)
+                        .timeout(request.timeout);
+
+                    // Preserve Range header for redirected request
+                    if let Some(range) = &request.range {
+                        let range_header =
+                            format!("bytes={}-{}", range.start, range.start + range.length - 1);
+                        redirect_req = redirect_req.header(reqwest::header::RANGE, range_header);
+                    }
+
+                    match redirect_req.send().await {
+                        Ok(redirect_response) => {
+                            let redirect_status = redirect_response.status();
+                            let redirect_headers = redirect_response.headers().clone();
+                            let redirect_reader = Box::new(StreamReader::new(
+                                redirect_response
+                                    .bytes_stream()
+                                    .map_err(|err| IOError::new(ErrorKind::Other, err)),
+                            ));
+
+                            debug!(
+                                "redirect response {} {}: {:?} {:?}",
+                                request.task_id,
+                                request.piece_id,
+                                redirect_status,
+                                redirect_headers
+                            );
+
+                            return Ok(super::GetResponse {
+                                success: redirect_status.is_success(),
+                                http_header: Some(redirect_headers),
+                                http_status_code: Some(redirect_status),
+                                reader: redirect_reader,
+                                error_message: Some(redirect_status.to_string()),
+                            });
+                        }
+                        Err(err) => {
+                            error!(
+                                "redirect request failed {} {} {}: {}",
+                                request.task_id, request.piece_id, location_str, err
+                            );
+
+                            return Ok(super::GetResponse {
+                                success: false,
+                                http_header: None,
+                                http_status_code: None,
+                                reader: Box::new(tokio::io::empty()),
+                                error_message: Some(err.to_string()),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Non-redirect response or redirect without Location header
         let response_reader = Box::new(StreamReader::new(
             response
                 .bytes_stream()
@@ -413,6 +578,11 @@ mod tests {
         matchers::{method, path},
         Mock, ResponseTemplate,
     };
+
+    // Test constants for redirect caching
+    const TEST_REDIRECT_CACHE_ENABLED: bool = true;
+    const TEST_REDIRECT_CACHE_TTL: Duration = Duration::from_secs(600); // 10 minutes
+    const TEST_REDIRECT_CACHE_MAX_SIZE: usize = 10000;
 
     // Generate the certificate and private key by script(`scripts/generate_certs.sh`).
     const SERVER_CERT: &str = r#"""
@@ -570,7 +740,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None)
+        let resp = HTTP::new(HTTP_SCHEME, None, false, Duration::from_secs(600), 10000)
             .unwrap()
             .head(HeadRequest {
                 task_id: "test".to_string(),
@@ -599,7 +769,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None)
+        let resp = HTTP::new(HTTP_SCHEME, None, false, Duration::from_secs(600), 10000)
             .unwrap()
             .head(HeadRequest {
                 task_id: "test".to_string(),
@@ -628,7 +798,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let mut resp = HTTP::new(HTTP_SCHEME, None)
+        let mut resp = HTTP::new(HTTP_SCHEME, None, false, Duration::from_secs(600), 10000)
             .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
@@ -651,7 +821,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_get_head_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None)
+        let resp = HTTP::new(HTTPS_SCHEME, None, false, Duration::from_secs(600), 10000)
             .unwrap()
             .head(HeadRequest {
                 task_id: "test".to_string(),
@@ -671,7 +841,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_return_error_response_when_head_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None)
+        let resp = HTTP::new(HTTPS_SCHEME, None, false, Duration::from_secs(600), 10000)
             .unwrap()
             .head(HeadRequest {
                 task_id: "test".to_string(),
@@ -690,7 +860,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_get_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let mut resp = HTTP::new(HTTPS_SCHEME, None)
+        let mut resp = HTTP::new(HTTPS_SCHEME, None, false, Duration::from_secs(600), 10000)
             .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
@@ -713,7 +883,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_return_error_response_when_get_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None)
+        let resp = HTTP::new(HTTPS_SCHEME, None, false, Duration::from_secs(600), 10000)
             .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
@@ -734,7 +904,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_get_head_response_with_no_verifier() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None)
+        let resp = HTTP::new(HTTPS_SCHEME, None, false, Duration::from_secs(600), 10000)
             .unwrap()
             .head(HeadRequest {
                 task_id: "test".to_string(),
@@ -754,7 +924,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_get_response_with_no_verifier() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let http_backend = HTTP::new(HTTPS_SCHEME, None);
+        let http_backend = HTTP::new(HTTPS_SCHEME, None, false, Duration::from_secs(600), 10000);
         let mut resp = http_backend
             .unwrap()
             .get(GetRequest {
@@ -778,7 +948,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[test]
     fn should_make_request_headers() {
         // Apply default user-agent when not specified.
-        let http = HTTP::new(HTTP_SCHEME, None).unwrap();
+        let http = HTTP::new(HTTP_SCHEME, None, false, Duration::from_secs(600), 10000).unwrap();
         let mut headers = HeaderMap::new();
         http.make_request_headers(&mut headers).unwrap();
         assert_eq!(
@@ -800,7 +970,14 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
         custom_headers.insert("X-Custom-Header".to_string(), "custom-value".to_string());
         custom_headers.insert("Authorization".to_string(), "Bearer token123".to_string());
 
-        let http = HTTP::new(HTTP_SCHEME, Some(custom_headers)).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            Some(custom_headers),
+            false,
+            Duration::from_secs(600),
+            10000,
+        )
+        .unwrap();
         let mut headers = HeaderMap::new();
         http.make_request_headers(&mut headers).unwrap();
         assert_eq!(
@@ -836,7 +1013,14 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
         // Return error for invalid header name.
         let mut custom_headers = HashMap::new();
         custom_headers.insert("Invalid Header Name".to_string(), "value".to_string());
-        let http = HTTP::new(HTTP_SCHEME, Some(custom_headers)).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            Some(custom_headers),
+            false,
+            Duration::from_secs(600),
+            10000,
+        )
+        .unwrap();
         let mut headers = HeaderMap::new();
         assert!(http.make_request_headers(&mut headers).is_err());
 
@@ -846,8 +1030,318 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             "X-Custom-Header".to_string(),
             "value\nwith\nnewlines".to_string(),
         );
-        let http = HTTP::new(HTTP_SCHEME, Some(custom_headers)).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            Some(custom_headers),
+            false,
+            Duration::from_secs(600),
+            10000,
+        )
+        .unwrap();
         let mut headers = HeaderMap::new();
         assert!(http.make_request_headers(&mut headers).is_err());
+    }
+
+    // Redirect caching tests
+    #[tokio::test]
+    async fn should_cache_307_redirect_with_cache_control() {
+        let server = wiremock::MockServer::start().await;
+
+        // Target endpoint
+        Mock::given(method("GET"))
+            .and(path("/target"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("target content")
+                    .insert_header("Content-Type", "text/plain"),
+            )
+            .mount(&server)
+            .await;
+
+        // Redirect endpoint with Cache-Control
+        Mock::given(method("GET"))
+            .and(path("/redirect"))
+            .respond_with(
+                ResponseTemplate::new(307)
+                    .insert_header("Location", format!("{}/target", server.uri()))
+                    .insert_header("Cache-Control", "max-age=300"),
+            )
+            .expect(1) // Should only be hit once due to caching
+            .mount(&server)
+            .await;
+
+        let backend = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            TEST_REDIRECT_CACHE_ENABLED,
+            TEST_REDIRECT_CACHE_TTL,
+            TEST_REDIRECT_CACHE_MAX_SIZE,
+        )
+        .unwrap();
+
+        // First request - should hit redirect endpoint and cache it
+        let mut resp1 = backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "p1".to_string(),
+                url: format!("{}/redirect", server.uri()),
+                range: None,
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp1.http_status_code, Some(StatusCode::OK));
+        assert_eq!(resp1.text().await.unwrap(), "target content");
+
+        // Second request - should use cached redirect, not hit redirect endpoint again
+        let mut resp2 = backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "p2".to_string(),
+                url: format!("{}/redirect", server.uri()),
+                range: None,
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp2.http_status_code, Some(StatusCode::OK));
+        assert_eq!(resp2.text().await.unwrap(), "target content");
+    }
+
+    #[tokio::test]
+    async fn should_cache_307_redirect_with_default_ttl_when_no_cache_control() {
+        let server = wiremock::MockServer::start().await;
+
+        // Target endpoint
+        Mock::given(method("GET"))
+            .and(path("/target"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("target content")
+                    .insert_header("Content-Type", "text/plain"),
+            )
+            .mount(&server)
+            .await;
+
+        // Redirect endpoint without Cache-Control
+        Mock::given(method("GET"))
+            .and(path("/redirect"))
+            .respond_with(
+                ResponseTemplate::new(307)
+                    .insert_header("Location", format!("{}/target", server.uri())),
+            )
+            .expect(1) // Should only be hit once, uses default TTL
+            .mount(&server)
+            .await;
+
+        let backend = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            TEST_REDIRECT_CACHE_ENABLED,
+            TEST_REDIRECT_CACHE_TTL,
+            TEST_REDIRECT_CACHE_MAX_SIZE,
+        )
+        .unwrap();
+
+        // First request
+        let mut resp1 = backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "p1".to_string(),
+                url: format!("{}/redirect", server.uri()),
+                range: None,
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp1.http_status_code, Some(StatusCode::OK));
+        assert_eq!(resp1.text().await.unwrap(), "target content");
+
+        // Second request - should use cached redirect with default TTL
+        let mut resp2 = backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "p2".to_string(),
+                url: format!("{}/redirect", server.uri()),
+                range: None,
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp2.http_status_code, Some(StatusCode::OK));
+        assert_eq!(resp2.text().await.unwrap(), "target content");
+    }
+
+    #[tokio::test]
+    async fn should_handle_range_requests_with_cached_redirect() {
+        let server = wiremock::MockServer::start().await;
+
+        // Target endpoint that supports range requests
+        Mock::given(method("GET"))
+            .and(path("/target"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .set_body_string("partial")
+                    .insert_header("Content-Type", "application/octet-stream")
+                    .insert_header("Content-Range", "bytes 0-6/100"),
+            )
+            .mount(&server)
+            .await;
+
+        // Redirect endpoint
+        Mock::given(method("GET"))
+            .and(path("/blob"))
+            .respond_with(
+                ResponseTemplate::new(307)
+                    .insert_header("Location", format!("{}/target", server.uri()))
+                    .insert_header("Cache-Control", "max-age=120"),
+            )
+            .expect(1) // Should only be hit once
+            .mount(&server)
+            .await;
+
+        let backend = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            TEST_REDIRECT_CACHE_ENABLED,
+            TEST_REDIRECT_CACHE_TTL,
+            TEST_REDIRECT_CACHE_MAX_SIZE,
+        )
+        .unwrap();
+
+        // First range request
+        let mut resp1 = backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "p1".to_string(),
+                url: format!("{}/blob", server.uri()),
+                range: Some(dragonfly_api::common::v2::Range {
+                    start: 0,
+                    length: 7,
+                }),
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp1.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
+        assert_eq!(resp1.text().await.unwrap(), "partial");
+
+        // Second range request - should use cached redirect
+        let mut resp2 = backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "p2".to_string(),
+                url: format!("{}/blob", server.uri()),
+                range: Some(dragonfly_api::common::v2::Range {
+                    start: 0,
+                    length: 7,
+                }),
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp2.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
+        assert_eq!(resp2.text().await.unwrap(), "partial");
+    }
+
+    #[tokio::test]
+    async fn should_expire_cached_redirect_after_ttl() {
+        let server = wiremock::MockServer::start().await;
+
+        // Target endpoint
+        Mock::given(method("GET"))
+            .and(path("/target"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("content")
+                    .insert_header("Content-Type", "text/plain"),
+            )
+            .mount(&server)
+            .await;
+
+        // Redirect endpoint
+        Mock::given(method("GET"))
+            .and(path("/short-ttl"))
+            .respond_with(
+                ResponseTemplate::new(307)
+                    .insert_header("Location", format!("{}/target", server.uri())),
+            )
+            .expect(2) // Should be hit twice (once initially, once after expiry)
+            .mount(&server)
+            .await;
+
+        // Use a very short TTL for this test (1 second)
+        let backend = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(1), 10000).unwrap();
+
+        // First request
+        let mut resp1 = backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "p1".to_string(),
+                url: format!("{}/short-ttl", server.uri()),
+                range: None,
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp1.http_status_code, Some(StatusCode::OK));
+        assert_eq!(resp1.text().await.unwrap(), "content");
+
+        // Wait for cache to expire
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        // Second request after TTL expiry - should hit redirect endpoint again
+        let mut resp2 = backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "p2".to_string(),
+                url: format!("{}/short-ttl", server.uri()),
+                range: None,
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp2.http_status_code, Some(StatusCode::OK));
+        assert_eq!(resp2.text().await.unwrap(), "content");
     }
 }
