@@ -5859,9 +5859,9 @@ checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
 
 [[package]]
 name = "vortex-protocol"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4c967af430b0b6db1d1c5beae962c1965485aa7fdf229bcc301720b3360ab3c"
+checksum = "77cc873f15ed596526527f21ad43d28fac5936a2259ae6c16e6709fec8c75771"
 dependencies = [
  "bytes",
  "chrono",

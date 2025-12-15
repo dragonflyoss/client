@@ -15,7 +15,9 @@
  */
 
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
-use dragonfly_api::dfdaemon::v2::{DownloadPersistentCachePieceRequest, DownloadPieceRequest};
+use dragonfly_api::dfdaemon::v2::{
+    DownloadPersistentCachePieceRequest, DownloadPersistentPieceRequest, DownloadPieceRequest,
+};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_storage::{client::quic::QUICClient, client::tcp::TCPClient, metadata};
@@ -38,6 +40,16 @@ const DEFAULT_DOWNLOADER_IDLE_TIMEOUT: Duration = Duration::from_secs(420);
 pub trait Downloader: Send + Sync {
     /// download_piece downloads a piece from the other peer by different protocols.
     async fn download_piece(
+        &self,
+        addr: &str,
+        number: u32,
+        host_id: &str,
+        task_id: &str,
+    ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)>;
+
+    /// download_persistent_piece downloads a persistent piece from the other peer by different
+    /// protocols.
+    async fn download_persistent_piece(
         &self,
         addr: &str,
         number: u32,
@@ -238,6 +250,75 @@ impl Downloader for GRPCDownloader {
         Ok((Box::new(Cursor::new(content)), piece.offset, piece.digest))
     }
 
+    /// download_persistent_piece downloads a persistent piece from the other peer by
+    /// the gRPC protocol.
+    #[instrument(skip_all)]
+    async fn download_persistent_piece(
+        &self,
+        addr: &str,
+        number: u32,
+        host_id: &str,
+        task_id: &str,
+    ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
+        let key = self.get_entry_key(addr);
+        let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
+        let request_guard = entry.request_guard();
+
+        let response = match entry
+            .client
+            .download_persistent_piece(
+                DownloadPersistentPieceRequest {
+                    host_id: host_id.to_string(),
+                    task_id: task_id.to_string(),
+                    piece_number: number,
+                },
+                self.config.download.piece_timeout,
+            )
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                // If the request fails, it will drop the request guard and remove the client
+                // entry to avoid using the invalid client.
+                drop(request_guard);
+                self.remove_client_entry(key).await;
+                return Err(err);
+            }
+        };
+
+        let Some(piece) = response.piece else {
+            error!("persistent piece is missing");
+            return Err(Error::InvalidParameter);
+        };
+
+        let Some(content) = piece.content else {
+            error!("persistent piece content is missing");
+            return Err(Error::InvalidParameter);
+        };
+
+        // Calculate the digest of the piece metadata and compare it with the expected digest,
+        // it verifies the integrity of the piece metadata.
+        let piece_metadata = metadata::Piece {
+            number,
+            length: piece.length,
+            offset: piece.offset,
+            digest: piece.digest.clone(),
+            ..Default::default()
+        };
+
+        if let Some(expected_digest) = response.digest {
+            let digest = piece_metadata.calculate_digest();
+            if expected_digest != digest {
+                return Err(Error::DigestMismatch(
+                    expected_digest.to_string(),
+                    digest.to_string(),
+                ));
+            }
+        }
+
+        Ok((Box::new(Cursor::new(content)), piece.offset, piece.digest))
+    }
+
     /// download_persistent_cache_piece downloads a persistent cache piece from the other peer by
     /// the gRPC protocol.
     #[instrument(skip_all)]
@@ -398,6 +479,36 @@ impl Downloader for QUICDownloader {
         }
     }
 
+    /// download_persistent_piece downloads a persistent piece from the other peer by
+    /// the QUIC protocol.
+    #[instrument(skip_all)]
+    async fn download_persistent_piece(
+        &self,
+        addr: &str,
+        number: u32,
+        _host_id: &str,
+        task_id: &str,
+    ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
+        let key = self.get_entry_key(addr);
+        let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
+        let request_guard = entry.request_guard();
+
+        match entry
+            .client
+            .download_persistent_piece(number, task_id)
+            .await
+        {
+            Ok((reader, offset, digest)) => Ok((Box::new(reader), offset, digest)),
+            Err(err) => {
+                // If the request fails, it will drop the request guard and remove the client
+                // entry to avoid using the invalid client.
+                drop(request_guard);
+                self.remove_client_entry(key).await;
+                Err(err)
+            }
+        }
+    }
+
     /// download_persistent_cache_piece downloads a persistent cache piece from the other peer by
     /// the QUIC protocol.
     #[instrument(skip_all)]
@@ -509,6 +620,36 @@ impl Downloader for TCPDownloader {
         let request_guard = entry.request_guard();
 
         match entry.client.download_piece(number, task_id).await {
+            Ok((reader, offset, digest)) => Ok((Box::new(reader), offset, digest)),
+            Err(err) => {
+                // If the request fails, it will drop the request guard and remove the client
+                // entry to avoid using the invalid client.
+                drop(request_guard);
+                self.remove_client_entry(key).await;
+                Err(err)
+            }
+        }
+    }
+
+    /// download_persistent_piece downloads a persistent piece from the other peer by
+    /// the TCP protocol.
+    #[instrument(skip_all)]
+    async fn download_persistent_piece(
+        &self,
+        addr: &str,
+        number: u32,
+        _host_id: &str,
+        task_id: &str,
+    ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
+        let key = self.get_entry_key(addr);
+        let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
+        let request_guard = entry.request_guard();
+
+        match entry
+            .client
+            .download_persistent_piece(number, task_id)
+            .await
+        {
             Ok((reader, offset, digest)) => Ok((Box::new(reader), offset, digest)),
             Err(err) => {
                 // If the request fails, it will drop the request guard and remove the client
