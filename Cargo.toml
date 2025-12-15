@@ -45,7 +45,7 @@ reqwest = { version = "0.12.4", features = [
 reqwest-middleware = "0.4"
 rcgen = { version = "0.12.1", features = ["x509-parser"] }
 hyper = { version = "1.6", features = ["full"] }
-hyper-util = { version = "0.1.18", features = [
+hyper-util = { version = "0.1.19", features = [
     "client",
     "client-legacy",
     "tokio",
@@ -58,13 +58,13 @@ http-range-header = "0.4.2"
 tracing = "0.1"
 url = "2.5.4"
 rustls = { version = "0.23.35", default-features = false, features = ["tls12", "ring"] }
-rustls-pki-types = "1.13.0"
+rustls-pki-types = "1.13.1"
 rustls-pemfile = "2.2.0"
 sha2 = "0.10"
 crc32fast = "1.5.0"
 uuid = { version = "1.16", features = ["v4"] }
 hex = "0.4"
-rocksdb = "0.22.0"
+rocksdb = "0.24.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 http = "1"
