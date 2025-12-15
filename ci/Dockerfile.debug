@@ -64,7 +64,7 @@ RUN if [ "$(uname -m)" = "ppc64le" ]; then \
 
 FROM public.ecr.aws/docker/library/golang:1.24.0-alpine3.20 AS pprof
 
-RUN go install github.com/google/pprof@latest
+RUN go install github.com/google/pprof@v0.0.0-20251114195745-4902fdda35c8
 RUN go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
 
 FROM public.ecr.aws/debian/debian:bookworm-slim
