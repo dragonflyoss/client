@@ -159,7 +159,7 @@ fn default_backend_enable_cache_temporary_redirect() -> bool {
     true
 }
 
-/// default_backend_cache_temporary_redirect_ttl is the default TTL for cached 307 redirects (10 minutes).
+/// default_backend_cache_temporary_redirect_ttl is the default TTL for cached 307 redirects, default is 10 minutes.
 #[inline]
 fn default_backend_cache_temporary_redirect_ttl() -> Duration {
     Duration::from_secs(600)
@@ -1368,7 +1368,7 @@ impl Default for Tracing {
 }
 
 /// Backend is the backend configuration for dfdaemon.
-#[derive(Default, Debug, Clone, Validate, Deserialize)]
+#[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Backend {
     /// request_header is the request header of backend.
@@ -1387,9 +1387,21 @@ pub struct Backend {
     /// the cached redirect target will expire and be re-resolved.
     #[serde(
         default = "default_backend_cache_temporary_redirect_ttl",
+        rename = "cacheTemporaryRedirectTTL",
         with = "humantime_serde"
     )]
     pub cache_temporary_redirect_ttl: Duration,
+}
+
+/// Backend implements Default.
+impl Default for Backend {
+    fn default() -> Self {
+        Self {
+            request_header: None,
+            enable_cache_temporary_redirect: default_backend_enable_cache_temporary_redirect(),
+            cache_temporary_redirect_ttl: default_backend_cache_temporary_redirect_ttl(),
+        }
+    }
 }
 
 /// Config is the configuration for dfdaemon.

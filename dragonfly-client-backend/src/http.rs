@@ -133,8 +133,10 @@ impl HTTP {
                 .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
                 .http2_keep_alive_while_idle(true)
                 .http2_max_frame_size(Some(super::HTTP2_MAX_FRAME_SIZE))
-                .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                    if attempt.status() == reqwest::StatusCode::TEMPORARY_REDIRECT {
+                .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                    if enable_cache_temporary_redirect
+                        && attempt.status() == reqwest::StatusCode::TEMPORARY_REDIRECT
+                    {
                         attempt.stop()
                     } else {
                         attempt.follow()
@@ -210,11 +212,16 @@ impl HTTP {
                     .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
                     .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
                     .http2_keep_alive_while_idle(true)
-                    .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                        if attempt.status() == reqwest::StatusCode::TEMPORARY_REDIRECT {
-                            attempt.stop()
-                        } else {
-                            attempt.follow()
+                    .redirect(reqwest::redirect::Policy::custom({
+                        let enable_cache_temporary_redirect = self.enable_cache_temporary_redirect;
+                        move |attempt| {
+                            if enable_cache_temporary_redirect
+                                && attempt.status() == reqwest::StatusCode::TEMPORARY_REDIRECT
+                            {
+                                attempt.stop()
+                            } else {
+                                attempt.follow()
+                            }
                         }
                     })) // Disable automatic redirects when status is 307.
                     .build()?;
@@ -237,6 +244,36 @@ impl HTTP {
                 Entry::Vacant(_) => Err(Error::Unknown("reqwest client not found".to_string())),
             },
         }
+    }
+
+    // Make custom request headers to the request header map.
+    fn make_request_headers(
+        &self,
+        request_header: &mut HeaderMap,
+        range: Option<Range>,
+    ) -> Result<()> {
+        // Add Range header if present in the request.
+        if let Some(range) = &range {
+            request_header.insert(
+                RANGE,
+                format!("bytes={}-{}", range.start, range.start + range.length - 1).parse()?,
+            );
+        };
+
+        // Make the user agent if not specified in header.
+        request_header
+            .entry(USER_AGENT)
+            .or_insert(HeaderValue::from_static(DEFAULT_USER_AGENT));
+
+        // Make custom request headers if provided and not defined in original request header.
+        if let Some(custom_headers) = &self.request_header {
+            for (key, value) in custom_headers {
+                let header_key: HeaderName = key.parse()?;
+                request_header.entry(header_key).or_insert(value.parse()?);
+            }
+        }
+
+        Ok(())
     }
 
     /// get_temporary_redirect_url gets the cached temporary redirect URL if exists
@@ -279,36 +316,6 @@ impl HTTP {
                 created_at: Instant::now(),
             },
         );
-    }
-
-    // Make custom request headers to the request header map.
-    fn make_request_headers(
-        &self,
-        request_header: &mut HeaderMap,
-        range: Option<Range>,
-    ) -> Result<()> {
-        // Add Range header if present in the request.
-        if let Some(range) = &range {
-            request_header.insert(
-                RANGE,
-                format!("bytes={}-{}", range.start, range.start + range.length - 1).parse()?,
-            );
-        };
-
-        // Make the user agent if not specified in header.
-        request_header
-            .entry(USER_AGENT)
-            .or_insert(HeaderValue::from_static(DEFAULT_USER_AGENT));
-
-        // Make custom request headers if provided and not defined in original request header.
-        if let Some(custom_headers) = &self.request_header {
-            for (key, value) in custom_headers {
-                let header_key: HeaderName = key.parse()?;
-                request_header.entry(header_key).or_insert(value.parse()?);
-            }
-        }
-
-        Ok(())
     }
 }
 
@@ -1100,14 +1107,14 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .and(path("/target"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .set_body_string("content")
+                    .set_body_string("target content")
                     .insert_header("Content-Type", "text/plain"),
             )
             .mount(&server)
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/short-ttl"))
+            .and(path("/redirect"))
             .respond_with(
                 ResponseTemplate::new(307)
                     .insert_header("Location", format!("{}/target", server.uri())),
@@ -1123,8 +1130,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
         let mut response = backend
             .get(GetRequest {
                 task_id: "test".to_string(),
-                piece_id: "p1".to_string(),
-                url: format!("{}/short-ttl", server.uri()),
+                piece_id: "1".to_string(),
+                url: format!("{}/redirect", server.uri()),
                 range: None,
                 http_header: Some(HeaderMap::new()),
                 timeout: Duration::from_secs(5),
@@ -1135,7 +1142,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .await
             .unwrap();
         assert_eq!(response.http_status_code, Some(StatusCode::OK));
-        assert_eq!(response.text().await.unwrap(), "content");
+        assert_eq!(response.text().await.unwrap(), "target content");
 
         // Wait for cache to expire.
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -1144,8 +1151,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
         let mut response = backend
             .get(GetRequest {
                 task_id: "test".to_string(),
-                piece_id: "p2".to_string(),
-                url: format!("{}/short-ttl", server.uri()),
+                piece_id: "1".to_string(),
+                url: format!("{}/redirect", server.uri()),
                 range: None,
                 http_header: Some(HeaderMap::new()),
                 timeout: Duration::from_secs(5),
@@ -1156,6 +1163,6 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .await
             .unwrap();
         assert_eq!(response.http_status_code, Some(StatusCode::OK));
-        assert_eq!(response.text().await.unwrap(), "content");
+        assert_eq!(response.text().await.unwrap(), "target content");
     }
 }
