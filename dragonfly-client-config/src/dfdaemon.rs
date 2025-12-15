@@ -153,6 +153,24 @@ fn default_download_concurrent_piece_count() -> u32 {
     8
 }
 
+/// default_backend_enable_cache_temporary_redirect is the default value for caching temporary redirects.
+#[inline]
+fn default_backend_enable_cache_temporary_redirect() -> bool {
+    false
+}
+
+/// default_backend_cache_temporary_redirect_ttl is the default TTL for cached 307 redirects (10 minutes).
+#[inline]
+fn default_backend_cache_temporary_redirect_ttl() -> Duration {
+    Duration::from_secs(10 * 60)
+}
+
+/// default_backend_cache_temporary_redirect_max_size is the default max size for the redirect cache.
+#[inline]
+fn default_backend_cache_temporary_redirect_max_size() -> usize {
+    10000
+}
+
 /// default_download_max_schedule_count is the default max count of schedule.
 #[inline]
 fn default_download_max_schedule_count() -> u32 {
@@ -1361,6 +1379,21 @@ impl Default for Tracing {
 pub struct Backend {
     /// request_header is the request header of backend.
     pub request_header: Option<HashMap<String, String>>,
+
+    /// enable_cache_temporary_redirect enables caching of 307 redirect URLs.
+    #[serde(default = "default_backend_enable_cache_temporary_redirect")]
+    pub enable_cache_temporary_redirect: bool,
+
+    /// cache_temporary_redirect_ttl is the TTL for cached 307 redirect URLs.
+    #[serde(
+        default = "default_backend_cache_temporary_redirect_ttl",
+        with = "humantime_serde"
+    )]
+    pub cache_temporary_redirect_ttl: Duration,
+
+    /// cache_temporary_redirect_max_size is the maximum number of entries in the redirect cache.
+    #[serde(default = "default_backend_cache_temporary_redirect_max_size")]
+    pub cache_temporary_redirect_max_size: usize,
 }
 
 /// Config is the configuration for dfdaemon.

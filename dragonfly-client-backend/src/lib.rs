@@ -239,13 +239,23 @@ pub struct BackendFactory {
 /// https://github.com/dragonflyoss/client/tree/main/dragonfly-client-backend/examples/plugin/.
 impl BackendFactory {
     /// new returns a new BackendFactory.
-    pub fn new(config: Arc<Config>, plugin_dir: Option<&Path>) -> Result<Self> {
+    pub fn new(
+        config: Arc<Config>,
+        plugin_dir: Option<&Path>,
+        redirect_cache_enabled: bool,
+        redirect_cache_ttl: Duration,
+        redirect_cache_max_size: usize,
+    ) -> Result<Self> {
         let mut backend_factory = Self {
             config,
             backends: HashMap::new(),
             libraries: Vec::new(),
         };
-        backend_factory.load_builtin_backends()?;
+        backend_factory.load_builtin_backends(
+            redirect_cache_enabled,
+            redirect_cache_ttl,
+            redirect_cache_max_size,
+        )?;
         if let Some(plugin_dir) = plugin_dir {
             backend_factory
                 .load_plugin_backends(plugin_dir)
@@ -276,12 +286,20 @@ impl BackendFactory {
     }
 
     /// load_builtin_backends loads the builtin backends.
-    fn load_builtin_backends(&mut self) -> Result<()> {
+    fn load_builtin_backends(
+        &mut self,
+        redirect_cache_enabled: bool,
+        redirect_cache_ttl: Duration,
+        redirect_cache_max_size: usize,
+    ) -> Result<()> {
         self.backends.insert(
             "http".to_string(),
             Box::new(http::HTTP::new(
                 http::HTTP_SCHEME,
                 self.config.backend.clone().request_header,
+                redirect_cache_enabled,
+                redirect_cache_ttl,
+                redirect_cache_max_size,
             )?),
         );
         info!("load [http] builtin backend");
@@ -291,6 +309,9 @@ impl BackendFactory {
             Box::new(http::HTTP::new(
                 http::HTTPS_SCHEME,
                 self.config.backend.clone().request_header,
+                redirect_cache_enabled,
+                redirect_cache_ttl,
+                redirect_cache_max_size,
             )?),
         );
         info!("load [https] builtin backend");
@@ -398,13 +419,26 @@ mod tests {
 
     #[test]
     fn should_create_backend_factory_without_plugin_dir() {
-        let result = BackendFactory::new(Arc::new(Config::default()), None);
+        let result = BackendFactory::new(
+            Arc::new(Config::default()),
+            None,
+            false,
+            Duration::from_secs(600),
+            10000,
+        );
         assert!(result.is_ok());
     }
 
     #[test]
     fn should_load_builtin_backends() {
-        let factory = BackendFactory::new(Arc::new(Config::default()), None).unwrap();
+        let factory = BackendFactory::new(
+            Arc::new(Config::default()),
+            None,
+            false,
+            Duration::from_secs(600),
+            10000,
+        )
+        .unwrap();
         let expected_backends = vec![
             "http", "https", "s3", "gs", "abs", "oss", "obs", "cos", "hdfs",
         ];
@@ -425,7 +459,13 @@ mod tests {
 
         build_example_plugin(&backend_dir);
 
-        let result = BackendFactory::new(Arc::new(Config::default()), Some(&plugin_dir));
+        let result = BackendFactory::new(
+            Arc::new(Config::default()),
+            Some(&plugin_dir),
+            false,
+            Duration::from_secs(600),
+            10000,
+        );
         assert!(result.is_ok());
 
         let factory = result.unwrap();
@@ -437,7 +477,14 @@ mod tests {
         let dir = tempdir().unwrap();
         let plugin_dir = dir.path().join("non_existent_plugin_dir");
 
-        let factory = BackendFactory::new(Arc::new(Config::default()), Some(&plugin_dir)).unwrap();
+        let factory = BackendFactory::new(
+            Arc::new(Config::default()),
+            Some(&plugin_dir),
+            false,
+            Duration::from_secs(600),
+            10000,
+        )
+        .unwrap();
         assert_eq!(factory.backends.len(), 9);
     }
 
@@ -454,7 +501,13 @@ mod tests {
         let lib_path = backend_dir.join("libinvalid_plugin.so");
         std::fs::write(&lib_path, b"invalid content").unwrap();
 
-        let result = BackendFactory::new(Arc::new(Config::default()), Some(&plugin_dir));
+        let result = BackendFactory::new(
+            Arc::new(Config::default()),
+            Some(&plugin_dir),
+            false,
+            Duration::from_secs(600),
+            10000,
+        );
         assert!(result.is_err());
         let err_msg = format!("{}", result.err().unwrap());
 
@@ -480,7 +533,14 @@ mod tests {
 
         build_example_plugin(&backend_dir);
 
-        let factory = BackendFactory::new(Arc::new(Config::default()), Some(&plugin_dir)).unwrap();
+        let factory = BackendFactory::new(
+            Arc::new(Config::default()),
+            Some(&plugin_dir),
+            false,
+            Duration::from_secs(600),
+            10000,
+        )
+        .unwrap();
         let schemes = vec![
             "http", "https", "s3", "gs", "abs", "oss", "obs", "cos", "hdfs",
         ];
@@ -496,7 +556,14 @@ mod tests {
 
     #[test]
     fn should_return_error_when_backend_scheme_is_not_support() {
-        let factory = BackendFactory::new(Arc::new(Config::default()), None).unwrap();
+        let factory = BackendFactory::new(
+            Arc::new(Config::default()),
+            None,
+            false,
+            Duration::from_secs(600),
+            10000,
+        )
+        .unwrap();
         let result = factory.build("github://example.com");
         assert!(result.is_err());
         assert_eq!(format!("{}", result.err().unwrap()), "invalid parameter");
@@ -504,7 +571,14 @@ mod tests {
 
     #[test]
     fn should_return_error_when_backend_scheme_is_invalid() {
-        let factory = BackendFactory::new(Arc::new(Config::default()), None).unwrap();
+        let factory = BackendFactory::new(
+            Arc::new(Config::default()),
+            None,
+            false,
+            Duration::from_secs(600),
+            10000,
+        )
+        .unwrap();
         let result = factory.build("invalid_scheme://example.com");
         assert!(result.is_err());
         assert_eq!(
