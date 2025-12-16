@@ -15,16 +15,22 @@
  */
 
 use crate::dynconfig::Dynconfig;
-use dragonfly_api::common::v2::{Peer, PersistentCachePeer, PersistentCacheTask, Task};
+use dragonfly_api::common::v2::{
+    Peer, PersistentCachePeer, PersistentCacheTask, PersistentPeer, PersistentTask, Task,
+};
 use dragonfly_api::manager::v2::Scheduler;
 use dragonfly_api::scheduler::v2::{
     scheduler_client::SchedulerClient as SchedulerGRPCClient, AnnounceHostRequest,
     AnnouncePeerRequest, AnnouncePeerResponse, AnnouncePersistentCachePeerRequest,
-    AnnouncePersistentCachePeerResponse, DeleteHostRequest, DeletePeerRequest,
-    DeletePersistentCachePeerRequest, DeletePersistentCacheTaskRequest, DeleteTaskRequest,
-    StatPeerRequest, StatPersistentCachePeerRequest, StatPersistentCacheTaskRequest,
-    StatTaskRequest, UploadPersistentCacheTaskFailedRequest,
+    AnnouncePersistentCachePeerResponse, AnnouncePersistentPeerRequest,
+    AnnouncePersistentPeerResponse, DeleteHostRequest, DeletePeerRequest,
+    DeletePersistentCachePeerRequest, DeletePersistentCacheTaskRequest,
+    DeletePersistentPeerRequest, DeletePersistentTaskRequest, DeleteTaskRequest, StatPeerRequest,
+    StatPersistentCachePeerRequest, StatPersistentCacheTaskRequest, StatPersistentPeerRequest,
+    StatPersistentTaskRequest, StatTaskRequest, UploadPersistentCacheTaskFailedRequest,
     UploadPersistentCacheTaskFinishedRequest, UploadPersistentCacheTaskStartedRequest,
+    UploadPersistentTaskFailedRequest, UploadPersistentTaskFinishedRequest,
+    UploadPersistentTaskStartedRequest,
 };
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::error::{ErrorType, OrErr};
@@ -326,6 +332,124 @@ impl SchedulerClient {
             }
         }
 
+        Ok(())
+    }
+
+    /// announce_persistent_peer announces the persistent peer to the scheduler.
+    #[instrument(skip_all)]
+    pub async fn announce_persistent_peer(
+        &self,
+        task_id: &str,
+        peer_id: &str,
+        request: impl tonic::IntoStreamingRequest<Message = AnnouncePersistentPeerRequest>,
+    ) -> Result<tonic::Response<tonic::codec::Streaming<AnnouncePersistentPeerResponse>>> {
+        let response = self
+            .client(task_id, Some(peer_id))
+            .await?
+            .announce_persistent_peer(request)
+            .await?;
+        Ok(response)
+    }
+
+    /// stat_persistent_peer gets the status of the persistent peer.
+    #[instrument(skip(self))]
+    pub async fn stat_persistent_peer(
+        &self,
+        request: StatPersistentPeerRequest,
+    ) -> Result<PersistentPeer> {
+        let task_id = request.task_id.clone();
+        let request = Self::make_request(request);
+        let response = self
+            .client(task_id.as_str(), None)
+            .await?
+            .stat_persistent_peer(request)
+            .await?;
+        Ok(response.into_inner())
+    }
+
+    /// delete_persistent_peer tells the scheduler that the persistent peer is deleting.
+    #[instrument(skip(self))]
+    pub async fn delete_persistent_peer(&self, request: DeletePersistentPeerRequest) -> Result<()> {
+        let task_id = request.task_id.clone();
+        let request = Self::make_request(request);
+        self.client(task_id.as_str(), None)
+            .await?
+            .delete_persistent_peer(request)
+            .await?;
+        Ok(())
+    }
+
+    /// upload_persistent_task_started uploads the metadata of the persistent task started.
+    #[instrument(skip(self))]
+    pub async fn upload_persistent_task_started(
+        &self,
+        request: UploadPersistentTaskStartedRequest,
+    ) -> Result<()> {
+        let task_id = request.task_id.clone();
+        let request = Self::make_request(request);
+        self.client(task_id.as_str(), None)
+            .await?
+            .upload_persistent_task_started(request)
+            .await?;
+        Ok(())
+    }
+
+    /// upload_persistent_task_finished uploads the metadata of the persistent task finished.
+    #[instrument(skip_all)]
+    pub async fn upload_persistent_task_finished(
+        &self,
+        request: UploadPersistentTaskFinishedRequest,
+    ) -> Result<PersistentTask> {
+        let task_id = request.task_id.clone();
+        let request = Self::make_request(request);
+        let response = self
+            .client(task_id.as_str(), None)
+            .await?
+            .upload_persistent_task_finished(request)
+            .await?;
+        Ok(response.into_inner())
+    }
+
+    /// upload_persistent_task_failed uploads the metadata of the persistent task failed.
+    #[instrument(skip_all)]
+    pub async fn upload_persistent_task_failed(
+        &self,
+        request: UploadPersistentTaskFailedRequest,
+    ) -> Result<()> {
+        let task_id = request.task_id.clone();
+        let request = Self::make_request(request);
+        self.client(task_id.as_str(), None)
+            .await?
+            .upload_persistent_task_failed(request)
+            .await?;
+        Ok(())
+    }
+
+    /// stat_persistent_task gets the status of the persistent task.
+    #[instrument(skip(self))]
+    pub async fn stat_persistent_task(
+        &self,
+        request: StatPersistentTaskRequest,
+    ) -> Result<PersistentTask> {
+        let task_id = request.task_id.clone();
+        let request = Self::make_request(request);
+        let response = self
+            .client(task_id.as_str(), None)
+            .await?
+            .stat_persistent_task(request)
+            .await?;
+        Ok(response.into_inner())
+    }
+
+    /// delete_persistent_task tells the scheduler that the persistent task is deleting.
+    #[instrument(skip(self))]
+    pub async fn delete_persistent_task(&self, request: DeletePersistentTaskRequest) -> Result<()> {
+        let task_id = request.task_id.clone();
+        let request = Self::make_request(request);
+        self.client(task_id.as_str(), None)
+            .await?
+            .delete_persistent_task(request)
+            .await?;
         Ok(())
     }
 
