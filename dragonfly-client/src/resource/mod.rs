@@ -16,6 +16,7 @@
 
 pub mod parent_selector;
 pub mod persistent_cache_task;
+pub mod persistent_task;
 pub mod piece;
 pub mod piece_collector;
 pub mod piece_downloader;
