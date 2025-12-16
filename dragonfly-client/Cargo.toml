@@ -82,7 +82,7 @@ rolling-file = "0.2.0"
 pprof = { version = "0.15", features = ["flamegraph", "protobuf-codec"] }
 prometheus = { version = "0.13", features = ["process"] }
 tower = { version = "0.4.13", features = ["limit", "load-shed", "buffer"] }
-indicatif = "0.18.2"
+indicatif = "0.18.3"
 http-body-util = "0.1.3"
 termion = "4.0.6"
 tabled = "0.20.0"
