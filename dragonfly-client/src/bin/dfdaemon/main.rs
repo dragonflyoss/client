@@ -24,7 +24,9 @@ use dragonfly_client::grpc::{
 };
 use dragonfly_client::health::Health;
 use dragonfly_client::proxy::Proxy;
-use dragonfly_client::resource::{persistent_cache_task::PersistentCacheTask, task::Task};
+use dragonfly_client::resource::{
+    persistent_cache_task::PersistentCacheTask, persistent_task::PersistentTask, task::Task,
+};
 use dragonfly_client::stats::Stats;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::BackendFactory;
@@ -260,6 +262,21 @@ async fn main() -> Result<(), anyhow::Error> {
     )?;
     let task = Arc::new(task);
 
+    // Initialize persistent task manager.
+    let persistent_task = PersistentTask::new(
+        config.clone(),
+        id_generator.clone(),
+        storage.clone(),
+        scheduler_client.clone(),
+        backend_factory.clone(),
+        download_rate_limiter.clone(),
+        upload_rate_limiter.clone(),
+        prefetch_rate_limiter.clone(),
+        shutdown.clone(),
+        shutdown_complete_tx.clone(),
+    )?;
+    let persistent_task = Arc::new(persistent_task);
+
     // Initialize persistent cache task manager.
     let persistent_cache_task = PersistentCacheTask::new(
         config.clone(),
@@ -353,6 +370,7 @@ async fn main() -> Result<(), anyhow::Error> {
         config.clone(),
         SocketAddr::new(config.upload.server.ip.unwrap(), config.upload.server.port),
         task.clone(),
+        persistent_task.clone(),
         persistent_cache_task.clone(),
         interface.clone(),
         shutdown.clone(),
