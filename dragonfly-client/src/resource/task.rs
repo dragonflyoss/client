@@ -1036,6 +1036,9 @@ impl Task {
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.concurrent_piece_count as usize,
         ));
+
+        let cumulative_piece_count = Arc::new(AtomicUsize::new(0));
+
         while let Some(collect_piece) = piece_collector_rx.recv().await {
             if interrupt.load(Ordering::SeqCst) {
                 // If the interrupt is true, break the collector loop.
@@ -1069,6 +1072,7 @@ impl Task {
                 if cumulative_piece_count.fetch_add(1, Ordering::SeqCst) + 1
                     > config.download.concurrent_piece_count as usize
                 {
+                    info!("refreshing parents for piece {}", piece_id);
                     if let Some(interested_piece) = interested_piece {
                         let piece_collector = piece_collector::PieceCollector::new(
                             config.clone(),
@@ -1239,7 +1243,7 @@ impl Task {
             let protocol = self.config.download.protocol.clone();
             let parent_selector = self.parent_selector.clone();
             let interested_piece = interested_pieces.get(1).cloned();
-            let cumulative_piece_count = Arc::new(AtomicUsize::new(0));
+            let cumulative_piece_count = cumulative_piece_count.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
