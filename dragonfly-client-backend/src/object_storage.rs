@@ -498,11 +498,11 @@ impl crate::Backend for ObjectStorage {
         self.scheme.to_string()
     }
 
-    /// head gets the header of the request.
+    /// stat gets the metadata from the backend.
     #[instrument(skip_all)]
-    async fn head(&self, request: super::HeadRequest) -> ClientResult<super::HeadResponse> {
+    async fn stat(&self, request: super::StatRequest) -> ClientResult<super::StatResponse> {
         debug!(
-            "head request {} {}: {:?}",
+            "stat request {} {}: {:?}",
             request.task_id, request.url, request.http_header
         );
 
@@ -513,7 +513,7 @@ impl crate::Backend for ObjectStorage {
             .map_err(|_| ClientError::InvalidURI(request.url.clone()))?;
         let parsed_url: super::object_storage::ParsedURL = url.try_into().inspect_err(|err| {
             error!(
-                "parse head request url failed {} {}: {}",
+                "parse stat request url failed {} {}: {}",
                 request.task_id, request.url, err
             );
         })?;
@@ -566,13 +566,13 @@ impl crate::Backend for ObjectStorage {
         })?;
 
         debug!(
-            "head response {} {}: {}",
+            "stat response {} {}: {}",
             request.task_id,
             request.url,
             response.content_length()
         );
 
-        Ok(super::HeadResponse {
+        Ok(super::StatResponse {
             success: true,
             content_length: Some(response.content_length()),
             http_header: None,
@@ -582,7 +582,7 @@ impl crate::Backend for ObjectStorage {
         })
     }
 
-    /// get returns content of requested file.
+    /// get gets the content from the backend.
     #[instrument(skip_all)]
     async fn get(
         &self,
