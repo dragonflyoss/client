@@ -15,7 +15,8 @@
  */
 
 use dragonfly_client_backend::{
-    Backend, Body, ExistsRequest, GetRequest, GetResponse, StatRequest, StatResponse,
+    Backend, Body, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse, StatRequest,
+    StatResponse,
 };
 use dragonfly_client_core::{Error, Result};
 
@@ -46,6 +47,12 @@ impl Backend for Hdfs {
     /// get gets the content from the backend.
     async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>> {
         println!("HDFS get url: {}", request.url);
+        Err(Error::Unimplemented)
+    }
+
+    /// put puts the content to the backend.
+    async fn put(&self, request: PutRequest) -> Result<PutResponse> {
+        println!("HDFS put url: {}", request.url);
         Err(Error::Unimplemented)
     }
 

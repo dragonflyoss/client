@@ -545,6 +545,12 @@ impl super::Backend for HTTP {
         })
     }
 
+    /// put puts the content to the backend.
+    #[instrument(skip_all)]
+    async fn put(&self, _request: super::PutRequest) -> Result<super::PutResponse> {
+        unimplemented!()
+    }
+
     /// exists checks whether the file exists in the backend.
     #[instrument(skip_all)]
     async fn exists(&self, request: super::ExistsRequest) -> Result<bool> {

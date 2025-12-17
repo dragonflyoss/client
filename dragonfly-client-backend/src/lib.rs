@@ -24,6 +24,7 @@ use libloading::Library;
 use reqwest::header::HeaderMap;
 use rustls_pki_types::CertificateDer;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::{collections::HashMap, pin::Pin, time::Duration};
 use std::{fmt::Debug, fs};
@@ -214,6 +215,52 @@ pub struct ExistsRequest {
     pub hdfs: Option<Hdfs>,
 }
 
+/// PutRequest is the put request for backend.
+pub struct PutRequest {
+    /// task_id is the id of the task.
+    pub task_id: String,
+
+    /// url is the url of the request.
+    pub url: String,
+
+    /// path is the local file path of the request.
+    pub path: PathBuf,
+
+    /// http_header is the headers of the request.
+    pub http_header: Option<HeaderMap>,
+
+    /// timeout is the timeout of the request.
+    pub timeout: Duration,
+
+    /// client_cert is the client certificates for the request.
+    pub client_cert: Option<Vec<CertificateDer<'static>>>,
+
+    /// object_storage is the object storage related information.
+    pub object_storage: Option<ObjectStorage>,
+
+    /// hdfs is the hdfs related information.
+    pub hdfs: Option<Hdfs>,
+}
+
+/// PutResponse is the put response for backend.
+#[derive(Debug)]
+pub struct PutResponse {
+    /// success is the success of the response.
+    pub success: bool,
+
+    /// content_length is the content length of the response.
+    pub content_length: Option<u64>,
+
+    /// http_header is the headers of the response.
+    pub http_header: Option<HeaderMap>,
+
+    /// http_status_code is the status code of the response.
+    pub http_status_code: Option<reqwest::StatusCode>,
+
+    /// error_message is the error message of the response.
+    pub error_message: Option<String>,
+}
+
 /// Backend is the interface of the backend.
 #[tonic::async_trait]
 pub trait Backend {
@@ -225,6 +272,9 @@ pub trait Backend {
 
     /// get gets the content from the backend.
     async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>>;
+
+    /// put puts the content to the backend.
+    async fn put(&self, request: PutRequest) -> Result<PutResponse>;
 
     /// exists checks whether the file exists in the backend.
     async fn exists(&self, request: ExistsRequest) -> Result<bool>;
@@ -340,6 +390,7 @@ impl BackendFactory {
             "s3".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::S3,
+                self.config.clone(),
             )?),
         );
         info!("load [s3] builtin backend");
@@ -348,6 +399,7 @@ impl BackendFactory {
             "gs".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::GCS,
+                self.config.clone(),
             )?),
         );
         info!("load [gcs] builtin backend");
@@ -356,6 +408,7 @@ impl BackendFactory {
             "abs".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::ABS,
+                self.config.clone(),
             )?),
         );
         info!("load [abs] builtin backend");
@@ -364,6 +417,7 @@ impl BackendFactory {
             "oss".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::OSS,
+                self.config.clone(),
             )?),
         );
         info!("load [oss] builtin backend");
@@ -372,6 +426,7 @@ impl BackendFactory {
             "obs".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::OBS,
+                self.config.clone(),
             )?),
         );
         info!("load [obs] builtin backend");
@@ -380,6 +435,7 @@ impl BackendFactory {
             "cos".to_string(),
             Box::new(object_storage::ObjectStorage::new(
                 object_storage::Scheme::COS,
+                self.config.clone(),
             )?),
         );
         info!("load [cos] builtin backend");
