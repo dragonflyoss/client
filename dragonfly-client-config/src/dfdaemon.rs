@@ -2141,7 +2141,7 @@ key: /etc/ssl/private/client.pem
             "enableCacheTemporaryRedirect": false,
             "cacheTemporaryRedirectTTL": "15m",
             "putConcurrentChunkCount": 2,
-            "putChunkSize": 2mb
+            "putChunkSize": "2mib"
         }"#;
 
         let backend: Backend = serde_json::from_str(json_data).unwrap();
