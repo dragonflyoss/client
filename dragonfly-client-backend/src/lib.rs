@@ -190,6 +190,30 @@ pub struct DirEntry {
     pub is_dir: bool,
 }
 
+/// ExistsRequest is the exists request for backend.
+pub struct ExistsRequest {
+    /// task_id is the id of the task.
+    pub task_id: String,
+
+    /// url is the url of the request.
+    pub url: String,
+
+    /// http_header is the headers of the request.
+    pub http_header: Option<HeaderMap>,
+
+    /// timeout is the timeout of the request.
+    pub timeout: Duration,
+
+    /// client_cert is the client certificates for the request.
+    pub client_cert: Option<Vec<CertificateDer<'static>>>,
+
+    /// object_storage is the object storage related information.
+    pub object_storage: Option<ObjectStorage>,
+
+    /// hdfs is the hdfs related information.
+    pub hdfs: Option<Hdfs>,
+}
+
 /// Backend is the interface of the backend.
 #[tonic::async_trait]
 pub trait Backend {
@@ -201,6 +225,9 @@ pub trait Backend {
 
     /// get gets the content from the backend.
     async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>>;
+
+    /// exists checks whether the file exists in the backend.
+    async fn exists(&self, request: ExistsRequest) -> Result<bool>;
 }
 
 /// BackendFactory is the factory of the backend.
@@ -208,9 +235,11 @@ pub trait Backend {
 pub struct BackendFactory {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
+
     /// backends is the backends of the factory, including the plugin backends and
     /// the builtin backends.
     backends: HashMap<String, Box<dyn Backend + Send + Sync>>,
+
     /// libraries are used to store the plugin's dynamic library, because when not saving the `Library`,
     /// it will drop when out of scope, resulting in the null pointer error.
     libraries: Vec<Library>,
