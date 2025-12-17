@@ -658,6 +658,31 @@ impl crate::Backend for ObjectStorage {
             error_message: None,
         })
     }
+
+    /// exists checks whether the file exists in the backend.
+    #[instrument(skip_all)]
+    async fn exists(&self, request: super::ExistsRequest) -> ClientResult<bool> {
+        debug!(
+            "exists request {} {}: {:?}",
+            request.task_id, request.url, request.http_header
+        );
+
+        // Parse the URL and convert it to a ParsedURL for create the ObjectStorage operator.
+        let url: Url = request
+            .url
+            .parse()
+            .map_err(|_| ClientError::InvalidURI(request.url.clone()))?;
+        let parsed_url: super::object_storage::ParsedURL = url.try_into().inspect_err(|err| {
+            error!(
+                "parse exists request url failed {} {}: {}",
+                request.task_id, request.url, err
+            );
+        })?;
+
+        // Initialize the operator with the parsed URL, object storage, and timeout.
+        let operator = self.operator(&parsed_url, request.object_storage, request.timeout)?;
+        Ok(operator.exists(&parsed_url.key).await?)
+    }
 }
 
 #[cfg(test)]
