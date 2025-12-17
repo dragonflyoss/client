@@ -116,6 +116,7 @@ impl super::Backend for Hdfs {
                         "list request failed {} {}: {}",
                         request.task_id, request.url, err
                     );
+
                     ClientError::BackendError(Box::new(BackendError {
                         message: err.to_string(),
                         status_code: None,
@@ -144,6 +145,7 @@ impl super::Backend for Hdfs {
                 "stat request failed {} {}: {}",
                 request.task_id, request.url, err
             );
+
             ClientError::BackendError(Box::new(BackendError {
                 message: err.to_string(),
                 status_code: None,
@@ -196,6 +198,7 @@ impl super::Backend for Hdfs {
                     "get request failed {} {}: {}",
                     request.piece_id, request.url, err
                 );
+
                 ClientError::BackendError(Box::new(BackendError {
                     message: err.to_string(),
                     status_code: None,
@@ -212,6 +215,7 @@ impl super::Backend for Hdfs {
                         "get request failed {} {}: {}",
                         request.piece_id, request.url, err
                     );
+
                     ClientError::BackendError(Box::new(BackendError {
                         message: err.to_string(),
                         status_code: None,
@@ -223,6 +227,7 @@ impl super::Backend for Hdfs {
                     "get request failed {} {}: {}",
                     request.piece_id, request.url, err
                 );
+
                 ClientError::BackendError(Box::new(BackendError {
                     message: err.to_string(),
                     status_code: None,
@@ -238,6 +243,12 @@ impl super::Backend for Hdfs {
             reader: Box::new(StreamReader::new(stream)),
             error_message: None,
         })
+    }
+
+    /// put puts the content to the backend.
+    #[instrument(skip_all)]
+    async fn put(&self, _request: super::PutRequest) -> ClientResult<super::PutResponse> {
+        unimplemented!()
     }
 
     /// exists checks whether the file exists in the backend.

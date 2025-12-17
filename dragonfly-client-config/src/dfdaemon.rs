@@ -165,6 +165,17 @@ fn default_backend_cache_temporary_redirect_ttl() -> Duration {
     Duration::from_secs(600)
 }
 
+/// default_backend_put_concurrent_chunk_count is the default number of concurrent chunks to upload.
+#[inline]
+fn default_backend_put_concurrent_chunk_count() -> u32 {
+    16
+}
+
+/// default_backend_put_chunk_size is the default chunk size for uploading, default is 8MiB.
+fn default_backend_put_chunk_size() -> ByteSize {
+    ByteSize::mib(8)
+}
+
 /// default_download_max_schedule_count is the default max count of schedule.
 #[inline]
 fn default_download_max_schedule_count() -> u32 {
@@ -307,20 +318,20 @@ fn default_enable_task_id_based_blob_digest() -> bool {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Host {
-    /// idc is the idc of the host.
+    /// IDC is the idc of the host.
     pub idc: Option<String>,
 
-    /// location is the location of the host.
+    /// Location is the location of the host.
     pub location: Option<String>,
 
-    /// hostname is the hostname of the host.
+    /// Hostname is the hostname of the host.
     #[serde(default = "default_host_hostname")]
     pub hostname: String,
 
-    /// ip is the advertise ip of the host.
+    /// IP is the advertise ip of the host.
     pub ip: Option<IpAddr>,
 
-    /// scheduler_cluster_id is the ID of the cluster to which the scheduler belongs.
+    /// Scheduler cluster ID is the ID of the cluster to which the scheduler belongs.
     /// NOTE: This field is used to identify the cluster to which the scheduler belongs.
     /// If this flag is set, the idc, location, hostname and ip will be ignored when listing schedulers.
     #[serde(rename = "schedulerClusterID")]
@@ -344,11 +355,11 @@ impl Default for Host {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Server {
-    /// plugin_dir is the directory to store plugins.
+    /// Plugin directory is the directory to store plugins.
     #[serde(default = "default_dfdaemon_plugin_dir")]
     pub plugin_dir: PathBuf,
 
-    /// cache_dir is the directory to store cache files.
+    /// Cache directory is the directory to store cache files.
     #[serde(default = "default_dfdaemon_cache_dir")]
     pub cache_dir: PathBuf,
 }
@@ -367,11 +378,11 @@ impl Default for Server {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DownloadServer {
-    /// socket_path is the unix socket path for dfdaemon gRPC service.
+    /// Socket path is the unix socket path for dfdaemon gRPC service.
     #[serde(default = "default_download_unix_socket_path")]
     pub socket_path: PathBuf,
 
-    /// request_rate_limit is the rate limit of the download request in the download grpc server,
+    /// Request rate limit is the rate limit of the download request in the download grpc server,
     /// default is 5000 req/s.
     #[serde(default = "default_download_request_rate_limit")]
     pub request_rate_limit: u64,
@@ -391,7 +402,7 @@ impl Default for DownloadServer {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Download {
-    /// server is the download server configuration for dfdaemon.
+    /// Server is the download server configuration for dfdaemon.
     pub server: DownloadServer,
 
     /// Protocol that peers use to download piece (e.g., "tcp", "quic").
@@ -400,15 +411,15 @@ pub struct Download {
     #[serde(default = "default_download_protocol")]
     pub protocol: String,
 
-    /// rate_limit is the rate limit of the download speed in GiB/Mib/Kib per second.
+    /// Rate limit is the rate limit of the download speed in GiB/Mib/Kib per second.
     #[serde(with = "bytesize_serde", default = "default_download_rate_limit")]
     pub rate_limit: ByteSize,
 
-    /// piece_timeout is the timeout for downloading a piece from source.
+    /// Piece timeout is the timeout for downloading a piece from source.
     #[serde(default = "default_download_piece_timeout", with = "humantime_serde")]
     pub piece_timeout: Duration,
 
-    /// collected_piece_timeout is the timeout for collecting one piece from the parent in the
+    /// Collected piece timeout is the timeout for collecting one piece from the parent in the
     /// stream.
     #[serde(
         default = "default_collected_download_piece_timeout",
@@ -416,7 +427,7 @@ pub struct Download {
     )]
     pub collected_piece_timeout: Duration,
 
-    /// concurrent_piece_count is the number of concurrent pieces to download.
+    /// Concurrent piece count is the number of concurrent pieces to download.
     #[serde(default = "default_download_concurrent_piece_count")]
     #[validate(range(min = 1))]
     pub concurrent_piece_count: u32,
@@ -440,26 +451,26 @@ impl Default for Download {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UploadServer {
-    /// ip is the listen ip of the gRPC server.
+    /// IP is the listen ip of the gRPC server.
     pub ip: Option<IpAddr>,
 
-    /// port is the port to the gRPC server.
+    /// Port is the port to the gRPC server.
     #[serde(default = "default_upload_grpc_server_port")]
     pub port: u16,
 
-    /// ca_cert is the root CA cert path with PEM format for the upload server, and it is used
+    /// CA cert is the root CA cert path with PEM format for the upload server, and it is used
     /// for mutual TLS.
     pub ca_cert: Option<PathBuf>,
 
-    /// cert is the server cert path with PEM format for the upload server and it is used for
+    /// Cert is the server cert path with PEM format for the upload server and it is used for
     /// mutual TLS.
     pub cert: Option<PathBuf>,
 
-    /// key is the server key path with PEM format for the upload server and it is used for
+    /// Key is the server key path with PEM format for the upload server and it is used for
     /// mutual TLS.
     pub key: Option<PathBuf>,
 
-    /// request_rate_limit is the rate limit of the upload request in the upload grpc server,
+    /// Request rate limit is the rate limit of the upload request in the upload grpc server,
     /// default is 5000 req/s.
     #[serde(default = "default_upload_request_rate_limit")]
     pub request_rate_limit: u64,
@@ -481,7 +492,7 @@ impl Default for UploadServer {
 
 /// UploadServer is the implementation of UploadServer.
 impl UploadServer {
-    /// load_server_tls_config loads the server tls config.
+    /// Load the server tls config.
     pub async fn load_server_tls_config(&self) -> Result<Option<ServerTlsConfig>> {
         if let (Some(ca_cert_path), Some(server_cert_path), Some(server_key_path)) =
             (self.ca_cert.clone(), self.cert.clone(), self.key.clone())
@@ -508,22 +519,22 @@ impl UploadServer {
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UploadClient {
-    /// ca_cert is the root CA cert path with PEM format for the upload client, and it is used
+    /// CA cert is the root CA cert path with PEM format for the upload client, and it is used
     /// for mutual TLS.
     pub ca_cert: Option<PathBuf>,
 
-    /// cert is the client cert path with PEM format for the upload client and it is used for
+    /// Cert is the client cert path with PEM format for the upload client and it is used for
     /// mutual TLS.
     pub cert: Option<PathBuf>,
 
-    /// key is the client key path with PEM format for the upload client and it is used for
+    /// Key is the client key path with PEM format for the upload client and it is used for
     /// mutual TLS.
     pub key: Option<PathBuf>,
 }
 
 /// UploadClient is the implementation of UploadClient.
 impl UploadClient {
-    /// load_client_tls_config loads the client tls config.
+    // Load the client tls config.
     pub async fn load_client_tls_config(
         &self,
         domain_name: &str,
@@ -555,16 +566,16 @@ impl UploadClient {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Upload {
-    /// server is the upload server configuration for dfdaemon.
+    /// Server is the upload server configuration for dfdaemon.
     pub server: UploadServer,
 
-    /// client is the upload client configuration for dfdaemon.
+    /// Client is the upload client configuration for dfdaemon.
     pub client: UploadClient,
 
-    /// disable_shared indicates whether disable to share data for other peers.
+    /// Disable shared indicates whether disable to share data for other peers.
     pub disable_shared: bool,
 
-    /// rate_limit is the rate limit of the upload speed in GiB/Mib/Kib per second.
+    /// Rate limit is the rate limit of the upload speed in GiB/Mib/Kib per second.
     #[serde(with = "bytesize_serde", default = "default_upload_rate_limit")]
     pub rate_limit: ByteSize,
 }
@@ -585,25 +596,25 @@ impl Default for Upload {
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Manager {
-    /// addr is the manager address.
+    /// Address is the manager address.
     pub addr: String,
 
-    /// ca_cert is the root CA cert path with PEM format for the manager, and it is used
+    /// CA cert is the root CA cert path with PEM format for the manager, and it is used
     /// for mutual TLS.
     pub ca_cert: Option<PathBuf>,
 
-    /// cert is the client cert path with PEM format for the manager and it is used for
+    /// Cert is the client cert path with PEM format for the manager and it is used for
     /// mutual TLS.
     pub cert: Option<PathBuf>,
 
-    /// key is the client key path with PEM format for the manager and it is used for
+    /// Key is the client key path with PEM format for the manager and it is used for
     /// mutual TLS.
     pub key: Option<PathBuf>,
 }
 
 /// Manager is the implementation of Manager.
 impl Manager {
-    /// load_client_tls_config loads the client tls config.
+    /// Load the client tls config.
     pub async fn load_client_tls_config(
         &self,
         domain_name: &str,
@@ -635,7 +646,7 @@ impl Manager {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Scheduler {
-    /// announce_interval is the interval to announce peer to the scheduler.
+    /// Announce interval is the interval to announce peer to the scheduler.
     /// Announcer will provide the scheduler with peer information for scheduling,
     /// peer information includes cpu, memory, etc.
     #[serde(
@@ -644,7 +655,7 @@ pub struct Scheduler {
     )]
     pub announce_interval: Duration,
 
-    /// schedule_timeout is timeout for the scheduler to respond to a scheduling request from dfdaemon, default is 3 hours.
+    /// Schedule timeout is timeout for the scheduler to respond to a scheduling request from dfdaemon, default is 3 hours.
     ///
     /// If the scheduler's response time for a scheduling decision exceeds this timeout,
     /// dfdaemon will encounter a `TokioStreamElapsed(Elapsed(()))` error.
@@ -679,20 +690,20 @@ pub struct Scheduler {
     )]
     pub schedule_timeout: Duration,
 
-    /// max_schedule_count is the max count of schedule.
+    /// Max schedule count is the max count of schedule.
     #[serde(default = "default_download_max_schedule_count")]
     #[validate(range(min = 1))]
     pub max_schedule_count: u32,
 
-    /// ca_cert is the root CA cert path with PEM format for the scheduler, and it is used
+    /// CA cert is the root CA cert path with PEM format for the scheduler, and it is used
     /// for mutual TLS.
     pub ca_cert: Option<PathBuf>,
 
-    /// cert is the client cert path with PEM format for the scheduler and it is used for
+    /// Cert is the client cert path with PEM format for the scheduler and it is used for
     /// mutual TLS.
     pub cert: Option<PathBuf>,
 
-    /// key is the client key path with PEM format for the scheduler and it is used for
+    /// Key is the client key path with PEM format for the scheduler and it is used for
     /// mutual TLS.
     pub key: Option<PathBuf>,
 }
@@ -713,7 +724,7 @@ impl Default for Scheduler {
 
 /// Scheduler is the implementation of Scheduler.
 impl Scheduler {
-    /// load_client_tls_config loads the client tls config.
+    /// Load the client tls config.
     pub async fn load_client_tls_config(
         &self,
         domain_name: &str,
@@ -768,10 +779,10 @@ impl fmt::Display for HostType {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SeedPeer {
-    /// enable indicates whether enable seed peer.
+    /// Enable indicates whether enable seed peer.
     pub enable: bool,
 
-    /// kind is the type of seed peer.
+    /// Kind is the type of seed peer.
     #[serde(default, rename = "type")]
     pub kind: HostType,
 }
@@ -790,7 +801,7 @@ impl Default for SeedPeer {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Dynconfig {
-    /// refresh_interval is the interval to refresh dynamic configuration from manager.
+    /// Refresh interval is the interval to refresh dynamic configuration from manager.
     #[serde(
         default = "default_dynconfig_refresh_interval",
         with = "humantime_serde"
@@ -811,19 +822,19 @@ impl Default for Dynconfig {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct StorageServer {
-    /// ip is the listen ip of the storage server.
+    /// IP is the listen ip of the storage server.
     pub ip: Option<IpAddr>,
 
-    /// port is the port to the tcp server.
+    /// Port is the port to the tcp server.
     #[serde(default = "default_storage_server_tcp_port")]
     pub tcp_port: u16,
 
-    /// tcp_fastopen indicates whether enable tcp fast open, refer to https://datatracker.ietf.org/doc/html/rfc7413.
+    /// TCP fastopen indicates whether enable tcp fast open, refer to https://datatracker.ietf.org/doc/html/rfc7413.
     /// Please check `net.ipv4.tcp_fastopen` sysctl is set to `3` to enable tcp fast open for both
     /// client and server.
     pub tcp_fastopen: bool,
 
-    /// port is the port to the quic server.
+    /// Port is the port to the quic server.
     #[serde(default = "default_storage_server_quic_port")]
     pub quic_port: u16,
 }
@@ -844,18 +855,18 @@ impl Default for StorageServer {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Storage {
-    /// server is the storage server configuration for dfdaemon.
+    /// Server is the storage server configuration for dfdaemon.
     pub server: StorageServer,
 
-    /// dir is the directory to store task's metadata and content.
+    /// Dir is the directory to store task's metadata and content.
     #[serde(default = "crate::default_storage_dir")]
     pub dir: PathBuf,
 
-    /// keep indicates whether keep the task's metadata and content when the dfdaemon restarts.
+    /// Keep indicates whether keep the task's metadata and content when the dfdaemon restarts.
     #[serde(default = "default_storage_keep")]
     pub keep: bool,
 
-    /// write_piece_timeout is the timeout for writing a piece to storage(e.g., disk
+    /// Write piece timeout is the timeout for writing a piece to storage(e.g., disk
     /// or cache).
     #[serde(
         default = "default_storage_write_piece_timeout",
@@ -863,15 +874,23 @@ pub struct Storage {
     )]
     pub write_piece_timeout: Duration,
 
-    /// write_buffer_size is the buffer size for writing piece to disk, default is 4MiB.
+    /// Write buffer size specifies the buffer size for writing piece data to disk.
+    /// Larger buffers improve write throughput by batching disk I/O operations and reducing
+    /// system call overhead, but consume more memory. Smaller buffers reduce memory usage
+    /// but may degrade write performance due to frequent I/O operations.
+    /// Default is 4MiB. Adjust based on your disk type (SSD vs HDD) and available memory.
     #[serde(default = "default_storage_write_buffer_size")]
     pub write_buffer_size: usize,
 
-    /// read_buffer_size is the buffer size for reading piece from disk, default is 4MiB.
+    /// Read buffer size specifies the buffer size for reading piece data from disk.
+    /// Larger buffers improve read throughput by reducing I/O system calls and better
+    /// utilizing disk sequential read performance, but increase memory consumption.
+    /// Smaller buffers reduce memory footprint but may cause more frequent I/O operations.
+    /// Default is 4MiB. Tune based on your access patterns and memory constraints.
     #[serde(default = "default_storage_read_buffer_size")]
     pub read_buffer_size: usize,
 
-    /// cache_capacity is the cache capacity for downloading, default is 100.
+    /// Cache capacity is the cache capacity for downloading, default is 100.
     ///
     /// Cache storage:
     /// 1. Users can preheat task by caching to memory (via CacheTask) or to disk (via Task).
@@ -924,7 +943,7 @@ impl Default for Storage {
 #[derive(Debug, Clone, Validate, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Policy {
-    /// task_ttl is the ttl of the task.
+    /// Task ttl is the ttl of the task.
     #[serde(
         default = "default_gc_policy_task_ttl",
         rename = "taskTTL",
@@ -932,7 +951,7 @@ pub struct Policy {
     )]
     pub task_ttl: Duration,
 
-    /// dist_threshold optionally defines a specific disk capacity to be used as the base for
+    /// Dist threshold optionally defines a specific disk capacity to be used as the base for
     /// calculating GC trigger points with `dist_high_threshold_percent` and `dist_low_threshold_percent`.
     ///
     /// - If a value is provided (e.g., "500GB"), the percentage-based thresholds (`dist_high_threshold_percent`,
@@ -945,13 +964,13 @@ pub struct Policy {
     #[serde(with = "bytesize_serde", default = "default_gc_policy_dist_threshold")]
     pub dist_threshold: ByteSize,
 
-    /// dist_high_threshold_percent is the high threshold percent of the disk usage.
+    /// Dist high threshold percent is the high threshold percent of the disk usage.
     /// If the disk usage is greater than the threshold, dfdaemon will do gc.
     #[serde(default = "default_gc_policy_dist_high_threshold_percent")]
     #[validate(range(min = 1, max = 99))]
     pub dist_high_threshold_percent: u8,
 
-    /// dist_low_threshold_percent is the low threshold percent of the disk usage.
+    /// Dist low threshold percent is the low threshold percent of the disk usage.
     /// If the disk usage is less than the threshold, dfdaemon will stop gc.
     #[serde(default = "default_gc_policy_dist_low_threshold_percent")]
     #[validate(range(min = 1, max = 99))]
@@ -974,11 +993,11 @@ impl Default for Policy {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct GC {
-    /// interval is the interval to do gc.
+    /// Interval is the interval to do gc.
     #[serde(default = "default_gc_interval", with = "humantime_serde")]
     pub interval: Duration,
 
-    /// policy is the gc policy.
+    /// Policy is the gc policy.
     pub policy: Policy,
 }
 
@@ -996,17 +1015,17 @@ impl Default for GC {
 #[derive(Default, Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct BasicAuth {
-    /// username is the username of the basic auth.
+    /// Username is the username of the basic auth.
     #[validate(length(min = 1, max = 20))]
     pub username: String,
 
-    /// passwork is the passwork of the basic auth.
+    /// Passwork is the passwork of the basic auth.
     #[validate(length(min = 1, max = 20))]
     pub password: String,
 }
 
 impl BasicAuth {
-    /// credentials loads the credentials.
+    /// Credentials loads the credentials.
     pub fn credentials(&self) -> basic_auth::Credentials {
         basic_auth::Credentials::new(&self.username, &self.password)
     }
@@ -1016,40 +1035,40 @@ impl BasicAuth {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProxyServer {
-    /// ip is the listen ip of the proxy server.
+    /// IP is the listen ip of the proxy server.
     pub ip: Option<IpAddr>,
 
-    /// port is the port to the proxy server.
+    /// Port is the port to the proxy server.
     #[serde(default = "default_proxy_server_port")]
     pub port: u16,
 
-    /// ca_cert is the root CA cert path with PEM format for the proxy server to generate the server cert.
+    /// CA cert is the root CA cert path with PEM format for the proxy server to generate the server cert.
     ///
-    /// If ca_cert is empty, proxy will generate a smaple CA cert by rcgen::generate_simple_self_signed.
+    /// If CA cert is empty, proxy will generate a smaple CA cert by rcgen::generate_simple_self_signed.
     /// When client requests via the proxy, the client should not verify the server cert and set
     /// insecure to true.
     ///
-    /// If ca_cert is not empty, proxy will sign the server cert with the CA cert. If openssl is installed,
+    /// If CA cert is not empty, proxy will sign the server cert with the CA cert. If openssl is installed,
     /// you can use openssl to generate the root CA cert and make the system trust the root CA cert.
     /// Then set the ca_cert and ca_key to the root CA cert and key path. Dfdaemon generates the server cert
     /// and key, and signs the server cert with the root CA cert. When client requests via the proxy,
     /// the proxy can intercept the request by the server cert.
     pub ca_cert: Option<PathBuf>,
 
-    /// ca_key is the root CA key path with PEM format for the proxy server to generate the server cert.
+    /// CA key is the root CA key path with PEM format for the proxy server to generate the server cert.
     ///
-    /// If ca_key is empty, proxy will generate a smaple CA key by rcgen::generate_simple_self_signed.
+    /// If CA key is empty, proxy will generate a smaple CA key by rcgen::generate_simple_self_signed.
     /// When client requests via the proxy, the client should not verify the server cert and set
     /// insecure to true.
     ///
-    /// If ca_key is not empty, proxy will sign the server cert with the CA cert. If openssl is installed,
+    /// If CA key is not empty, proxy will sign the server cert with the CA cert. If openssl is installed,
     /// you can use openssl to generate the root CA cert and make the system trust the root CA cert.
     /// Then set the ca_cert and ca_key to the root CA cert and key path. Dfdaemon generates the server cert
     /// and key, and signs the server cert with the root CA cert. When client requests via the proxy,
     /// the proxy can intercept the request by the server cert.
     pub ca_key: Option<PathBuf>,
 
-    /// basic_auth is the basic auth configuration for HTTP proxy in dfdaemon. If basic_auth is not
+    /// Basic auth is the basic auth configuration for HTTP proxy in dfdaemon. If basic_auth is not
     /// empty, the proxy will use the basic auth to authenticate the client by Authorization
     /// header. The value of the Authorization header is "Basic base64(username:password)", refer
     /// to https://en.wikipedia.org/wiki/Basic_access_authentication.
@@ -1071,7 +1090,7 @@ impl Default for ProxyServer {
 
 /// ProxyServer is the implementation of ProxyServer.
 impl ProxyServer {
-    /// load_cert loads the cert.
+    /// Load the cert.
     pub fn load_cert(&self) -> Result<Option<Certificate>> {
         if let (Some(server_ca_cert_path), Some(server_ca_key_path)) =
             (self.ca_cert.clone(), self.ca_key.clone())
@@ -1093,18 +1112,18 @@ impl ProxyServer {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Rule {
-    /// regex is the regex of the request url.
+    /// Regex is the regex of the request url.
     #[serde(with = "serde_regex")]
     pub regex: Regex,
 
-    /// use_tls indicates whether use tls for the proxy backend.
+    /// Use tls indicates whether use tls for the proxy backend.
     #[serde(rename = "useTLS")]
     pub use_tls: bool,
 
     /// redirect is the redirect url.
     pub redirect: Option<String>,
 
-    /// filtered_query_params is the filtered query params to generate the task id.
+    /// Filtered query params specifies which URL query parameters should be ignored when generating task IDs.
     /// When filter is ["Signature", "Expires", "ns"], for example:
     /// http://example.com/xyz?Expires=e1&Signature=s1&ns=docker.io and http://example.com/xyz?Expires=e2&Signature=s2&ns=docker.io
     /// will generate the same task id.
@@ -1129,19 +1148,19 @@ impl Default for Rule {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct RegistryMirror {
-    /// addr is the default address of the registry mirror. Proxy will start a registry mirror service for the
+    /// Address is the default address of the registry mirror. Proxy will start a registry mirror service for the
     /// client to pull the image. The client can use the default address of the registry mirror in
     /// configuration to pull the image. The `X-Dragonfly-Registry` header can instead of the default address
     /// of registry mirror.
     #[serde(default = "default_proxy_registry_mirror_addr")]
     pub addr: String,
 
-    /// cert is the client cert path with PEM format for the registry.
+    /// Cert is the client cert path with PEM format for the registry.
     /// If registry use self-signed cert, the client should set the
     /// cert for the registry mirror.
     pub cert: Option<PathBuf>,
 
-    /// enable_task_id_based_blob_digest indicates whether to use the blob digest for task ID calculation
+    /// Enable indicates whether to use the blob's content digest (e.g., SHA-256 hash) for task ID calculation,
     /// when downloading from OCI registries. When enabled for OCI blob URLs (e.g., /v2/<name>/blobs/sha256:<digest>),
     /// the task ID is derived from the blob digest rather than the full URL. This enables deduplication across
     /// registries - the same blob from different registries shares one task ID, eliminating redundant downloads
@@ -1166,7 +1185,7 @@ impl Default for RegistryMirror {
 
 /// RegistryMirror is the implementation of RegistryMirror.
 impl RegistryMirror {
-    /// load_cert_ders loads the cert ders.
+    /// Load the cert in DER format.
     pub fn load_cert_der(&self) -> Result<Option<Vec<CertificateDer<'static>>>> {
         if let Some(cert_path) = self.cert.clone() {
             match generate_cert_from_pem(&cert_path) {
@@ -1186,28 +1205,30 @@ impl RegistryMirror {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Proxy {
-    /// server is the proxy server configuration for dfdaemon.
+    /// Server is the proxy server configuration for dfdaemon.
     pub server: ProxyServer,
 
-    /// rules is the proxy rules.
+    /// Rules is the proxy rules.
     pub rules: Option<Vec<Rule>>,
 
-    /// registry_mirror is implementation of the registry mirror in the proxy.
+    /// Registry mirror is implementation of the registry mirror in the proxy.
     pub registry_mirror: RegistryMirror,
 
-    /// disable_back_to_source indicates whether disable to download back-to-source
-    /// when download failed.
+    /// Disable indicates whether to prevent fallback to source downloads when a download fails.
     pub disable_back_to_source: bool,
 
-    /// prefetch pre-downloads full of the task when download with range request.
+    /// Prefetch pre-downloads full of the task when download with range request.
     pub prefetch: bool,
 
-    /// prefetch_rate_limit is the rate limit of the prefetch speed in GiB/Mib/Kib per second. The prefetch request
+    /// Prefetch rate limit is the rate limit of the prefetch speed in GiB/Mib/Kib per second. The prefetch request
     /// has lower priority so limit the rate to avoid occupying the bandwidth impact other download tasks.
     #[serde(with = "bytesize_serde", default = "default_prefetch_rate_limit")]
     pub prefetch_rate_limit: ByteSize,
 
-    /// read_buffer_size is the buffer size for reading piece from disk, default is 1KB.
+    /// Read buffer size specifies the buffer size for reading piece data from disk.
+    /// Larger buffers can improve throughput for sequential reads but consume more memory.
+    /// Smaller buffers reduce memory usage but may increase I/O overhead.
+    /// Default value is 1KB. Adjust based on your disk I/O characteristics and memory constraints.
     #[serde(default = "default_proxy_read_buffer_size")]
     pub read_buffer_size: usize,
 }
@@ -1231,7 +1252,7 @@ impl Default for Proxy {
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Security {
-    /// enable indicates whether enable security.
+    /// Enable indicates whether enable security.
     pub enable: bool,
 }
 
@@ -1247,10 +1268,10 @@ pub struct Network {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct HealthServer {
-    /// ip is the listen ip of the health server.
+    /// IP is the listen ip of the health server.
     pub ip: Option<IpAddr>,
 
-    /// port is the port to the health server.
+    /// Port is the port to the health server.
     #[serde(default = "default_health_server_port")]
     pub port: u16,
 }
@@ -1269,7 +1290,7 @@ impl Default for HealthServer {
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Health {
-    /// server is the health server configuration for dfdaemon.
+    /// Server is the health server configuration for dfdaemon.
     pub server: HealthServer,
 }
 
@@ -1277,10 +1298,10 @@ pub struct Health {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct MetricsServer {
-    /// ip is the listen ip of the metrics server.
+    /// IP is the listen ip of the metrics server.
     pub ip: Option<IpAddr>,
 
-    /// port is the port to the metrics server.
+    /// Port is the port to the metrics server.
     #[serde(default = "default_metrics_server_port")]
     pub port: u16,
 }
@@ -1299,7 +1320,7 @@ impl Default for MetricsServer {
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Metrics {
-    /// server is the metrics server configuration for dfdaemon.
+    /// Server is the metrics server configuration for dfdaemon.
     pub server: MetricsServer,
 }
 
@@ -1307,10 +1328,10 @@ pub struct Metrics {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct StatsServer {
-    /// ip is the listen ip of the stats server.
+    /// IP is the listen ip of the stats server.
     pub ip: Option<IpAddr>,
 
-    /// port is the port to the stats server.
+    /// Port is the port to the stats server.
     #[serde(default = "default_stats_server_port")]
     pub port: u16,
 }
@@ -1329,7 +1350,7 @@ impl Default for StatsServer {
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Stats {
-    /// server is the stats server configuration for dfdaemon.
+    /// Server is the stats server configuration for dfdaemon.
     pub server: StatsServer,
 }
 
@@ -1342,15 +1363,15 @@ pub struct Tracing {
     /// This determines how tracing logs are transmitted to the server.
     pub protocol: Option<String>,
 
-    /// endpoint is the endpoint to report tracing log, example: "localhost:4317".
+    /// Endpoint is the endpoint to report tracing log, example: "localhost:4317".
     pub endpoint: Option<String>,
 
-    /// path is the path to report tracing log, example: "/v1/traces" if the protocol is "http" or
+    /// Path is the path to report tracing log, example: "/v1/traces" if the protocol is "http" or
     /// "https".
     #[serde(default = "default_tracing_path")]
     pub path: Option<PathBuf>,
 
-    /// headers is the headers to report tracing log.
+    /// Headers is the headers to report tracing log.
     #[serde(with = "http_serde::header_map")]
     pub headers: reqwest::header::HeaderMap,
 }
@@ -1371,10 +1392,10 @@ impl Default for Tracing {
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Backend {
-    /// request_header is the request header of backend.
+    /// Request header is the request header of backend.
     pub request_header: Option<HashMap<String, String>>,
 
-    /// enable_cache_temporary_redirect enables caching of 307 redirect URLs.
+    /// Enable cache temporary redirect controls whether to cache HTTP 307 (Temporary Redirect) response URLs.
     ///
     /// Motivation: Dragonfly splits a download URL into multiple pieces and performs multiple
     /// requests. Without caching, each piece request may trigger the same 307 redirect again,
@@ -1383,14 +1404,29 @@ pub struct Backend {
     #[serde(default = "default_backend_enable_cache_temporary_redirect")]
     pub enable_cache_temporary_redirect: bool,
 
-    /// cache_temporary_redirect_ttl is the TTL for cached 307 redirect URLs. After this duration,
-    /// the cached redirect target will expire and be re-resolved.
+    /// Cache temporary redirect TTL specifies the time-to-live for cached HTTP 307 redirect URLs.
+    /// After this duration, the cached redirect target will expire and be re-resolved.
     #[serde(
         default = "default_backend_cache_temporary_redirect_ttl",
         rename = "cacheTemporaryRedirectTTL",
         with = "humantime_serde"
     )]
     pub cache_temporary_redirect_ttl: Duration,
+
+    /// Put concurrent chunk count specifies the maximum number of chunks to upload in parallel
+    /// to backend storage. Higher values can improve upload throughput by maximizing bandwidth utilization,
+    /// but increase memory usage and backend load. Lower values reduce resource consumption but may
+    /// underutilize available bandwidth. Tune based on your network capacity and backend concurrency limits.
+    #[serde(default = "default_backend_put_concurrent_chunk_count")]
+    pub put_concurrent_chunk_count: u32,
+
+    /// Put chunk size specifies the size of each chunk when uploading data to backend storage.
+    /// Larger chunks reduce the total number of requests and API overhead, but require more memory
+    /// for buffering and may delay upload start. Smaller chunks reduce memory footprint and provide
+    /// faster initial response, but increase request overhead and API costs. Choose based on your
+    /// network conditions, available memory, and backend pricing/performance characteristics.
+    #[serde(with = "bytesize_serde", default = "default_backend_put_chunk_size")]
+    pub put_chunk_size: ByteSize,
 }
 
 /// Backend implements Default.
@@ -1400,6 +1436,8 @@ impl Default for Backend {
             request_header: None,
             enable_cache_temporary_redirect: default_backend_enable_cache_temporary_redirect(),
             cache_temporary_redirect_ttl: default_backend_cache_temporary_redirect_ttl(),
+            put_concurrent_chunk_count: default_backend_put_concurrent_chunk_count(),
+            put_chunk_size: default_backend_put_chunk_size(),
         }
     }
 }
@@ -1408,82 +1446,82 @@ impl Default for Backend {
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
-    /// backend is the backend configuration for dfdaemon.
+    /// Backend is the backend configuration for dfdaemon.
     #[validate]
     pub backend: Backend,
 
-    /// host is the host configuration for dfdaemon.
+    /// Host is the host configuration for dfdaemon.
     #[validate]
     pub host: Host,
 
-    /// server is the server configuration for dfdaemon.
+    /// Server is the server configuration for dfdaemon.
     #[validate]
     pub server: Server,
 
-    /// download is the download configuration for dfdaemon.
+    /// Download is the download configuration for dfdaemon.
     #[validate]
     pub download: Download,
 
-    /// upload is the upload configuration for dfdaemon.
+    /// Upload is the upload configuration for dfdaemon.
     #[validate]
     pub upload: Upload,
 
-    /// manager is the manager configuration for dfdaemon.
+    /// Manager is the manager configuration for dfdaemon.
     #[validate]
     pub manager: Manager,
 
-    /// scheduler is the scheduler configuration for dfdaemon.
+    /// Scheduler is the scheduler configuration for dfdaemon.
     #[validate]
     pub scheduler: Scheduler,
 
-    /// seed_peer is the seed peer configuration for dfdaemon.
+    /// Seed peer is the seed peer configuration for dfdaemon.
     #[validate]
     pub seed_peer: SeedPeer,
 
-    /// dynconfig is the dynconfig configuration for dfdaemon.
+    /// Dynconfig is the dynconfig configuration for dfdaemon.
     #[validate]
     pub dynconfig: Dynconfig,
 
-    /// storage is the storage configuration for dfdaemon.
+    /// Storage is the storage configuration for dfdaemon.
     #[validate]
     pub storage: Storage,
 
-    /// gc is the gc configuration for dfdaemon.
+    /// GC is the gc configuration for dfdaemon.
     #[validate]
     pub gc: GC,
 
-    /// proxy is the proxy configuration for dfdaemon.
+    /// Proxy is the proxy configuration for dfdaemon.
     #[validate]
     pub proxy: Proxy,
 
-    /// security is the security configuration for dfdaemon.
+    /// Security is the security configuration for dfdaemon.
     #[validate]
     pub security: Security,
 
-    /// health is the health configuration for dfdaemon.
+    /// Health is the health configuration for dfdaemon.
     #[validate]
     pub health: Health,
 
-    /// metrics is the metrics configuration for dfdaemon.
+    /// Metrics is the metrics configuration for dfdaemon.
     #[validate]
     pub metrics: Metrics,
 
-    /// stats is the stats configuration for dfdaemon.
+    /// Stats is the stats configuration for dfdaemon.
     #[validate]
     pub stats: Stats,
 
-    /// tracing is the tracing configuration for dfdaemon.
+    /// Tracing is the tracing configuration for dfdaemon.
     #[validate]
     pub tracing: Tracing,
 
-    /// network is the network configuration for dfdaemon.
+    /// Network is the network configuration for dfdaemon.
     #[validate]
     pub network: Network,
 }
 
 /// Config implements the config operation of dfdaemon.
 impl Config {
-    /// load loads configuration from file.
+    /// Load the configuration from file.
     #[instrument(skip_all)]
     pub async fn load(path: &PathBuf) -> Result<Config> {
         // Load configuration from file.
@@ -1498,7 +1536,7 @@ impl Config {
         Ok(config)
     }
 
-    /// convert converts the configuration.
+    /// Convert converts the configuration.
     #[instrument(skip_all)]
     fn convert(&mut self) {
         // Convert advertise ip.
@@ -1582,7 +1620,6 @@ mod tests {
         }"#;
 
         let server: Server = serde_json::from_str(json_data).unwrap();
-
         assert_eq!(server.plugin_dir, PathBuf::from("/custom/plugin/dir"));
         assert_eq!(server.cache_dir, PathBuf::from("/custom/cache/dir"));
     }
@@ -1602,7 +1639,6 @@ mod tests {
         }"#;
 
         let download: Download = serde_json::from_str(json_data).unwrap();
-
         assert_eq!(
             download.server.socket_path,
             PathBuf::from("/var/run/dragonfly/dfdaemon.sock")
@@ -1635,7 +1671,6 @@ mod tests {
         }"#;
 
         let upload: Upload = serde_json::from_str(json_data).unwrap();
-
         assert_eq!(upload.server.port, 4000);
         assert_eq!(
             upload.server.ip,
@@ -1666,7 +1701,6 @@ mod tests {
             upload.client.key,
             Some(PathBuf::from("/etc/ssl/private/client.pem"))
         );
-
         assert!(!upload.disable_shared);
         assert_eq!(upload.rate_limit, ByteSize::gib(10));
     }
@@ -1674,7 +1708,6 @@ mod tests {
     #[test]
     fn upload_server_default() {
         let server = UploadServer::default();
-
         assert!(server.ip.is_none());
         assert_eq!(server.port, default_upload_grpc_server_port());
         assert!(server.ca_cert.is_none());
@@ -1810,7 +1843,6 @@ addr: http://another-service:8080
 "#;
 
         let manager: Manager = serde_yaml::from_str(yaml).unwrap();
-
         assert_eq!(manager.addr, "http://another-service:8080");
         assert!(manager.ca_cert.is_none());
         assert!(manager.cert.is_none());
@@ -1825,8 +1857,8 @@ caCert: /etc/ssl/certs/ca.crt
 cert: /etc/ssl/certs/client.crt
 key: /etc/ssl/private/client.pem
 "#;
-        let manager: Manager = serde_yaml::from_str(yaml).expect("Failed to deserialize");
 
+        let manager: Manager = serde_yaml::from_str(yaml).expect("Failed to deserialize");
         assert_eq!(manager.addr, "http://manager-service:65003");
         assert_eq!(
             manager.ca_cert,
@@ -1857,7 +1889,6 @@ key: /etc/ssl/private/client.pem
     fn serialize_host_type_correctly() {
         let normal: HostType = serde_json::from_str("\"normal\"").unwrap();
         let super_seed: HostType = serde_json::from_str("\"super\"").unwrap();
-
         assert_eq!(normal, HostType::Normal);
         assert_eq!(super_seed, HostType::Super);
     }
@@ -1866,7 +1897,6 @@ key: /etc/ssl/private/client.pem
     fn serialize_host_type() {
         let normal_json = serde_json::to_string(&HostType::Normal).unwrap();
         let super_json = serde_json::to_string(&HostType::Super).unwrap();
-
         assert_eq!(normal_json, "\"normal\"");
         assert_eq!(super_json, "\"super\"");
     }
@@ -1884,7 +1914,6 @@ key: /etc/ssl/private/client.pem
             enable: true,
             kind: HostType::Super,
         };
-
         assert!(valid_seed_peer.validate().is_ok());
     }
 
@@ -1899,7 +1928,6 @@ key: /etc/ssl/private/client.pem
         }"#;
 
         let seed_peer: SeedPeer = serde_json::from_str(json_data).unwrap();
-
         assert!(seed_peer.enable);
         assert_eq!(seed_peer.kind, HostType::Super);
     }
@@ -1918,7 +1946,6 @@ key: /etc/ssl/private/client.pem
         }"#;
 
         let dynconfig: Dynconfig = serde_json::from_str(json_data).unwrap();
-
         assert_eq!(dynconfig.refresh_interval, Duration::from_secs(300));
     }
 
@@ -1940,7 +1967,6 @@ key: /etc/ssl/private/client.pem
         }"#;
 
         let storage: Storage = serde_json::from_str(json_data).unwrap();
-
         assert_eq!(
             storage.server.ip.unwrap().to_string(),
             "128.0.0.1".to_string()
@@ -1987,7 +2013,6 @@ key: /etc/ssl/private/client.pem
         }"#;
 
         let gc: GC = serde_json::from_str(json_data).unwrap();
-
         assert_eq!(gc.interval, Duration::from_secs(3600));
         assert_eq!(gc.policy.task_ttl, Duration::from_secs(12 * 3600));
         assert_eq!(gc.policy.dist_high_threshold_percent, 90);
@@ -2030,7 +2055,6 @@ key: /etc/ssl/private/client.pem
         }"#;
 
         let proxy: Proxy = serde_json::from_str(json_data).unwrap();
-
         assert_eq!(proxy.server.port, 8080);
         assert_eq!(
             proxy.server.ca_cert,
@@ -2057,7 +2081,6 @@ key: /etc/ssl/private/client.pem
             Some("https://mirror.example.com".to_string())
         );
         assert_eq!(rule.filtered_query_params, vec!["Signature", "Expires"]);
-
         assert!(proxy.registry_mirror.enable_task_id_based_blob_digest);
         assert_eq!(proxy.registry_mirror.addr, "https://mirror.example.com");
         assert_eq!(
@@ -2101,7 +2124,6 @@ key: /etc/ssl/private/client.pem
         }"#;
 
         let metrics: Metrics = serde_json::from_str(json_data).unwrap();
-
         assert_eq!(metrics.server.port, 4002);
         assert_eq!(
             metrics.server.ip,
@@ -2117,11 +2139,12 @@ key: /etc/ssl/private/client.pem
                 "X-Custom-Header": "value"
             },
             "enableCacheTemporaryRedirect": false,
-            "cacheTemporaryRedirectTTL": "15m"
+            "cacheTemporaryRedirectTTL": "15m",
+            "putConcurrentChunkCount": 2,
+            "putChunkSize": "2mib"
         }"#;
 
         let backend: Backend = serde_json::from_str(json_data).unwrap();
-
         assert!(backend.request_header.is_some());
         assert_eq!(
             backend
@@ -2136,5 +2159,7 @@ key: /etc/ssl/private/client.pem
             backend.cache_temporary_redirect_ttl,
             Duration::from_secs(900)
         );
+        assert_eq!(backend.put_concurrent_chunk_count, 2);
+        assert_eq!(backend.put_chunk_size, ByteSize::mib(2));
     }
 }

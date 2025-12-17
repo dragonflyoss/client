@@ -82,6 +82,7 @@ prost-wkt-types = "0.6"
 chrono = { version = "0.4.42", features = ["serde", "clock"] }
 openssl = { version = "0.10", features = ["vendored"] }
 opendal = { version = "0.55.0", features = [
+    "services-fs",
     "services-s3",
     "services-azblob",
     "services-gcs",
