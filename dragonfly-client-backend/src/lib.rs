@@ -65,8 +65,8 @@ pub const NAME: &str = "backend";
 /// Body is the body of the response.
 pub type Body = Box<dyn AsyncRead + Send + Unpin>;
 
-/// HeadRequest is the head request for backend.
-pub struct HeadRequest {
+/// StatRequest is the stat request for backend.
+pub struct StatRequest {
     /// task_id is the id of the task.
     pub task_id: String,
 
@@ -89,9 +89,9 @@ pub struct HeadRequest {
     pub hdfs: Option<Hdfs>,
 }
 
-/// HeadResponse is the head response for backend.
+/// StatResponse is the stat response for backend.
 #[derive(Debug)]
-pub struct HeadResponse {
+pub struct StatResponse {
     /// success is the success of the response.
     pub success: bool,
 
@@ -196,10 +196,10 @@ pub trait Backend {
     /// scheme returns the scheme of the backend.
     fn scheme(&self) -> String;
 
-    /// head gets the header of the request.
-    async fn head(&self, request: HeadRequest) -> Result<HeadResponse>;
+    /// stat gets the metadata from the backend.
+    async fn stat(&self, request: StatRequest) -> Result<StatResponse>;
 
-    /// get gets the content of the request.
+    /// get gets the content from the backend.
     async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>>;
 }
 

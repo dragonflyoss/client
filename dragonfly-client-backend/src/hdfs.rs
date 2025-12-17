@@ -87,11 +87,11 @@ impl super::Backend for Hdfs {
         self.scheme.clone()
     }
 
-    /// head gets the header of the request.
+    /// stat gets the metadata from the backend.
     #[instrument(skip_all)]
-    async fn head(&self, request: super::HeadRequest) -> ClientResult<super::HeadResponse> {
+    async fn stat(&self, request: super::StatRequest) -> ClientResult<super::StatResponse> {
         debug!(
-            "head request {} {}: {:?}",
+            "stat request {} {}: {:?}",
             request.task_id, request.url, request.http_header
         );
 
@@ -155,13 +155,13 @@ impl super::Backend for Hdfs {
             })?;
 
         debug!(
-            "head response {} {}: {}",
+            "stat response {} {}: {}",
             request.task_id,
             request.url,
             response.content_length()
         );
 
-        Ok(super::HeadResponse {
+        Ok(super::StatResponse {
             success: true,
             content_length: Some(response.content_length()),
             http_header: None,
@@ -171,7 +171,7 @@ impl super::Backend for Hdfs {
         })
     }
 
-    /// get returns content of requested file.
+    /// get gets the content from the backend.
     #[instrument(skip_all)]
     async fn get(
         &self,

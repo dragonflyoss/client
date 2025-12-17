@@ -33,7 +33,7 @@ use dragonfly_api::dfdaemon::v2::{
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::DeleteHostRequest as SchedulerDeleteHostRequest;
-use dragonfly_client_backend::HeadRequest;
+use dragonfly_client_backend::StatRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -785,7 +785,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
         // Head the task entries.
         let response = backend
-            .head(HeadRequest {
+            .stat(StatRequest {
                 task_id: request.task_id.clone(),
                 url: request.url.clone(),
                 http_header: Some(hashmap_to_headermap(&request.request_header).map_err(
