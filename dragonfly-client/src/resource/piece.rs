@@ -28,7 +28,7 @@ use dragonfly_client_metric::{
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::id_generator::IDGenerator;
 use leaky_bucket::RateLimiter;
-use reqwest::header::{self, HeaderMap};
+use reqwest::header::HeaderMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -564,15 +564,6 @@ impl Piece {
             self.download_rate_limiter.acquire(length as usize).await;
         }
 
-        // Add range header to the request by offset and length.
-        let mut request_header = request_header.clone();
-        request_header.insert(
-            header::RANGE,
-            format!("bytes={}-{}", offset, offset + length - 1)
-                .parse()
-                .unwrap(),
-        );
-
         // Download the piece from the source.
         let backend = self.backend_factory.build(url).inspect_err(|err| {
             error!("build backend failed: {}", err);
@@ -670,6 +661,248 @@ impl Piece {
             }
             Err(err) => {
                 error!("download piece finished: {}", err);
+                Err(err)
+            }
+        }
+    }
+
+    /// persistent_id generates a new persistent piece id.
+    #[inline]
+    pub fn persistent_id(&self, task_id: &str, number: u32) -> String {
+        self.storage.persistent_piece_id(task_id, number)
+    }
+
+    /// get_persistent gets a persistent piece from the local storage.
+    #[instrument(skip_all)]
+    pub fn get_persistent(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
+        self.storage.get_persistent_piece(piece_id)
+    }
+
+    /// create_persistent creates a new persistent piece.
+    #[instrument(skip_all)]
+    pub async fn create_persistent<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        number: u32,
+        offset: u64,
+        length: u64,
+        reader: &mut R,
+    ) -> Result<metadata::Piece> {
+        self.storage
+            .create_persistent_piece(piece_id, task_id, number, offset, length, reader)
+            .await
+    }
+
+    /// register_persistent registers a new persistent piece.
+    #[instrument(skip_all)]
+    pub fn register_persistent(
+        &self,
+        piece_id: &str,
+        number: u32,
+        offset: u64,
+        length: u64,
+    ) -> Result<metadata::Piece> {
+        self.storage
+            .register_persistent_piece(piece_id, number, offset, length)
+    }
+
+    /// upload_persistent_from_local_into_async_read uploads a persistent piece from local cache.
+    #[instrument(skip_all, fields(piece_id))]
+    pub async fn upload_persistent_from_local_into_async_read(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        length: u64,
+        range: Option<Range>,
+    ) -> Result<impl AsyncRead> {
+        // Span record the piece_id.
+        Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
+
+        // Acquire the upload rate limiter.
+        self.upload_rate_limiter.acquire(length as usize).await;
+
+        // Upload the persistent piece content.
+        self.storage
+            .upload_persistent_piece(piece_id, task_id, range)
+            .await
+            .inspect(|_| {
+                collect_upload_piece_traffic_metrics(
+                    self.id_generator.task_type(task_id) as i32,
+                    length,
+                );
+            })
+    }
+
+    /// download_persistent_from_local_into_async_read downloads a persistent piece from local cache.
+    #[instrument(skip_all, fields(piece_id))]
+    pub async fn download_persistent_from_local_into_async_read(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        length: u64,
+        range: Option<Range>,
+        disable_rate_limit: bool,
+        is_prefetch: bool,
+    ) -> Result<impl AsyncRead> {
+        // Span record the piece_id.
+        Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
+
+        // Acquire the download rate limiter.
+        if !disable_rate_limit {
+            if is_prefetch {
+                // Acquire the prefetch rate limiter.
+                self.prefetch_rate_limiter.acquire(length as usize).await;
+            } else {
+                // Acquire the download rate limiter.
+                self.download_rate_limiter.acquire(length as usize).await;
+            }
+        }
+
+        // Upload the piece content.
+        self.storage
+            .upload_persistent_piece(piece_id, task_id, range)
+            .await
+    }
+
+    /// download_persistent_from_local downloads a persistent piece from local cache. Fake the download
+    /// persistent piece from the local cache, just collect the metrics.
+    #[instrument(skip_all)]
+    pub fn download_persistent_from_local(&self, task_id: &str, length: u64) {
+        collect_download_piece_traffic_metrics(
+            &TrafficType::LocalPeer,
+            self.id_generator.task_type(task_id) as i32,
+            length,
+        );
+    }
+
+    /// download_persistent_from_parent downloads a persistent piece from a parent.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all, fields(piece_id))]
+    pub async fn download_persistent_from_parent(
+        &self,
+        piece_id: &str,
+        host_id: &str,
+        task_id: &str,
+        number: u32,
+        length: u64,
+        parent: piece_collector::CollectedParent,
+        is_prefetch: bool,
+    ) -> Result<metadata::Piece> {
+        // Span record the piece_id.
+        Span::current().record("piece_id", piece_id);
+        Span::current().record("piece_length", length);
+
+        // Clean up residual persistent metadata if error occurred.
+        let guard = scopeguard::guard((), |_| {
+            if let Some(err) = self
+                .storage
+                .download_persistent_piece_failed(piece_id)
+                .err()
+            {
+                error!("set persistent piece metadata failed: {}", err)
+            };
+        });
+
+        if is_prefetch {
+            // Acquire the prefetch rate limiter.
+            self.prefetch_rate_limiter.acquire(length as usize).await;
+        } else {
+            // Acquire the download rate limiter.
+            self.download_rate_limiter.acquire(length as usize).await;
+        }
+
+        // Record the start of downloading piece.
+        let piece = self
+            .storage
+            .download_persistent_piece_started(piece_id, number)
+            .await?;
+
+        // If the piece is downloaded by the other thread,
+        // return the piece directly.
+        if piece.is_finished() {
+            info!("finished persistent piece {} from local", piece_id);
+            scopeguard::ScopeGuard::into_inner(guard);
+            return Ok(piece);
+        }
+
+        let (mut reader, offset, digest) = match (
+            self.config.download.protocol.as_str(),
+            parent.download_ip,
+            parent.download_tcp_port,
+            parent.download_quic_port,
+        ) {
+            ("tcp", Some(ip), Some(port), _) => {
+                self.tcp_downloader
+                    .download_persistent_piece(
+                        format!("{}:{}", ip, port).as_str(),
+                        number,
+                        host_id,
+                        task_id,
+                    )
+                    .await?
+            }
+            ("quic", Some(ip), _, Some(port)) => {
+                let quic_downloader =
+                    piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
+                quic_downloader
+                    .download_persistent_piece(
+                        format!("{}:{}", ip, port).as_str(),
+                        number,
+                        host_id,
+                        task_id,
+                    )
+                    .await?
+            }
+            _ => {
+                warn!("fall back to grpc downloader");
+                let host = parent.host.clone().ok_or_else(|| {
+                    error!("parent host is empty");
+                    Error::InvalidPeer(parent.id.clone())
+                })?;
+
+                self.grpc_downloader
+                    .download_persistent_piece(
+                        format!("{}:{}", host.ip, host.port).as_str(),
+                        number,
+                        host_id,
+                        task_id,
+                    )
+                    .await
+                    .inspect_err(|err| {
+                        error!("download persistent piece failed: {}", err);
+                    })?
+            }
+        };
+
+        // Record the finish of downloading piece.
+        match self
+            .storage
+            .download_persistent_piece_from_parent_finished(
+                piece_id,
+                task_id,
+                offset,
+                length,
+                digest.as_str(),
+                parent.id.as_str(),
+                &mut reader,
+            )
+            .await
+        {
+            Ok(piece) => {
+                collect_download_piece_traffic_metrics(
+                    &TrafficType::RemotePeer,
+                    self.id_generator.task_type(task_id) as i32,
+                    length,
+                );
+
+                scopeguard::ScopeGuard::into_inner(guard);
+                Ok(piece)
+            }
+            Err(err) => {
+                error!("download persistent piece finished: {}", err);
                 Err(err)
             }
         }

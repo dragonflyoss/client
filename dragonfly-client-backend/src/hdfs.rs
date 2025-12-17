@@ -21,7 +21,7 @@ use opendal::{layers::TimeoutLayer, Operator};
 use percent_encoding::percent_decode_str;
 use std::time::Duration;
 use tokio_util::io::StreamReader;
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 use url::Url;
 
 /// HDFS_SCHEME is the scheme of the HDFS.
@@ -64,12 +64,12 @@ impl Hdfs {
         let mut builder = opendal::services::Webhdfs::default();
         builder = builder
             .root("/")
-            .endpoint(format!("http://{}:{}", host, port).as_str());
+            .endpoint(&format!("http://{}:{}", host, port));
 
         // If HDFS config is not None, set the config for builder.
         if let Some(config) = config {
             if let Some(delegation_token) = &config.delegation_token {
-                builder = builder.delegation(delegation_token.as_str());
+                builder = builder.delegation(delegation_token);
             }
         }
 
@@ -87,10 +87,11 @@ impl super::Backend for Hdfs {
         self.scheme.clone()
     }
 
-    /// head gets the header of the request.
-    async fn head(&self, request: super::HeadRequest) -> ClientResult<super::HeadResponse> {
+    /// stat gets the metadata from the backend.
+    #[instrument(skip_all)]
+    async fn stat(&self, request: super::StatRequest) -> ClientResult<super::StatResponse> {
         debug!(
-            "head request {} {}: {:?}",
+            "stat request {} {}: {:?}",
             request.task_id, request.url, request.http_header
         );
 
@@ -107,7 +108,7 @@ impl super::Backend for Hdfs {
         // Get the entries if url point to a directory.
         let entries = if url.path().ends_with('/') {
             operator
-                .list_with(decoded_path.as_str())
+                .list_with(&decoded_path)
                 .recursive(true)
                 .await // Do the list op here.
                 .map_err(|err| {
@@ -138,29 +139,26 @@ impl super::Backend for Hdfs {
         };
 
         // Stat the path to get the response from HDFS operator.
-        let response = operator
-            .stat_with(decoded_path.as_str())
-            .await
-            .map_err(|err| {
-                error!(
-                    "stat request failed {} {}: {}",
-                    request.task_id, request.url, err
-                );
-                ClientError::BackendError(Box::new(BackendError {
-                    message: err.to_string(),
-                    status_code: None,
-                    header: None,
-                }))
-            })?;
+        let response = operator.stat_with(&decoded_path).await.map_err(|err| {
+            error!(
+                "stat request failed {} {}: {}",
+                request.task_id, request.url, err
+            );
+            ClientError::BackendError(Box::new(BackendError {
+                message: err.to_string(),
+                status_code: None,
+                header: None,
+            }))
+        })?;
 
         debug!(
-            "head response {} {}: {}",
+            "stat response {} {}: {}",
             request.task_id,
             request.url,
             response.content_length()
         );
 
-        Ok(super::HeadResponse {
+        Ok(super::StatResponse {
             success: true,
             content_length: Some(response.content_length()),
             http_header: None,
@@ -170,7 +168,8 @@ impl super::Backend for Hdfs {
         })
     }
 
-    /// get returns content of requested file.
+    /// get gets the content from the backend.
+    #[instrument(skip_all)]
     async fn get(
         &self,
         request: super::GetRequest,
@@ -239,6 +238,26 @@ impl super::Backend for Hdfs {
             reader: Box::new(StreamReader::new(stream)),
             error_message: None,
         })
+    }
+
+    /// exists checks whether the file exists in the backend.
+    #[instrument(skip_all)]
+    async fn exists(&self, request: super::ExistsRequest) -> ClientResult<bool> {
+        debug!(
+            "exist request {} {}: {:?}",
+            request.task_id, request.url, request.http_header
+        );
+
+        // Parse the URL.
+        let url = Url::parse(request.url.as_ref())
+            .map_err(|_| ClientError::InvalidURI(request.url.clone()))?;
+        let decoded_path = percent_decode_str(url.path())
+            .decode_utf8_lossy()
+            .to_string();
+
+        // Initialize the operator with the parsed URL and HDFS config.
+        let operator = self.operator(url.clone(), request.hdfs, request.timeout)?;
+        Ok(operator.exists(&decoded_path).await?)
     }
 }
 

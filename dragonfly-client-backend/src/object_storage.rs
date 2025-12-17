@@ -501,7 +501,7 @@ impl crate::Backend for ObjectStorage {
     /// head gets the header of the request.
     async fn head(&self, request: super::HeadRequest) -> ClientResult<super::HeadResponse> {
         debug!(
-            "head request {} {}: {:?}",
+            "stat request {} {}: {:?}",
             request.task_id, request.url, request.http_header
         );
 
@@ -512,7 +512,7 @@ impl crate::Backend for ObjectStorage {
             .map_err(|_| ClientError::InvalidURI(request.url.clone()))?;
         let parsed_url: super::object_storage::ParsedURL = url.try_into().inspect_err(|err| {
             error!(
-                "parse head request url failed {} {}: {}",
+                "parse stat request url failed {} {}: {}",
                 request.task_id, request.url, err
             );
         })?;
@@ -565,13 +565,13 @@ impl crate::Backend for ObjectStorage {
         })?;
 
         debug!(
-            "head response {} {}: {}",
+            "stat response {} {}: {}",
             request.task_id,
             request.url,
             response.content_length()
         );
 
-        Ok(super::HeadResponse {
+        Ok(super::StatResponse {
             success: true,
             content_length: Some(response.content_length()),
             http_header: None,
@@ -655,6 +655,31 @@ impl crate::Backend for ObjectStorage {
             reader: Box::new(StreamReader::new(stream)),
             error_message: None,
         })
+    }
+
+    /// exists checks whether the file exists in the backend.
+    #[instrument(skip_all)]
+    async fn exists(&self, request: super::ExistsRequest) -> ClientResult<bool> {
+        debug!(
+            "exists request {} {}: {:?}",
+            request.task_id, request.url, request.http_header
+        );
+
+        // Parse the URL and convert it to a ParsedURL for create the ObjectStorage operator.
+        let url: Url = request
+            .url
+            .parse()
+            .map_err(|_| ClientError::InvalidURI(request.url.clone()))?;
+        let parsed_url: super::object_storage::ParsedURL = url.try_into().inspect_err(|err| {
+            error!(
+                "parse exists request url failed {} {}: {}",
+                request.task_id, request.url, err
+            );
+        })?;
+
+        // Initialize the operator with the parsed URL, object storage, and timeout.
+        let operator = self.operator(&parsed_url, request.object_storage, request.timeout)?;
+        Ok(operator.exists(&parsed_url.key).await?)
     }
 }
 

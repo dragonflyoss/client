@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
-use dragonfly_client_backend::{Backend, Body, GetRequest, GetResponse, HeadRequest, HeadResponse};
+use dragonfly_client_backend::{
+    Backend, Body, ExistsRequest, GetRequest, GetResponse, StatRequest, StatResponse,
+};
 use dragonfly_client_core::{Error, Result};
 
 /// Hdfs is a struct that implements the Backend trait
@@ -35,15 +37,21 @@ impl Backend for Hdfs {
         "hdfs".to_string()
     }
 
-    /// head is an async function that takes a HeadRequest and returns a HeadResponse.
-    async fn head(&self, request: HeadRequest) -> Result<HeadResponse> {
-        println!("HDFS head url: {}", request.url);
+    /// stat gets the metadata from the backend.
+    async fn stat(&self, request: StatRequest) -> Result<StatResponse> {
+        println!("HDFS stat url: {}", request.url);
         Err(Error::Unimplemented)
     }
 
-    /// get is an async function that takes a GetRequest and returns a GetResponse.
+    /// get gets the content from the backend.
     async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>> {
         println!("HDFS get url: {}", request.url);
+        Err(Error::Unimplemented)
+    }
+
+    /// exists checks if the object exists in the backend.
+    async fn exists(&self, request: ExistsRequest) -> Result<bool> {
+        println!("HDFS exists url: {}", request.url);
         Err(Error::Unimplemented)
     }
 }

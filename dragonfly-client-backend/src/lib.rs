@@ -65,8 +65,8 @@ pub const NAME: &str = "backend";
 /// Body is the body of the response.
 pub type Body = Box<dyn AsyncRead + Send + Unpin>;
 
-/// HeadRequest is the head request for backend.
-pub struct HeadRequest {
+/// StatRequest is the stat request for backend.
+pub struct StatRequest {
     /// task_id is the id of the task.
     pub task_id: String,
 
@@ -89,9 +89,9 @@ pub struct HeadRequest {
     pub hdfs: Option<Hdfs>,
 }
 
-/// HeadResponse is the head response for backend.
+/// StatResponse is the stat response for backend.
 #[derive(Debug)]
-pub struct HeadResponse {
+pub struct StatResponse {
     /// success is the success of the response.
     pub success: bool,
 
@@ -112,6 +112,7 @@ pub struct HeadResponse {
 }
 
 /// GetRequest is the get request for backend.
+#[derive(Debug, Clone)]
 pub struct GetRequest {
     /// task_id is the id of the task.
     pub task_id: String,
@@ -189,17 +190,44 @@ pub struct DirEntry {
     pub is_dir: bool,
 }
 
+/// ExistsRequest is the exists request for backend.
+pub struct ExistsRequest {
+    /// task_id is the id of the task.
+    pub task_id: String,
+
+    /// url is the url of the request.
+    pub url: String,
+
+    /// http_header is the headers of the request.
+    pub http_header: Option<HeaderMap>,
+
+    /// timeout is the timeout of the request.
+    pub timeout: Duration,
+
+    /// client_cert is the client certificates for the request.
+    pub client_cert: Option<Vec<CertificateDer<'static>>>,
+
+    /// object_storage is the object storage related information.
+    pub object_storage: Option<ObjectStorage>,
+
+    /// hdfs is the hdfs related information.
+    pub hdfs: Option<Hdfs>,
+}
+
 /// Backend is the interface of the backend.
 #[tonic::async_trait]
 pub trait Backend {
     /// scheme returns the scheme of the backend.
     fn scheme(&self) -> String;
 
-    /// head gets the header of the request.
-    async fn head(&self, request: HeadRequest) -> Result<HeadResponse>;
+    /// stat gets the metadata from the backend.
+    async fn stat(&self, request: StatRequest) -> Result<StatResponse>;
 
-    /// get gets the content of the request.
+    /// get gets the content from the backend.
     async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>>;
+
+    /// exists checks whether the file exists in the backend.
+    async fn exists(&self, request: ExistsRequest) -> Result<bool>;
 }
 
 /// BackendFactory is the factory of the backend.
@@ -207,9 +235,11 @@ pub trait Backend {
 pub struct BackendFactory {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
+
     /// backends is the backends of the factory, including the plugin backends and
     /// the builtin backends.
     backends: HashMap<String, Box<dyn Backend + Send + Sync>>,
+
     /// libraries are used to store the plugin's dynamic library, because when not saving the `Library`,
     /// it will drop when out of scope, resulting in the null pointer error.
     libraries: Vec<Library>,
@@ -241,11 +271,14 @@ impl BackendFactory {
     /// new returns a new BackendFactory.
     pub fn new(config: Arc<Config>, plugin_dir: Option<&Path>) -> Result<Self> {
         let mut backend_factory = Self {
-            config,
+            config: config.clone(),
             backends: HashMap::new(),
             libraries: Vec::new(),
         };
-        backend_factory.load_builtin_backends()?;
+        backend_factory.load_builtin_backends(
+            config.backend.enable_cache_temporary_redirect,
+            config.backend.cache_temporary_redirect_ttl,
+        )?;
         if let Some(plugin_dir) = plugin_dir {
             backend_factory
                 .load_plugin_backends(plugin_dir)
@@ -276,12 +309,18 @@ impl BackendFactory {
     }
 
     /// load_builtin_backends loads the builtin backends.
-    fn load_builtin_backends(&mut self) -> Result<()> {
+    fn load_builtin_backends(
+        &mut self,
+        enable_cache_temporary_redirect: bool,
+        cache_temporary_redirect_ttl: Duration,
+    ) -> Result<()> {
         self.backends.insert(
             "http".to_string(),
             Box::new(http::HTTP::new(
                 http::HTTP_SCHEME,
                 self.config.backend.clone().request_header,
+                enable_cache_temporary_redirect,
+                cache_temporary_redirect_ttl,
             )?),
         );
         info!("load [http] builtin backend");
@@ -291,6 +330,8 @@ impl BackendFactory {
             Box::new(http::HTTP::new(
                 http::HTTPS_SCHEME,
                 self.config.backend.clone().request_header,
+                enable_cache_temporary_redirect,
+                cache_temporary_redirect_ttl,
             )?),
         );
         info!("load [https] builtin backend");

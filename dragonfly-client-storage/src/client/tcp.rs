@@ -26,7 +26,8 @@ use tracing::{debug, error, Span};
 use vortex_protocol::{
     tlv::{
         download_persistent_cache_piece::DownloadPersistentCachePiece,
-        download_piece::DownloadPiece, error::Error as VortexError, persistent_cache_piece_content,
+        download_persistent_piece::DownloadPersistentPiece, download_piece::DownloadPiece,
+        error::Error as VortexError, persistent_cache_piece_content, persistent_piece_content,
         piece_content, Tag,
     },
     Header, Vortex, HEADER_SIZE,
@@ -97,6 +98,64 @@ impl TCPClient {
                 debug!("received piece content: {:?}", piece_content.metadata());
 
                 let metadata = piece_content.metadata();
+                Ok((reader, metadata.offset, metadata.digest))
+            }
+            Tag::Error => Err(self.read_error(&mut reader, header.length() as usize).await),
+            _ => Err(ClientError::Unknown(format!(
+                "unexpected tag: {:?}",
+                header.tag()
+            ))),
+        }
+    }
+
+    /// Downloads a persistent piece from the server using the vortex protocol.
+    ///
+    /// Similar to `download_piece` but specifically for persistent piece.
+    #[instrument(skip_all)]
+    pub async fn download_persistent_piece(
+        &self,
+        number: u32,
+        task_id: &str,
+    ) -> ClientResult<(impl AsyncRead, u64, String)> {
+        time::timeout(
+            self.config.download.piece_timeout,
+            self.handle_download_persistent_piece(number, task_id),
+        )
+        .await
+        .inspect_err(|err| {
+            error!("connect timeout to {}: {}", self.addr, err);
+        })?
+    }
+
+    /// Internal handler for downloading a persistent piece.
+    ///
+    /// Implements the same protocol flow as `handle_download_piece` but uses
+    /// persistent specific request/response types.
+    #[instrument(skip_all)]
+    async fn handle_download_persistent_piece(
+        &self,
+        number: u32,
+        task_id: &str,
+    ) -> ClientResult<(impl AsyncRead, u64, String)> {
+        let request: Bytes = Vortex::DownloadPersistentPiece(
+            Header::new_download_persistent_piece(),
+            DownloadPersistentPiece::new(task_id.to_string(), number),
+        )
+        .into();
+
+        let (mut reader, _writer) = self.connect_and_write_request(request).await?;
+        let header = self.read_header(&mut reader).await?;
+        match header.tag() {
+            Tag::PersistentPieceContent => {
+                let persistent_piece_content: persistent_piece_content::PersistentPieceContent =
+                    self.read_piece_content(&mut reader, piece_content::METADATA_LENGTH_SIZE)
+                        .await?;
+                debug!(
+                    "received piece content: {:?}",
+                    persistent_piece_content.metadata()
+                );
+
+                let metadata = persistent_piece_content.metadata();
                 Ok((reader, metadata.offset, metadata.digest))
             }
             Tag::Error => Err(self.read_error(&mut reader, header.length() as usize).await),

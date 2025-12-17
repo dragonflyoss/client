@@ -153,6 +153,18 @@ fn default_download_concurrent_piece_count() -> u32 {
     8
 }
 
+/// default_backend_enable_cache_temporary_redirect is the default value for caching temporary redirects.
+#[inline]
+fn default_backend_enable_cache_temporary_redirect() -> bool {
+    true
+}
+
+/// default_backend_cache_temporary_redirect_ttl is the default TTL for cached 307 redirects, default is 10 minutes.
+#[inline]
+fn default_backend_cache_temporary_redirect_ttl() -> Duration {
+    Duration::from_secs(600)
+}
+
 /// default_download_max_schedule_count is the default max count of schedule.
 #[inline]
 fn default_download_max_schedule_count() -> u32 {
@@ -1356,11 +1368,40 @@ impl Default for Tracing {
 }
 
 /// Backend is the backend configuration for dfdaemon.
-#[derive(Default, Debug, Clone, Validate, Deserialize)]
+#[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Backend {
     /// request_header is the request header of backend.
     pub request_header: Option<HashMap<String, String>>,
+
+    /// enable_cache_temporary_redirect enables caching of 307 redirect URLs.
+    ///
+    /// Motivation: Dragonfly splits a download URL into multiple pieces and performs multiple
+    /// requests. Without caching, each piece request may trigger the same 307 redirect again,
+    /// repeating the redirect flow and adding extra latency. Caching the resolved redirect URL
+    /// reduces repeated redirects and improves request performance.
+    #[serde(default = "default_backend_enable_cache_temporary_redirect")]
+    pub enable_cache_temporary_redirect: bool,
+
+    /// cache_temporary_redirect_ttl is the TTL for cached 307 redirect URLs. After this duration,
+    /// the cached redirect target will expire and be re-resolved.
+    #[serde(
+        default = "default_backend_cache_temporary_redirect_ttl",
+        rename = "cacheTemporaryRedirectTTL",
+        with = "humantime_serde"
+    )]
+    pub cache_temporary_redirect_ttl: Duration,
+}
+
+/// Backend implements Default.
+impl Default for Backend {
+    fn default() -> Self {
+        Self {
+            request_header: None,
+            enable_cache_temporary_redirect: default_backend_enable_cache_temporary_redirect(),
+            cache_temporary_redirect_ttl: default_backend_cache_temporary_redirect_ttl(),
+        }
+    }
 }
 
 /// Config is the configuration for dfdaemon.
@@ -2072,7 +2113,9 @@ key: /etc/ssl/private/client.pem
         {
             "requestHeader": {
                 "X-Custom-Header": "value"
-            }
+            },
+            "enableCacheTemporaryRedirect": false,
+            "cacheTemporaryRedirectTTL": "15m"
         }"#;
 
         let backend: Backend = serde_json::from_str(json_data).unwrap();
@@ -2085,6 +2128,11 @@ key: /etc/ssl/private/client.pem
                 .unwrap()
                 .get("X-Custom-Header"),
             Some(&"value".to_string())
+        );
+        assert!(!backend.enable_cache_temporary_redirect);
+        assert_eq!(
+            backend.cache_temporary_redirect_ttl,
+            Duration::from_secs(900)
         );
     }
 }
