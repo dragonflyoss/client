@@ -2139,7 +2139,7 @@ key: /etc/ssl/private/client.pem
                 "X-Custom-Header": "value"
             },
             "enableCacheTemporaryRedirect": false,
-            "cacheTemporaryRedirectTTL": "15m"
+            "cacheTemporaryRedirectTTL": "15m",
             "putConcurrentChunkCount": 2,
             "putChunkSize": 2mb
         }"#;
