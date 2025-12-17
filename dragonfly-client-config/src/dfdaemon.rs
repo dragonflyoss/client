@@ -2160,6 +2160,6 @@ key: /etc/ssl/private/client.pem
             Duration::from_secs(900)
         );
         assert_eq!(backend.put_concurrent_chunk_count, 2);
-        assert_eq!(backend.put_chunk_size, ByteSize::mb(2));
+        assert_eq!(backend.put_chunk_size, ByteSize::mib(2));
     }
 }
