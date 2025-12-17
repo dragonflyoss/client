@@ -15,6 +15,7 @@
  */
 
 use dragonfly_api::common;
+use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::error::BackendError;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use opendal::{layers::HttpClientLayer, layers::TimeoutLayer, raw::HttpClient, Operator};
@@ -22,6 +23,7 @@ use percent_encoding::percent_decode_str;
 use std::fmt;
 use std::result::Result;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::io::StreamReader;
 use tracing::{debug, error, instrument};
@@ -170,6 +172,9 @@ pub struct ObjectStorage {
     /// scheme is the scheme of the object storage.
     scheme: Scheme,
 
+    /// config is the configuration of the dfdaemon.
+    config: Arc<Config>,
+
     /// client is the reqwest client.
     client: reqwest::Client,
 }
@@ -177,7 +182,7 @@ pub struct ObjectStorage {
 /// ObjectStorage implements the ObjectStorage trait.
 impl ObjectStorage {
     /// Returns ObjectStorage that implements the Backend trait.
-    pub fn new(scheme: Scheme) -> ClientResult<ObjectStorage> {
+    pub fn new(scheme: Scheme, config: Arc<Config>) -> ClientResult<ObjectStorage> {
         // Initialize the reqwest client.
         let client = reqwest::Client::builder()
             .no_gzip()
@@ -196,7 +201,11 @@ impl ObjectStorage {
             .http2_keep_alive_while_idle(true)
             .build()?;
 
-        Ok(Self { scheme, client })
+        Ok(Self {
+            scheme,
+            config,
+            client,
+        })
     }
 
     /// operator initializes the operator with the parsed URL and object storage.
@@ -511,6 +520,7 @@ impl crate::Backend for ObjectStorage {
             .url
             .parse()
             .map_err(|_| ClientError::InvalidURI(request.url.clone()))?;
+
         let parsed_url: super::object_storage::ParsedURL = url.try_into().inspect_err(|err| {
             error!(
                 "parse stat request url failed {} {}: {}",
@@ -532,6 +542,7 @@ impl crate::Backend for ObjectStorage {
                         "list request failed {} {}: {}",
                         request.task_id, request.url, err
                     );
+
                     ClientError::BackendError(Box::new(BackendError {
                         message: err.to_string(),
                         status_code: None,
@@ -558,6 +569,7 @@ impl crate::Backend for ObjectStorage {
                 "stat request failed {} {}: {}",
                 request.task_id, request.url, err
             );
+
             ClientError::BackendError(Box::new(BackendError {
                 message: err.to_string(),
                 status_code: None,
@@ -598,6 +610,7 @@ impl crate::Backend for ObjectStorage {
             .url
             .parse()
             .map_err(|_| ClientError::InvalidURI(request.url.clone()))?;
+
         let parsed_url: super::object_storage::ParsedURL = url.try_into().inspect_err(|err| {
             error!(
                 "parse get request url failed {} {}: {}",
@@ -615,6 +628,7 @@ impl crate::Backend for ObjectStorage {
                     "get request failed {} {}: {}",
                     request.piece_id, request.url, err
                 );
+
                 ClientError::BackendError(Box::new(BackendError {
                     message: err.to_string(),
                     status_code: None,
@@ -631,6 +645,7 @@ impl crate::Backend for ObjectStorage {
                         "get request failed {} {}: {}",
                         request.piece_id, request.url, err
                     );
+
                     ClientError::BackendError(Box::new(BackendError {
                         message: err.to_string(),
                         status_code: None,
@@ -642,6 +657,7 @@ impl crate::Backend for ObjectStorage {
                     "get request failed {} {}: {}",
                     request.piece_id, request.url, err
                 );
+
                 ClientError::BackendError(Box::new(BackendError {
                     message: err.to_string(),
                     status_code: None,
@@ -659,6 +675,108 @@ impl crate::Backend for ObjectStorage {
         })
     }
 
+    /// put puts the content to the backend.
+    #[instrument(skip_all)]
+    async fn put(&self, request: super::PutRequest) -> ClientResult<super::PutResponse> {
+        debug!("put request {:?} {}", request.path, request.url);
+
+        // Parse the URL and convert it to a ParsedURL for create the ObjectStorage operator.
+        let url: Url = request
+            .url
+            .parse()
+            .map_err(|_| ClientError::InvalidURI(request.url.clone()))?;
+
+        let parsed_url: super::object_storage::ParsedURL = url.try_into().inspect_err(|err| {
+            error!(
+                "parse put request url failed {:?} {}: {}",
+                request.path, request.url, err
+            );
+        })?;
+
+        // Initialize the object storage operator to write the object.
+        let mut object_storage_writer = self
+            .operator(&parsed_url, request.object_storage, request.timeout)?
+            .writer_with(&parsed_url.key)
+            .concurrent(self.config.backend.put_concurrent_chunk_count as usize)
+            .chunk(self.config.backend.put_chunk_size.as_u64() as usize)
+            .await
+            .map_err(|err| {
+                error!(
+                    "put request failed {:?} {}: {}",
+                    request.path, request.url, err
+                );
+
+                ClientError::BackendError(Box::new(BackendError {
+                    message: err.to_string(),
+                    status_code: None,
+                    header: None,
+                }))
+            })?;
+
+        // Initialize the fs operator to read the local file.
+        let fs_operator = Operator::new(opendal::services::Fs::default().root("/"))
+            .inspect_err(|err| {
+                error!("initialize fs operator failed: {}", err);
+            })?
+            .finish();
+
+        let fs_reader = fs_operator
+            .reader_with(&request.path.to_string_lossy())
+            .concurrent(self.config.backend.put_concurrent_chunk_count as usize)
+            .chunk(self.config.backend.put_chunk_size.as_u64() as usize)
+            .await?;
+
+        let content_length = fs_operator
+            .stat(&request.path.to_string_lossy())
+            .await
+            .inspect_err(|err| {
+                error!(
+                    "stat local file failed {:?} {}: {}",
+                    request.path, request.url, err
+                );
+            })?
+            .content_length();
+
+        let mut offset: u64 = 0;
+        while offset < content_length {
+            let end = std::cmp::min(
+                offset + self.config.backend.put_chunk_size.as_u64(),
+                content_length,
+            );
+
+            let buf = fs_reader.read(offset..end).await.inspect_err(|err| {
+                error!(
+                    "read local file failed {:?} {}: {}",
+                    request.path, request.url, err
+                );
+            })?;
+
+            object_storage_writer.write(buf).await.inspect_err(|err| {
+                error!(
+                    "put request failed {:?} {}: {}",
+                    request.path, request.url, err
+                );
+            })?;
+
+            offset = end;
+        }
+
+        object_storage_writer.close().await.inspect_err(|err| {
+            error!(
+                "close put request failed {:?} {}: {}",
+                request.path, request.url, err
+            );
+        })?;
+
+        Ok(crate::PutResponse {
+            success: true,
+            http_header: None,
+            http_status_code: Some(reqwest::StatusCode::OK),
+            content_length: None,
+            error_message: None,
+        })
+    }
+
     /// exists checks whether the file exists in the backend.
     #[instrument(skip_all)]
     async fn exists(&self, request: super::ExistsRequest) -> ClientResult<bool> {
@@ -672,6 +790,7 @@ impl crate::Backend for ObjectStorage {
             .url
             .parse()
             .map_err(|_| ClientError::InvalidURI(request.url.clone()))?;
+
         let parsed_url: super::object_storage::ParsedURL = url.try_into().inspect_err(|err| {
             error!(
                 "parse exists request url failed {} {}: {}",
@@ -836,11 +955,9 @@ mod tests {
             let url: Url = format!("{}://test-bucket/file", scheme).parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            let result = ObjectStorage::new(scheme).unwrap().operator(
-                &parsed_url,
-                Some(object_storage),
-                Duration::from_secs(3),
-            );
+            let result = ObjectStorage::new(scheme, Arc::new(Config::default()))
+                .unwrap()
+                .operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
 
             assert!(
                 result.is_ok(),
@@ -885,11 +1002,9 @@ mod tests {
             let url: Url = "s3://test-bucket/file".parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            let result = ObjectStorage::new(Scheme::S3).unwrap().operator(
-                &parsed_url,
-                Some(object_storage),
-                Duration::from_secs(3),
-            );
+            let result = ObjectStorage::new(Scheme::S3, Arc::new(Config::default()))
+                .unwrap()
+                .operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
 
             assert!(result.is_ok());
             assert_eq!(result.unwrap().info().scheme().to_string(), "s3");
@@ -938,11 +1053,9 @@ mod tests {
             let url: Url = "gs://test-bucket/file".parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            let result = ObjectStorage::new(Scheme::GCS).unwrap().operator(
-                &parsed_url,
-                Some(object_storage),
-                Duration::from_secs(3),
-            );
+            let result = ObjectStorage::new(Scheme::GCS, Arc::new(Config::default()))
+                .unwrap()
+                .operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
 
             assert!(result.is_ok());
             assert_eq!(result.unwrap().info().scheme().to_string(), "gcs");
@@ -954,11 +1067,9 @@ mod tests {
         let url: Url = "s3://test-bucket/file".parse().unwrap();
         let parsed_url: ParsedURL = url.try_into().unwrap();
 
-        let result = ObjectStorage::new(Scheme::S3).unwrap().operator(
-            &parsed_url,
-            None,
-            Duration::from_secs(3),
-        );
+        let result = ObjectStorage::new(Scheme::S3, Arc::new(Config::default()))
+            .unwrap()
+            .operator(&parsed_url, None, Duration::from_secs(3));
 
         assert!(result.is_err());
         assert_eq!(
@@ -1025,11 +1136,9 @@ mod tests {
             let url: Url = "s3://test-bucket/file".parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            let result = ObjectStorage::new(Scheme::S3).unwrap().operator(
-                &parsed_url,
-                Some(object_storage),
-                Duration::from_secs(3),
-            );
+            let result = ObjectStorage::new(Scheme::S3, Arc::new(Config::default()))
+                .unwrap()
+                .operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
 
             assert!(result.is_err());
             assert_eq!(result.unwrap_err().to_string(), error_message);
@@ -1094,11 +1203,9 @@ mod tests {
             let url: Url = "abs://test-bucket/file".parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            let result = ObjectStorage::new(Scheme::ABS).unwrap().operator(
-                &parsed_url,
-                Some(object_storage),
-                Duration::from_secs(3),
-            );
+            let result = ObjectStorage::new(Scheme::ABS, Arc::new(Config::default()))
+                .unwrap()
+                .operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
 
             assert!(result.is_err());
             assert_eq!(result.unwrap_err().to_string(), error_message);
@@ -1163,11 +1270,9 @@ mod tests {
             let url: Url = "oss://test-bucket/file".parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            let result = ObjectStorage::new(Scheme::OSS).unwrap().operator(
-                &parsed_url,
-                Some(object_storage),
-                Duration::from_secs(3),
-            );
+            let result = ObjectStorage::new(Scheme::OSS, Arc::new(Config::default()))
+                .unwrap()
+                .operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
 
             assert!(result.is_err());
             assert_eq!(result.unwrap_err().to_string(), error_message);
@@ -1232,11 +1337,9 @@ mod tests {
             let url: Url = "obs://test-bucket/file".parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            let result = ObjectStorage::new(Scheme::OBS).unwrap().operator(
-                &parsed_url,
-                Some(object_storage),
-                Duration::from_secs(3),
-            );
+            let result = ObjectStorage::new(Scheme::OBS, Arc::new(Config::default()))
+                .unwrap()
+                .operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
 
             assert!(result.is_err());
             assert_eq!(result.unwrap_err().to_string(), error_message);
@@ -1301,11 +1404,9 @@ mod tests {
             let url: Url = "cos://test-bucket/file".parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            let result = ObjectStorage::new(Scheme::COS).unwrap().operator(
-                &parsed_url,
-                Some(object_storage),
-                Duration::from_secs(3),
-            );
+            let result = ObjectStorage::new(Scheme::COS, Arc::new(Config::default()))
+                .unwrap()
+                .operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
 
             assert!(result.is_err());
             assert_eq!(result.unwrap_err().to_string(), error_message);
