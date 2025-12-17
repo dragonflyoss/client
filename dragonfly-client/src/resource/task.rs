@@ -22,7 +22,7 @@ use dragonfly_api::common::v2::{
 };
 use dragonfly_api::dfdaemon::{
     self,
-    v2::{download_task_response, DownloadTaskResponse},
+    v2::{download_task_response, DownloadTaskResponse, StatLocalTaskResponse},
 };
 use dragonfly_api::errordetails::v2::{Backend, Unknown};
 use dragonfly_api::scheduler::v2::{
@@ -1980,6 +1980,37 @@ impl Task {
             })?;
 
         Ok(task)
+    }
+
+    /// local_stat returns the local task metadata.
+    #[instrument(skip_all)]
+    pub async fn local_stat(&self, task_id: &str) -> ClientResult<StatLocalTaskResponse> {
+        let Some(task_metadata) = self.storage.get_task(task_id).inspect_err(|err| {
+            error!("get task {} from local storage error: {:?}", task_id, err);
+        })?
+        else {
+            return Err(Error::TaskNotFound(task_id.to_owned()));
+        };
+
+        Ok(StatLocalTaskResponse {
+            task_id: task_metadata.id,
+            piece_length: task_metadata.piece_length,
+            content_length: task_metadata.content_length.unwrap_or(0),
+            response_header: task_metadata.response_header,
+            uploading_count: u64::try_from(task_metadata.uploading_count).unwrap_or(0),
+            uploaded_count: task_metadata.uploaded_count,
+            created_at: Some(prost_wkt_types::Timestamp::from(task_metadata.created_at)),
+            updated_at: Some(prost_wkt_types::Timestamp::from(task_metadata.updated_at)),
+            prefetched_at: task_metadata
+                .prefetched_at
+                .map(prost_wkt_types::Timestamp::from),
+            failed_at: task_metadata
+                .failed_at
+                .map(prost_wkt_types::Timestamp::from),
+            finished_at: task_metadata
+                .finished_at
+                .map(prost_wkt_types::Timestamp::from),
+        })
     }
 
     /// Delete a task and reclaim local storage.
