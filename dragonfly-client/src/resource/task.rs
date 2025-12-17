@@ -988,6 +988,27 @@ impl Task {
     ) -> ClientResult<Vec<metadata::Piece>> {
         // Get the id of the task.
         let task_id = task.id.as_str();
+        // If scheduler only gives one parent (likely seed), add a small random wait to stagger requests.
+        info!("parents for task {}: {:?}", task_id, parents.iter().map(|p| p.id.clone()).collect::<Vec<String>>());
+        if parents.len() == 1 {
+            // let backoff = Duration::from_millis(200 + fastrand::u64(0..301));
+            info!("single parent detected",);
+            // tokio::time::sleep(backoff).await;
+
+            let has_available_peer = self
+                .parent_selector
+                .apply_single_parent_backoff(&parents, task_id)
+                .await
+                .unwrap_or(false);
+
+            if !has_available_peer {
+                info!(
+                    "single parent has no available peer for task {}, triggering reschedule",
+                    task_id
+                );
+                return Ok(Vec::new());
+            }
+        }
 
         // Register the parents for syncing host info.
         self.parent_selector
@@ -1087,6 +1108,14 @@ impl Task {
                         if let Some(updated_parents) = piece_collector_rx.recv().await {
                             if !updated_parents.parents.is_empty() {
                                 parents = updated_parents.parents;
+                                info!(
+                                    "refreshed parents for piece {}: {:?}",
+                                    piece_id,
+                                    parents
+                                        .iter()
+                                        .map(|p| p.id.clone())
+                                        .collect::<Vec<String>>()
+                                );
                             }
                         }
                     }

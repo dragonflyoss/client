@@ -217,7 +217,7 @@ impl ParentSelector {
             let parent_host_id = parent_host.id.clone();
             // Seed a baseline weight so selection works even before the first sync_host response arrives.
             let baseline_network = parent_host.network.clone().unwrap_or_else(|| Network {
-                max_tx_bandwidth: self.config.upload.rate_limit,
+                max_tx_bandwidth: self.config.upload.rate_limit.as_u64(),
                 tx_bandwidth: Some(0),
                 ..Network::default()
             });
