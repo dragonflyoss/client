@@ -327,11 +327,11 @@ impl super::Backend for HTTP {
         self.scheme.clone()
     }
 
-    /// head gets the header of the request.
+    /// stat gets the metadata from the backend.
     #[instrument(skip_all)]
-    async fn head(&self, request: super::HeadRequest) -> Result<super::HeadResponse> {
+    async fn stat(&self, request: super::StatRequest) -> Result<super::StatResponse> {
         debug!(
-            "head request {} {}: {:?}",
+            "stat request {} {}: {:?}",
             request.task_id, request.url, request.http_header
         );
 
@@ -369,7 +369,7 @@ impl super::Backend for HTTP {
                 // For zero-byte files, some servers return 416 Range Not Satisfiable.
                 // Retry with a GET request without the Range header to retrieve headers.
                 info!(
-                    "head request got 416 Range Not Satisfiable, retrying with HEAD {} {}",
+                    "stat request got 416 Range Not Satisfiable, retrying with HEAD {} {}",
                     request.task_id, request.url
                 );
 
@@ -384,11 +384,11 @@ impl super::Backend for HTTP {
                     Ok(response) => response,
                     Err(err) => {
                         error!(
-                            "head request failed {} {}: {}",
+                            "stat request failed {} {}: {}",
                             request.task_id, request.url, err
                         );
 
-                        return Ok(super::HeadResponse {
+                        return Ok(super::StatResponse {
                             success: false,
                             content_length: None,
                             http_header: None,
@@ -406,7 +406,7 @@ impl super::Backend for HTTP {
                     request.task_id, request.url, err
                 );
 
-                return Ok(super::HeadResponse {
+                return Ok(super::StatResponse {
                     success: false,
                     content_length: None,
                     http_header: None,
@@ -431,7 +431,7 @@ impl super::Backend for HTTP {
 
         // Drop the response body to avoid reading it.
         drop(response);
-        Ok(super::HeadResponse {
+        Ok(super::StatResponse {
             success: response_status_code.is_success(),
             content_length: response_content_length,
             http_header: Some(response_header),
@@ -441,7 +441,7 @@ impl super::Backend for HTTP {
         })
     }
 
-    /// get gets the content of the request.
+    /// get gets the content from the backend.
     #[instrument(skip_all)]
     async fn get(&self, request: super::GetRequest) -> Result<super::GetResponse<super::Body>> {
         debug!(
@@ -551,7 +551,7 @@ mod tests {
     use super::*;
     use crate::{
         http::{HTTP, HTTPS_SCHEME, HTTP_SCHEME},
-        Backend, GetRequest, HeadRequest,
+        Backend, GetRequest, StatRequest,
     };
     use dragonfly_client_util::tls::{load_certs_from_pem, load_key_from_pem};
     use http::header::{HeaderValue, USER_AGENT};
@@ -725,7 +725,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
 
         let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600))
             .unwrap()
-            .head(HeadRequest {
+            .stat(StatRequest {
                 task_id: "test".to_string(),
                 url: format!("{}/head", server.uri()),
                 http_header: Some(HeaderMap::new()),
@@ -754,7 +754,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
 
         let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600))
             .unwrap()
-            .head(HeadRequest {
+            .stat(StatRequest {
                 task_id: "test".to_string(),
                 url: format!("{}/head", server.uri()),
                 http_header: None,
@@ -806,7 +806,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
         let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600))
             .unwrap()
-            .head(HeadRequest {
+            .stat(StatRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
                 http_header: Some(HeaderMap::new()),
@@ -826,7 +826,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
         let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600))
             .unwrap()
-            .head(HeadRequest {
+            .stat(StatRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
                 http_header: Some(HeaderMap::new()),
@@ -889,7 +889,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
         let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600))
             .unwrap()
-            .head(HeadRequest {
+            .stat(StatRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
                 http_header: Some(HeaderMap::new()),

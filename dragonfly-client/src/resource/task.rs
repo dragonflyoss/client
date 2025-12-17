@@ -34,7 +34,7 @@ use dragonfly_api::scheduler::v2::{
     DownloadPieceFailedRequest, DownloadPieceFinishedRequest, RegisterPeerRequest,
     ReschedulePeerRequest, StatTaskRequest,
 };
-use dragonfly_client_backend::{BackendFactory, HeadRequest};
+use dragonfly_client_backend::{BackendFactory, StatRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{BackendError, DownloadFromParentFailed, ErrorType, OrErr},
@@ -197,7 +197,7 @@ impl Task {
             http::Method::HEAD.as_str(),
         );
         let response = backend
-            .head(HeadRequest {
+            .stat(StatRequest {
                 task_id: id.to_string(),
                 url: request.url,
                 http_header: Some(request_header),
