@@ -18,7 +18,7 @@ use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::resource::piece_collector::CollectedParent;
 use dashmap::DashMap;
 use dragonfly_api::common::v2::{Host, Network, Peer, PersistentCachePeer};
-use dragonfly_api::dfdaemon::v2::SyncHostRequest;
+use dragonfly_api::dfdaemon::v2::{StatTaskRequest, SyncHostRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
 use dragonfly_client_util::id_generator::IDGenerator;
@@ -215,6 +215,15 @@ impl ParentSelector {
                 continue;
             };
             let parent_host_id = parent_host.id.clone();
+            // Seed a baseline weight so selection works even before the first sync_host response arrives.
+            let baseline_network = parent_host.network.clone().unwrap_or_else(|| Network {
+                max_tx_bandwidth: self.config.upload.rate_limit,
+                tx_bandwidth: Some(0),
+                ..Network::default()
+            });
+            self.networks
+                .entry(parent_host_id.clone())
+                .or_insert(baseline_network);
 
             match self.connections.entry(parent_host_id.clone()) {
                 dashmap::mapref::entry::Entry::Occupied(entry) => {
@@ -427,6 +436,43 @@ impl ParentSelector {
         );
 
         weight as u64
+    }
+
+    /// Sends a local-only StatTaskRequest to the parent to trigger single-parent backoff handling.
+    #[instrument(skip_all)]
+    pub async fn apply_single_parent_backoff(
+        &self,
+        parents: &[Peer],
+        task_id: &str,
+    ) -> Result<bool> {
+        let Some(parent) = parents.first() else {
+            warn!("apply_single_parent_backoff called with empty parents");
+            return Ok(false);
+        };
+
+        let Some(host) = parent.host.as_ref() else {
+            warn!("parent {} has no host info, skipping stat", parent.id);
+            return Ok(true);
+        };
+
+        let addr = format!("http://{}:{}", host.ip, host.port);
+        let client = DfdaemonUploadClient::new(self.config.clone(), addr, false).await?;
+
+        let task = client
+            .stat_task(StatTaskRequest {
+                task_id: task_id.to_string(),
+                remote_ip: None,
+                local_only: true,
+            })
+            .await
+            .inspect_err(|err| {
+                warn!(
+                    "stat task {} with parent {} failed: {}",
+                    task_id, parent.id, err
+                );
+            })?;
+
+        Ok(task.has_available_peer)
     }
 }
 
