@@ -482,6 +482,10 @@ async fn main() -> Result<(), anyhow::Error> {
     // of scheduler_client, so scheduler_client can be released normally.
     drop(task);
 
+    // Drop persistent task to release scheduler_client. when drop the persistent task, it will release the Arc reference
+    // of scheduler_client, so scheduler_client can be released normally.
+    drop(persistent_task);
+
     // Drop persistent cache task to release scheduler_client. when drop the persistent cache task, it will release the Arc reference
     // of scheduler_client, so scheduler_client can be released normally.
     drop(persistent_cache_task);
