@@ -75,6 +75,9 @@ pub struct PersistentTask {
     /// storage is the local storage.
     storage: Arc<Storage>,
 
+    /// backend_factory is the backend factory.
+    backend_factory: Arc<BackendFactory>,
+
     /// scheduler_client is the grpc client of the scheduler.
     pub scheduler_client: Arc<SchedulerClient>,
 
@@ -105,6 +108,7 @@ impl PersistentTask {
             config: config.clone(),
             id_generator: id_generator.clone(),
             storage: storage.clone(),
+            backend_factory: backend_factory.clone(),
             scheduler_client,
             piece: Arc::new(piece::Piece::new(
                 config.clone(),

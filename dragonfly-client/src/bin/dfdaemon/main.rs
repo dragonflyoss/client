@@ -382,6 +382,7 @@ async fn main() -> Result<(), anyhow::Error> {
         config.clone(),
         config.download.server.socket_path.clone(),
         task.clone(),
+        persistent_task.clone(),
         persistent_cache_task.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
@@ -481,6 +482,10 @@ async fn main() -> Result<(), anyhow::Error> {
     // Drop task to release scheduler_client. when drop the task, it will release the Arc reference
     // of scheduler_client, so scheduler_client can be released normally.
     drop(task);
+
+    // Drop persistent task to release scheduler_client. when drop the persistent task, it will release the Arc reference
+    // of scheduler_client, so scheduler_client can be released normally.
+    drop(persistent_task);
 
     // Drop persistent cache task to release scheduler_client. when drop the persistent cache task, it will release the Arc reference
     // of scheduler_client, so scheduler_client can be released normally.

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::resource::{persistent_cache_task, task};
+use crate::resource::{persistent_cache_task, persistent_task, task};
 use dragonfly_api::common::v2::{
     CacheTask, PersistentCacheTask, PersistentTask, Priority, Task, TaskType,
 };
@@ -91,6 +91,9 @@ pub struct DfdaemonDownloadServer {
     /// task is the task manager.
     task: Arc<task::Task>,
 
+    /// persistent_task is the persistent cache task manager.
+    persistent_task: Arc<persistent_task::PersistentTask>,
+
     /// persistent_cache_task is the persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 
@@ -108,6 +111,7 @@ impl DfdaemonDownloadServer {
         config: Arc<Config>,
         socket_path: PathBuf,
         task: Arc<task::Task>,
+        persistent_task: Arc<persistent_task::PersistentTask>,
         persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
@@ -116,6 +120,7 @@ impl DfdaemonDownloadServer {
             config,
             socket_path,
             task,
+            persistent_task,
             persistent_cache_task,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
@@ -130,6 +135,7 @@ impl DfdaemonDownloadServer {
                 config: self.config.clone(),
                 socket_path: self.socket_path.clone(),
                 task: self.task.clone(),
+                persistent_task: self.persistent_task.clone(),
                 persistent_cache_task: self.persistent_cache_task.clone(),
             },
             ExtractTracingInterceptor,
@@ -228,6 +234,9 @@ pub struct DfdaemonDownloadServerHandler {
 
     /// task is the task manager.
     task: Arc<task::Task>,
+
+    /// persistent_task is the persistent task manager.
+    persistent_task: Arc<persistent_task::PersistentTask>,
 
     /// persistent_cache_task is the persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
@@ -983,12 +992,27 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             .id_generator
             .persistent_task_id(match request.content_for_calculating_task_id.clone() {
                 Some(content) => PersistentTaskIDParameter::Content(content),
-                None => PersistentTaskIDParameter::FileContentBased {
-                    path: path.to_path_buf(),
-                    piece_length: request.piece_length,
-                    tag: request.tag.clone(),
-                    application: request.application.clone(),
-                },
+                None => {
+                    let object_storage = request.object_storage.clone().ok_or_else(|| {
+                        error!("missing object storage");
+                        Status::invalid_argument("missing object storage")
+                    })?;
+
+                    PersistentTaskIDParameter::FileContentBased {
+                        key: request.object_storage_key.clone(),
+                        region: object_storage.region.ok_or_else(|| {
+                            error!("missing object storage region");
+                            Status::invalid_argument("missing object storage region")
+                        })?,
+                        endpoint: object_storage.endpoint.ok_or_else(|| {
+                            error!("missing object storage endpoint");
+                            Status::invalid_argument("missing object storage endpoint")
+                        })?,
+                        piece_length: request.piece_length,
+                        tag: request.tag.clone(),
+                        application: request.application.clone(),
+                    }
+                }
             })
             .map_err(|err| {
                 error!("generate persistent task id: {}", err);
