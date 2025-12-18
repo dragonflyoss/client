@@ -999,7 +999,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                     })?;
 
                     PersistentTaskIDParameter::FileContentBased {
-                        key: request.object_storage_key.clone(),
+                        url: request.url.clone(),
                         region: object_storage.region.ok_or_else(|| {
                             error!("missing object storage region");
                             Status::invalid_argument("missing object storage region")
@@ -1034,6 +1034,23 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             request.remote_ip.clone().unwrap_or_default().as_str(),
         );
         info!("upload persistent task in download server");
+
+        // Check whether the persistent task already exists.
+        match self
+            .persistent_task
+            .exists(&task_id, &request.url, request.object_storage.clone())
+            .await
+        {
+            Ok(true) => {
+                info!("persistent task already exists, skip upload");
+                return Err(Status::already_exists("persistent task already exists"));
+            }
+            Ok(false) => {}
+            Err(err) => {
+                error!("check persistent task exists: {}", err);
+                return Err(Status::internal(err.to_string()));
+            }
+        };
 
         // Collect upload task started metrics.
         collect_upload_task_started_metrics(

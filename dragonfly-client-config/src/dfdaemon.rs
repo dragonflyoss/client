@@ -176,6 +176,12 @@ fn default_backend_put_chunk_size() -> ByteSize {
     ByteSize::mib(8)
 }
 
+/// default_backend_put_timeout is the default timeout for uploading a file to backend, default is
+/// 15 minutes.
+fn default_backend_put_timeout() -> Duration {
+    Duration::from_secs(900)
+}
+
 /// default_download_max_schedule_count is the default max count of schedule.
 #[inline]
 fn default_download_max_schedule_count() -> u32 {
@@ -1425,8 +1431,15 @@ pub struct Backend {
     /// for buffering and may delay upload start. Smaller chunks reduce memory footprint and provide
     /// faster initial response, but increase request overhead and API costs. Choose based on your
     /// network conditions, available memory, and backend pricing/performance characteristics.
-    #[serde(with = "bytesize_serde", default = "default_backend_put_chunk_size")]
+    #[serde(default = "default_backend_put_chunk_size", with = "bytesize_serde")]
     pub put_chunk_size: ByteSize,
+
+    /// Put timeout specifies the maximum duration allowed for uploading a single object
+    /// (potentially consisting of multiple chunks) to the backend storage. If the upload
+    /// does not complete within this time window, the operation will be canceled and
+    /// treated as a failure.
+    #[serde(default = "default_backend_put_timeout", with = "humantime_serde")]
+    pub put_timeout: Duration,
 }
 
 /// Backend implements Default.
@@ -1438,6 +1451,7 @@ impl Default for Backend {
             cache_temporary_redirect_ttl: default_backend_cache_temporary_redirect_ttl(),
             put_concurrent_chunk_count: default_backend_put_concurrent_chunk_count(),
             put_chunk_size: default_backend_put_chunk_size(),
+            put_timeout: default_backend_put_timeout(),
         }
     }
 }
@@ -2141,7 +2155,8 @@ key: /etc/ssl/private/client.pem
             "enableCacheTemporaryRedirect": false,
             "cacheTemporaryRedirectTTL": "15m",
             "putConcurrentChunkCount": 2,
-            "putChunkSize": "2mib"
+            "putChunkSize": "2mib",
+            "putTimeout": "1m"
         }"#;
 
         let backend: Backend = serde_json::from_str(json_data).unwrap();
@@ -2161,5 +2176,6 @@ key: /etc/ssl/private/client.pem
         );
         assert_eq!(backend.put_concurrent_chunk_count, 2);
         assert_eq!(backend.put_chunk_size, ByteSize::mib(2));
+        assert_eq!(backend.put_timeout, Duration::from_secs(60));
     }
 }
