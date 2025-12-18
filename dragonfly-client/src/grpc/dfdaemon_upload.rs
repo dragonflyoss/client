@@ -29,12 +29,13 @@ use dragonfly_api::dfdaemon::v2::{
     DownloadPersistentPieceResponse, DownloadPersistentTaskRequest, DownloadPersistentTaskResponse,
     DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest, DownloadTaskResponse, Entry,
     ExchangeIbVerbsQueuePairEndpointRequest, ExchangeIbVerbsQueuePairEndpointResponse,
-    ListTaskEntriesRequest, ListTaskEntriesResponse, StatCacheTaskRequest,
-    StatPersistentCacheTaskRequest, StatPersistentTaskRequest, StatTaskRequest,
-    StatTaskRequest as DfdaemonStatTaskRequest, SyncCachePiecesRequest, SyncCachePiecesResponse,
-    SyncHostRequest, SyncPersistentCachePiecesRequest, SyncPersistentCachePiecesResponse,
-    SyncPersistentPiecesRequest, SyncPersistentPiecesResponse, SyncPiecesRequest,
-    SyncPiecesResponse, UpdatePersistentCacheTaskRequest, UpdatePersistentTaskRequest,
+    ListTaskEntriesRequest, ListTaskEntriesResponse, StatCacheTaskRequest, StatLocalTaskRequest,
+    StatLocalTaskResponse, StatPersistentCacheTaskRequest, StatPersistentTaskRequest,
+    StatTaskRequest, StatTaskRequest as DfdaemonStatTaskRequest, SyncCachePiecesRequest,
+    SyncCachePiecesResponse, SyncHostRequest, SyncPersistentCachePiecesRequest,
+    SyncPersistentCachePiecesResponse, SyncPersistentPiecesRequest, SyncPersistentPiecesResponse,
+    SyncPiecesRequest, SyncPiecesResponse, UpdatePersistentCacheTaskRequest,
+    UpdatePersistentTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_backend::StatRequest;
@@ -47,7 +48,8 @@ use dragonfly_client_metric::{
     collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
     collect_download_task_failure_metrics, collect_download_task_finished_metrics,
     collect_download_task_started_metrics, collect_list_task_entries_failure_metrics,
-    collect_list_task_entries_started_metrics, collect_stat_task_failure_metrics,
+    collect_list_task_entries_started_metrics, collect_local_stat_task_failure_metrics,
+    collect_local_stat_task_started_metrics, collect_stat_task_failure_metrics,
     collect_stat_task_started_metrics, collect_update_task_failure_metrics,
     collect_update_task_started_metrics, collect_upload_piece_failure_metrics,
     collect_upload_piece_finished_metrics, collect_upload_piece_started_metrics,
@@ -715,6 +717,54 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 Err(match err {
                     ClientError::TaskNotFound(id) => {
                         Status::not_found(format!("task not found: {}", id))
+                    }
+                    _ => Status::internal(err.to_string()),
+                })
+            }
+        }
+    }
+
+    /// stat_local_task stats the local task.
+    #[instrument(skip_all, fields(task_id, remote_ip))]
+    async fn stat_local_task(
+        &self,
+        request: Request<StatLocalTaskRequest>,
+    ) -> Result<Response<StatLocalTaskResponse>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the task id.
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        info!("stat local task in upload server");
+
+        // Collect the local stat task metrics.
+        collect_local_stat_task_started_metrics(TaskType::Standard as i32);
+
+        match self.task.local_stat(task_id.as_str()).await {
+            Ok(response) => Ok(Response::new(response)),
+            Err(err) => {
+                // Collect the local stat task failure metrics.
+                collect_local_stat_task_failure_metrics(TaskType::Standard as i32);
+
+                // Log the error with detailed context.
+                error!("stat local task failed: {}", err);
+
+                // Map the error to an appropriate gRPC status.
+                Err(match err {
+                    ClientError::TaskNotFound(id) => {
+                        Status::not_found(format!("local task not found: {}", id))
                     }
                     _ => Status::internal(err.to_string()),
                 })
