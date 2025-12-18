@@ -101,6 +101,13 @@ pub struct ImportCommand {
     endpoint: PathBuf,
 
     #[arg(
+        long,
+        default_value_t = false,
+        help = "Specify whether to disable the progress bar display"
+    )]
+    no_progress: bool,
+
+    #[arg(
         short = 'l',
         long,
         default_value = "info",
@@ -317,7 +324,12 @@ impl ImportCommand {
         let absolute_path = Path::new(&self.path).absolutize()?;
         info!("import file: {}", absolute_path.to_string_lossy());
 
-        let progress_bar = ProgressBar::new_spinner();
+        let progress_bar = if self.no_progress {
+            ProgressBar::hidden()
+        } else {
+            ProgressBar::new_spinner()
+        };
+
         progress_bar.enable_steady_tick(DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL);
         progress_bar.set_style(
             ProgressStyle::with_template("{spinner:.blue} {msg}")
