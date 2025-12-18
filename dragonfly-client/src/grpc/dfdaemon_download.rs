@@ -51,7 +51,7 @@ use dragonfly_client_metric::{
 use dragonfly_client_util::{
     digest::{is_blob_url, verify_file_digest, Digest},
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
-    id_generator::{PersistentCacheTaskIDParameter, TaskIDParameter},
+    id_generator::{PersistentCacheTaskIDParameter, PersistentTaskIDParameter, TaskIDParameter},
     shutdown,
 };
 use hyper_util::rt::TokioIo;
@@ -921,9 +921,100 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip))]
     async fn upload_persistent_task(
         &self,
-        _request: Request<UploadPersistentTaskRequest>,
+        request: Request<UploadPersistentTaskRequest>,
     ) -> Result<Response<PersistentTask>, Status> {
-        todo!();
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Record the start time.
+        let start_time = Instant::now();
+
+        // Clone the request.
+        let request = request.into_inner();
+        let path = Path::new(request.path.as_str());
+        info!("upload persistent task {:?}", request);
+
+        // Generate the task id.
+        let task_id = self
+            .task
+            .id_generator
+            .persistent_task_id(match request.content_for_calculating_task_id.clone() {
+                Some(content) => PersistentTaskIDParameter::Content(content),
+                None => PersistentTaskIDParameter::FileContentBased {
+                    path: path.to_path_buf(),
+                    piece_length: request.piece_length,
+                    tag: request.tag.clone(),
+                    application: request.application.clone(),
+                },
+            })
+            .map_err(|err| {
+                error!("generate persistent task id: {}", err);
+                Status::invalid_argument(err.to_string())
+            })?;
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Generate the peer id.
+        let peer_id = self.task.id_generator.peer_id();
+
+        // Span record the host id, task id and peer id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record("peer_id", peer_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        info!("upload persistent task in download server");
+
+        // Collect upload task started metrics.
+        collect_upload_task_started_metrics(
+            TaskType::Persistent as i32,
+            request.tag.clone().unwrap_or_default().as_str(),
+            request.application.clone().unwrap_or_default().as_str(),
+        );
+
+        // Create the persistent task to local storage.
+        let task = match self
+            .persistent_task
+            .upload(
+                task_id.as_str(),
+                host_id.as_str(),
+                peer_id.as_str(),
+                path.to_path_buf(),
+                request.clone(),
+            )
+            .await
+        {
+            Ok(task) => {
+                // Collect upload task finished metrics.
+                collect_upload_task_finished_metrics(
+                    TaskType::Persistent as i32,
+                    request.tag.clone().unwrap_or_default().as_str(),
+                    request.application.clone().unwrap_or_default().as_str(),
+                    task.content_length,
+                    start_time.elapsed(),
+                );
+
+                task
+            }
+            Err(err) => {
+                // Collect upload task failure metrics.
+                collect_upload_task_failure_metrics(
+                    TaskType::Persistent as i32,
+                    request.tag.clone().unwrap_or_default().as_str(),
+                    request.application.clone().unwrap_or_default().as_str(),
+                );
+
+                error!("create persistent task: {}", err);
+                return Err(Status::internal(err.to_string()));
+            }
+        };
+
+        Ok(Response::new(task))
     }
 
     /// DownloadPersistentCacheTaskStream is the stream of the download persistent cache task response.
