@@ -786,15 +786,15 @@ pub fn collect_stat_task_failure_metrics(typ: i32) {
         .inc();
 }
 
-/// collect_stat_task_started_metrics collects the stat task started metrics.
-pub fn collect_local_stat_task_started_metrics(typ: i32) {
+/// collect_stat_local_task_started_metrics collects the stat local task started metrics.
+pub fn collect_stat_local_task_started_metrics(typ: i32) {
     STAT_LOCAL_TASK_COUNT
         .with_label_values(&[typ.to_string().as_str()])
         .inc();
 }
 
-/// collect_stat_task_failure_metrics collects the stat task failure metrics.
-pub fn collect_local_stat_task_failure_metrics(typ: i32) {
+/// collect_stat_local_task_failure_metrics collects the stat local task failure metrics.
+pub fn collect_stat_local_task_failure_metrics(typ: i32) {
     STAT_LOCAL_TASK_FAILURE_COUNT
         .with_label_values(&[typ.to_string().as_str()])
         .inc();
