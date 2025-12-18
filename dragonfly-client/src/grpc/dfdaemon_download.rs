@@ -45,8 +45,8 @@ use dragonfly_client_metric::{
     collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
     collect_download_task_failure_metrics, collect_download_task_finished_metrics,
     collect_download_task_started_metrics, collect_list_task_entries_failure_metrics,
-    collect_list_task_entries_started_metrics, collect_local_stat_task_failure_metrics,
-    collect_local_stat_task_started_metrics, collect_stat_task_failure_metrics,
+    collect_list_task_entries_started_metrics, collect_stat_local_task_failure_metrics,
+    collect_stat_local_task_started_metrics, collect_stat_task_failure_metrics,
     collect_stat_task_started_metrics, collect_upload_task_failure_metrics,
     collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
 };
@@ -687,7 +687,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 
     /// stat_task gets the status of the task.
-    #[instrument(skip_all, fields(host_id, task_id, remote_ip, local_only))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_task(
         &self,
         request: Request<DfdaemonStatTaskRequest>,
@@ -706,9 +706,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Get the task id from the request.
         let task_id = request.task_id;
 
-        // Get the local_only flag from the request, default to false.
-        let local_only = request.local_only;
-
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
@@ -716,17 +713,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             "remote_ip",
             request.remote_ip.clone().unwrap_or_default().as_str(),
         );
-        Span::current().record("local_only", local_only.to_string().as_str());
         info!("stat task in download server");
 
         // Collect the stat task metrics.
         collect_stat_task_started_metrics(TaskType::Standard as i32);
-
-        match self
-            .task
-            .stat(task_id.as_str(), host_id.as_str(), local_only)
-            .await
-        {
+        match self.task.stat(task_id.as_str(), host_id.as_str()).await {
             Ok(task) => Ok(Response::new(task)),
             Err(err) => {
                 // Collect the stat task failure metrics.
@@ -772,13 +763,13 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         info!("stat local task in upload server");
 
         // Collect the local stat task metrics.
-        collect_local_stat_task_started_metrics(TaskType::Standard as i32);
+        collect_stat_local_task_started_metrics(TaskType::Standard as i32);
 
-        match self.task.local_stat(task_id.as_str()).await {
+        match self.task.stat_local(task_id.as_str()).await {
             Ok(response) => Ok(Response::new(response)),
             Err(err) => {
                 // Collect the local stat task failure metrics.
-                collect_local_stat_task_failure_metrics(TaskType::Standard as i32);
+                collect_stat_local_task_failure_metrics(TaskType::Standard as i32);
 
                 // Log the error with detailed context.
                 error!("stat local task failed: {}", err);
@@ -1406,7 +1397,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 
     /// stat_cache_task gets the status of the cache task.
-    #[instrument(skip_all, fields(host_id, task_id, remote_pi, local_only))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_cache_task(
         &self,
         _request: Request<DfdaemonStatCacheTaskRequest>,
