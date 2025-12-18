@@ -212,6 +212,20 @@ lazy_static! {
             &["type"]
         ).expect("metric can be created");
 
+    /// STAT_TASK_COUNT is used to count the number of stat tasks.
+    pub static ref STAT_LOCAL_TASK_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("stat_local_task_total", "Counter of the number of the stat local task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type"]
+        ).expect("metric can be created");
+
+    /// STAT_TASK_FAILURE_COUNT is used to count the failed number of stat tasks.
+    pub static ref STAT_LOCAL_TASK_FAILURE_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("stat_local_task_failure_total", "Counter of the number of failed of the stat local task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type"]
+        ).expect("metric can be created");
+
     /// LIST_TASK_ENTRIES_COUNT is used to count the number of list task entries.
     pub static ref LIST_TASK_ENTRIES_COUNT: IntCounterVec =
         IntCounterVec::new(
@@ -768,6 +782,20 @@ pub fn collect_stat_task_started_metrics(typ: i32) {
 /// collect_stat_task_failure_metrics collects the stat task failure metrics.
 pub fn collect_stat_task_failure_metrics(typ: i32) {
     STAT_TASK_FAILURE_COUNT
+        .with_label_values(&[typ.to_string().as_str()])
+        .inc();
+}
+
+/// collect_stat_local_task_started_metrics collects the stat local task started metrics.
+pub fn collect_stat_local_task_started_metrics(typ: i32) {
+    STAT_LOCAL_TASK_COUNT
+        .with_label_values(&[typ.to_string().as_str()])
+        .inc();
+}
+
+/// collect_stat_local_task_failure_metrics collects the stat local task failure metrics.
+pub fn collect_stat_local_task_failure_metrics(typ: i32) {
+    STAT_LOCAL_TASK_FAILURE_COUNT
         .with_label_values(&[typ.to_string().as_str()])
         .inc();
 }
