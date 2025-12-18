@@ -35,7 +35,7 @@ use dragonfly_client_util::{
     http::query_params::default_proxy_rule_filtered_query_params,
 };
 use glob::Pattern;
-use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressState, ProgressStyle};
 use local_ip_address::local_ip;
 use path_absolutize::*;
 use percent_encoding::percent_decode_str;
@@ -284,6 +284,13 @@ struct Args {
         help = "Specify the max count of concurrent download files when downloading a directory"
     )]
     max_concurrent_requests: usize,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Specify whether to disable the progress bar display"
+    )]
+    no_progress: bool,
 
     #[arg(
         short = 'l',
@@ -624,7 +631,13 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
         return download_dir(args, dfdaemon_download_client).await;
     };
 
-    download(args, ProgressBar::new(0), dfdaemon_download_client).await
+    let progress_bar = if args.no_progress {
+        ProgressBar::hidden()
+    } else {
+        ProgressBar::new(0)
+    };
+
+    download(args, progress_bar, dfdaemon_download_client).await
 }
 
 /// Downloads all files in a directory from various storage backends (object storage, HDFS, etc.).
@@ -675,7 +688,13 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
     }
 
     // Initialize the multi progress bar.
-    let multi_progress_bar = MultiProgress::new();
+    let multi_progress_bar = if args.no_progress {
+        let multi_progress = MultiProgress::new();
+        multi_progress.set_draw_target(ProgressDrawTarget::hidden());
+        multi_progress
+    } else {
+        MultiProgress::new()
+    };
 
     // Initialize the join set.
     let mut join_set = JoinSet::new();
@@ -821,8 +840,8 @@ async fn get_all_entries(
 
     // Sort directories before files to ensure parent directories exist
     // before attempting to create their children.
-    let mut sorted_entries: Vec<DirEntry> = entries.into_iter().collect();
-    sorted_entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir));
+    let mut sorted_entries = Vec::from_iter(entries);
+    sorted_entries.sort_unstable_by(|a, b| b.is_dir.cmp(&a.is_dir));
     info!("get all entries: {:?}", sorted_entries);
 
     Ok(sorted_entries)

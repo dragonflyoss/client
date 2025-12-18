@@ -109,6 +109,13 @@ pub struct ExportCommand {
     endpoint: PathBuf,
 
     #[arg(
+        long,
+        default_value_t = false,
+        help = "Specify whether to disable the progress bar display"
+    )]
+    no_progress: bool,
+
+    #[arg(
         short = 'l',
         long,
         default_value = "info",
@@ -495,7 +502,12 @@ impl ExportCommand {
         };
 
         // Initialize progress bar.
-        let progress_bar = ProgressBar::new(0);
+        let progress_bar = if self.no_progress {
+            ProgressBar::hidden()
+        } else {
+            ProgressBar::new(0)
+        };
+
         progress_bar.set_style(
             ProgressStyle::with_template(
                 "[{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})",
