@@ -18,7 +18,7 @@ use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::resource::piece_collector::CollectedParent;
 use dashmap::DashMap;
 use dragonfly_api::common::v2::{Host, Network, Peer, PersistentCachePeer};
-use dragonfly_api::dfdaemon::v2::{StatTaskRequest, SyncHostRequest};
+use dragonfly_api::dfdaemon::v2::SyncHostRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
 use dragonfly_client_util::id_generator::IDGenerator;
@@ -41,9 +41,6 @@ struct Connection {
     /// Used for reference counting to determine when cleanup is safe.
     active_requests: Arc<AtomicUsize>,
 
-    /// Number of inflight piece downloads routed through this parent.
-    inflight_pieces: Arc<AtomicUsize>,
-
     /// Shutdown signal to stop the background host sync task.
     shutdown: Shutdown,
 }
@@ -54,7 +51,6 @@ impl Connection {
     pub fn new() -> Self {
         Self {
             active_requests: Arc::new(AtomicUsize::new(0)),
-            inflight_pieces: Arc::new(AtomicUsize::new(0)),
             shutdown: Shutdown::new(),
         }
     }
@@ -77,18 +73,6 @@ impl Connection {
     /// Triggers shutdown of the background host synchronization task.
     pub fn shutdown(&self) {
         self.shutdown.trigger();
-    }
-
-    pub fn inflight_pieces(&self) -> usize {
-        self.inflight_pieces.load(Ordering::SeqCst)
-    }
-
-    pub fn increment_inflight_piece(&self) {
-        self.inflight_pieces.fetch_add(1, Ordering::SeqCst);
-    }
-
-    pub fn decrement_inflight_piece(&self) {
-        self.inflight_pieces.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -392,22 +376,6 @@ impl ParentSelector {
         }
     }
 
-    /// Increase inflight counter for the selected parent and return host id for later release.
-    pub fn increment_inflight_piece(&self, parent: &CollectedParent) -> Option<String> {
-        let parent_host_id = parent.host.as_ref().map(|host| host.id.clone())?;
-        let connection = self.connections.get(&parent_host_id)?;
-        connection.increment_inflight_piece();
-
-        Some(parent_host_id)
-    }
-
-    /// Decrease inflight counter for the given parent host id.
-    pub fn decrement_inflight_piece(&self, parent_host_id: &str) {
-        if let Some(connection) = self.connections.get(parent_host_id) {
-            connection.decrement_inflight_piece();
-        }
-    }
-
     /// Calculates the weight of a host based on its idle bandwidth and inflight pieces.
     fn calculate_weight(&self, host: &Host) -> u64 {
         let (tx_bw, max_bw) = self
@@ -416,63 +384,17 @@ impl ParentSelector {
             .map(|w| (w.tx_bandwidth().max(1), w.max_tx_bandwidth.max(1)))
             .unwrap_or((1, 1));
 
-        // idle bandwidth, at least 10% of max bandwidth.
-        let idle_bw = max_bw.saturating_sub(tx_bw).max(max_bw / 10) as f64;
+        // idle bandwidth, at least 5% of max bandwidth.
+        let idle_bw = max_bw.saturating_sub(tx_bw).max(max_bw / 20) as f64;
 
-        // inflight backpressure（γ=3.0）
-        let inflight = self
-            .connections
-            .get(&host.id)
-            .map(|c| c.inflight_pieces() as u64)
-            .unwrap_or(0) as f64;
-
-        let backpressure = 1.0 / (1.0 + inflight.powf(3.0));
-
-        let weight = idle_bw * backpressure;
+        let weight = idle_bw;
 
         info!(
-            "calculate_weight host {}: idle_bw={}, inflight={}, weight={:.2}",
-            host.id, idle_bw, inflight, weight,
+            "calculate_weight host {}: idle_bw={}, weight={:.2}",
+            host.id, idle_bw, weight,
         );
 
         weight as u64
-    }
-
-    /// Sends a local-only StatTaskRequest to the parent to trigger single-parent backoff handling.
-    #[instrument(skip_all)]
-    pub async fn apply_single_parent_backoff(
-        &self,
-        parents: &[Peer],
-        task_id: &str,
-    ) -> Result<bool> {
-        let Some(parent) = parents.first() else {
-            warn!("apply_single_parent_backoff called with empty parents");
-            return Ok(false);
-        };
-
-        let Some(host) = parent.host.as_ref() else {
-            warn!("parent {} has no host info, skipping stat", parent.id);
-            return Ok(true);
-        };
-
-        let addr = format!("http://{}:{}", host.ip, host.port);
-        let client = DfdaemonUploadClient::new(self.config.clone(), addr, false).await?;
-
-        let task = client
-            .stat_task(StatTaskRequest {
-                task_id: task_id.to_string(),
-                remote_ip: None,
-                local_only: true,
-            })
-            .await
-            .inspect_err(|err| {
-                warn!(
-                    "stat task {} with parent {} failed: {}",
-                    task_id, parent.id, err
-                );
-            })?;
-
-        Ok(task.has_available_peer)
     }
 }
 

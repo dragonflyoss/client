@@ -55,7 +55,7 @@ use reqwest::header::HeaderMap;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicBool, Ordering},
     Arc,
 };
 use std::time::Instant;
@@ -986,29 +986,7 @@ impl Task {
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
         in_stream_tx: Sender<AnnouncePeerRequest>,
     ) -> ClientResult<Vec<metadata::Piece>> {
-        // Get the id of the task.
         let task_id = task.id.as_str();
-        // If scheduler only gives one parent (likely seed), add a small random wait to stagger requests.
-        info!("parents for task {}: {:?}", task_id, parents.iter().map(|p| p.id.clone()).collect::<Vec<String>>());
-        if parents.len() == 1 {
-            // let backoff = Duration::from_millis(200 + fastrand::u64(0..301));
-            info!("single parent detected",);
-            // tokio::time::sleep(backoff).await;
-
-            let has_available_peer = self
-                .parent_selector
-                .apply_single_parent_backoff(&parents, task_id)
-                .await
-                .unwrap_or(false);
-
-            if !has_available_peer {
-                info!(
-                    "single parent has no available peer for task {}, triggering reschedule",
-                    task_id
-                );
-                return Ok(Vec::new());
-            }
-        }
 
         // Register the parents for syncing host info.
         self.parent_selector
@@ -1058,8 +1036,6 @@ impl Task {
             self.config.download.concurrent_piece_count as usize,
         ));
 
-        let cumulative_piece_count = Arc::new(AtomicUsize::new(0));
-
         while let Some(collect_piece) = piece_collector_rx.recv().await {
             if interrupt.load(Ordering::SeqCst) {
                 // If the interrupt is true, break the collector loop.
@@ -1069,11 +1045,9 @@ impl Task {
             }
 
             async fn download_from_parent(
-                config: Arc<Config>,
                 task_id: String,
                 host_id: String,
                 peer_id: String,
-                interested_piece: Option<metadata::Piece>,
                 number: u32,
                 length: u64,
                 parents: Vec<piece_collector::CollectedParent>,
@@ -1086,54 +1060,9 @@ impl Task {
                 need_piece_content: bool,
                 protocol: String,
                 parent_selector: Arc<ParentSelector>,
-                cumulative_piece_count: Arc<AtomicUsize>,
             ) -> ClientResult<metadata::Piece> {
-                let piece_id = piece_manager.id(task_id.as_str(), number);
-                let mut parents = parents;
-                if cumulative_piece_count.fetch_add(1, Ordering::SeqCst) + 1
-                    > config.download.concurrent_piece_count as usize
-                {
-                    info!("refreshing parents for piece {}", piece_id);
-                    if let Some(interested_piece) = interested_piece {
-                        let piece_collector = piece_collector::PieceCollector::new(
-                            config.clone(),
-                            host_id.as_str(),
-                            task_id.as_str(),
-                            vec![interested_piece],
-                            parents.clone(),
-                        )
-                        .await;
-                        let mut piece_collector_rx = piece_collector.run().await;
-
-                        if let Some(updated_parents) = piece_collector_rx.recv().await {
-                            if !updated_parents.parents.is_empty() {
-                                parents = updated_parents.parents;
-                                info!(
-                                    "refreshed parents for piece {}: {:?}",
-                                    piece_id,
-                                    parents
-                                        .iter()
-                                        .map(|p| p.id.clone())
-                                        .collect::<Vec<String>>()
-                                );
-                            }
-                        }
-                    }
-                }
-
+                let piece_id = piece_manager.id(task_id.as_str(), number);                
                 let parent = parent_selector.select(parents);
-                let inflight_parent_id = parent_selector.increment_inflight_piece(&parent);
-                let _inflight_guard = inflight_parent_id.as_ref().map(|parent_host_id| {
-                    scopeguard::guard(parent_host_id.clone(), |parent_host_id| {
-                        parent_selector.decrement_inflight_piece(&parent_host_id);
-                    })
-                });
-
-                info!(
-                    "start to download piece {} from parent {:?}",
-                    piece_id,
-                    parent.id.clone()
-                );
 
                 let metadata = piece_manager
                     .download_from_parent(
@@ -1263,7 +1192,6 @@ impl Task {
             let task_id = task_id.to_string();
             let host_id = host_id.to_string();
             let peer_id = peer_id.to_string();
-            let config = self.config.clone();
             let piece_manager = self.piece.clone();
             let download_progress_tx = download_progress_tx.clone();
             let in_stream_tx = in_stream_tx.clone();
@@ -1271,18 +1199,14 @@ impl Task {
             let finished_pieces = finished_pieces.clone();
             let protocol = self.config.download.protocol.clone();
             let parent_selector = self.parent_selector.clone();
-            let interested_piece = interested_pieces.get(1).cloned();
-            let cumulative_piece_count = cumulative_piece_count.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
                     let _permit: tokio::sync::OwnedSemaphorePermit = permit;
                     download_from_parent(
-                        config,
                         task_id,
                         host_id,
                         peer_id,
-                        interested_piece,
                         collect_piece.number,
                         collect_piece.length,
                         collect_piece.parents,
@@ -1295,7 +1219,6 @@ impl Task {
                         need_piece_content,
                         protocol,
                         parent_selector,
-                        cumulative_piece_count,
                     )
                     .await
                 }

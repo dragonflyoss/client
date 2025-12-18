@@ -98,8 +98,6 @@ pub struct DfdaemonUploadServer {
     /// interface is the network interface.
     interface: Arc<Interface>,
 
-    active_single_uploads: Arc<dashmap::DashMap<String, usize>>,
-
     /// shutdown is used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
 
@@ -125,7 +123,6 @@ impl DfdaemonUploadServer {
             task,
             interface,
             persistent_cache_task,
-            active_single_uploads: Arc::new(dashmap::DashMap::new()),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -140,7 +137,6 @@ impl DfdaemonUploadServer {
                 task: self.task.clone(),
                 persistent_cache_task: self.persistent_cache_task.clone(),
                 interface: self.interface.clone(),
-                active_single_uploads: self.active_single_uploads.clone(),
             },
             ExtractTracingInterceptor,
         );
@@ -228,8 +224,6 @@ pub struct DfdaemonUploadServerHandler {
 
     /// interface is the network interface.
     interface: Arc<Interface>,
-
-    active_single_uploads: Arc<dashmap::DashMap<String, usize>>,
 }
 
 /// DfdaemonUploadServerHandler implements the dfdaemon upload grpc service.
@@ -691,63 +685,31 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("local_only", local_only.to_string().as_str());
         info!("stat task in upload server");
 
-        // If local_only is true, this is a single-source probe from child. Enforce local cap.
-        if local_only {
-            let mut counter_entry = self
-                .active_single_uploads
-                .entry(task_id.clone())
-                .or_insert(0);
-            let current = *counter_entry;
-            let mut task = Task::default();
+        // Collect the stat task metrics.
+        collect_stat_task_started_metrics(TaskType::Standard as i32);
 
-            if current < 2 {
-                *counter_entry += 1;
-                task.has_available_peer = true;
-                info!(
-                    "single-source stat: task {} accept child, current={} (cap=2)",
-                    task_id,
-                    current + 1
-                );
-            } else {
-                task.has_available_peer = false;
-                info!(
-                    "single-source stat: task {} reject child, current={} (cap=2)",
-                    task_id, current
-                );
+        match self
+            .task
+            .stat(task_id.as_str(), host_id.as_str(), local_only)
+            .await
+        {
+            Ok(task) => Ok(Response::new(task)),
+            Err(err) => {
+                // Collect the stat task failure metrics.
+                collect_stat_task_failure_metrics(TaskType::Standard as i32);
+
+                // Log the error with detailed context.
+                error!("stat task failed: {}", err);
+
+                // Map the error to an appropriate gRPC status.
+                Err(match err {
+                    ClientError::TaskNotFound(id) => {
+                        Status::not_found(format!("task not found: {}", id))
+                    }
+                    _ => Status::internal(err.to_string()),
+                })
             }
-
-            return Ok(Response::new(task));
-        } else {
-            let mut task = Task::default();
-            task.has_available_peer = true;
-            return Ok(Response::new(task));
         }
-
-        // // Collect the stat task metrics.
-        // collect_stat_task_started_metrics(TaskType::Standard as i32);
-
-        // match self
-        //     .task
-        //     .stat(task_id.as_str(), host_id.as_str(), local_only)
-        //     .await
-        // {
-        //     Ok(task) => Ok(Response::new(task)),
-        //     Err(err) => {
-        //         // Collect the stat task failure metrics.
-        //         collect_stat_task_failure_metrics(TaskType::Standard as i32);
-
-        //         // Log the error with detailed context.
-        //         error!("stat task failed: {}", err);
-
-        //         // Map the error to an appropriate gRPC status.
-        //         Err(match err {
-        //             ClientError::TaskNotFound(id) => {
-        //                 Status::not_found(format!("task not found: {}", id))
-        //             }
-        //             _ => Status::internal(err.to_string()),
-        //         })
-        //     }
-        // }
     }
 
     /// list_tasks lists the tasks.

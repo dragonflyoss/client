@@ -173,6 +173,9 @@ impl PieceCollector {
         collected_piece_tx: Sender<CollectedPiece>,
         collected_piece_timeout: Duration,
     ) -> Result<()> {
+        // Only require multiple parents to trigger download when we have at least three parents in total.
+        let required_parent_count = if parents.len() > 2 { 2 } else { 1 };
+
         // Create a task to collect pieces from peers.
         let mut join_set = JoinSet::new();
         for parent in parents.iter() {
@@ -186,8 +189,9 @@ impl PieceCollector {
                 collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
                 collected_piece_tx: Sender<CollectedPiece>,
                 collected_piece_timeout: Duration,
+                required_parent_count: usize,
             ) -> Result<CollectedParent> {
-                debug!("sync pieces from parent {}", parent.id);
+                info!("sync pieces from parent {}", parent.id);
 
                 // If candidate_parent.host is None, skip it.
                 let host = parent.host.clone().ok_or_else(|| {
@@ -237,6 +241,9 @@ impl PieceCollector {
                         parent.download_tcp_port = message.tcp_port;
                         parent.download_quic_port = message.quic_port;
                         parents.push(parent.clone());
+                        if parents.len() < required_parent_count {
+                            continue;
+                        }
                     } else {
                         continue;
                     }
@@ -281,6 +288,7 @@ impl PieceCollector {
                     collected_pieces.clone(),
                     collected_piece_tx.clone(),
                     collected_piece_timeout,
+                    required_parent_count,
                 )
                 .in_current_span(),
             );
