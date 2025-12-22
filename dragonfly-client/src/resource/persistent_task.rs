@@ -18,7 +18,7 @@ use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::resource::parent_selector::PersistentParentSelector;
 use chrono::DateTime;
 use dragonfly_api::common::v2::{
-    PersistentPeer, PersistentTask as CommonPersistentTask, Piece, TrafficType,
+    ObjectStorage, PersistentPeer, PersistentTask as CommonPersistentTask, Piece, TrafficType,
 };
 use dragonfly_api::dfdaemon::{
     self,
@@ -35,12 +35,16 @@ use dragonfly_api::scheduler::v2::{
     ReschedulePersistentPeerRequest, StatPersistentTaskRequest, UploadPersistentTaskFailedRequest,
     UploadPersistentTaskFinishedRequest, UploadPersistentTaskStartedRequest,
 };
-use dragonfly_client_backend::BackendFactory;
+use dragonfly_client_backend::{BackendFactory, ExistsRequest, PutRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{error::DownloadFromParentFailed, Error};
 use dragonfly_client_core::{
-    error::{ErrorType, OrErr},
+    error::{BackendError, ErrorType, OrErr},
     Result as ClientResult,
+};
+use dragonfly_client_metric::{
+    collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
+    collect_backend_request_started_metrics,
 };
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::{id_generator::IDGenerator, shutdown};
@@ -50,7 +54,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom};
 use tokio::sync::{
@@ -74,6 +78,9 @@ pub struct PersistentTask {
 
     /// storage is the local storage.
     storage: Arc<Storage>,
+
+    /// backend_factory is the backend factory.
+    backend_factory: Arc<BackendFactory>,
 
     /// scheduler_client is the grpc client of the scheduler.
     pub scheduler_client: Arc<SchedulerClient>,
@@ -105,6 +112,7 @@ impl PersistentTask {
             config: config.clone(),
             id_generator: id_generator.clone(),
             storage: storage.clone(),
+            backend_factory: backend_factory.clone(),
             scheduler_client,
             piece: Arc::new(piece::Piece::new(
                 config.clone(),
@@ -171,8 +179,8 @@ impl PersistentTask {
                 host_id: host_id.to_string(),
                 task_id: task_id.to_string(),
                 peer_id: peer_id.to_string(),
-                object_storage_key: request.object_storage_key,
-                object_storage: request.object_storage,
+                url: request.url.clone(),
+                object_storage: request.object_storage.clone(),
                 persistent_replica_count: request.persistent_replica_count,
                 tag: request.tag.clone(),
                 application: request.application.clone(),
@@ -201,7 +209,14 @@ impl PersistentTask {
 
         info!("upload persistent task started");
         match self
-            .upload_content(task_id, piece_length, content_length, path)
+            .upload_content(
+                task_id,
+                &request.url,
+                piece_length,
+                content_length,
+                path,
+                request.object_storage,
+            )
             .await
         {
             Ok(_) => {
@@ -310,14 +325,32 @@ impl PersistentTask {
         }
     }
 
-    /// Uploads content from a local file path to the persistent storage.
-    ///
-    /// This function attempts to optimize the upload process by first trying to create
-    /// a hard link from the source file to the task storage. If the hard link succeeds,
-    /// the function returns immediately without copying data. If the hard link fails
-    /// (e.g., source and destination are on different filesystems), the function falls
-    /// back to reading the file and writing it piece by piece into the content storage.
+    /// Orchestrates uploading content for a task by first persisting the local file
+    /// into the local piece-based storage, then uploading the same file to the
+    /// configured source storage backend.
     async fn upload_content(
+        &self,
+        task_id: &str,
+        url: &str,
+        piece_length: u64,
+        content_length: u64,
+        path: PathBuf,
+        object_storage: Option<ObjectStorage>,
+    ) -> ClientResult<()> {
+        tokio::try_join!(
+            self.upload_content_to_local(task_id, piece_length, content_length, path.clone()),
+            self.upload_content_to_source(task_id, url, path, object_storage)
+        )?;
+
+        Ok(())
+    }
+
+    /// Persists a local file into the piece-based local storage for a task by
+    /// computing the required pieces, then either registering them via a hard link
+    /// when possible or, if linking fails, concurrently reading the file by piece
+    /// and writing each piece into persistent storage, ensuring all targeted pieces
+    /// are successfully imported.
+    async fn upload_content_to_local(
         &self,
         task_id: &str,
         piece_length: u64,
@@ -503,6 +536,72 @@ impl PersistentTask {
                 "not all persistent pieces are imported".to_string(),
             ));
         }
+
+        Ok(())
+    }
+
+    /// Uploads a locally persisted task file to the remote source storage backend
+    /// using a PUT request created from the backend factory, while recording metrics
+    /// for request start, failure, and completion, and converting non‑successful
+    /// backend responses into structured backend errors.
+    async fn upload_content_to_source(
+        &self,
+        task_id: &str,
+        url: &str,
+        path: PathBuf,
+        object_storage: Option<ObjectStorage>,
+    ) -> ClientResult<()> {
+        let backend = self.backend_factory.build(url)?;
+
+        // Record the start time.
+        let start_time = Instant::now();
+
+        // Collect the backend request started metrics.
+        collect_backend_request_started_metrics(
+            backend.scheme().as_str(),
+            http::Method::PUT.as_str(),
+        );
+        let response = backend
+            .put(PutRequest {
+                task_id: task_id.to_string(),
+                url: url.to_string(),
+                path,
+                http_header: None,
+                timeout: self.config.backend.put_timeout,
+                client_cert: None,
+                object_storage,
+                hdfs: None,
+            })
+            .await
+            .inspect_err(|err| {
+                error!("upload persistent task to source failed: {}", err);
+            })?;
+
+        if !response.success {
+            error!(
+                "upload persistent task to source failed: {:?}",
+                response.error_message
+            );
+
+            // Collect the backend request failure metrics.
+            collect_backend_request_failure_metrics(
+                backend.scheme().as_str(),
+                http::Method::PUT.as_str(),
+            );
+
+            return Err(Error::BackendError(Box::new(BackendError {
+                message: response.error_message.unwrap_or_default(),
+                status_code: response.http_status_code,
+                header: response.http_header,
+            })));
+        }
+
+        // Collect the backend request finished metrics.
+        collect_backend_request_finished_metrics(
+            backend.scheme().as_str(),
+            http::Method::PUT.as_str(),
+            start_time.elapsed(),
+        );
 
         Ok(())
     }
@@ -811,9 +910,7 @@ impl PersistentTask {
                     request: Some(
                         announce_persistent_peer_request::Request::RegisterPersistentPeerRequest(
                             RegisterPersistentPeerRequest {
-                                object_storage_key: request
-                                    .object_storage_key
-                                    .ok_or(Error::InvalidParameter)?,
+                                url: request.url.ok_or(Error::InvalidParameter)?,
                                 object_storage: request.object_storage,
                                 persistent: request.persistent,
                                 tag: request.tag.clone(),
@@ -1527,6 +1624,31 @@ impl PersistentTask {
     /// persist persists the persistent task.
     pub fn persist(&self, task_id: &str) -> ClientResult<metadata::PersistentTask> {
         self.storage.persist_persistent_task(task_id)
+    }
+
+    /// exists checks if the persistent task exists in the source.
+    #[instrument(skip_all)]
+    pub async fn exists(
+        &self,
+        task_id: &str,
+        url: &str,
+        object_storage: Option<ObjectStorage>,
+    ) -> ClientResult<bool> {
+        self.backend_factory
+            .build(url)?
+            .exists(ExistsRequest {
+                task_id: task_id.to_string(),
+                url: url.to_string(),
+                http_header: None,
+                timeout: self.config.backend.put_timeout,
+                client_cert: None,
+                object_storage,
+                hdfs: None,
+            })
+            .await
+            .inspect_err(|err| {
+                error!("exists persistent task in source failed: {}", err);
+            })
     }
 
     /// stat stats the persistent task from the scheduler.

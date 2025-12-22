@@ -745,7 +745,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     /// is_task_exists checks if the task exists.
     #[instrument(skip_all)]
     pub fn is_task_exists(&self, id: &str) -> Result<bool> {
-        self.db.is_exist::<Task>(id.as_bytes())
+        self.db.exists::<Task>(id.as_bytes())
     }
 
     /// get_tasks gets the task metadatas.
@@ -971,7 +971,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     /// is_persistent_task_exists checks if the persistent task exists.
     #[instrument(skip_all)]
     pub fn is_persistent_task_exists(&self, id: &str) -> Result<bool> {
-        self.db.is_exist::<PersistentTask>(id.as_bytes())
+        self.db.exists::<PersistentTask>(id.as_bytes())
     }
 
     /// get_persistent_tasks gets the persistent task metadatas.
@@ -1186,7 +1186,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     /// is_persistent_cache_task_exists checks if the persistent cache task exists.
     #[instrument(skip_all)]
     pub fn is_persistent_cache_task_exists(&self, id: &str) -> Result<bool> {
-        self.db.is_exist::<PersistentCacheTask>(id.as_bytes())
+        self.db.exists::<PersistentCacheTask>(id.as_bytes())
     }
 
     /// get_persistent_cache_tasks gets the persistent cache task metadatas.
@@ -1373,7 +1373,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     /// is_cache_task_exists checks if the cache task exists.
     #[instrument(skip_all)]
     pub fn is_cache_task_exists(&self, id: &str) -> Result<bool> {
-        self.db.is_exist::<CacheTask>(id.as_bytes())
+        self.db.exists::<CacheTask>(id.as_bytes())
     }
 
     /// get_cache_tasks gets the cache task metadatas.
@@ -1526,7 +1526,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     /// is_piece_exists checks if the piece exists.
     #[instrument(skip_all)]
     pub fn is_piece_exists(&self, piece_id: &str) -> Result<bool> {
-        self.db.is_exist::<Piece>(piece_id.as_bytes())
+        self.db.exists::<Piece>(piece_id.as_bytes())
     }
 
     /// get_pieces gets the piece metadatas.
