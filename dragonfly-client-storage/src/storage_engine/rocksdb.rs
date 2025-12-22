@@ -149,8 +149,8 @@ impl Operations for RocksdbStorageEngine {
         }
     }
 
-    /// is_exist checks if the object exists by key.
-    fn is_exist<O: DatabaseObject>(&self, key: &[u8]) -> Result<bool> {
+    /// exists checks if the object exists by key.
+    fn exists<O: DatabaseObject>(&self, key: &[u8]) -> Result<bool> {
         let cf = cf_handle::<O>(self)?;
         Ok(self
             .get_cf(cf, key)
@@ -294,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_exist() {
+    fn test_exists() {
         let engine = create_test_engine();
 
         let object = Object {
@@ -302,9 +302,9 @@ mod tests {
             value: 100,
         };
 
-        assert!(!engine.is_exist::<Object>(object.id.as_bytes()).unwrap());
+        assert!(!engine.exists::<Object>(object.id.as_bytes()).unwrap());
         engine.put::<Object>(object.id.as_bytes(), &object).unwrap();
-        assert!(engine.is_exist::<Object>(object.id.as_bytes()).unwrap());
+        assert!(engine.exists::<Object>(object.id.as_bytes()).unwrap());
     }
 
     #[test]
@@ -317,10 +317,10 @@ mod tests {
         };
 
         engine.put::<Object>(object.id.as_bytes(), &object).unwrap();
-        assert!(engine.is_exist::<Object>(object.id.as_bytes()).unwrap());
+        assert!(engine.exists::<Object>(object.id.as_bytes()).unwrap());
 
         engine.delete::<Object>(object.id.as_bytes()).unwrap();
-        assert!(!engine.is_exist::<Object>(object.id.as_bytes()).unwrap());
+        assert!(!engine.exists::<Object>(object.id.as_bytes()).unwrap());
     }
 
     #[test]
@@ -344,14 +344,14 @@ mod tests {
 
         for object in &objects {
             engine.put::<Object>(object.id.as_bytes(), object).unwrap();
-            assert!(engine.is_exist::<Object>(object.id.as_bytes()).unwrap());
+            assert!(engine.exists::<Object>(object.id.as_bytes()).unwrap());
         }
 
         let ids: Vec<&[u8]> = objects.iter().map(|object| object.id.as_bytes()).collect();
         engine.batch_delete::<Object>(ids).unwrap();
 
         for object in &objects {
-            assert!(!engine.is_exist::<Object>(object.id.as_bytes()).unwrap());
+            assert!(!engine.exists::<Object>(object.id.as_bytes()).unwrap());
         }
     }
 

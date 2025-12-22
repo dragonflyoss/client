@@ -382,6 +382,7 @@ async fn main() -> Result<(), anyhow::Error> {
         config.clone(),
         config.download.server.socket_path.clone(),
         task.clone(),
+        persistent_task.clone(),
         persistent_cache_task.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),

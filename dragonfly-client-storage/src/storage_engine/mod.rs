@@ -52,8 +52,8 @@ pub trait Operations {
     /// get gets the object by key.
     fn get<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>>;
 
-    /// is_exist checks if the object exists by key.
-    fn is_exist<O: DatabaseObject>(&self, key: &[u8]) -> Result<bool>;
+    /// exists checks if the object exists by key.
+    fn exists<O: DatabaseObject>(&self, key: &[u8]) -> Result<bool>;
 
     /// put puts the object by key.
     fn put<O: DatabaseObject>(&self, key: &[u8], value: &O) -> Result<()>;
