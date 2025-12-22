@@ -141,9 +141,10 @@ impl PersistentCacheTask {
         path: PathBuf,
         request: UploadPersistentCacheTaskRequest,
     ) -> ClientResult<CommonPersistentCacheTask> {
-        // Convert prost_wkt_types::Duration to std::time::Duration.
-        let ttl = Duration::try_from(request.ttl.ok_or(Error::UnexpectedResponse)?)
-            .or_err(ErrorType::ParseError)?;
+        let ttl = match request.ttl {
+            Some(ttl) => Duration::try_from(ttl).or_err(ErrorType::ParseError)?,
+            None => self.config.gc.policy.persistent_cache_task_ttl,
+        };
 
         // Get the content length of the file asynchronously.
         let content_length = tokio::fs::metadata(path.as_path())
@@ -839,7 +840,6 @@ impl PersistentCacheTask {
                                 application: request.application.clone(),
                                 piece_length: task.piece_length,
                                 output_path: request.output_path.clone(),
-                                timeout: request.timeout,
                                 concurrent_piece_count: Some(self.config.download.concurrent_piece_count),
                                 piece_count: task.piece_count(),
                             },

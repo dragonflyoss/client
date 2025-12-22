@@ -52,17 +52,12 @@ pub enum TaskIDParameter {
 
 /// PersistentTaskIDParameter is the parameter of the persistent task id.
 pub enum PersistentTaskIDParameter {
-    /// Content uses the content to generate the persistent task id.
-    Content(String),
     /// FileContentBased uses the object storage url, region, endpoint, piece_length, tag and application
     /// to generate the persistent task id.
     FileContentBased {
         url: String,
         region: String,
         endpoint: String,
-        piece_length: Option<u64>,
-        tag: Option<String>,
-        application: Option<String>,
     },
 }
 
@@ -186,38 +181,16 @@ impl IDGenerator {
     #[inline]
     pub fn persistent_task_id(&self, parameter: PersistentTaskIDParameter) -> Result<String> {
         match parameter {
-            PersistentTaskIDParameter::Content(content) => {
-                Ok(hex::encode(Sha256::digest(content.as_bytes())))
-            }
             PersistentTaskIDParameter::FileContentBased {
                 url,
                 region,
                 endpoint,
-                piece_length,
-                tag,
-                application,
             } => {
                 // Calculate the hash of the file.
                 let mut hasher = Sha256::new();
                 hasher.update(url.as_bytes());
                 hasher.update(region.as_bytes());
                 hasher.update(endpoint.as_bytes());
-
-                // Add the tag to generate the persistent task id.
-                if let Some(tag) = tag {
-                    hasher.update(tag.as_bytes());
-                }
-
-                // Add the application to generate the persistent task id.
-                if let Some(application) = application {
-                    hasher.update(application.as_bytes());
-                }
-
-                // Add the piece length to generate the persistent task id.
-                if let Some(piece_length) = piece_length {
-                    hasher.update(piece_length.to_string().as_bytes());
-                }
-
                 hasher.update(TaskType::Persistent.as_str_name().as_bytes());
 
                 // Generate the persistent task id by sha256.
@@ -423,61 +396,15 @@ mod tests {
 
     #[test]
     fn should_generate_persistent_task_id() {
-        let test_cases = vec![
-            (
-                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
-                PersistentTaskIDParameter::FileContentBased {
-                    url: "my-object-key".to_string(),
-                    region: "us-west-1".to_string(),
-                    endpoint: "https://s3.us-west-1.amazonaws.com".to_string(),
-                    piece_length: Some(1024_u64),
-                    tag: Some("tag1".to_string()),
-                    application: Some("app1".to_string()),
-                },
-                "8999e17517c51decbc64a946c5c6d483c6b5fa75aabf1501e75ca3d97f1b8d74",
-            ),
-            (
-                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
-                PersistentTaskIDParameter::FileContentBased {
-                    url: "my-object-key".to_string(),
-                    region: "us-west-1".to_string(),
-                    endpoint: "https://s3.us-west-1.amazonaws.com".to_string(),
-                    piece_length: None,
-                    tag: None,
-                    application: Some("app1".to_string()),
-                },
-                "ca552e8ef6a64cc0ade44e9a364ebdef87d9a06994d825375d99be7bf84db5da",
-            ),
-            (
-                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
-                PersistentTaskIDParameter::FileContentBased {
-                    url: "my-object-key".to_string(),
-                    region: "us-west-1".to_string(),
-                    endpoint: "https://s3.us-west-1.amazonaws.com".to_string(),
-                    piece_length: None,
-                    tag: Some("tag1".to_string()),
-                    application: None,
-                },
-                "a87b4f8cdb7a488a7b16a66dbe0ce55ae83dc9e0752faf5d031c3da0d636bef2",
-            ),
-            (
-                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
-                PersistentTaskIDParameter::FileContentBased {
-                    url: "my-object-key".to_string(),
-                    region: "us-west-1".to_string(),
-                    endpoint: "https://s3.us-west-1.amazonaws.com".to_string(),
-                    piece_length: Some(1024_u64),
-                    tag: None,
-                    application: None,
-                },
-                "7df98302b9a6a93f2cc655e070b84ccb47d3c24cc45b3e54c0e337c73cf38001",
-            ),
-            (
-                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
-                PersistentTaskIDParameter::Content("This is a test file".to_string()),
-                "e2d0fe1585a63ec6009c8016ff8dda8b17719a637405a4e23c0ff81339148249",
-            ),
-        ];
+        let test_cases = vec![(
+            IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+            PersistentTaskIDParameter::FileContentBased {
+                url: "my-object-key".to_string(),
+                region: "us-west-1".to_string(),
+                endpoint: "https://s3.us-west-1.amazonaws.com".to_string(),
+            },
+            "8999e17517c51decbc64a946c5c6d483c6b5fa75aabf1501e75ca3d97f1b8d74",
+        )];
 
         for (generator, parameter, expected_id) in test_cases {
             let task_id = generator.persistent_task_id(parameter).unwrap();

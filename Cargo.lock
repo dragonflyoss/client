@@ -961,9 +961,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.2.1"
+version = "2.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fe9970c9cbd5378f40c3d7e153abd698a084ddafb89374ac727e4618b2aa07a"
+checksum = "89dee4553868d0494e7afd22cac2443c8d4083bdbd0efef2bf0b022968976725"
 dependencies = [
  "prost 0.13.5",
  "prost-types 0.14.1",
@@ -1009,6 +1009,7 @@ dependencies = [
  "leaky-bucket",
  "local-ip-address",
  "mocktail",
+ "opendal",
  "openssl",
  "opentelemetry",
  "opentelemetry-otlp",

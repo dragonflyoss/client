@@ -35,12 +35,13 @@ use dragonfly_api::scheduler::v2::{
     ReschedulePersistentPeerRequest, StatPersistentTaskRequest, UploadPersistentTaskFailedRequest,
     UploadPersistentTaskFinishedRequest, UploadPersistentTaskStartedRequest,
 };
-use dragonfly_client_backend::{BackendFactory, ExistsRequest, PutRequest};
+use dragonfly_client_backend::{
+    BackendFactory, ExistsRequest, PutRequest, StatRequest, StatResponse,
+};
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::{error::DownloadFromParentFailed, Error};
 use dragonfly_client_core::{
-    error::{BackendError, ErrorType, OrErr},
-    Result as ClientResult,
+    error::{BackendError, DownloadFromParentFailed, ErrorType, OrErr},
+    Error, Result as ClientResult,
 };
 use dragonfly_client_metric::{
     collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
@@ -148,9 +149,10 @@ impl PersistentTask {
         path: PathBuf,
         request: UploadPersistentTaskRequest,
     ) -> ClientResult<CommonPersistentTask> {
-        // Convert prost_wkt_types::Duration to std::time::Duration.
-        let ttl = Duration::try_from(request.ttl.ok_or(Error::UnexpectedResponse)?)
-            .or_err(ErrorType::ParseError)?;
+        let ttl = match request.ttl {
+            Some(ttl) => Duration::try_from(ttl).or_err(ErrorType::ParseError)?,
+            None => self.config.gc.policy.persistent_cache_task_ttl,
+        };
 
         // Get the content length of the file asynchronously.
         let content_length = tokio::fs::metadata(path.as_path())
@@ -161,17 +163,11 @@ impl PersistentTask {
             .len();
 
         // Get the piece length of the file.
-        let piece_length = match request.piece_length {
-            Some(piece_length) => self
-                .piece
-                .calculate_piece_length(piece::PieceLengthStrategy::FixedPieceLength(piece_length)),
-            None => {
-                self.piece
-                    .calculate_piece_length(piece::PieceLengthStrategy::OptimizeByFileLength(
-                        content_length,
-                    ))
-            }
-        };
+        let piece_length =
+            self.piece
+                .calculate_piece_length(piece::PieceLengthStrategy::OptimizeByFileLength(
+                    content_length,
+                ));
 
         // Notify the scheduler that the persistent task is started.
         self.scheduler_client
@@ -182,9 +178,6 @@ impl PersistentTask {
                 url: request.url.clone(),
                 object_storage: request.object_storage.clone(),
                 persistent_replica_count: request.persistent_replica_count,
-                tag: request.tag.clone(),
-                application: request.application.clone(),
-                piece_length,
                 content_length,
                 piece_count: self
                     .piece
@@ -267,9 +260,6 @@ impl PersistentTask {
                             current_persistent_replica_count: response
                                 .current_persistent_replica_count,
                             current_replica_count: response.current_replica_count,
-                            tag: request.tag,
-                            application: request.application,
-                            piece_length: metadata.piece_length,
                             content_length: metadata.content_length,
                             piece_count: response.piece_count,
                             state: response.state,
@@ -612,51 +602,79 @@ impl PersistentTask {
         &self,
         task_id: &str,
         host_id: &str,
+        content_length: u64,
         request: DownloadPersistentTaskRequest,
     ) -> ClientResult<metadata::PersistentTask> {
-        let response = self
+        let (ttl, created_at) = match self
             .scheduler_client
             .stat_persistent_task(StatPersistentTaskRequest {
                 host_id: host_id.to_string(),
                 task_id: task_id.to_string(),
             })
-            .await?;
+            .await
+        {
+            Ok(response) => {
+                // Convert prost_wkt_types::Duration to std::time::Duration.
+                let ttl = response
+                    .ttl
+                    .ok_or(Error::InvalidParameter)
+                    .inspect_err(|_err| {
+                        error!("persistent task ttl is missing");
+                    })?;
 
-        // Convert prost_wkt_types::Duration to std::time::Duration.
-        let ttl = response
-            .ttl
-            .ok_or(Error::InvalidParameter)
-            .inspect_err(|_err| {
-                error!("persistent task ttl is missing");
-            })?;
+                let ttl = Duration::try_from(ttl).or_err(ErrorType::ParseError)?;
 
-        let ttl = Duration::try_from(ttl).or_err(ErrorType::ParseError)?;
+                // Convert prost_wkt_types::Timestamp to chrono::DateTime.
+                let created_at = response
+                    .created_at
+                    .ok_or(Error::InvalidParameter)
+                    .inspect_err(|_err| {
+                        error!("persistent task created_at is missing");
+                    })?;
 
-        // Convert prost_wkt_types::Timestamp to chrono::DateTime.
-        let created_at = response
-            .created_at
-            .ok_or(Error::InvalidParameter)
-            .inspect_err(|_err| {
-                error!("persistent task created_at is missing");
-            })?;
+                let created_at =
+                    DateTime::from_timestamp(created_at.seconds, created_at.nanos as u32)
+                        .ok_or(Error::InvalidParameter)
+                        .inspect_err(|_err| {
+                            error!("invalid created_at: {}", created_at);
+                        })?;
 
-        let created_at = DateTime::from_timestamp(created_at.seconds, created_at.nanos as u32)
-            .ok_or(Error::InvalidParameter)
-            .inspect_err(|_err| {
-                error!("invalid created_at: {}", created_at);
-            })?;
+                (ttl, created_at)
+            }
+            Err(Error::TonicStatus(status)) if status.code() == tonic::Code::NotFound => {
+                info!(
+                    "persistent task {} not found in scheduler, proceed to download",
+                    task_id
+                );
+
+                (
+                    self.config.gc.policy.persistent_cache_task_ttl,
+                    chrono::Utc::now(),
+                )
+            }
+            Err(err) => {
+                error!("stat persistent task failed: {}", err);
+                return Err(err);
+            }
+        };
 
         // If the persistent task is not found, check if the storage has enough space to
         // store the persistent task.
         if let Ok(None) = self.get(task_id) {
-            let has_enough_space = self.storage.has_enough_space(response.content_length)?;
+            let has_enough_space = self.storage.has_enough_space(content_length)?;
             if !has_enough_space {
                 return Err(Error::NoSpace(format!(
                     "not enough space to store the persistent task: content_length={}",
-                    response.content_length
+                    content_length
                 )));
             }
         }
+
+        let piece_length =
+            self.piece
+                .calculate_piece_length(piece::PieceLengthStrategy::OptimizeByFileLength(
+                    content_length,
+                ));
 
         let task = self
             .storage
@@ -664,8 +682,8 @@ impl PersistentTask {
                 task_id,
                 ttl,
                 request.persistent,
-                response.piece_length,
-                response.content_length,
+                piece_length,
+                content_length,
                 created_at.naive_utc(),
             )
             .await?;
@@ -910,14 +928,10 @@ impl PersistentTask {
                     request: Some(
                         announce_persistent_peer_request::Request::RegisterPersistentPeerRequest(
                             RegisterPersistentPeerRequest {
-                                url: request.url.ok_or(Error::InvalidParameter)?,
+                                url: request.url,
                                 object_storage: request.object_storage,
                                 persistent: request.persistent,
-                                tag: request.tag.clone(),
-                                application: request.application.clone(),
-                                piece_length: task.piece_length,
                                 output_path: request.output_path.clone(),
-                                timeout: request.timeout,
                                 concurrent_piece_count: Some(
                                     self.config.download.concurrent_piece_count,
                                 ),
@@ -1648,6 +1662,31 @@ impl PersistentTask {
             .await
             .inspect_err(|err| {
                 error!("exists persistent task in source failed: {}", err);
+            })
+    }
+
+    /// stat_source stats the persistent task in the source.
+    #[instrument(skip_all)]
+    pub async fn stat_source(
+        &self,
+        task_id: &str,
+        url: &str,
+        object_storage: Option<ObjectStorage>,
+    ) -> ClientResult<StatResponse> {
+        self.backend_factory
+            .build(url)?
+            .stat(StatRequest {
+                task_id: task_id.to_string(),
+                url: url.to_string(),
+                http_header: None,
+                timeout: self.config.backend.put_timeout,
+                client_cert: None,
+                object_storage,
+                hdfs: None,
+            })
+            .await
+            .inspect_err(|err| {
+                error!("stat persistent task in source failed: {}", err);
             })
     }
 
