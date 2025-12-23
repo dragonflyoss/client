@@ -97,6 +97,7 @@ jobs:
           mv "target/${{ matrix.target }}/release/dfget" "$dirname"
           mv "target/${{ matrix.target }}/release/dfdaemon" "$dirname"
           mv "target/${{ matrix.target }}/release/dfcache" "$dirname"
+          mv "target/${{ matrix.target }}/release/dfstore" "$dirname"
           mv "target/${{ matrix.target }}/release/dfinit" "$dirname"
           mv CONTRIBUTING.md LICENSE README.md "$dirname"
           tar -czf "$dirname.tar.gz" "$dirname"

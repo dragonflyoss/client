@@ -1,5 +1,5 @@
 /*
- *     Copyright 2024 The Dragonfly Authors
+ *     Copyright 2025 The Dragonfly Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,23 +19,23 @@ use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::tracing::init_command_tracing;
 use dragonfly_client_config::VersionValueParser;
-use dragonfly_client_config::{dfcache, dfdaemon};
+use dragonfly_client_config::{dfdaemon, dfstore};
 use dragonfly_client_core::Result;
 use std::path::PathBuf;
 use tracing::Level;
 
 pub mod export;
 pub mod import;
-pub mod stat;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = dfcache::NAME,
+    name = dfstore::NAME,
     author,
     version,
-    about = "dfcache is a cache command line based on P2P technology in Dragonfly.",
-    long_about = "A cache command line based on P2P technology in Dragonfly that can import file and export file in P2P network, \
-    and it can create multiple replicas on different peers. P2P cache is effectively used for fast read and write cache.",
+    about = "dfstore is a storage command line based on P2P technology in Dragonfly.",
+    long_about = "A storage command line based on P2P technology in Dragonfly that can import file and export file in P2P network, \
+    and it can create multiple replicas on different peers and provides persistence by copying data to object storage. P2P cache is \
+    effectively used for fast read and write cache.",
     disable_version_flag = true
 )]
 struct Args {
@@ -61,7 +61,7 @@ pub enum Command {
         author,
         version,
         about = "Import a file into Dragonfly P2P network",
-        long_about = "Import a local file into Dragonfly P2P network and create multiple replicas on different peers. If import successfully, it will return a task ID."
+        long_about = "Import a local file into Dragonfly P2P network and create multiple replicas on different peers and provides persistence by copying data to object storage."
     )]
     Import(import::ImportCommand),
 
@@ -70,18 +70,9 @@ pub enum Command {
         author,
         version,
         about = "Export a file from Dragonfly P2P network",
-        long_about = "Export a file from Dragonfly P2P network by task ID. If export successfully, it will return the local file path."
+        long_about = "Export a file from Dragonfly P2P network. If export successfully, it will return the local file path."
     )]
     Export(export::ExportCommand),
-
-    #[command(
-        name = "stat",
-        author,
-        version,
-        about = "Stat a file in Dragonfly P2P network",
-        long_about = "Stat a file in Dragonfly P2P network by task ID. If stat successfully, it will return the file information."
-    )]
-    Stat(stat::StatCommand),
 }
 
 /// Implement the execute for Command.
@@ -91,7 +82,6 @@ impl Command {
         match self {
             Self::Import(cmd) => cmd.execute().await,
             Self::Export(cmd) => cmd.execute().await,
-            Self::Stat(cmd) => cmd.execute().await,
         }
     }
 }

@@ -17,8 +17,8 @@
 /// NAME is the name of dfcache.
 pub const NAME: &str = "dfcache";
 
-// DEFAULT_OUTPUT_FILE_MODE defines the default file mode for output files when downloading with dfcache
-// using the `--transfer-from-dfdaemon=true` option.
+/// DEFAULT_OUTPUT_FILE_MODE defines the default file mode for output files when downloading with dfcache
+/// using the `--transfer-from-dfdaemon=true` option.
 pub const DEFAULT_OUTPUT_FILE_MODE: u32 = 0o644;
 
 /// default_dfcache_persistent_replica_count is the default replica count of the persistent cache task.

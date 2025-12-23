@@ -1,5 +1,5 @@
 /*
- *     Copyright 2024 The Dragonfly Authors
+ *     Copyright 2025 The Dragonfly Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,9 +14,15 @@
  * limitations under the License.
  */
 
-/// NAME is the name of dfget.
-pub const NAME: &str = "dfget";
+/// NAME is the name of dfstore.
+pub const NAME: &str = "dfstore";
 
-/// DEFAULT_OUTPUT_FILE_MODE defines the default file mode for output files when downloading with dfget
-/// using the `--transfer-from-dfdaemon=true` option.
+/// DEFAULT_OUTPUT_FILE_MODE defines the default file mode for output files when downloading with
+/// dfstore using the `--transfer-from-dfdaemon=true` option.
 pub const DEFAULT_OUTPUT_FILE_MODE: u32 = 0o644;
+
+/// default_dfstore_persistent_replica_count is the default replica count of the persistent cache task.
+#[inline]
+pub fn default_dfstore_persistent_replica_count() -> u64 {
+    2
+}
