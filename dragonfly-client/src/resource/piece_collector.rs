@@ -173,8 +173,8 @@ impl PieceCollector {
         collected_piece_tx: Sender<CollectedPiece>,
         collected_piece_timeout: Duration,
     ) -> Result<()> {
-        // Only require multiple parents to trigger download when we have at least three parents in total.
-        let required_parent_count = if parents.len() > 2 { 2 } else { 1 };
+        // Only require multiple parents to trigger download when we have at least two parents in total.
+        let required_parent_count = if parents.len() > 1 { 2 } else { 1 };
 
         // Create a task to collect pieces from peers.
         let mut join_set = JoinSet::new();

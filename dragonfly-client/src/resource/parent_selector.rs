@@ -110,8 +110,8 @@ pub struct ParentSelector {
     /// Generator for host and peer identifiers.
     id_generator: Arc<IDGenerator>,
 
-    /// Maps parent host IDs to their current network information.
-    networks: Arc<DashMap<String, Network>>,
+    /// Maps parent host IDs to their current bandwidth weights.
+    weights: Arc<DashMap<String, u64>>,
 
     /// Active connections indexed by parent host ID and each connection tracks usage and manages its sync task.
     connections: Arc<DashMap<String, Connection>>,
@@ -136,7 +136,7 @@ impl ParentSelector {
         Self {
             config,
             id_generator,
-            networks: Arc::new(DashMap::new()),
+            weights: Arc::new(DashMap::new()),
             connections: Arc::new(DashMap::new()),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
@@ -161,7 +161,19 @@ impl ParentSelector {
 
                     return 0;
                 };
-                self.calculate_weight(parent_host)
+                let parent_host_id = parent_host.id.clone();
+
+                self.weights
+                    .get(&parent_host_id)
+                    .map(|w| *w)
+                    .unwrap_or_else(|| {
+                        debug!(
+                            "no weight info for parent {} {}, defaulting weight to 0",
+                            parent.id, parent_host_id
+                        );
+
+                        0
+                    })
             })
             .collect();
 
@@ -199,15 +211,22 @@ impl ParentSelector {
                 continue;
             };
             let parent_host_id = parent_host.id.clone();
+            
             // Seed a baseline weight so selection works even before the first sync_host response arrives.
-            let baseline_network = parent_host.network.clone().unwrap_or_else(|| Network {
-                max_tx_bandwidth: self.config.upload.rate_limit.as_u64(),
-                tx_bandwidth: Some(0),
-                ..Network::default()
-            });
-            self.networks
+            let baseline_weight = parent_host
+                .network
+                .as_ref()
+                .map(Self::calculate_weight_from_network)
+                .unwrap_or_else(|| {
+                    Self::calculate_weight_from_network(&Network {
+                        max_tx_bandwidth: self.config.upload.rate_limit.as_u64(),
+                        tx_bandwidth: Some(0),
+                        ..Network::default()
+                    })
+                });
+            self.weights
                 .entry(parent_host_id.clone())
-                .or_insert(baseline_network);
+                .or_insert(baseline_weight);
 
             match self.connections.entry(parent_host_id.clone()) {
                 dashmap::mapref::entry::Entry::Occupied(entry) => {
@@ -227,7 +246,7 @@ impl ParentSelector {
                     let shutdown = connection.shutdown.clone();
                     entry.insert(connection);
 
-                    let weights = self.networks.clone();
+                    let weights = self.weights.clone();
                     let host_id = self.id_generator.host_id();
                     let peer_id = self.id_generator.peer_id();
                     let dfdaemon_shutdown_clone = dfdaemon_shutdown.clone();
@@ -287,7 +306,7 @@ impl ParentSelector {
                     // Explicitly drop the reference to avoid holding the borrow
                     // from self.connections.get() while trying to call remove().
                     drop(connection);
-                    self.networks.remove(&parent_host_id);
+                    self.weights.remove(&parent_host_id);
                     self.connections.remove(&parent_host_id);
                 }
             }
@@ -307,7 +326,7 @@ impl ParentSelector {
         host_id: String,
         peer_id: String,
         parent_host_id: String,
-        weights: Arc<DashMap<String, Network>>,
+        weights: Arc<DashMap<String, u64>>,
         dfdaemon_upload_client: DfdaemonUploadClient,
         mut shutdown: Shutdown,
         mut dfdaemon_shutdown: Shutdown,
@@ -332,11 +351,15 @@ impl ParentSelector {
                         error!("sync host info from parent {} failed: {}", parent_host_id, err);
                     })? {
                         Some(message) => {
-                            let idle_tx_bandwidth = Self::get_idle_tx_bandwidth(&message);
+                            let weight = message
+                                .network
+                                .as_ref()
+                                .map(Self::calculate_weight_from_network)
+                                .unwrap_or(0);
 
-                            info!("update host {} idle TX bandwidth to {}", parent_host_id, idle_tx_bandwidth);
+                            info!("update host {} weight to {}", parent_host_id, weight);
 
-                            weights.insert(parent_host_id.clone(), message.network.as_ref().unwrap_or(&Network::default()).clone());
+                            weights.insert(parent_host_id.clone(), weight);
                         }
                         None => break,
                     }
@@ -355,46 +378,13 @@ impl ParentSelector {
         Ok(())
     }
 
-    /// Calculates the idle transmission bandwidth of a host.
-    #[instrument(skip_all)]
-    #[allow(dead_code)]
-    fn get_idle_tx_bandwidth(host: &Host) -> u64 {
-        let network = match &host.network {
-            Some(network) => network,
-            None => return 0,
-        };
+    /// Calculates the weight of a host based on its idle bandwidth.
+    fn calculate_weight_from_network(network: &Network) -> u64 {
+        let tx_bw = network.tx_bandwidth();
+        let max_bw = network.max_tx_bandwidth;
 
-        debug!("host {} network info: {:?}", host.id, network);
-        let Some(tx_bandwidth) = network.tx_bandwidth else {
-            return 0;
-        };
-
-        if tx_bandwidth < network.max_tx_bandwidth {
-            network.max_tx_bandwidth - tx_bandwidth
-        } else {
-            0
-        }
-    }
-
-    /// Calculates the weight of a host based on its idle bandwidth and inflight pieces.
-    fn calculate_weight(&self, host: &Host) -> u64 {
-        let (tx_bw, max_bw) = self
-            .networks
-            .get(&host.id)
-            .map(|w| (w.tx_bandwidth().max(1), w.max_tx_bandwidth.max(1)))
-            .unwrap_or((1, 1));
-
-        // idle bandwidth, at least 5% of max bandwidth.
-        let idle_bw = max_bw.saturating_sub(tx_bw).max(max_bw / 20) as f64;
-
-        let weight = idle_bw;
-
-        info!(
-            "calculate_weight host {}: idle_bw={}, weight={:.2}",
-            host.id, idle_bw, weight,
-        );
-
-        weight as u64
+        // calculate weight, at least 5% of max tx bandwidth.
+        max_bw.saturating_sub(tx_bw).max(max_bw / 20)
     }
 }
 
