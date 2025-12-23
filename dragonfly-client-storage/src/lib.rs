@@ -584,18 +584,6 @@ impl Storage {
         self.metadata.download_cache_task_failed(id)
     }
 
-    /// prefetch_cache_task_started updates the metadata of the cache task when the cache task prefetches started.
-    #[instrument(skip_all)]
-    pub async fn prefetch_cache_task_started(&self, id: &str) -> Result<metadata::CacheTask> {
-        self.metadata.prefetch_cache_task_started(id)
-    }
-
-    /// prefetch_cache_task_failed updates the metadata of the cache task when the cache task prefetches failed.
-    #[instrument(skip_all)]
-    pub async fn prefetch_cache_task_failed(&self, id: &str) -> Result<metadata::CacheTask> {
-        self.metadata.prefetch_cache_task_failed(id)
-    }
-
     /// upload_cache_task_finished updates the metadata of the cache task when the cache task uploads finished.
     #[instrument(skip_all)]
     pub fn upload_cache_task_finished(&self, id: &str) -> Result<metadata::CacheTask> {

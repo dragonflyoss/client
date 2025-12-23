@@ -262,10 +262,22 @@ fn default_gc_interval() -> Duration {
     Duration::from_secs(900)
 }
 
-/// default_gc_policy_task_ttl is the default ttl of the task.
+/// default_gc_policy_task_ttl is the default ttl of the task, default is 6 hours.
 #[inline]
 fn default_gc_policy_task_ttl() -> Duration {
     Duration::from_secs(21_600)
+}
+
+/// default_gc_policy_task_ttl is the default ttl of the task, default is 1 day.
+#[inline]
+fn default_gc_policy_persistent_task_ttl() -> Duration {
+    Duration::from_secs(86_400)
+}
+
+/// default_gc_policy_task_ttl is the default ttl of the task, default is 1 day.
+#[inline]
+fn default_gc_policy_persistent_cache_task_ttl() -> Duration {
+    Duration::from_secs(86_400)
 }
 
 /// default_gc_policy_dist_threshold is the default threshold of the disk usage to do gc.
@@ -949,13 +961,34 @@ impl Default for Storage {
 #[derive(Debug, Clone, Validate, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Policy {
-    /// Task ttl is the ttl of the task.
+    /// Task ttl is the ttl of the task. If the task's access time exceeds the ttl, dfdaemon
+    /// will delete the task cache.
     #[serde(
         default = "default_gc_policy_task_ttl",
         rename = "taskTTL",
         with = "humantime_serde"
     )]
     pub task_ttl: Duration,
+
+    /// Persistent task ttl is the ttl of the persistent task. If the persistent task's ttl is None
+    /// in DownloadPersistentTask grpc request, dfdaemon will use persistent_task_ttl as the
+    /// persistent task's ttl.
+    #[serde(
+        default = "default_gc_policy_persistent_task_ttl",
+        rename = "persistentTaskTTL",
+        with = "humantime_serde"
+    )]
+    pub persistent_task_ttl: Duration,
+
+    /// Persistent cache task ttl is the ttl of the persistent cache task. If the persistent cache
+    /// task's ttl is None in DownloadPersistentTask grpc request, dfdaemon will use
+    /// persistent_cache_task_ttl as the persistent cache task's ttl.
+    #[serde(
+        default = "default_gc_policy_persistent_cache_task_ttl",
+        rename = "persistentCacheTaskTTL",
+        with = "humantime_serde"
+    )]
+    pub persistent_cache_task_ttl: Duration,
 
     /// Dist threshold optionally defines a specific disk capacity to be used as the base for
     /// calculating GC trigger points with `dist_high_threshold_percent` and `dist_low_threshold_percent`.
@@ -989,6 +1022,8 @@ impl Default for Policy {
         Policy {
             dist_threshold: default_gc_policy_dist_threshold(),
             task_ttl: default_gc_policy_task_ttl(),
+            persistent_task_ttl: default_gc_policy_persistent_task_ttl(),
+            persistent_cache_task_ttl: default_gc_policy_persistent_cache_task_ttl(),
             dist_high_threshold_percent: default_gc_policy_dist_high_threshold_percent(),
             dist_low_threshold_percent: default_gc_policy_dist_low_threshold_percent(),
         }
@@ -1460,10 +1495,6 @@ impl Default for Backend {
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
-    /// Backend is the backend configuration for dfdaemon.
-    #[validate]
-    pub backend: Backend,
-
     /// Host is the host configuration for dfdaemon.
     #[validate]
     pub host: Host,
@@ -1499,6 +1530,10 @@ pub struct Config {
     /// Storage is the storage configuration for dfdaemon.
     #[validate]
     pub storage: Storage,
+
+    /// Backend is the backend configuration for dfdaemon.
+    #[validate]
+    pub backend: Backend,
 
     /// GC is the gc configuration for dfdaemon.
     #[validate]
@@ -1999,6 +2034,8 @@ key: /etc/ssl/private/client.pem
     fn validate_policy() {
         let valid_policy = Policy {
             task_ttl: Duration::from_secs(12 * 3600),
+            persistent_task_ttl: Duration::from_secs(24 * 3600),
+            persistent_cache_task_ttl: Duration::from_secs(48 * 3600),
             dist_threshold: ByteSize::mb(100),
             dist_high_threshold_percent: 90,
             dist_low_threshold_percent: 70,
@@ -2007,6 +2044,8 @@ key: /etc/ssl/private/client.pem
 
         let invalid_policy = Policy {
             task_ttl: Duration::from_secs(12 * 3600),
+            persistent_task_ttl: Duration::from_secs(24 * 3600),
+            persistent_cache_task_ttl: Duration::from_secs(48 * 3600),
             dist_threshold: ByteSize::mb(100),
             dist_high_threshold_percent: 100,
             dist_low_threshold_percent: 70,
@@ -2021,6 +2060,8 @@ key: /etc/ssl/private/client.pem
             "interval": "1h",
             "policy": {
                 "taskTTL": "12h",
+                "persistentTaskTTL": "24h",
+                "persistentCacheTaskTTL": "48h",
                 "distHighThresholdPercent": 90,
                 "distLowThresholdPercent": 70
             }
@@ -2029,6 +2070,14 @@ key: /etc/ssl/private/client.pem
         let gc: GC = serde_json::from_str(json_data).unwrap();
         assert_eq!(gc.interval, Duration::from_secs(3600));
         assert_eq!(gc.policy.task_ttl, Duration::from_secs(12 * 3600));
+        assert_eq!(
+            gc.policy.persistent_task_ttl,
+            Duration::from_secs(24 * 3600)
+        );
+        assert_eq!(
+            gc.policy.persistent_cache_task_ttl,
+            Duration::from_secs(48 * 3600)
+        );
         assert_eq!(gc.policy.dist_high_threshold_percent, 90);
         assert_eq!(gc.policy.dist_low_threshold_percent, 70);
     }
