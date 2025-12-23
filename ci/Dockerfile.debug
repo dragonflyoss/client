@@ -43,7 +43,7 @@ ARG TARGETPLATFORM
 RUN case "${TARGETPLATFORM}" in \
   "linux/arm64") export JEMALLOC_SYS_WITH_LG_PAGE=16;; \
   esac && \
-  cargo build --verbose --bin dfget --bin dfdaemon --bin dfcache
+  cargo build --verbose --bin dfget --bin dfdaemon --bin dfcache --bin dfstore
 
 RUN cargo install flamegraph --version 0.6.8 --root /usr/local
 RUN cargo install bottom --version 0.11.0 --locked --root /usr/local
@@ -77,6 +77,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends iperf3 iperf fi
 COPY --from=builder /app/client/target/debug/dfget /usr/local/bin/dfget
 COPY --from=builder /app/client/target/debug/dfdaemon /usr/local/bin/dfdaemon
 COPY --from=builder /app/client/target/debug/dfcache /usr/local/bin/dfcache
+COPY --from=builder /app/client/target/debug/dfstore /usr/local/bin/dfstore
 COPY --from=builder /usr/local/bin/flamegraph /usr/local/bin/
 COPY --from=builder /usr/local/bin/btm /usr/local/bin/
 COPY --from=builder /usr/local/bin/tokio-console /usr/local/bin/
