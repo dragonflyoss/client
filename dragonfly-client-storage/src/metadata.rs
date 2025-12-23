@@ -357,9 +357,6 @@ pub struct CacheTask {
     /// created_at is the time when the task metadata is created.
     pub created_at: NaiveDateTime,
 
-    /// prefetched_at is the time when the task prefetched.
-    pub prefetched_at: Option<NaiveDateTime>,
-
     /// failed_at is the time when the task downloads failed.
     pub failed_at: Option<NaiveDateTime>,
 
@@ -388,11 +385,6 @@ impl CacheTask {
     /// is_expired returns whether the cache task is expired.
     pub fn is_expired(&self, ttl: Duration) -> bool {
         self.updated_at + ttl < Utc::now().naive_utc()
-    }
-
-    /// is_prefetched returns whether the cache task is prefetched.
-    pub fn is_prefetched(&self) -> bool {
-        self.prefetched_at.is_some()
     }
 
     /// is_failed returns whether the cache task downloads failed.
@@ -1266,45 +1258,6 @@ impl<E: StorageEngineOwned> Metadata<E> {
         let task = match self.db.get::<CacheTask>(id.as_bytes())? {
             Some(mut task) => {
                 task.updated_at = Utc::now().naive_utc();
-                task.failed_at = Some(Utc::now().naive_utc());
-                task
-            }
-            None => return Err(Error::TaskNotFound(id.to_string())),
-        };
-
-        self.db.put(id.as_bytes(), &task)?;
-        Ok(task)
-    }
-
-    /// prefetch_cache_task_started updates the metadata of the cache task when the cache task prefetch started.
-    #[instrument(skip_all)]
-    pub fn prefetch_cache_task_started(&self, id: &str) -> Result<CacheTask> {
-        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
-            Some(mut task) => {
-                // If the task is prefetched, return an error.
-                if task.is_prefetched() {
-                    return Err(Error::InvalidState("prefetched".to_string()));
-                }
-
-                task.updated_at = Utc::now().naive_utc();
-                task.prefetched_at = Some(Utc::now().naive_utc());
-                task.failed_at = None;
-                task
-            }
-            None => return Err(Error::TaskNotFound(id.to_string())),
-        };
-
-        self.db.put(id.as_bytes(), &task)?;
-        Ok(task)
-    }
-
-    /// prefetch_cache_task_failed updates the metadata of the cache task when the cache task prefetch failed.
-    #[instrument(skip_all)]
-    pub fn prefetch_cache_task_failed(&self, id: &str) -> Result<CacheTask> {
-        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
-            Some(mut task) => {
-                task.updated_at = Utc::now().naive_utc();
-                task.prefetched_at = None;
                 task.failed_at = Some(Utc::now().naive_utc());
                 task
             }

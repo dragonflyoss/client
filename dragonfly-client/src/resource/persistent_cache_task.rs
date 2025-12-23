@@ -1210,7 +1210,6 @@ impl PersistentCacheTask {
                         number,
                         length,
                         parent.clone(),
-                        false,
                     )
                     .await
                     .map_err(|err| {
@@ -1248,8 +1247,6 @@ impl PersistentCacheTask {
                             task_id.as_str(),
                             metadata.length,
                             None,
-                            true,
-                            false,
                         )
                         .await
                         .inspect_err(|err| {
@@ -1493,8 +1490,6 @@ impl PersistentCacheTask {
                         task_id,
                         piece.length,
                         None,
-                        true,
-                        false,
                     )
                     .await
                     .inspect_err(|err| {
