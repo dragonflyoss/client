@@ -43,7 +43,7 @@ ARG TARGETPLATFORM
 RUN case "${TARGETPLATFORM}" in \
   "linux/arm64") export JEMALLOC_SYS_WITH_LG_PAGE=16;; \
   esac && \
-  cargo build --release --verbose --bin dfget --bin dfdaemon --bin dfcache
+  cargo build --release --verbose --bin dfget --bin dfdaemon --bin dfcache --bin dfstore
 
 RUN cargo install tokio-console --version 0.1.13 --locked --root /usr/local
 
@@ -75,6 +75,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends iperf3 iperf li
 COPY --from=builder /app/client/target/release/dfget /usr/local/bin/dfget
 COPY --from=builder /app/client/target/release/dfdaemon /usr/local/bin/dfdaemon
 COPY --from=builder /app/client/target/release/dfcache /usr/local/bin/dfcache
+COPY --from=builder /app/client/target/release/dfstore /usr/local/bin/dfstore
 COPY --from=builder /usr/local/bin/tokio-console /usr/local/bin/
 COPY --from=pprof /go/bin/pprof /bin/pprof
 COPY --from=pprof /go/bin/grpcurl /bin/grpcurl
