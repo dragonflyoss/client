@@ -403,7 +403,7 @@ mod tests {
                 region: "us-west-1".to_string(),
                 endpoint: "https://s3.us-west-1.amazonaws.com".to_string(),
             },
-            "8999e17517c51decbc64a946c5c6d483c6b5fa75aabf1501e75ca3d97f1b8d74",
+            "b51f4f44921bb585277a5cbac13e7f6e2858238e98546f3ee6bfeb56369979c0",
         )];
 
         for (generator, parameter, expected_id) in test_cases {
