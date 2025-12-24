@@ -219,8 +219,6 @@ impl PersistentTask {
             .await
         {
             Ok(_) => {
-                info!("upload persistent task content finished");
-
                 // Create the persistent task.
                 match self.storage.create_persistent_task_finished(task_id).await {
                     Ok(metadata) => {
@@ -324,6 +322,7 @@ impl PersistentTask {
     /// Orchestrates uploading content for a task by first persisting the local file
     /// into the local piece-based storage, then uploading the same file to the
     /// configured source storage backend.
+    #[instrument(skip_all)]
     async fn upload_content(
         &self,
         task_id: &str,
@@ -346,6 +345,7 @@ impl PersistentTask {
     /// when possible or, if linking fails, concurrently reading the file by piece
     /// and writing each piece into persistent storage, ensuring all targeted pieces
     /// are successfully imported.
+    #[instrument(skip_all)]
     async fn upload_content_to_local(
         &self,
         task_id: &str,
@@ -353,6 +353,9 @@ impl PersistentTask {
         content_length: u64,
         path: PathBuf,
     ) -> ClientResult<()> {
+        // Record the start time.
+        let start_time = Instant::now();
+
         // Hard link creation failed. Fall back to writing pieces to content storage.
         let interested_pieces =
             match self
@@ -440,6 +443,11 @@ impl PersistentTask {
                 ));
             }
 
+            info!(
+                "upload persistent task to local, cost: {:?}, size: {} bytes",
+                start_time.elapsed(),
+                content_length
+            );
             return Ok(());
         }
 
@@ -533,6 +541,11 @@ impl PersistentTask {
             ));
         }
 
+        info!(
+            "upload persistent task to local, cost: {:?}, size: {} bytes",
+            start_time.elapsed(),
+            content_length
+        );
         Ok(())
     }
 
@@ -540,6 +553,7 @@ impl PersistentTask {
     /// using a PUT request created from the backend factory, while recording metrics
     /// for request start, failure, and completion, and converting non‑successful
     /// backend responses into structured backend errors.
+    #[instrument(skip_all)]
     async fn upload_content_to_source(
         &self,
         task_id: &str,
@@ -547,10 +561,10 @@ impl PersistentTask {
         path: PathBuf,
         object_storage: Option<ObjectStorage>,
     ) -> ClientResult<()> {
-        let backend = self.backend_factory.build(url)?;
-
         // Record the start time.
         let start_time = Instant::now();
+
+        let backend = self.backend_factory.build(url)?;
 
         // Collect the backend request started metrics.
         collect_backend_request_started_metrics(
@@ -599,6 +613,11 @@ impl PersistentTask {
             start_time.elapsed(),
         );
 
+        info!(
+            "upload persistent task to source, cost: {:?}, size: {:?} bytes",
+            start_time.elapsed(),
+            response.content_length
+        );
         Ok(())
     }
 

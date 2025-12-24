@@ -1003,6 +1003,53 @@ impl Storage {
         )
     }
 
+    /// download_persistent_piece_from_source_finished is used for downloading piece from source.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
+    pub async fn download_persistent_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+        reader: &mut R,
+        timeout: Duration,
+    ) -> Result<metadata::Piece> {
+        tokio::select! {
+            piece = self.handle_persistent_downloaded_from_source_finished(piece_id, task_id, offset, length, reader) => {
+                piece
+            }
+            _ = sleep(timeout) => {
+                Err(Error::DownloadPieceFinishedTimeout(piece_id.to_string()))
+            }
+        }
+    }
+
+    // handle_persistent_downloaded_from_source_finished handles the downloaded persistent piece from source.
+    #[instrument(skip_all)]
+    async fn handle_persistent_downloaded_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+        reader: &mut R,
+    ) -> Result<metadata::Piece> {
+        let response = self
+            .content
+            .write_persistent_piece(task_id, offset, length, reader)
+            .await?;
+
+        let digest = Digest::new(Algorithm::Crc32, response.hash);
+        self.metadata.download_piece_finished(
+            piece_id,
+            offset,
+            length,
+            digest.to_string().as_str(),
+            None,
+        )
+    }
+
     /// download_persistent_piece_failed updates the metadata of the persistent piece when the persistent piece downloads failed.
     #[instrument(skip_all)]
     pub fn download_persistent_piece_failed(&self, piece_id: &str) -> Result<()> {
