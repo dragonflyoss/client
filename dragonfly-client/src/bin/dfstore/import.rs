@@ -361,7 +361,7 @@ impl ImportCommand {
         );
         progress_bar.set_message("Importing...");
 
-        let persistent_task = dfdaemon_download_client
+        dfdaemon_download_client
             .upload_persistent_task(UploadPersistentTaskRequest {
                 url: self.url.to_string(),
                 object_storage: Some(ObjectStorage {
@@ -387,7 +387,7 @@ impl ImportCommand {
             })
             .await?;
 
-        progress_bar.finish_with_message(format!("Done: {}", persistent_task.id));
+        progress_bar.finish_with_message(format!("Done: {}", self.url));
         Ok(())
     }
 

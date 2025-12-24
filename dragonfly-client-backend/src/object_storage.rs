@@ -772,7 +772,7 @@ impl crate::Backend for ObjectStorage {
             success: true,
             http_header: None,
             http_status_code: Some(reqwest::StatusCode::OK),
-            content_length: None,
+            content_length: Some(content_length),
             error_message: None,
         })
     }

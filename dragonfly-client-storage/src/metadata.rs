@@ -1558,6 +1558,7 @@ impl Metadata<RocksdbStorageEngine> {
             &[
                 Task::NAMESPACE,
                 Piece::NAMESPACE,
+                PersistentTask::NAMESPACE,
                 PersistentCacheTask::NAMESPACE,
                 CacheTask::NAMESPACE,
             ],
