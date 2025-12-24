@@ -188,7 +188,7 @@ impl PersistentTask {
                 piece_count: self
                     .piece
                     .calculate_piece_count(piece_length, content_length),
-                ttl: request.ttl,
+                ttl: Some(prost_wkt_types::Duration::try_from(ttl).or_err(ErrorType::ParseError)?),
             })
             .await
             .inspect_err(|err| error!("upload persistent task started: {}", err))?;
@@ -267,7 +267,10 @@ impl PersistentTask {
                             content_length: metadata.content_length,
                             piece_count: response.piece_count,
                             state: response.state,
-                            ttl: request.ttl,
+                            ttl: Some(
+                                prost_wkt_types::Duration::try_from(ttl)
+                                    .or_err(ErrorType::ParseError)?,
+                            ),
                             created_at: response.created_at,
                             updated_at: response.updated_at,
                         })
