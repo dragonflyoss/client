@@ -581,9 +581,8 @@ pub fn collect_upload_task_finished_metrics(
     // Collect the slow upload Level1 task for analysis.
     if task_size == TaskSize::Level1 && cost > UPLOAD_TASK_LEVEL1_DURATION_THRESHOLD {
         warn!(
-            "upload task cost is too long: {}ms {}bytes",
-            cost.as_millis(),
-            content_length,
+            "upload task, cost: {:?}, size: {} bytes",
+            cost, content_length,
         );
     }
 
@@ -645,11 +644,7 @@ pub fn collect_download_task_finished_metrics(
     // Nydus will request the small range of the file, so the download task duration
     // should be short. Collect the slow download Level1 task for analysis.
     if task_size == TaskSize::Level1 && cost > DOWNLOAD_TASK_LEVEL1_DURATION_THRESHOLD {
-        warn!(
-            "download task cost is too long: {}ms {}bytes",
-            cost.as_millis(),
-            size,
-        );
+        warn!("download task, cost: {:?}, size: {} bytes", cost, size,);
     }
 
     let typ = typ.to_string();

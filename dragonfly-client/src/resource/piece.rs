@@ -913,7 +913,11 @@ impl Piece {
 
         // Clean up residual piece metadata if error occurred.
         let guard = scopeguard::guard((), |_| {
-            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
+            if let Some(err) = self
+                .storage
+                .download_persistent_piece_failed(piece_id)
+                .err()
+            {
                 error!("set piece metadata failed: {}", err)
             };
         });
@@ -921,7 +925,7 @@ impl Piece {
         // Record the start of downloading piece.
         let piece = self
             .storage
-            .download_piece_started(piece_id, number)
+            .download_persistent_piece_started(piece_id, number)
             .await?;
 
         // If the piece is downloaded by the other thread,
@@ -1010,7 +1014,7 @@ impl Piece {
         // Record the finish of downloading piece.
         match self
             .storage
-            .download_piece_from_source_finished(
+            .download_persistent_piece_from_source_finished(
                 piece_id,
                 task_id,
                 offset,
