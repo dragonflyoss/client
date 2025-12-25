@@ -81,6 +81,16 @@ impl GC {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
+                    // Evict the task by ttl.
+                    if let Err(err) = self.evict_task_by_ttl().await {
+                        info!("failed to evict task by ttl: {}", err);
+                    }
+
+                    // Evict the task by disk usage.
+                    if let Err(err) = self.evict_task_by_disk_usage().await {
+                        info!("failed to evict task by disk usage: {}", err);
+                    }
+
                     // Evict the persistent cache task by ttl.
                     if let Err(err) = self.evict_persistent_cache_task_by_ttl().await {
                         info!("failed to evict persistent cache task by ttl: {}", err);
@@ -91,14 +101,14 @@ impl GC {
                         info!("failed to evict persistent cache task by disk usage: {}", err);
                     }
 
-                    // Evict the task by ttl.
-                    if let Err(err) = self.evict_task_by_ttl().await {
-                        info!("failed to evict task by ttl: {}", err);
+                    // Evict the persistent task by ttl.
+                    if let Err(err) = self.evict_persistent_task_by_ttl().await {
+                        info!("failed to evict persistent task by ttl: {}", err);
                     }
 
-                    // Evict the cache by disk usage.
-                    if let Err(err) = self.evict_task_by_disk_usage().await {
-                        info!("failed to evict task by disk usage: {}", err);
+                    // Evict the by disk usage.
+                    if let Err(err) = self.evict_persistent_task_by_disk_usage().await {
+                        info!("failed to evict persistent task by disk usage: {}", err);
                     }
                 }
                 _ = shutdown.recv() => {
@@ -230,6 +240,55 @@ impl GC {
             });
     }
 
+    /// evict_persistent_task_by_ttl evicts the persistent task by ttl.
+    #[instrument(skip_all)]
+    async fn evict_persistent_task_by_ttl(&self) -> Result<()> {
+        info!("start to evict by persistent task ttl");
+        for task in self.storage.get_persistent_tasks()? {
+            // If the persistent task is expired and not uploading, evict the persistent task.
+            if task.is_expired() {
+                self.storage.delete_persistent_task(&task.id).await;
+                info!("evict persistent task {}", task.id);
+            }
+        }
+
+        info!("evict by persistent task ttl done");
+        Ok(())
+    }
+
+    /// evict_persistent_task_by_disk_usage evicts the persistent task by disk usage.
+    #[instrument(skip_all)]
+    async fn evict_persistent_task_by_disk_usage(&self) -> Result<()> {
+        let available_space = self.storage.available_space()?;
+        let total_space = self.storage.total_space()?;
+
+        // Calculate the usage percent.
+        let usage_percent = (100 - available_space * 100 / total_space) as u8;
+        if usage_percent >= self.config.gc.policy.dist_high_threshold_percent {
+            info!(
+                "start to evict persistent task by disk usage, disk usage {}% is higher than high threshold {}%",
+                usage_percent, self.config.gc.policy.dist_high_threshold_percent
+            );
+
+            // Calculate the need evict space.
+            let need_evict_space = total_space as f64
+                * ((usage_percent - self.config.gc.policy.dist_low_threshold_percent) as f64
+                    / 100.0);
+
+            // Evict the persistent task by the need evict space.
+            if let Err(err) = self
+                .evict_persistent_task_space(need_evict_space as u64)
+                .await
+            {
+                info!("failed to evict task by disk usage: {}", err);
+            }
+
+            info!("evict persistent task by disk usage done");
+        }
+
+        Ok(())
+    }
+
     /// evict_persistent_cache_task_by_ttl evicts the persistent cache task by ttl.
     #[instrument(skip_all)]
     async fn evict_persistent_cache_task_by_ttl(&self) -> Result<()> {
@@ -276,6 +335,51 @@ impl GC {
             info!("evict persistent cache task by disk usage done");
         }
 
+        Ok(())
+    }
+
+    /// evict_persistent_task_space evicts the persistent task by the given space.
+    #[instrument(skip_all)]
+    async fn evict_persistent_task_space(&self, need_evict_space: u64) -> Result<()> {
+        let mut tasks = self.storage.get_persistent_tasks()?;
+        tasks.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
+
+        let mut evicted_space = 0;
+        for task in tasks {
+            // Evict enough space.
+            if evicted_space >= need_evict_space {
+                break;
+            }
+
+            // If the persistent task is persistent, skip it.
+            if task.is_persistent() {
+                continue;
+            }
+
+            //  If the task is started and not finished, and the task download is not timeout,
+            //  skip it.
+            if task.is_started()
+                && !task.is_finished()
+                && !task.is_failed()
+                && (task.created_at + DOWNLOAD_TASK_TIMEOUT > Utc::now().naive_utc())
+            {
+                info!(
+                    "persistent task {} is started and not finished, skip it",
+                    task.id
+                );
+                continue;
+            }
+
+            // Evict the task.
+            self.storage.delete_persistent_task(&task.id).await;
+
+            // Update the evicted space.
+            let task_space = task.content_length();
+            evicted_space += task_space;
+            info!("evict persistent task {} size {}", task.id, task_space);
+        }
+
+        info!("evict total size {}", evicted_space);
         Ok(())
     }
 
