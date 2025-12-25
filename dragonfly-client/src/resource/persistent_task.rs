@@ -740,6 +740,71 @@ impl PersistentTask {
         Ok(task)
     }
 
+    /// download_started_for_replication updates the metadata of the persistent task when the
+    /// persistent task downloads started for replication.
+    #[instrument(skip_all)]
+    pub async fn download_started_for_replication(
+        &self,
+        task_id: &str,
+        content_length: u64,
+        ttl: Duration,
+        created_at: DateTime<chrono::Utc>,
+        request: DownloadPersistentTaskRequest,
+    ) -> ClientResult<metadata::PersistentTask> {
+        // If the persistent task is not found, check if the storage has enough space to
+        // store the persistent task.
+        if let Ok(None) = self.get(task_id) {
+            let has_enough_space = self.storage.has_enough_space(content_length)?;
+            if !has_enough_space {
+                return Err(Error::NoSpace(format!(
+                    "not enough space to store the persistent task: content_length={}",
+                    content_length
+                )));
+            }
+        }
+
+        let piece_length =
+            self.piece
+                .calculate_piece_length(piece::PieceLengthStrategy::OptimizeByFileLength(
+                    content_length,
+                ));
+
+        let task = self
+            .storage
+            .download_persistent_task_started(
+                task_id,
+                ttl,
+                request.persistent,
+                piece_length,
+                content_length,
+                created_at.naive_utc(),
+            )
+            .await?;
+
+        // Attempt to create a hard link from the task file to the output path.
+        //
+        // Behavior based on force_hard_link setting:
+        // 1. force_hard_link is true:
+        //    - Success: Continue processing
+        //    - Failure: Return error immediately
+        // 2. force_hard_link is false:
+        //    - Success: Continue processing
+        //    - Failure: Fall back to copying the file instead
+        if let Some(output_path) = &request.output_path {
+            if let Err(err) = self
+                .storage
+                .hard_link_persistent_task(task_id, Path::new(output_path.as_str()))
+                .await
+            {
+                if request.force_hard_link {
+                    return Err(err);
+                }
+            }
+        }
+
+        Ok(task)
+    }
+
     /// download_finished updates the metadata of the persistent task when the task downloads finished.
     #[instrument(skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::PersistentTask> {
@@ -1423,7 +1488,7 @@ impl PersistentTask {
         });
 
         // Initialize the piece collector.
-        let piece_collector = piece_collector::PieceCollector::new(
+        let piece_collector = piece_collector::PersistentPieceCollector::new(
             self.config.clone(),
             host_id,
             task_id,

@@ -15,6 +15,7 @@
  */
 
 use crate::resource::{persistent_cache_task, persistent_task, task};
+use chrono::DateTime;
 use dragonfly_api::common::v2::{
     CacheTask, Host, Network, PersistentCacheTask, PersistentTask, Piece, Priority, Task, TaskType,
 };
@@ -1268,7 +1269,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     type DownloadPersistentTaskStream =
         ReceiverStream<Result<DownloadPersistentTaskResponse, Status>>;
 
-    /// download_persistent_task downloads the persistent task.
+    /// download_persistent_task downloads the persistent task for scheduler replication purposes.
+    /// Note: This request does NOT include object storage credentials and should ONLY be used
+    /// for internal peer-to-peer task replication.
     #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip, content_length))]
     async fn download_persistent_task(
         &self,
@@ -1330,19 +1333,12 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             request.remote_ip.clone().unwrap_or_default().as_str(),
         );
 
-        // Check whether the persistent task already exists.
-        let content_length = match self
-            .persistent_task
-            .stat_source(&task_id, &request.url, request.object_storage.clone())
-            .await
-        {
-            Ok(response) => response.content_length.ok_or_else(|| {
-                error!("missing content length in persistent task");
-                Status::internal("missing content length in persistent task")
-            })?,
-            Err(ClientError::OpenDALError(err)) if err.kind() == opendal::ErrorKind::NotFound => {
-                error!("persistent task not found: {}", err);
-                return Err(Status::not_found(err.to_string()));
+        // Check whether the persistent task already exists in the storage.
+        let response = match self.persistent_task.stat(&task_id, &host_id).await {
+            Ok(response) => response,
+            Err(ClientError::TonicStatus(status)) if status.code() == tonic::Code::NotFound => {
+                error!("persistent task not found: {}", status);
+                return Err(Status::not_found(status.to_string()));
             }
             Err(err) => {
                 error!("check persistent task exists: {}", err);
@@ -1350,14 +1346,47 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             }
         };
 
+        // Convert prost_wkt_types::Duration to std::time::Duration.
+        let ttl = response
+            .ttl
+            .ok_or(ClientError::InvalidParameter)
+            .map_err(|_err| {
+                error!("persistent task ttl is missing");
+                Status::internal("persistent task ttl is missing")
+            })?;
+
+        let ttl = Duration::try_from(ttl)
+            .or_err(ErrorType::ParseError)
+            .map_err(|_err| {
+                error!("invalid ttl: {}", ttl);
+                Status::internal(format!("invalid ttl: {}", ttl))
+            })?;
+
+        // Convert prost_wkt_types::Timestamp to chrono::DateTime.
+        let created_at = response
+            .created_at
+            .ok_or(ClientError::InvalidParameter)
+            .map_err(|_err| {
+                error!("persistent task created_at is missing");
+                Status::internal("persistent task created_at is missing")
+            })?;
+
+        let created_at = DateTime::from_timestamp(created_at.seconds, created_at.nanos as u32)
+            .ok_or(ClientError::InvalidParameter)
+            .map_err(|_err| {
+                error!("invalid created_at: {}", created_at);
+                Status::internal(format!("invalid created_at: {}", created_at))
+            })?;
+
         // Download task started.
         info!("download persistent task started: {:?}", request);
         let task = match self
             .persistent_task
-            .download_started(
+            .download_started_for_replication(
                 task_id.as_str(),
-                host_id.as_str(),
-                content_length,
+                response.content_length,
+                ttl,
+                created_at,
                 request.clone(),
             )
             .await

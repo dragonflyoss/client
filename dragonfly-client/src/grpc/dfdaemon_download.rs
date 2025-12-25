@@ -958,7 +958,9 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     type DownloadPersistentTaskStream =
         ReceiverStream<Result<DownloadPersistentTaskResponse, Status>>;
 
-    /// download_persistent_task downloads the persistent task.
+    /// download_persistent_task downloads the persistent task for downloading by user.
+    /// Note: This request include object storage credentials and should be used
+    /// for downloading from object storage and peers.
     #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip, content_length))]
     async fn download_persistent_task(
         &self,
