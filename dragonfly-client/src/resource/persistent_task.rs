@@ -831,6 +831,498 @@ impl PersistentTask {
         self.storage.copy_persistent_task(id, to).await
     }
 
+    /// download_for_replication downloads a persistent task for replication.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
+    pub async fn download_for_replication(
+        &self,
+        task: &metadata::PersistentTask,
+        host_id: &str,
+        peer_id: &str,
+        request: DownloadPersistentTaskRequest,
+        download_progress_tx: Sender<Result<DownloadPersistentTaskResponse, Status>>,
+    ) -> ClientResult<()> {
+        // Get the id of the task.
+        let task_id = task.id.as_str();
+
+        // Calculate the interested pieces to download.
+        let interested_pieces =
+            match self
+                .piece
+                .calculate_interested(task.piece_length, task.content_length, None)
+            {
+                Ok(interested_pieces) => interested_pieces,
+                Err(err) => {
+                    error!("calculate interested pieces error: {:?}", err);
+                    return Err(err);
+                }
+            };
+        debug!(
+            "interested pieces: {:?}",
+            interested_pieces
+                .iter()
+                .map(|p| p.number)
+                .collect::<Vec<u32>>()
+        );
+
+        // Construct the pieces for the download task started response.
+        let mut pieces = Vec::new();
+        for interested_piece in interested_pieces.clone() {
+            pieces.push(Piece {
+                number: interested_piece.number,
+                parent_id: interested_piece.parent_id.clone(),
+                offset: interested_piece.offset,
+                length: interested_piece.length,
+                digest: interested_piece.digest.clone(),
+                content: None,
+                traffic_type: None,
+                cost: interested_piece.prost_cost(),
+                created_at: Some(prost_wkt_types::Timestamp::from(
+                    interested_piece.created_at,
+                )),
+            });
+        }
+
+        // Send the download task started request.
+        download_progress_tx
+            .send_timeout(
+                Ok(DownloadPersistentTaskResponse {
+                    host_id: host_id.to_string(),
+                    task_id: task_id.to_string(),
+                    peer_id: peer_id.to_string(),
+                    response: Some(
+                        download_persistent_task_response::Response::DownloadPersistentTaskStartedResponse(
+                            dfdaemon::v2::DownloadPersistentTaskStartedResponse {
+                                content_length: task.content_length,
+                            },
+                        ),
+                    ),
+                }),
+                REQUEST_TIMEOUT,
+            )
+            .await
+            .inspect_err(|err| {
+                error!("send DownloadPersistentTaskStartedResponse failed: {:?}", err);
+            })?;
+
+        // Download the pieces from the local.
+        debug!("download the pieces from local");
+        let finished_pieces = match self
+            .download_partial_from_local(
+                task,
+                host_id,
+                peer_id,
+                request.need_piece_content,
+                interested_pieces.clone(),
+                download_progress_tx.clone(),
+            )
+            .await
+        {
+            Ok(finished_pieces) => finished_pieces,
+            Err(err) => {
+                error!("download from local error: {:?}", err);
+                return Err(err);
+            }
+        };
+
+        // Remove the finished pieces from the pieces.
+        let interested_pieces = self
+            .piece
+            .remove_finished_from_interested(finished_pieces, interested_pieces);
+        info!(
+            "interested pieces after downloading from local: {:?}",
+            interested_pieces
+                .iter()
+                .map(|p| p.number)
+                .collect::<Vec<u32>>()
+        );
+
+        // Check if all pieces are downloaded.
+        if interested_pieces.is_empty() {
+            info!("all pieces are downloaded from local");
+            return Ok(());
+        };
+        debug!("download the pieces with scheduler");
+
+        // Download the pieces with scheduler.
+        let finished_pieces = match self
+            .download_partial_for_replication_with_scheduler(
+                task,
+                host_id,
+                peer_id,
+                interested_pieces.clone(),
+                request.clone(),
+                download_progress_tx.clone(),
+            )
+            .await
+        {
+            Ok(finished_pieces) => finished_pieces,
+            Err(err) => {
+                error!("download with scheduler error: {:?}", err);
+                return Err(err);
+            }
+        };
+
+        // Remove the finished pieces from the pieces.
+        let interested_pieces = self
+            .piece
+            .remove_finished_from_interested(finished_pieces, interested_pieces);
+        info!(
+            "interested pieces after downloading from scheduler: {:?}",
+            interested_pieces
+                .iter()
+                .map(|p| p.number)
+                .collect::<Vec<u32>>()
+        );
+
+        // Check if all pieces are downloaded.
+        if !interested_pieces.is_empty() {
+            error!("not all persistent pieces are downloaded with scheduler");
+            return Err(Error::Unknown(
+                "not all persistent pieces are downloaded with scheduler".to_string(),
+            ));
+        };
+
+        info!("all persistent pieces are downloaded with scheduler");
+        Ok(())
+    }
+
+    /// download_partial_for_replication_with_scheduler downloads a partial task for replication
+    /// with scheduler.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all)]
+    async fn download_partial_for_replication_with_scheduler(
+        &self,
+        task: &metadata::PersistentTask,
+        host_id: &str,
+        peer_id: &str,
+        interested_pieces: Vec<metadata::Piece>,
+        request: DownloadPersistentTaskRequest,
+        download_progress_tx: Sender<Result<DownloadPersistentTaskResponse, Status>>,
+    ) -> ClientResult<Vec<metadata::Piece>> {
+        // Get the id of the task.
+        let task_id = task.id.as_str();
+
+        // Initialize the schedule count.
+        let mut schedule_count = 0;
+
+        // Initialize the finished pieces.
+        let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
+
+        // Initialize stream channel.
+        let (in_stream_tx, in_stream_rx) = mpsc::channel(4);
+
+        // Send the register peer request.
+        in_stream_tx
+            .send_timeout(
+                AnnouncePersistentPeerRequest {
+                    host_id: host_id.to_string(),
+                    task_id: task_id.to_string(),
+                    peer_id: peer_id.to_string(),
+                    request: Some(
+                        announce_persistent_peer_request::Request::RegisterPersistentPeerRequest(
+                            RegisterPersistentPeerRequest {
+                                url: request.url.clone(),
+                                object_storage: request.object_storage.clone(),
+                                persistent: request.persistent,
+                                output_path: request.output_path.clone(),
+                                concurrent_piece_count: Some(
+                                    self.config.download.concurrent_piece_count,
+                                ),
+                                piece_count: task.piece_count(),
+                            },
+                        ),
+                    ),
+                },
+                REQUEST_TIMEOUT,
+            )
+            .await
+            .inspect_err(|err| {
+                error!("send RegisterPersistentPeerRequest failed: {:?}", err);
+            })?;
+        debug!("sent RegisterPersistentPeerRequest");
+
+        // Initialize the stream.
+        let in_stream = ReceiverStream::new(in_stream_rx);
+        let request_stream = Request::new(in_stream);
+        let response = self
+            .scheduler_client
+            .announce_persistent_peer(task_id, peer_id, request_stream)
+            .await
+            .inspect_err(|err| {
+                error!("announce persistent peer failed: {:?}", err);
+            })?;
+        debug!("announced persistent peer has been connected");
+
+        let out_stream = response
+            .into_inner()
+            .timeout(self.config.scheduler.schedule_timeout);
+        tokio::pin!(out_stream);
+
+        while let Some(message) = out_stream.try_next().await.inspect_err(|err| {
+            error!("receive message from scheduler failed: {:?}", err);
+        })? {
+            // Check if the schedule count is exceeded.
+            schedule_count += 1;
+            if schedule_count > self.config.scheduler.max_schedule_count {
+                in_stream_tx
+                    .send_timeout(
+                        AnnouncePersistentPeerRequest {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                            request: Some(
+                                announce_persistent_peer_request::Request::DownloadPersistentPeerFailedRequest(
+                                    DownloadPersistentPeerFailedRequest {
+                                        description: Some(
+                                            "max schedule count exceeded".to_string(),
+                                        ),
+                                    },
+                                ),
+                            ),
+                        },
+                        REQUEST_TIMEOUT,
+                    )
+                    .await
+                    .unwrap_or_else(|err| {
+                        error!("send DownloadPersistentPeerFailedRequest failed: {:?}", err)
+                    });
+                debug!("sent DownloadPersistentPeerFailedRequest");
+
+                // Wait for the latest message to be sent.
+                in_stream_tx.closed().await;
+                return Ok(finished_pieces);
+            }
+
+            let response = message?.response.ok_or(Error::UnexpectedResponse)?;
+            match response {
+                announce_persistent_peer_response::Response::EmptyPersistentTaskResponse(
+                    response,
+                ) => {
+                    // If the task is empty, return an empty vector.
+                    info!("empty persistent task response: {:?}", response);
+
+                    // Send the download peer started request.
+                    in_stream_tx
+                        .send_timeout(
+                            AnnouncePersistentPeerRequest {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.to_string(),
+                                peer_id: peer_id.to_string(),
+                                request: Some(
+                                    announce_persistent_peer_request::Request::DownloadPersistentPeerFinishedRequest(
+                                        DownloadPersistentPeerFinishedRequest {},
+                                    ),
+                                ),
+                            },
+                            REQUEST_TIMEOUT,
+                        )
+                        .await
+                        .inspect_err(|err| {
+                            error!("send DownloadPersistentPeerFinishedRequest failed: {:?}", err);
+                        })?;
+                    debug!("sent DownloadPersistentPeerFinishedRequest");
+
+                    // Send the download peer finished request.
+                    in_stream_tx
+                        .send_timeout(
+                            AnnouncePersistentPeerRequest {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.to_string(),
+                                peer_id: peer_id.to_string(),
+                                request: Some(
+                                    announce_persistent_peer_request::Request::DownloadPersistentPeerStartedRequest(
+                                        DownloadPersistentPeerStartedRequest {},
+                                    ),
+                                ),
+                            },
+                            REQUEST_TIMEOUT,
+                        )
+                        .await
+                        .inspect_err(|err| {
+                            error!("send DownloadPersistentPeerStartedRequest failed: {:?}", err);
+                        })?;
+                    debug!("sent DownloadPersistentPeerStartedRequest");
+
+                    // Wait for the latest message to be sent.
+                    in_stream_tx.closed().await;
+                    return Ok(Vec::new());
+                }
+                announce_persistent_peer_response::Response::NormalPersistentTaskResponse(
+                    response,
+                ) => {
+                    // If the task is normal, download the pieces from the parent.
+                    info!(
+                        "normal persistent task response: {:?}",
+                        response
+                            .candidate_parents
+                            .iter()
+                            .map(|p| p.id.clone())
+                            .collect::<Vec<String>>()
+                    );
+
+                    // Send the download peer started request.
+                    match in_stream_tx
+                        .send_timeout(
+                            AnnouncePersistentPeerRequest {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.to_string(),
+                                peer_id: peer_id.to_string(),
+                                request: Some(
+                                    announce_persistent_peer_request::Request::DownloadPersistentPeerStartedRequest(
+                                        DownloadPersistentPeerStartedRequest {},
+                                    ),
+                                ),
+                            },
+                            REQUEST_TIMEOUT,
+                        )
+                        .await
+                    {
+                        Ok(_) => debug!("sent DownloadPersistentPeerStartedRequest"),
+                        Err(err) => {
+                            error!("send DownloadPersistentPeerStartedRequest failed: {:?}", err);
+                            return Ok(finished_pieces);
+                        }
+                    };
+
+                    // Remove the finished pieces from the pieces.
+                    let remaining_interested_pieces = self.piece.remove_finished_from_interested(
+                        finished_pieces.clone(),
+                        interested_pieces.clone(),
+                    );
+
+                    // Download the pieces from the parent.
+                    let partial_finished_pieces = match self
+                        .download_partial_with_scheduler_from_parent(
+                            task,
+                            host_id,
+                            peer_id,
+                            response.candidate_parents.clone(),
+                            remaining_interested_pieces.clone(),
+                            request.need_piece_content,
+                            download_progress_tx.clone(),
+                            in_stream_tx.clone(),
+                        )
+                        .await
+                    {
+                        Ok(partial_finished_pieces) => {
+                            debug!(
+                                "schedule {} finished {} pieces from parent",
+                                schedule_count,
+                                partial_finished_pieces.len()
+                            );
+
+                            partial_finished_pieces
+                        }
+                        Err(err) => {
+                            error!("download from parent error: {:?}", err);
+                            Vec::new()
+                        }
+                    };
+
+                    // Merge the finished pieces.
+                    finished_pieces = self.piece.merge_finished_pieces(
+                        finished_pieces.clone(),
+                        partial_finished_pieces.clone(),
+                    );
+
+                    // Check if all pieces are downloaded.
+                    if finished_pieces.len() == interested_pieces.len() {
+                        // Send the download peer finished request.
+                        match in_stream_tx
+                            .send_timeout(
+                                AnnouncePersistentPeerRequest {
+                                    host_id: host_id.to_string(),
+                                    task_id: task_id.to_string(),
+                                    peer_id: peer_id.to_string(),
+                                    request: Some(
+                                        announce_persistent_peer_request::Request::DownloadPersistentPeerFinishedRequest(
+                                            DownloadPersistentPeerFinishedRequest {},
+                                        ),
+                                    ),
+                                },
+                                REQUEST_TIMEOUT,
+                            )
+                            .await
+                        {
+                            Ok(_) => debug!("sent DownloadPersistentPeerFinishedRequest"),
+                            Err(err) => {
+                                error!("send DownloadPersistentPeerFinishedRequest failed: {:?}", err);
+                            }
+                        }
+
+                        // Wait for the latest message to be sent.
+                        in_stream_tx.closed().await;
+                        return Ok(finished_pieces);
+                    }
+
+                    // If not all pieces are downloaded, send the reschedule request.
+                    match in_stream_tx
+                        .send_timeout(
+                            AnnouncePersistentPeerRequest {
+                                host_id: host_id.to_string(),
+                                task_id: task_id.to_string(),
+                                peer_id: peer_id.to_string(),
+                                request: Some(
+                                    announce_persistent_peer_request::Request::ReschedulePersistentPeerRequest(
+                                        ReschedulePersistentPeerRequest {
+                                            candidate_parents: response.candidate_parents,
+                                            description: Some(
+                                                "not all pieces are downloaded from parent"
+                                                    .to_string(),
+                                            ),
+                                        },
+                                    ),
+                                ),
+                            },
+                            REQUEST_TIMEOUT,
+                        )
+                        .await
+                    {
+                        Ok(_) => debug!("sent ReschedulePersistentPeerRequest"),
+                        Err(err) => {
+                            error!("send ReschedulePersistentPeerRequest failed: {:?}", err);
+                            return Ok(finished_pieces);
+                        }
+                    };
+                }
+                announce_persistent_peer_response::Response::NeedBackToSourceResponse(
+                    _response,
+                ) => {
+                    // If the task need back to source, download the pieces from the source.
+                    info!("replication cannot download from source");
+                    match in_stream_tx
+                        .send_timeout(AnnouncePersistentPeerRequest {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                            request: Some(
+                                announce_persistent_peer_request::Request::DownloadPersistentPeerBackToSourceFailedRequest(
+                                    DownloadPersistentPeerBackToSourceFailedRequest {
+                                        description: Some("replication cannot download from source".to_string()),
+                                    },
+                                ),
+                            ),
+                        }, REQUEST_TIMEOUT)
+                    .await {
+                        Ok(_) => debug!("sent DownloadPersistentPeerBackToSourceFailedRequest"),
+                        Err(err) => {
+                            error!("send DownloadPersistentPeerBackToSourceFailedRequest failed: {:?}", err);
+                        }
+                    }
+
+                    // Wait for the latest message to be sent.
+                    in_stream_tx.closed().await;
+                    return Ok(finished_pieces);
+                }
+            }
+        }
+
+        // If the stream is finished abnormally, return an error.
+        error!("stream is finished abnormally");
+        Ok(finished_pieces)
+    }
+
     /// download downloads a persistent task.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
