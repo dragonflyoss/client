@@ -1061,6 +1061,7 @@ impl PersistentTask {
                                     self.config.download.concurrent_piece_count,
                                 ),
                                 piece_count: task.piece_count(),
+                                need_back_to_source: false,
                             },
                         ),
                     ),
