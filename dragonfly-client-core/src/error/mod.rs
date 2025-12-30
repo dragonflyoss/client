@@ -238,6 +238,14 @@ pub enum DFError {
     #[error("max number of files to download exceeded: {0}")]
     MaxDownloadFilesExceeded(usize),
 
+    /// DigestManifestParseFailed is the error for digest manifest parsing failure.
+    #[error("digest manifest {filepath} parse failed: {error}")]
+    DigestManifestParseFailed { filepath: String, error: String },
+
+    /// MissingDigestEntry is the error when a non-directory entry has no corresponding digest.
+    #[error("missing digest for entry: {entry_url}")]
+    MissingDigestEntry { entry_url: String },
+
     /// Unsupported is the error for unsupported.
     #[error("unsupported {0}")]
     Unsupported(String),
