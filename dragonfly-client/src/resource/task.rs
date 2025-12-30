@@ -1061,7 +1061,7 @@ impl Task {
                 protocol: String,
                 parent_selector: Arc<ParentSelector>,
             ) -> ClientResult<metadata::Piece> {
-                let piece_id = piece_manager.id(task_id.as_str(), number);                
+                let piece_id = piece_manager.id(task_id.as_str(), number);
                 let parent = parent_selector.select(parents);
 
                 let metadata = piece_manager

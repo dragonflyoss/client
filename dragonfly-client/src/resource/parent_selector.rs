@@ -211,7 +211,7 @@ impl ParentSelector {
                 continue;
             };
             let parent_host_id = parent_host.id.clone();
-            
+
             // Seed a baseline weight so selection works even before the first sync_host response arrives.
             let baseline_weight = parent_host
                 .network

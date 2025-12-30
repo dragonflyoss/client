@@ -24,6 +24,7 @@ use dragonfly_client_storage::metadata;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, instrument, Instrument};
@@ -80,7 +81,7 @@ pub struct PieceCollector {
     interested_pieces: Vec<metadata::Piece>,
 
     /// collected_pieces is a map to store the collected pieces from different parents.
-    collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
+    collected_pieces: Arc<DashMap<u32, CollectedPiece>>,
 }
 
 /// PieceCollector is used to collect pieces from peers.
@@ -95,7 +96,14 @@ impl PieceCollector {
     ) -> Self {
         let collected_pieces = Arc::new(DashMap::with_capacity(interested_pieces.len()));
         for interested_piece in &interested_pieces {
-            collected_pieces.insert(interested_piece.number, Vec::new());
+            collected_pieces.insert(
+                interested_piece.number,
+                CollectedPiece {
+                    number: interested_piece.number,
+                    length: interested_piece.length,
+                    parents: Vec::new(),
+                },
+            );
         }
 
         Self {
@@ -169,12 +177,43 @@ impl PieceCollector {
         task_id: &str,
         parents: Vec<CollectedParent>,
         interested_pieces: Vec<metadata::Piece>,
-        collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
+        collected_pieces: Arc<DashMap<u32, CollectedPiece>>,
         collected_piece_tx: Sender<CollectedPiece>,
         collected_piece_timeout: Duration,
     ) -> Result<()> {
-        // Only require multiple parents to trigger download when we have at least two parents in total.
-        let required_parent_count = if parents.len() > 1 { 2 } else { 1 };
+        // Only require multiple parents to trigger download when peer have at least two parents.
+        // The timeout is set lower than collected_piece_timeout (1/10 of it) to avoid deadlocks when some parents fail to synchronize.
+        let required_parent_count = Arc::new(Mutex::new(if parents.len() > 1 {
+            Some(parents.len())
+        } else {
+            None
+        }));
+        let send_notify = Arc::new(Notify::new());
+        {
+            let collected_pieces = collected_pieces.clone();
+            let collected_piece_tx = collected_piece_tx.clone();
+            let timeout = Duration::from_secs(collected_piece_timeout.as_secs() / 10);
+            let required_parent_count = required_parent_count.clone();
+            let send_notify = send_notify.clone();
+            let task_id = task_id.to_string();
+            tokio::spawn(
+                async move {
+                    Self::downgrade_parent_requirement(
+                        task_id,
+                        required_parent_count,
+                        send_notify,
+                        collected_pieces,
+                        collected_piece_tx,
+                        timeout,
+                    )
+                    .await
+                    .unwrap_or_else(|err| {
+                        error!("monitor required parent count failed: {}", err);
+                    });
+                }
+                .in_current_span(),
+            );
+        }
 
         // Create a task to collect pieces from peers.
         let mut join_set = JoinSet::new();
@@ -186,10 +225,11 @@ impl PieceCollector {
                 task_id: String,
                 mut parent: CollectedParent,
                 interested_pieces: Vec<metadata::Piece>,
-                collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
+                collected_pieces: Arc<DashMap<u32, CollectedPiece>>,
                 collected_piece_tx: Sender<CollectedPiece>,
                 collected_piece_timeout: Duration,
-                required_parent_count: usize,
+                required_parent_count: Arc<Mutex<Option<usize>>>,
+                send_notify: Arc<Notify>,
             ) -> Result<CollectedParent> {
                 info!("sync pieces from parent {}", parent.id);
 
@@ -236,13 +276,16 @@ impl PieceCollector {
                 })? {
                     let message = message?;
 
-                    if let Some(mut parents) = collected_pieces.get_mut(&message.number) {
+                    if let Some(mut piece) = collected_pieces.get_mut(&message.number) {
                         parent.download_ip = Some(message.ip);
                         parent.download_tcp_port = message.tcp_port;
                         parent.download_quic_port = message.quic_port;
-                        parents.push(parent.clone());
-                        if parents.len() < required_parent_count {
-                            continue;
+                        piece.parents.push(parent.clone());
+                        let required_parent_count = *required_parent_count.lock().await;
+                        if let Some(required_parent_count) = required_parent_count {
+                            if piece.parents.len() < required_parent_count {
+                                continue;
+                            }
                         }
                     } else {
                         continue;
@@ -251,8 +294,8 @@ impl PieceCollector {
                     // Wait for collecting the piece from different parents when the first
                     // piece is collected.
                     tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS).await;
-                    let parents = match collected_pieces.remove(&message.number) {
-                        Some((_, parents)) => parents,
+                    let piece = match collected_pieces.remove(&message.number) {
+                        Some((_, piece)) => piece,
                         None => continue,
                     };
 
@@ -260,19 +303,17 @@ impl PieceCollector {
                         "receive piece {}-{} metadata from parents {:?}",
                         task_id,
                         message.number,
-                        parents.iter().map(|p| &p.id).collect::<Vec<&String>>()
+                        piece
+                            .parents
+                            .iter()
+                            .map(|p| &p.id)
+                            .collect::<Vec<&String>>()
                     );
 
-                    collected_piece_tx
-                        .send(CollectedPiece {
-                            number: message.number,
-                            length: message.length,
-                            parents,
-                        })
-                        .await
-                        .inspect_err(|err| {
-                            error!("send CollectedPiece failed: {}", err);
-                        })?;
+                    collected_piece_tx.send(piece).await.inspect_err(|err| {
+                        error!("send CollectedPiece failed: {}", err);
+                    })?;
+                    send_notify.notify_one();
                 }
 
                 Ok(parent)
@@ -288,7 +329,8 @@ impl PieceCollector {
                     collected_pieces.clone(),
                     collected_piece_tx.clone(),
                     collected_piece_timeout,
-                    required_parent_count,
+                    required_parent_count.clone(),
+                    send_notify.clone(),
                 )
                 .in_current_span(),
             );
@@ -309,6 +351,66 @@ impl PieceCollector {
                 Ok(Err(err)) => error!("sync pieces failed: {}", err),
                 Err(err) => error!("task join error: {}", err),
             }
+        }
+
+        Ok(())
+    }
+
+    /// downgrade_parent_requirement downgrades the required parent count to None.
+    /// This is used to avoid deadlock when some pieces are only available from few parents.
+    async fn downgrade_parent_requirement(
+        task_id: String,
+        required_parent_count: Arc<Mutex<Option<usize>>>,
+        send_notify: Arc<Notify>,
+        collected_pieces: Arc<DashMap<u32, CollectedPiece>>,
+        collected_piece_tx: Sender<CollectedPiece>,
+        timeout: Duration,
+    ) -> Result<()> {
+        let timer = tokio::time::sleep(timeout);
+        tokio::pin!(timer);
+        loop {
+            if collected_pieces.is_empty() {
+                break;
+            }
+
+            tokio::select! {
+                _ = &mut timer => {}
+                _ = send_notify.notified() => {
+                    timer
+                        .as_mut()
+                        .reset(tokio::time::Instant::now()
+                            + timeout);
+                    continue;
+                }
+            }
+
+            let mut required_parent_count = required_parent_count.lock().await;
+            if required_parent_count.is_none() {
+                break;
+            }
+
+            *required_parent_count = None;
+            drop(required_parent_count);
+            info!(
+                "idle timeout reached, disable required parent count for task {}",
+                task_id
+            );
+
+            let ready_numbers: Vec<u32> = collected_pieces
+                .iter()
+                .filter_map(|entry| (!entry.value().parents.is_empty()).then_some(*entry.key()))
+                .collect();
+
+            for piece in ready_numbers
+                .into_iter()
+                .filter_map(|number| collected_pieces.remove(&number).map(|(_, piece)| piece))
+            {
+                collected_piece_tx.send(piece).await.inspect_err(|err| {
+                    error!("send CollectedPiece failed: {}", err);
+                })?;
+            }
+
+            break;
         }
 
         Ok(())
