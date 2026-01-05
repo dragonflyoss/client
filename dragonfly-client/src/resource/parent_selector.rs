@@ -30,7 +30,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
-use tracing::{debug, error, info, instrument, warn, Instrument};
+use tracing::{debug, error, instrument, warn, Instrument};
 
 /// Manages a single connection to a parent peer.
 ///
@@ -182,10 +182,6 @@ impl ParentSelector {
                 let mut rng = rand::rng();
                 let index = dist.sample(&mut rng);
                 let selected_parent = &parents[index];
-                info!(
-                    "weights {:?}, selected parent {}",
-                    weights, selected_parent.id
-                );
 
                 selected_parent.clone()
             }
@@ -204,7 +200,7 @@ impl ParentSelector {
         let dfdaemon_shutdown = self.shutdown.clone();
         let mut join_set = JoinSet::new();
         for parent in parents {
-            info!("register parent {}", parent.id);
+            debug!("register parent {}", parent.id);
 
             let Some(parent_host) = parent.host.as_ref() else {
                 error!("parent {} has no host info, skipping", parent.id);
@@ -269,7 +265,7 @@ impl ParentSelector {
         tokio::spawn(async move {
             while let Some(message) = join_set.join_next().await {
                 match message {
-                    Ok(Ok(_)) => info!("sync host info completed"),
+                    Ok(Ok(_)) => debug!("sync host info completed"),
                     Ok(Err(err)) => error!("sync host info failed: {}", err),
                     Err(err) => error!("task join error: {}", err),
                 }
@@ -289,7 +285,7 @@ impl ParentSelector {
     #[instrument(skip_all)]
     pub fn unregister(&self, parents: &[Peer]) {
         for parent in parents {
-            info!("unregister parent {}", parent.id);
+            debug!("unregister parent {}", parent.id);
 
             let Some(parent_host) = parent.host.as_ref() else {
                 warn!("parent {} has no host info, skipping", parent.id);
@@ -300,7 +296,7 @@ impl ParentSelector {
             if let Some(connection) = self.connections.get(&parent_host_id) {
                 connection.decrement_request();
                 if connection.active_requests() == 0 {
-                    info!("cleaning up parent {} connection", parent_host_id);
+                    debug!("cleaning up parent {} connection", parent_host_id);
                     connection.shutdown();
 
                     // Explicitly drop the reference to avoid holding the borrow
@@ -331,7 +327,7 @@ impl ParentSelector {
         mut shutdown: Shutdown,
         mut dfdaemon_shutdown: Shutdown,
     ) -> Result<()> {
-        info!("sync host info from parent {}", parent_host_id);
+        debug!("sync host info from parent {}", parent_host_id);
         let response = dfdaemon_upload_client
             .sync_host(SyncHostRequest { host_id, peer_id })
             .await
@@ -357,7 +353,7 @@ impl ParentSelector {
                                 .map(Self::calculate_weight_from_network)
                                 .unwrap_or(0);
 
-                            info!("update host {} weight to {}", parent_host_id, weight);
+                            debug!("update host {} weight to {}", parent_host_id, weight);
 
                             weights.insert(parent_host_id.clone(), weight);
                         }
