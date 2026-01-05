@@ -938,7 +938,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
         tokio::spawn(
             async move {
-                match task_manager.get(task_id.as_str()) {
+                let task = match task_manager.get(task_id.as_str()) {
                     Ok(Some(task)) => {
                         if task.is_failed() {
                             error!("get task {} failed", task_id);
@@ -954,6 +954,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                             return;
                         }
+
+                        task
                     }
                     Ok(None) => {
                         error!("get task {} not found", task_id);
@@ -983,7 +985,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                         return;
                     }
-                }
+                };
 
                 loop {
                     let mut finished_piece_numbers = Vec::new();
@@ -1050,13 +1052,20 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         }
                     }
 
+                    // If task is finished, no need to wait for downloads piece.
+                    if task.is_finished() {
+                        info!("all existing pieces have been sent");
+                        drop(out_stream_tx);
+                        return;
+                    }
+
                     // Remove the finished piece numbers from the interested piece numbers.
                     interested_piece_numbers
                         .retain(|number| !finished_piece_numbers.contains(number));
 
                     // If all the interested pieces are finished, return.
                     if interested_piece_numbers.is_empty() {
-                        info!("all the interested pieces are finished");
+                        info!("all interested pieces have been finished");
                         drop(out_stream_tx);
                         return;
                     }
@@ -1777,7 +1786,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
         tokio::spawn(
             async move {
-                match persistent_task_manager.get(task_id.as_str()) {
+                let task = match persistent_task_manager.get(task_id.as_str()) {
                     Ok(Some(task)) => {
                         if task.is_failed() {
                             error!("get persistent task {} failed", task_id);
@@ -1799,6 +1808,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                             return;
                         }
+
+                        task
                     }
                     Ok(None) => {
                         error!("get persistent task {} not found", task_id);
@@ -1834,7 +1845,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                         return;
                     }
-                }
+                };
 
                 loop {
                     let mut finished_piece_numbers = Vec::new();
@@ -1909,13 +1920,20 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         }
                     }
 
+                    // If task is finished, no need to wait for downloads piece.
+                    if task.is_finished() {
+                        info!("all existing pieces have been sent");
+                        drop(out_stream_tx);
+                        return;
+                    }
+
                     // Remove the finished piece numbers from the interested piece numbers.
                     interested_piece_numbers
                         .retain(|number| !finished_piece_numbers.contains(number));
 
                     // If all the interested pieces are finished, return.
                     if interested_piece_numbers.is_empty() {
-                        info!("all the interested persistent pieces are finished");
+                        info!("all interested pieces have been finished");
                         drop(out_stream_tx);
                         return;
                     }
@@ -2463,7 +2481,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
         tokio::spawn(
             async move {
-                match persistent_cache_task_manager.get(task_id.as_str()) {
+                let task = match persistent_cache_task_manager.get(task_id.as_str()) {
                     Ok(Some(task)) => {
                         if task.is_failed() {
                             error!("get persistent cache task {} failed", task_id);
@@ -2479,6 +2497,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                             return;
                         }
+
+                        task
                     }
                     Ok(None) => {
                         error!("get persistent cache task {} not found", task_id);
@@ -2508,7 +2528,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                         return;
                     }
-                }
+                };
 
                 loop {
                     let mut finished_piece_numbers = Vec::new();
@@ -2574,13 +2594,20 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         }
                     }
 
+                    // If task is finished, no need to wait for downloads piece.
+                    if task.is_finished() {
+                        info!("all existing pieces have been sent");
+                        drop(out_stream_tx);
+                        return;
+                    }
+
                     // Remove the finished piece numbers from the interested piece numbers.
                     interested_piece_numbers
                         .retain(|number| !finished_piece_numbers.contains(number));
 
                     // If all the interested pieces are finished, return.
                     if interested_piece_numbers.is_empty() {
-                        info!("all the interested persistent cache pieces are finished");
+                        info!("all interested pieces have been finished");
                         drop(out_stream_tx);
                         return;
                     }
