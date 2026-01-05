@@ -280,21 +280,21 @@ fn default_gc_policy_persistent_cache_task_ttl() -> Duration {
     Duration::from_secs(86_400)
 }
 
-/// default_gc_policy_dist_threshold is the default threshold of the disk usage to do gc.
+/// default_gc_policy_disk_threshold is the default threshold of the disk usage to do gc.
 #[inline]
-fn default_gc_policy_dist_threshold() -> ByteSize {
+fn default_gc_policy_disk_threshold() -> ByteSize {
     ByteSize::default()
 }
 
-/// default_gc_policy_dist_high_threshold_percent is the default high threshold percent of the disk usage.
+/// default_gc_policy_disk_high_threshold_percent is the default high threshold percent of the disk usage.
 #[inline]
-fn default_gc_policy_dist_high_threshold_percent() -> u8 {
+fn default_gc_policy_disk_high_threshold_percent() -> u8 {
     80
 }
 
-/// default_gc_policy_dist_low_threshold_percent is the default low threshold percent of the disk usage.
+/// default_gc_policy_disk_low_threshold_percent is the default low threshold percent of the disk usage.
 #[inline]
-fn default_gc_policy_dist_low_threshold_percent() -> u8 {
+fn default_gc_policy_disk_low_threshold_percent() -> u8 {
     60
 }
 
@@ -990,42 +990,52 @@ pub struct Policy {
     )]
     pub persistent_cache_task_ttl: Duration,
 
-    /// Dist threshold optionally defines a specific disk capacity to be used as the base for
-    /// calculating GC trigger points with `dist_high_threshold_percent` and `dist_low_threshold_percent`.
+    /// Disk threshold optionally defines a specific disk capacity to be used as the base for
+    /// calculating GC trigger points with `disk_high_threshold_percent` and `disk_low_threshold_percent`.
     ///
-    /// - If a value is provided (e.g., "500GB"), the percentage-based thresholds (`dist_high_threshold_percent`,
-    ///   `dist_low_threshold_percent`) are applied relative to this specified capacity.
+    /// - If a value is provided (e.g., "500GB"), the percentage-based thresholds (`disk_high_threshold_percent`,
+    ///   `disk_low_threshold_percent`) are applied relative to this specified capacity.
     /// - If not provided or set to 0 (the default behavior), these percentage-based thresholds are applied
     ///   relative to the total actual disk space.
     ///
     /// This allows dfdaemon to effectively manage a logical portion of the disk for its cache,
     /// rather than always considering the entire disk volume.
-    #[serde(with = "bytesize_serde", default = "default_gc_policy_dist_threshold")]
-    pub dist_threshold: ByteSize,
+    #[serde(
+        with = "bytesize_serde",
+        default = "default_gc_policy_disk_threshold",
+        alias = "distThreshold"
+    )]
+    pub disk_threshold: ByteSize,
 
-    /// Dist high threshold percent is the high threshold percent of the disk usage.
+    /// Disk high threshold percent is the high threshold percent of the disk usage.
     /// If the disk usage is greater than the threshold, dfdaemon will do gc.
-    #[serde(default = "default_gc_policy_dist_high_threshold_percent")]
+    #[serde(
+        default = "default_gc_policy_disk_high_threshold_percent",
+        alias = "distHighThresholdPercent"
+    )]
     #[validate(range(min = 1, max = 99))]
-    pub dist_high_threshold_percent: u8,
+    pub disk_high_threshold_percent: u8,
 
-    /// Dist low threshold percent is the low threshold percent of the disk usage.
+    /// Disk low threshold percent is the low threshold percent of the disk usage.
     /// If the disk usage is less than the threshold, dfdaemon will stop gc.
-    #[serde(default = "default_gc_policy_dist_low_threshold_percent")]
+    #[serde(
+        default = "default_gc_policy_disk_low_threshold_percent",
+        alias = "distLowThresholdPercent"
+    )]
     #[validate(range(min = 1, max = 99))]
-    pub dist_low_threshold_percent: u8,
+    pub disk_low_threshold_percent: u8,
 }
 
 /// Policy implements Default.
 impl Default for Policy {
     fn default() -> Self {
         Policy {
-            dist_threshold: default_gc_policy_dist_threshold(),
+            disk_threshold: default_gc_policy_disk_threshold(),
             task_ttl: default_gc_policy_task_ttl(),
             persistent_task_ttl: default_gc_policy_persistent_task_ttl(),
             persistent_cache_task_ttl: default_gc_policy_persistent_cache_task_ttl(),
-            dist_high_threshold_percent: default_gc_policy_dist_high_threshold_percent(),
-            dist_low_threshold_percent: default_gc_policy_dist_low_threshold_percent(),
+            disk_high_threshold_percent: default_gc_policy_disk_high_threshold_percent(),
+            disk_low_threshold_percent: default_gc_policy_disk_low_threshold_percent(),
         }
     }
 }
@@ -2036,9 +2046,9 @@ key: /etc/ssl/private/client.pem
             task_ttl: Duration::from_secs(12 * 3600),
             persistent_task_ttl: Duration::from_secs(24 * 3600),
             persistent_cache_task_ttl: Duration::from_secs(48 * 3600),
-            dist_threshold: ByteSize::mb(100),
-            dist_high_threshold_percent: 90,
-            dist_low_threshold_percent: 70,
+            disk_threshold: ByteSize::mb(100),
+            disk_high_threshold_percent: 90,
+            disk_low_threshold_percent: 70,
         };
         assert!(valid_policy.validate().is_ok());
 
@@ -2046,9 +2056,9 @@ key: /etc/ssl/private/client.pem
             task_ttl: Duration::from_secs(12 * 3600),
             persistent_task_ttl: Duration::from_secs(24 * 3600),
             persistent_cache_task_ttl: Duration::from_secs(48 * 3600),
-            dist_threshold: ByteSize::mb(100),
-            dist_high_threshold_percent: 100,
-            dist_low_threshold_percent: 70,
+            disk_threshold: ByteSize::mb(100),
+            disk_high_threshold_percent: 100,
+            disk_low_threshold_percent: 70,
         };
         assert!(invalid_policy.validate().is_err());
     }
@@ -2078,8 +2088,8 @@ key: /etc/ssl/private/client.pem
             gc.policy.persistent_cache_task_ttl,
             Duration::from_secs(48 * 3600)
         );
-        assert_eq!(gc.policy.dist_high_threshold_percent, 90);
-        assert_eq!(gc.policy.dist_low_threshold_percent, 70);
+        assert_eq!(gc.policy.disk_high_threshold_percent, 90);
+        assert_eq!(gc.policy.disk_low_threshold_percent, 70);
     }
 
     #[test]
