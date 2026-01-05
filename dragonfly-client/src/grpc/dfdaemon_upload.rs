@@ -480,15 +480,15 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
                         // Download task succeeded.
                         info!("download task succeeded");
-                        if download_clone.range.is_none() {
-                            if let Err(err) =
-                                task_manager_clone.download_finished(task_clone.id.as_str())
-                            {
-                                error!("download task finished: {}", err);
-                                handle_error(&out_stream_tx, err).await;
-                                return;
-                            }
+                        if let Err(err) =
+                            task_manager_clone.download_finished(task_clone.id.as_str())
+                        {
+                            error!("download task finished: {}", err);
+                            handle_error(&out_stream_tx, err).await;
+                            return;
+                        }
 
+                        if download_clone.range.is_none() {
                             if let Some(output_path) = &download_clone.output_path {
                                 if !download_clone.force_hard_link {
                                     let output_path = Path::new(output_path.as_str());
