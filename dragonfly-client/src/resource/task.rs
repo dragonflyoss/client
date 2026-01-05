@@ -984,6 +984,7 @@ impl Task {
         download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
         in_stream_tx: Sender<AnnouncePeerRequest>,
     ) -> ClientResult<Vec<metadata::Piece>> {
+        // Get the id of the task.
         let task_id = task.id.as_str();
 
         // Register the parents for syncing host info.
@@ -1061,6 +1062,12 @@ impl Task {
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 let parent = parent_selector.select(parents);
+
+                info!(
+                    "start to download piece {} from parent {:?}",
+                    piece_id,
+                    parent.id.clone()
+                );
 
                 let metadata = piece_manager
                     .download_from_parent(
@@ -1200,7 +1207,7 @@ impl Task {
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
-                    let _permit: tokio::sync::OwnedSemaphorePermit = permit;
+                    let _permit = permit;
                     download_from_parent(
                         task_id,
                         host_id,
