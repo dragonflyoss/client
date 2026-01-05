@@ -52,7 +52,7 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Install cargo-deb
-        uses: taiki-e/cache-cargo-install-action@7447f04c51f2ba27ca35e7f1e28fab848c5b3ba7
+        uses: taiki-e/cache-cargo-install-action@25ef9892608d184944df486ae09ffae168b3cda3
         with:
           # Don't upgrade cargo-deb, refer to https://github.com/kornelski/cargo-deb/issues/169.
           tool: cargo-deb@2.10.0
