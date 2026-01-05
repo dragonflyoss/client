@@ -147,15 +147,15 @@ impl GC {
 
         // Calculate the usage percent.
         let usage_percent = (100 - available_space * 100 / total_space) as u8;
-        if usage_percent >= self.config.gc.policy.dist_high_threshold_percent {
+        if usage_percent >= self.config.gc.policy.disk_high_threshold_percent {
             info!(
                 "start to evict task by disk usage, disk usage {}% is higher than high threshold {}%",
-                usage_percent, self.config.gc.policy.dist_high_threshold_percent
+                usage_percent, self.config.gc.policy.disk_high_threshold_percent
             );
 
             // Calculate the need evict space.
             let need_evict_space = total_space as f64
-                * ((usage_percent - self.config.gc.policy.dist_low_threshold_percent) as f64
+                * ((usage_percent - self.config.gc.policy.disk_low_threshold_percent) as f64
                     / 100.0);
 
             // Evict the task by the need evict space.
@@ -264,15 +264,15 @@ impl GC {
 
         // Calculate the usage percent.
         let usage_percent = (100 - available_space * 100 / total_space) as u8;
-        if usage_percent >= self.config.gc.policy.dist_high_threshold_percent {
+        if usage_percent >= self.config.gc.policy.disk_high_threshold_percent {
             info!(
                 "start to evict persistent task by disk usage, disk usage {}% is higher than high threshold {}%",
-                usage_percent, self.config.gc.policy.dist_high_threshold_percent
+                usage_percent, self.config.gc.policy.disk_high_threshold_percent
             );
 
             // Calculate the need evict space.
             let need_evict_space = total_space as f64
-                * ((usage_percent - self.config.gc.policy.dist_low_threshold_percent) as f64
+                * ((usage_percent - self.config.gc.policy.disk_low_threshold_percent) as f64
                     / 100.0);
 
             // Evict the persistent task by the need evict space.
@@ -313,15 +313,15 @@ impl GC {
 
         // Calculate the usage percent.
         let usage_percent = (100 - available_space * 100 / total_space) as u8;
-        if usage_percent >= self.config.gc.policy.dist_high_threshold_percent {
+        if usage_percent >= self.config.gc.policy.disk_high_threshold_percent {
             info!(
                 "start to evict persistent cache task by disk usage, disk usage {}% is higher than high threshold {}%",
-                usage_percent, self.config.gc.policy.dist_high_threshold_percent
+                usage_percent, self.config.gc.policy.disk_high_threshold_percent
             );
 
             // Calculate the need evict space.
             let need_evict_space = total_space as f64
-                * ((usage_percent - self.config.gc.policy.dist_low_threshold_percent) as f64
+                * ((usage_percent - self.config.gc.policy.disk_low_threshold_percent) as f64
                     / 100.0);
 
             // Evict the persistent cache task by the need evict space.
