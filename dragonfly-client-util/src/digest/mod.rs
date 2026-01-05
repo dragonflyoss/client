@@ -29,7 +29,7 @@ pub const SEPARATOR: &str = ":";
 
 lazy_static! {
     /// BLOB_URL_REGEX is the regex for oci blob url, e.g. http(s)://<registry>/v2/<repository>/blobs/<digest>.
-    static ref BLOB_URL_REGEX: Regex = Regex::new(r"^(.*)://(.*)/v2/(.*)/blobs/(.*)$").unwrap();
+    static ref BLOB_URL_REGEX: Regex = Regex::new(r"^(.*)://(.*)/v2/(.*)/blobs/([^?]+)(?:\?.*)?$").unwrap();
 }
 
 /// is_blob_url checks if the url is an oci blob url.
@@ -253,6 +253,17 @@ mod tests {
         assert!(digest.is_some());
 
         let url = "http://localhost:5000/v2/myrepo/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e";
+        let digest = Digest::extract_from_blob_url(url);
+        assert!(digest.is_some());
+        let digest = digest.unwrap();
+        assert_eq!(digest.algorithm(), Algorithm::Sha256);
+        assert_eq!(
+            digest.encoded(),
+            "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
+        );
+
+        // Test URL with query parameters (e.g. containerd adds ?ns=docker.io for registry mirrors)
+        let url = "https://index.docker.io/v2/library/alpine/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e?ns=docker.io";
         let digest = Digest::extract_from_blob_url(url);
         assert!(digest.is_some());
         let digest = digest.unwrap();
