@@ -1,5 +1,5 @@
 /*
- *     Copyright 2024 The Dragonfly Authors
+ *     Copyright 2025 The Dragonfly Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,8 +15,9 @@
  */
 
 use clap::Parser;
+use dragonfly_api::common::v2::ObjectStorage;
 use dragonfly_api::dfdaemon::v2::{
-    download_persistent_cache_task_response, DownloadPersistentCacheTaskRequest,
+    download_persistent_task_response, DownloadPersistentTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_core::{
@@ -34,19 +35,22 @@ use termion::{color, style};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tracing::{debug, error, info};
+use url::Url;
 
 use super::*;
 
 /// ExportCommand is the subcommand of export.
 #[derive(Debug, Clone, Parser)]
 pub struct ExportCommand {
-    #[arg(help = "Specify the persistent cache task ID to export")]
-    id: String,
+    #[arg(
+        help = "Specify the URL to download. Format: scheme://<bucket>/<path>. Examples: s3://<bucket>/<path>, abs://<bucket>/<path>"
+    )]
+    url: Url,
 
     #[arg(
         long = "transfer-from-dfdaemon",
         default_value_t = false,
-        help = "Specify whether to transfer the content of downloading file from dfdaemon's unix domain socket. If it is true, dfcache will call dfdaemon to download the file, and dfdaemon will return the content of downloading file to dfcache via unix domain socket, and dfcache will copy the content to the output path. If it is false, dfdaemon will download the file and hardlink or copy the file to the output path."
+        help = "Specify whether to transfer the content of downloading file from dfdaemon's unix domain socket. If it is true, dfstore will call dfdaemon to download the file, and dfdaemon will return the content of downloading file to dfstore via unix domain socket, and dfstore will copy the content to the output path. If it is false, dfdaemon will download the file and hardlink or copy the file to the output path."
     )]
     transfer_from_dfdaemon: bool,
 
@@ -63,20 +67,6 @@ pub struct ExportCommand {
         help = "Specify whether the download file must be hard linked to the output path. If hard link is failed, download will be failed. If it is false, dfdaemon will copy the file to the output path if hard link is failed."
     )]
     force_hard_link: bool,
-
-    #[arg(
-        long = "application",
-        default_value = "",
-        help = "Caller application which is used for statistics and access control"
-    )]
-    application: String,
-
-    #[arg(
-        long = "tag",
-        default_value = "",
-        help = "Different tags for the same file will be divided into different persistent cache tasks"
-    )]
-    tag: String,
 
     #[arg(
         short = 'O',
@@ -108,6 +98,49 @@ pub struct ExportCommand {
     )]
     endpoint: PathBuf,
 
+    #[arg(long, help = "Specify the region for the Object Storage Service")]
+    storage_region: Option<String>,
+
+    #[arg(long, help = "Specify the endpoint for the Object Storage Service")]
+    storage_endpoint: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the access key ID for the Object Storage Service"
+    )]
+    storage_access_key_id: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the access key secret for the Object Storage Service"
+    )]
+    storage_access_key_secret: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the security token for the Object Storage Service"
+    )]
+    storage_security_token: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the session token for Amazon Simple Storage Service(S3)"
+    )]
+    storage_session_token: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the local path to the credential file which is used for OAuth2 authentication for Google Cloud Storage Service(GCS)"
+    )]
+    storage_credential_path: Option<String>,
+
+    #[arg(
+        long,
+        default_value = "publicRead",
+        help = "Specify the predefined ACL for Google Cloud Storage Service(GCS)"
+    )]
+    storage_predefined_acl: Option<String>,
+
     #[arg(
         long,
         default_value_t = false,
@@ -131,7 +164,7 @@ pub struct ExportCommand {
 impl ExportCommand {
     /// Executes the export command with comprehensive validation and advanced error handling.
     ///
-    /// This function serves as the main entry point for the dfcache export command execution.
+    /// This function serves as the main entry point for the dfstore export command execution.
     /// It handles the complete workflow including argument parsing, validation, logging setup,
     /// dfdaemon client connection, and export operation execution. The function provides
     /// sophisticated error reporting with colored terminal output, including specialized
@@ -430,15 +463,15 @@ impl ExportCommand {
         Ok(())
     }
 
-    /// Executes the export operation to retrieve cached files from the persistent cache system.
+    /// Executes the export operation to retrieve stored files from the persistent system.
     ///
-    /// This function handles the core export functionality by downloading a cached file from the
-    /// dfdaemon persistent cache system. It supports two transfer modes: direct file transfer
+    /// This function handles the core export functionality by downloading a stored file from the
+    /// dfdaemon persistent system. It supports two transfer modes: direct file transfer
     /// by dfdaemon (hardlink/copy) or streaming piece content through the client for manual
     /// file assembly. The operation provides real-time progress feedback and handles file
     /// creation, directory setup, and efficient piece-by-piece writing with sparse file allocation.
     async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
-        // Dfcache needs to notify dfdaemon to transfer the piece content of downloading file via unix domain socket
+        // Dfstore needs to notify dfdaemon to transfer the piece content of downloading file via unix domain socket
         // when the `transfer_from_dfdaemon` is true. Otherwise, dfdaemon will download the file and hardlink or
         // copy the file to the output path.
         let (output_path, need_piece_content) = if self.transfer_from_dfdaemon {
@@ -451,13 +484,21 @@ impl ExportCommand {
 
         // Create dfdaemon client.
         let response = dfdaemon_download_client
-            .download_persistent_cache_task(DownloadPersistentCacheTaskRequest {
-                task_id: self.id.clone(),
+            .download_persistent_task(DownloadPersistentTaskRequest {
+                url: self.url.to_string(),
+                object_storage: Some(ObjectStorage {
+                    region: self.storage_region.clone(),
+                    endpoint: self.storage_endpoint.clone(),
+                    access_key_id: self.storage_access_key_id.clone(),
+                    access_key_secret: self.storage_access_key_secret.clone(),
+                    security_token: self.storage_security_token.clone(),
+                    session_token: self.storage_session_token.clone(),
+                    credential_path: self.storage_credential_path.clone(),
+                    predefined_acl: self.storage_predefined_acl.clone(),
+                }),
                 // When scheduler triggers the export task, it will set true. If the export task is
                 // triggered by the user, it will set false.
                 persistent: false,
-                tag: Some(self.tag.clone()),
-                application: Some(self.application.clone()),
                 output_path,
                 timeout: Some(
                     prost_wkt_types::Duration::try_from(self.timeout)
@@ -471,10 +512,10 @@ impl ExportCommand {
             })
             .await
             .inspect_err(|err| {
-                error!("download persistent cache task failed: {}", err);
+                error!("download persistent task failed: {}", err);
             })?;
 
-        // If transfer_from_dfdaemon is true, then dfcache needs to create the output file and write the
+        // If transfer_from_dfdaemon is true, then dfstore needs to create the output file and write the
         // piece content to the output file.
         let mut f = if self.transfer_from_dfdaemon {
             if let Some(parent) = self.output.parent() {
@@ -489,7 +530,7 @@ impl ExportCommand {
                 .create(true)
                 .truncate(true)
                 .write(true)
-                .mode(dfcache::DEFAULT_OUTPUT_FILE_MODE)
+                .mode(dfstore::DEFAULT_OUTPUT_FILE_MODE)
                 .open(&self.output)
                 .await
                 .inspect_err(|err| {
@@ -526,7 +567,7 @@ impl ExportCommand {
             match out_stream.message().await {
                 Ok(Some(message)) => {
                     match message.response {
-                        Some(download_persistent_cache_task_response::Response::DownloadPersistentCacheTaskStartedResponse(
+                        Some(download_persistent_task_response::Response::DownloadPersistentTaskStartedResponse(
                             response,
                         )) => {
                             if let Some(f) = &f {
@@ -542,7 +583,7 @@ impl ExportCommand {
 
                             progress_bar.set_length(response.content_length);
                         }
-                        Some(download_persistent_cache_task_response::Response::DownloadPieceFinishedResponse(
+                        Some(download_persistent_task_response::Response::DownloadPieceFinishedResponse(
                             response,
                         )) => {
                             let piece = match response.piece {
@@ -557,7 +598,7 @@ impl ExportCommand {
                                 }
                             };
 
-                            // Dfcache needs to write the piece content to the output file.
+                            // Dfstore needs to write the piece content to the output file.
                             if let Some(f) = &mut f {
                                 debug!("copy piece {} to {:?} started", piece.number, self.output);
                                 if let Err(err) =f.seek(SeekFrom::Start(piece.offset)).await {

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::resource::{persistent_cache_task, task};
+use crate::resource::{persistent_cache_task, persistent_task, task};
 use dragonfly_api::common::v2::{
     CacheTask, PersistentCacheTask, PersistentTask, Priority, Task, TaskType,
 };
@@ -27,13 +27,14 @@ use dragonfly_api::dfdaemon::v2::{
     DownloadPersistentCacheTaskRequest, DownloadPersistentCacheTaskResponse,
     DownloadPersistentTaskRequest, DownloadPersistentTaskResponse, DownloadTaskRequest,
     DownloadTaskResponse, Entry, ListTaskEntriesRequest, ListTaskEntriesResponse,
-    StatCacheTaskRequest as DfdaemonStatCacheTaskRequest, StatPersistentCacheTaskRequest,
+    StatCacheTaskRequest as DfdaemonStatCacheTaskRequest, StatLocalTaskRequest,
+    StatLocalTaskResponse, StatPersistentCacheTaskRequest,
     StatTaskRequest as DfdaemonStatTaskRequest, UploadPersistentCacheTaskRequest,
     UploadPersistentTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::DeleteHostRequest as SchedulerDeleteHostRequest;
-use dragonfly_client_backend::HeadRequest;
+use dragonfly_client_backend::StatRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -44,14 +45,15 @@ use dragonfly_client_metric::{
     collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
     collect_download_task_failure_metrics, collect_download_task_finished_metrics,
     collect_download_task_started_metrics, collect_list_task_entries_failure_metrics,
-    collect_list_task_entries_started_metrics, collect_stat_task_failure_metrics,
+    collect_list_task_entries_started_metrics, collect_stat_local_task_failure_metrics,
+    collect_stat_local_task_started_metrics, collect_stat_task_failure_metrics,
     collect_stat_task_started_metrics, collect_upload_task_failure_metrics,
     collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
 };
 use dragonfly_client_util::{
     digest::{is_blob_url, verify_file_digest, Digest},
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
-    id_generator::{PersistentCacheTaskIDParameter, TaskIDParameter},
+    id_generator::{PersistentCacheTaskIDParameter, PersistentTaskIDParameter, TaskIDParameter},
     shutdown,
 };
 use hyper_util::rt::TokioIo;
@@ -89,6 +91,9 @@ pub struct DfdaemonDownloadServer {
     /// task is the task manager.
     task: Arc<task::Task>,
 
+    /// persistent_task is the persistent cache task manager.
+    persistent_task: Arc<persistent_task::PersistentTask>,
+
     /// persistent_cache_task is the persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 
@@ -106,6 +111,7 @@ impl DfdaemonDownloadServer {
         config: Arc<Config>,
         socket_path: PathBuf,
         task: Arc<task::Task>,
+        persistent_task: Arc<persistent_task::PersistentTask>,
         persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
@@ -114,6 +120,7 @@ impl DfdaemonDownloadServer {
             config,
             socket_path,
             task,
+            persistent_task,
             persistent_cache_task,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
@@ -128,6 +135,7 @@ impl DfdaemonDownloadServer {
                 config: self.config.clone(),
                 socket_path: self.socket_path.clone(),
                 task: self.task.clone(),
+                persistent_task: self.persistent_task.clone(),
                 persistent_cache_task: self.persistent_cache_task.clone(),
             },
             ExtractTracingInterceptor,
@@ -226,6 +234,9 @@ pub struct DfdaemonDownloadServerHandler {
 
     /// task is the task manager.
     task: Arc<task::Task>,
+
+    /// persistent_task is the persistent task manager.
+    persistent_task: Arc<persistent_task::PersistentTask>,
 
     /// persistent_cache_task is the persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
@@ -685,7 +696,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 
     /// stat_task gets the status of the task.
-    #[instrument(skip_all, fields(host_id, task_id, remote_ip, local_only))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_task(
         &self,
         request: Request<DfdaemonStatTaskRequest>,
@@ -704,9 +715,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Get the task id from the request.
         let task_id = request.task_id;
 
-        // Get the local_only flag from the request, default to false.
-        let local_only = request.local_only;
-
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
@@ -714,17 +722,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             "remote_ip",
             request.remote_ip.clone().unwrap_or_default().as_str(),
         );
-        Span::current().record("local_only", local_only.to_string().as_str());
         info!("stat task in download server");
 
         // Collect the stat task metrics.
         collect_stat_task_started_metrics(TaskType::Standard as i32);
-
-        match self
-            .task
-            .stat(task_id.as_str(), host_id.as_str(), local_only)
-            .await
-        {
+        match self.task.stat(task_id.as_str(), host_id.as_str()).await {
             Ok(task) => Ok(Response::new(task)),
             Err(err) => {
                 // Collect the stat task failure metrics.
@@ -737,6 +739,54 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 Err(match err {
                     ClientError::TaskNotFound(id) => {
                         Status::not_found(format!("task not found: {}", id))
+                    }
+                    _ => Status::internal(err.to_string()),
+                })
+            }
+        }
+    }
+
+    /// stat_local_task stats the local task.
+    #[instrument(skip_all, fields(task_id, remote_ip))]
+    async fn stat_local_task(
+        &self,
+        request: Request<StatLocalTaskRequest>,
+    ) -> Result<Response<StatLocalTaskResponse>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the task id.
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        info!("stat local task in upload server");
+
+        // Collect the local stat task metrics.
+        collect_stat_local_task_started_metrics(TaskType::Standard as i32);
+
+        match self.task.stat_local(task_id.as_str()).await {
+            Ok(response) => Ok(Response::new(response)),
+            Err(err) => {
+                // Collect the local stat task failure metrics.
+                collect_stat_local_task_failure_metrics(TaskType::Standard as i32);
+
+                // Log the error with detailed context.
+                error!("stat local task failed: {}", err);
+
+                // Map the error to an appropriate gRPC status.
+                Err(match err {
+                    ClientError::TaskNotFound(id) => {
+                        Status::not_found(format!("local task not found: {}", id))
                     }
                     _ => Status::internal(err.to_string()),
                 })
@@ -785,7 +835,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
         // Head the task entries.
         let response = backend
-            .head(HeadRequest {
+            .stat(StatRequest {
                 task_id: request.task_id.clone(),
                 url: request.url.clone(),
                 http_header: Some(hashmap_to_headermap(&request.request_header).map_err(
@@ -908,22 +958,427 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     type DownloadPersistentTaskStream =
         ReceiverStream<Result<DownloadPersistentTaskResponse, Status>>;
 
-    /// download_persistent_task downloads the persistent task.
+    /// download_persistent_task downloads the persistent task for downloading by user.
+    /// Note: This request include object storage credentials and should be used
+    /// for downloading from object storage and peers.
     #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip, content_length))]
     async fn download_persistent_task(
         &self,
-        _request: Request<DownloadPersistentTaskRequest>,
+        request: Request<DownloadPersistentTaskRequest>,
     ) -> Result<Response<Self::DownloadPersistentTaskStream>, Status> {
-        todo!();
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Record the start time.
+        let start_time = Instant::now();
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Generate the peer id.
+        let peer_id = self.task.id_generator.peer_id();
+
+        // Generate the task type and task priority.
+        let task_type = TaskType::Persistent as i32;
+        let task_priority = Priority::Level0 as i32;
+
+        // Get the object storage from the request.
+        let object_storage = request.object_storage.clone().ok_or_else(|| {
+            error!("missing object storage");
+            Status::invalid_argument("missing object storage")
+        })?;
+
+        // Generate the task id.
+        let task_id = self
+            .task
+            .id_generator
+            .persistent_task_id(PersistentTaskIDParameter::FileContentBased {
+                url: request.url.clone(),
+                region: object_storage.region.ok_or_else(|| {
+                    error!("missing object storage region");
+                    Status::invalid_argument("missing object storage region")
+                })?,
+                endpoint: object_storage.endpoint.ok_or_else(|| {
+                    error!("missing object storage endpoint");
+                    Status::invalid_argument("missing object storage endpoint")
+                })?,
+            })
+            .map_err(|err| {
+                error!("generate persistent task id: {}", err);
+                Status::invalid_argument(err.to_string())
+            })?;
+
+        // Span record the host id, task id and peer id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record("peer_id", peer_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+
+        // Check whether the persistent task already exists.
+        let content_length = match self
+            .persistent_task
+            .stat_source(&task_id, &request.url, request.object_storage.clone())
+            .await
+        {
+            Ok(response) => response.content_length.ok_or_else(|| {
+                error!("missing content length in persistent task");
+                Status::internal("missing content length in persistent task")
+            })?,
+            Err(ClientError::OpenDALError(err)) if err.kind() == opendal::ErrorKind::NotFound => {
+                error!("persistent task not found: {}", err);
+                return Err(Status::not_found(err.to_string()));
+            }
+            Err(err) => {
+                error!("check persistent task exists: {}", err);
+                return Err(Status::internal(err.to_string()));
+            }
+        };
+
+        // Download task started.
+        info!("download persistent task started: {:?}", request);
+        let task = match self
+            .persistent_task
+            .download_started(
+                task_id.as_str(),
+                host_id.as_str(),
+                content_length,
+                request.clone(),
+            )
+            .await
+        {
+            Err(ClientError::BackendError(err)) => {
+                error!("download persistent task started failed by error: {}", err);
+                self.persistent_task
+                    .download_failed(task_id.as_str())
+                    .await
+                    .unwrap_or_else(|err| error!("download persistent task failed: {}", err));
+
+                match serde_json::to_vec::<Backend>(&Backend {
+                    message: err.message.clone(),
+                    header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
+                    status_code: err.status_code.map(|code| code.as_u16() as i32),
+                }) {
+                    Ok(json) => {
+                        return Err(Status::with_details(
+                            Code::Internal,
+                            err.to_string(),
+                            json.into(),
+                        ));
+                    }
+                    Err(e) => {
+                        error!("serialize error: {}", e);
+                        return Err(Status::internal(e.to_string()));
+                    }
+                }
+            }
+            Err(err) => {
+                error!("download persistent task started failed: {}", err);
+                return Err(Status::internal(err.to_string()));
+            }
+            Ok(task) => {
+                // Collect download persistent task started metrics.
+                collect_download_task_started_metrics(
+                    task_type,
+                    "",
+                    "",
+                    task_priority.to_string().as_str(),
+                );
+
+                task
+            }
+        };
+        Span::current().record("content_length", task.content_length());
+
+        // Initialize stream channel.
+        let request_clone = request.clone();
+        let task_manager_clone = self.persistent_task.clone();
+        let task_clone = task.clone();
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(4);
+
+        // Define the error handler to send the error to the stream.
+        async fn handle_error(
+            out_stream_tx: &Sender<Result<DownloadPersistentTaskResponse, Status>>,
+            err: impl std::error::Error,
+        ) {
+            out_stream_tx
+                .send_timeout(
+                    Err(Status::internal(err.to_string())),
+                    super::REQUEST_TIMEOUT,
+                )
+                .await
+                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+        }
+
+        tokio::spawn(
+            async move {
+                match task_manager_clone
+                    .download(
+                        &task_clone,
+                        host_id.as_str(),
+                        peer_id.as_str(),
+                        request_clone.clone(),
+                        out_stream_tx.clone(),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        // Collect download task finished metrics.
+                        collect_download_task_finished_metrics(
+                            task_type,
+                            "",
+                            "",
+                            task_priority.to_string().as_str(),
+                            task_clone.content_length(),
+                            None,
+                            start_time.elapsed(),
+                        );
+
+                        // Download persistent task succeeded.
+                        info!("download persistent task succeeded");
+                        if let Err(err) =
+                            task_manager_clone.download_finished(task_clone.id.as_str())
+                        {
+                            error!("download persistent task finished: {}", err);
+                            handle_error(&out_stream_tx, err).await;
+                            return;
+                        }
+
+                        if let Some(output_path) = &request_clone.output_path {
+                            if !request_clone.force_hard_link {
+                                let output_path = Path::new(output_path.as_str());
+                                if output_path.exists() {
+                                    match task_manager_clone
+                                        .is_same_dev_inode(task_clone.id.as_str(), output_path)
+                                        .await
+                                    {
+                                        Ok(true) => {}
+                                        Ok(false) => {
+                                            if request_clone.overwrite {
+                                                if let Err(err) = task_manager_clone
+                                                    .copy_task(task_clone.id.as_str(), output_path)
+                                                    .await
+                                                {
+                                                    error!("copy task: {}", err);
+                                                    handle_error(&out_stream_tx, err).await;
+                                                    return;
+                                                };
+
+                                                return;
+                                            }
+
+                                            error!(
+                                                "output path {} is already exists",
+                                                output_path.display()
+                                            );
+
+                                            handle_error(
+                                                &out_stream_tx,
+                                                Status::internal(format!(
+                                                    "output path {} is already exists",
+                                                    output_path.display()
+                                                )),
+                                            )
+                                            .await;
+                                            return;
+                                        }
+                                        Err(err) => {
+                                            error!("check output path: {}", err);
+                                            handle_error(&out_stream_tx, err).await;
+                                            return;
+                                        }
+                                    }
+                                } else if let Err(err) = task_manager_clone
+                                    .copy_task(task_clone.id.as_str(), output_path)
+                                    .await
+                                {
+                                    error!("copy task: {}", err);
+                                    handle_error(&out_stream_tx, err).await;
+                                    return;
+                                }
+                            }
+
+                            // Verify the file digest if it is provided.
+                            if let Some(raw_digest) = &request_clone.digest {
+                                let digest = match raw_digest.parse::<Digest>() {
+                                    Ok(digest) => digest,
+                                    Err(err) => {
+                                        error!("parse digest: {}", err);
+                                        handle_error(
+                                            &out_stream_tx,
+                                            Status::invalid_argument(format!(
+                                                "invalid digest({}): {}",
+                                                raw_digest, err
+                                            )),
+                                        )
+                                        .await;
+                                        return;
+                                    }
+                                };
+
+                                if let Err(err) =
+                                    verify_file_digest(digest, Path::new(output_path.as_str()))
+                                {
+                                    error!("verify file digest: {}", err);
+                                    handle_error(&out_stream_tx, err).await;
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        error!("download persistent task failed: {}", err);
+
+                        // Collect download task failure metrics.
+                        collect_download_task_failure_metrics(
+                            task_type,
+                            "",
+                            "",
+                            task_priority.to_string().as_str(),
+                        );
+
+                        // Download task failed.
+                        task_manager_clone
+                            .download_failed(task_clone.id.as_str())
+                            .await
+                            .unwrap_or_else(|err| {
+                                error!("download persistent task failed: {}", err)
+                            });
+
+                        handle_error(&out_stream_tx, err).await;
+                    }
+                }
+
+                drop(out_stream_tx);
+            }
+            .in_current_span(),
+        );
+
+        Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
     /// upload_persistent_task uploads the persistent task.
     #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip))]
     async fn upload_persistent_task(
         &self,
-        _request: Request<UploadPersistentTaskRequest>,
+        request: Request<UploadPersistentTaskRequest>,
     ) -> Result<Response<PersistentTask>, Status> {
-        todo!();
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Record the start time.
+        let start_time = Instant::now();
+
+        // Clone the request.
+        let request = request.into_inner();
+        let path = Path::new(request.path.as_str());
+        info!("upload persistent task {:?}", request);
+
+        // Get the object storage from the request.
+        let object_storage = request.object_storage.clone().ok_or_else(|| {
+            error!("missing object storage");
+            Status::invalid_argument("missing object storage")
+        })?;
+
+        // Generate the task id.
+        let task_id = self
+            .task
+            .id_generator
+            .persistent_task_id(PersistentTaskIDParameter::FileContentBased {
+                url: request.url.clone(),
+                region: object_storage.region.ok_or_else(|| {
+                    error!("missing object storage region");
+                    Status::invalid_argument("missing object storage region")
+                })?,
+                endpoint: object_storage.endpoint.ok_or_else(|| {
+                    error!("missing object storage endpoint");
+                    Status::invalid_argument("missing object storage endpoint")
+                })?,
+            })
+            .map_err(|err| {
+                error!("generate persistent task id: {}", err);
+                Status::invalid_argument(err.to_string())
+            })?;
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Generate the peer id.
+        let peer_id = self.task.id_generator.peer_id();
+
+        // Span record the host id, task id and peer id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record("peer_id", peer_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        info!("upload persistent task in download server");
+
+        // Check whether the persistent task already exists.
+        match self
+            .persistent_task
+            .exists(&task_id, &request.url, request.object_storage.clone())
+            .await
+        {
+            Ok(true) => {
+                info!("persistent task already exists, skip upload");
+                return Err(Status::already_exists("persistent task already exists"));
+            }
+            Ok(false) => {}
+            Err(err) => {
+                error!("check persistent task exists: {}", err);
+                return Err(Status::internal(err.to_string()));
+            }
+        };
+
+        // Collect upload task started metrics.
+        collect_upload_task_started_metrics(TaskType::Persistent as i32, "", "");
+
+        // Create the persistent task to local storage.
+        let task = match self
+            .persistent_task
+            .upload(
+                task_id.as_str(),
+                host_id.as_str(),
+                peer_id.as_str(),
+                path.to_path_buf(),
+                request.clone(),
+            )
+            .await
+        {
+            Ok(task) => {
+                // Collect upload task finished metrics.
+                collect_upload_task_finished_metrics(
+                    TaskType::Persistent as i32,
+                    "",
+                    "",
+                    task.content_length,
+                    start_time.elapsed(),
+                );
+
+                task
+            }
+            Err(err) => {
+                // Collect upload task failure metrics.
+                collect_upload_task_failure_metrics(TaskType::Persistent as i32, "", "");
+
+                error!("create persistent task: {}", err);
+                return Err(Status::internal(err.to_string()));
+            }
+        };
+
+        Ok(Response::new(task))
     }
 
     /// DownloadPersistentCacheTaskStream is the stream of the download persistent cache task response.
@@ -1356,7 +1811,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 
     /// stat_cache_task gets the status of the cache task.
-    #[instrument(skip_all, fields(host_id, task_id, remote_pi, local_only))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_cache_task(
         &self,
         _request: Request<DfdaemonStatCacheTaskRequest>,

@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-use crate::resource::{persistent_cache_task, task};
+use crate::resource::{persistent_cache_task, persistent_task, task};
+use chrono::DateTime;
 use dragonfly_api::common::v2::{
     CacheTask, Host, Network, PersistentCacheTask, PersistentTask, Piece, Priority, Task, TaskType,
 };
@@ -29,15 +30,16 @@ use dragonfly_api::dfdaemon::v2::{
     DownloadPersistentPieceResponse, DownloadPersistentTaskRequest, DownloadPersistentTaskResponse,
     DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest, DownloadTaskResponse, Entry,
     ExchangeIbVerbsQueuePairEndpointRequest, ExchangeIbVerbsQueuePairEndpointResponse,
-    ListTaskEntriesRequest, ListTaskEntriesResponse, StatCacheTaskRequest,
-    StatPersistentCacheTaskRequest, StatPersistentTaskRequest, StatTaskRequest,
-    StatTaskRequest as DfdaemonStatTaskRequest, SyncCachePiecesRequest, SyncCachePiecesResponse,
-    SyncHostRequest, SyncPersistentCachePiecesRequest, SyncPersistentCachePiecesResponse,
-    SyncPersistentPiecesRequest, SyncPersistentPiecesResponse, SyncPiecesRequest,
-    SyncPiecesResponse, UpdatePersistentCacheTaskRequest, UpdatePersistentTaskRequest,
+    ListTaskEntriesRequest, ListTaskEntriesResponse, StatCacheTaskRequest, StatLocalTaskRequest,
+    StatLocalTaskResponse, StatPersistentCacheTaskRequest, StatPersistentTaskRequest,
+    StatTaskRequest, StatTaskRequest as DfdaemonStatTaskRequest, SyncCachePiecesRequest,
+    SyncCachePiecesResponse, SyncHostRequest, SyncPersistentCachePiecesRequest,
+    SyncPersistentCachePiecesResponse, SyncPersistentPiecesRequest, SyncPersistentPiecesResponse,
+    SyncPiecesRequest, SyncPiecesResponse, UpdatePersistentCacheTaskRequest,
+    UpdatePersistentTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
-use dragonfly_client_backend::HeadRequest;
+use dragonfly_client_backend::StatRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -47,15 +49,16 @@ use dragonfly_client_metric::{
     collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
     collect_download_task_failure_metrics, collect_download_task_finished_metrics,
     collect_download_task_started_metrics, collect_list_task_entries_failure_metrics,
-    collect_list_task_entries_started_metrics, collect_stat_task_failure_metrics,
+    collect_list_task_entries_started_metrics, collect_stat_local_task_failure_metrics,
+    collect_stat_local_task_started_metrics, collect_stat_task_failure_metrics,
     collect_stat_task_started_metrics, collect_update_task_failure_metrics,
     collect_update_task_started_metrics, collect_upload_piece_failure_metrics,
     collect_upload_piece_finished_metrics, collect_upload_piece_started_metrics,
 };
 use dragonfly_client_util::{
-    digest::is_blob_url,
+    digest::{is_blob_url, verify_file_digest, Digest},
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
-    id_generator::TaskIDParameter,
+    id_generator::{PersistentTaskIDParameter, TaskIDParameter},
     net::Interface,
     shutdown,
 };
@@ -92,6 +95,9 @@ pub struct DfdaemonUploadServer {
     /// task is the task manager.
     task: Arc<task::Task>,
 
+    /// persistent_task is the persistent task manager.
+    persistent_task: Arc<persistent_task::PersistentTask>,
+
     /// persistent_cache_task is the persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 
@@ -108,10 +114,12 @@ pub struct DfdaemonUploadServer {
 /// DfdaemonUploadServer implements the grpc server of the upload.
 impl DfdaemonUploadServer {
     /// new creates a new DfdaemonUploadServer.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
         addr: SocketAddr,
         task: Arc<task::Task>,
+        persistent_task: Arc<persistent_task::PersistentTask>,
         persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
         interface: Arc<Interface>,
         shutdown: shutdown::Shutdown,
@@ -121,8 +129,9 @@ impl DfdaemonUploadServer {
             config,
             addr,
             task,
-            interface,
+            persistent_task,
             persistent_cache_task,
+            interface,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -135,6 +144,7 @@ impl DfdaemonUploadServer {
                 config: self.config.clone(),
                 socket_path: self.config.download.server.socket_path.clone(),
                 task: self.task.clone(),
+                persistent_task: self.persistent_task.clone(),
                 persistent_cache_task: self.persistent_cache_task.clone(),
                 interface: self.interface.clone(),
             },
@@ -218,6 +228,9 @@ pub struct DfdaemonUploadServerHandler {
 
     /// task is the task manager.
     task: Arc<task::Task>,
+
+    /// persistent_task is the persistent task manager.
+    persistent_task: Arc<persistent_task::PersistentTask>,
 
     /// persistent_cache_task is the persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
@@ -656,7 +669,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 
     /// stat_task stats the task.
-    #[instrument(skip_all, fields(host_id, task_id, remote_ip, local_only))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_task(&self, request: Request<StatTaskRequest>) -> Result<Response<Task>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
@@ -672,9 +685,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // Get the task id from the request.
         let task_id = request.task_id;
 
-        // Get the local_only flag from the request, default to false.
-        let local_only = request.local_only;
-
         // Span record the host id and task id.
         Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
@@ -682,17 +692,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             "remote_ip",
             request.remote_ip.clone().unwrap_or_default().as_str(),
         );
-        Span::current().record("local_only", local_only.to_string().as_str());
         info!("stat task in upload server");
 
         // Collect the stat task metrics.
         collect_stat_task_started_metrics(TaskType::Standard as i32);
-
-        match self
-            .task
-            .stat(task_id.as_str(), host_id.as_str(), local_only)
-            .await
-        {
+        match self.task.stat(task_id.as_str(), host_id.as_str()).await {
             Ok(task) => Ok(Response::new(task)),
             Err(err) => {
                 // Collect the stat task failure metrics.
@@ -705,6 +709,53 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 Err(match err {
                     ClientError::TaskNotFound(id) => {
                         Status::not_found(format!("task not found: {}", id))
+                    }
+                    _ => Status::internal(err.to_string()),
+                })
+            }
+        }
+    }
+
+    /// stat_local_task stats the local task.
+    #[instrument(skip_all, fields(task_id, remote_ip))]
+    async fn stat_local_task(
+        &self,
+        request: Request<StatLocalTaskRequest>,
+    ) -> Result<Response<StatLocalTaskResponse>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the task id.
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        info!("stat local task in upload server");
+
+        // Collect the local stat task metrics.
+        collect_stat_local_task_started_metrics(TaskType::Standard as i32);
+        match self.task.stat_local(task_id.as_str()).await {
+            Ok(response) => Ok(Response::new(response)),
+            Err(err) => {
+                // Collect the local stat task failure metrics.
+                collect_stat_local_task_failure_metrics(TaskType::Standard as i32);
+
+                // Log the error with detailed context.
+                error!("stat local task failed: {}", err);
+
+                // Map the error to an appropriate gRPC status.
+                Err(match err {
+                    ClientError::TaskNotFound(id) => {
+                        Status::not_found(format!("local task not found: {}", id))
                     }
                     _ => Status::internal(err.to_string()),
                 })
@@ -753,7 +804,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
         // Head the task entries.
         let response = backend
-            .head(HeadRequest {
+            .stat(StatRequest {
                 task_id: request.task_id.clone(),
                 url: request.url.clone(),
                 http_header: Some(hashmap_to_headermap(&request.request_header).map_err(
@@ -1218,40 +1269,465 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     type DownloadPersistentTaskStream =
         ReceiverStream<Result<DownloadPersistentTaskResponse, Status>>;
 
-    /// download_persistent_task downloads the persistent task.
+    /// download_persistent_task downloads the persistent task for scheduler replication purposes.
+    /// Note: This request does NOT include object storage credentials and should ONLY be used
+    /// for internal peer-to-peer task replication.
     #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip, content_length))]
     async fn download_persistent_task(
         &self,
-        _request: Request<DownloadPersistentTaskRequest>,
+        request: Request<DownloadPersistentTaskRequest>,
     ) -> Result<Response<Self::DownloadPersistentTaskStream>, Status> {
-        todo!()
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Record the start time.
+        let start_time = Instant::now();
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Generate the peer id.
+        let peer_id = self.task.id_generator.peer_id();
+
+        // Generate the task type and task priority.
+        let task_type = TaskType::Persistent as i32;
+        let task_priority = Priority::Level0 as i32;
+
+        // Get the object storage from the request.
+        let object_storage = request.object_storage.clone().ok_or_else(|| {
+            error!("missing object storage");
+            Status::invalid_argument("missing object storage")
+        })?;
+
+        // Generate the task id.
+        let task_id = self
+            .task
+            .id_generator
+            .persistent_task_id(PersistentTaskIDParameter::FileContentBased {
+                url: request.url.clone(),
+                region: object_storage.region.ok_or_else(|| {
+                    error!("missing object storage region");
+                    Status::invalid_argument("missing object storage region")
+                })?,
+                endpoint: object_storage.endpoint.ok_or_else(|| {
+                    error!("missing object storage endpoint");
+                    Status::invalid_argument("missing object storage endpoint")
+                })?,
+            })
+            .map_err(|err| {
+                error!("generate persistent task id: {}", err);
+                Status::invalid_argument(err.to_string())
+            })?;
+
+        // Span record the host id, task id and peer id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record("peer_id", peer_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+
+        // Check whether the persistent task already exists in the storage.
+        let response = match self.persistent_task.stat(&task_id, &host_id).await {
+            Ok(response) => response,
+            Err(ClientError::TonicStatus(status)) if status.code() == tonic::Code::NotFound => {
+                error!("persistent task not found: {}", status);
+                return Err(Status::not_found(status.to_string()));
+            }
+            Err(err) => {
+                error!("check persistent task exists: {}", err);
+                return Err(Status::internal(err.to_string()));
+            }
+        };
+
+        // Convert prost_wkt_types::Duration to std::time::Duration.
+        let ttl = response
+            .ttl
+            .ok_or(ClientError::InvalidParameter)
+            .map_err(|_err| {
+                error!("persistent task ttl is missing");
+                Status::internal("persistent task ttl is missing")
+            })?;
+
+        let ttl = Duration::try_from(ttl)
+            .or_err(ErrorType::ParseError)
+            .map_err(|_err| {
+                error!("invalid ttl: {}", ttl);
+                Status::internal(format!("invalid ttl: {}", ttl))
+            })?;
+
+        // Convert prost_wkt_types::Timestamp to chrono::DateTime.
+        let created_at = response
+            .created_at
+            .ok_or(ClientError::InvalidParameter)
+            .map_err(|_err| {
+                error!("persistent task created_at is missing");
+                Status::internal("persistent task created_at is missing")
+            })?;
+
+        let created_at = DateTime::from_timestamp(created_at.seconds, created_at.nanos as u32)
+            .ok_or(ClientError::InvalidParameter)
+            .map_err(|_err| {
+                error!("invalid created_at: {}", created_at);
+                Status::internal(format!("invalid created_at: {}", created_at))
+            })?;
+
+        // Download task started.
+        info!("download persistent task started: {:?}", request);
+        let task = match self
+            .persistent_task
+            .download_started_for_replication(
+                task_id.as_str(),
+                response.content_length,
+                ttl,
+                created_at,
+                request.clone(),
+            )
+            .await
+        {
+            Err(ClientError::BackendError(err)) => {
+                error!("download persistent task started failed by error: {}", err);
+                self.persistent_task
+                    .download_failed(task_id.as_str())
+                    .await
+                    .unwrap_or_else(|err| error!("download persistent task failed: {}", err));
+
+                match serde_json::to_vec::<Backend>(&Backend {
+                    message: err.message.clone(),
+                    header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
+                    status_code: err.status_code.map(|code| code.as_u16() as i32),
+                }) {
+                    Ok(json) => {
+                        return Err(Status::with_details(
+                            Code::Internal,
+                            err.to_string(),
+                            json.into(),
+                        ));
+                    }
+                    Err(e) => {
+                        error!("serialize error: {}", e);
+                        return Err(Status::internal(e.to_string()));
+                    }
+                }
+            }
+            Err(err) => {
+                error!("download persistent task started failed: {}", err);
+                return Err(Status::internal(err.to_string()));
+            }
+            Ok(task) => {
+                // Collect download persistent task started metrics.
+                collect_download_task_started_metrics(
+                    task_type,
+                    "",
+                    "",
+                    task_priority.to_string().as_str(),
+                );
+
+                task
+            }
+        };
+        Span::current().record("content_length", task.content_length());
+
+        // Initialize stream channel.
+        let request_clone = request.clone();
+        let task_manager_clone = self.persistent_task.clone();
+        let task_clone = task.clone();
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(4);
+
+        // Define the error handler to send the error to the stream.
+        async fn handle_error(
+            out_stream_tx: &Sender<Result<DownloadPersistentTaskResponse, Status>>,
+            err: impl std::error::Error,
+        ) {
+            out_stream_tx
+                .send_timeout(
+                    Err(Status::internal(err.to_string())),
+                    super::REQUEST_TIMEOUT,
+                )
+                .await
+                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+        }
+
+        tokio::spawn(
+            async move {
+                match task_manager_clone
+                    .download_for_replication(
+                        &task_clone,
+                        host_id.as_str(),
+                        peer_id.as_str(),
+                        request_clone.clone(),
+                        out_stream_tx.clone(),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        // Collect download task finished metrics.
+                        collect_download_task_finished_metrics(
+                            task_type,
+                            "",
+                            "",
+                            task_priority.to_string().as_str(),
+                            task_clone.content_length(),
+                            None,
+                            start_time.elapsed(),
+                        );
+
+                        // Download persistent task succeeded.
+                        info!("download persistent task succeeded");
+                        if let Err(err) =
+                            task_manager_clone.download_finished(task_clone.id.as_str())
+                        {
+                            error!("download persistent task finished: {}", err);
+                            handle_error(&out_stream_tx, err).await;
+                            return;
+                        }
+
+                        if let Some(output_path) = &request_clone.output_path {
+                            if !request_clone.force_hard_link {
+                                let output_path = Path::new(output_path.as_str());
+                                if output_path.exists() {
+                                    match task_manager_clone
+                                        .is_same_dev_inode(task_clone.id.as_str(), output_path)
+                                        .await
+                                    {
+                                        Ok(true) => {}
+                                        Ok(false) => {
+                                            if request_clone.overwrite {
+                                                if let Err(err) = task_manager_clone
+                                                    .copy_task(task_clone.id.as_str(), output_path)
+                                                    .await
+                                                {
+                                                    error!("copy task: {}", err);
+                                                    handle_error(&out_stream_tx, err).await;
+                                                    return;
+                                                };
+
+                                                return;
+                                            }
+
+                                            error!(
+                                                "output path {} is already exists",
+                                                output_path.display()
+                                            );
+
+                                            handle_error(
+                                                &out_stream_tx,
+                                                Status::internal(format!(
+                                                    "output path {} is already exists",
+                                                    output_path.display()
+                                                )),
+                                            )
+                                            .await;
+                                            return;
+                                        }
+                                        Err(err) => {
+                                            error!("check output path: {}", err);
+                                            handle_error(&out_stream_tx, err).await;
+                                            return;
+                                        }
+                                    }
+                                } else if let Err(err) = task_manager_clone
+                                    .copy_task(task_clone.id.as_str(), output_path)
+                                    .await
+                                {
+                                    error!("copy task: {}", err);
+                                    handle_error(&out_stream_tx, err).await;
+                                    return;
+                                }
+                            }
+
+                            // Verify the file digest if it is provided.
+                            if let Some(raw_digest) = &request_clone.digest {
+                                let digest = match raw_digest.parse::<Digest>() {
+                                    Ok(digest) => digest,
+                                    Err(err) => {
+                                        error!("parse digest: {}", err);
+                                        handle_error(
+                                            &out_stream_tx,
+                                            Status::invalid_argument(format!(
+                                                "invalid digest({}): {}",
+                                                raw_digest, err
+                                            )),
+                                        )
+                                        .await;
+                                        return;
+                                    }
+                                };
+
+                                if let Err(err) =
+                                    verify_file_digest(digest, Path::new(output_path.as_str()))
+                                {
+                                    error!("verify file digest: {}", err);
+                                    handle_error(&out_stream_tx, err).await;
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        error!("download persistent task failed: {}", err);
+
+                        // Collect download task failure metrics.
+                        collect_download_task_failure_metrics(
+                            task_type,
+                            "",
+                            "",
+                            task_priority.to_string().as_str(),
+                        );
+
+                        // Download task failed.
+                        task_manager_clone
+                            .download_failed(task_clone.id.as_str())
+                            .await
+                            .unwrap_or_else(|err| {
+                                error!("download persistent task failed: {}", err)
+                            });
+
+                        handle_error(&out_stream_tx, err).await;
+                    }
+                }
+
+                drop(out_stream_tx);
+            }
+            .in_current_span(),
+        );
+
+        Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
     /// update_persistent_task update metadata of the persistent task.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn update_persistent_task(
         &self,
-        _request: Request<UpdatePersistentTaskRequest>,
+        request: Request<UpdatePersistentTaskRequest>,
     ) -> Result<Response<()>, Status> {
-        todo!()
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        info!("update persistent task in upload server");
+
+        // Collect the update task started metrics.
+        collect_update_task_started_metrics(TaskType::Persistent as i32);
+
+        if request.persistent {
+            self.persistent_task
+                .persist(task_id.as_str())
+                .map_err(|err| {
+                    // Collect the update task failure metrics.
+                    collect_update_task_failure_metrics(TaskType::Persistent as i32);
+
+                    error!("update persistent task: {}", err);
+                    Status::internal(err.to_string())
+                })?;
+        }
+
+        Ok(Response::new(()))
     }
 
     /// stat_persistent_task stats the persistent task.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_persistent_task(
         &self,
-        _request: Request<StatPersistentTaskRequest>,
+        request: Request<StatPersistentTaskRequest>,
     ) -> Result<Response<PersistentTask>, Status> {
-        todo!()
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        info!("stat persistent task in upload server");
+
+        // Collect the stat task started metrics.
+        collect_stat_task_started_metrics(TaskType::Persistent as i32);
+
+        let task = self
+            .persistent_task
+            .stat(task_id.as_str(), host_id.as_str())
+            .await
+            .map_err(|err| {
+                // Collect the stat task failure metrics.
+                collect_stat_task_failure_metrics(TaskType::Persistent as i32);
+
+                error!("stat persistent task: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        Ok(Response::new(task))
     }
 
     /// delete_persistent_task deletes the persistent task.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn delete_persistent_task(
         &self,
-        _request: Request<DeletePersistentTaskRequest>,
+        request: Request<DeletePersistentTaskRequest>,
     ) -> Result<Response<()>, Status> {
-        todo!()
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        info!("delete persistent task in upload server");
+
+        // Collect the delete task started metrics.
+        collect_delete_task_started_metrics(TaskType::Persistent as i32);
+        self.persistent_task.delete(task_id.as_str()).await;
+        Ok(Response::new(()))
     }
 
     /// SyncPersistentPiecesStream is the stream of the sync pieces response.
@@ -1261,18 +1737,312 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
     async fn sync_persistent_pieces(
         &self,
-        _request: Request<SyncPersistentPiecesRequest>,
+        request: Request<SyncPersistentPiecesRequest>,
     ) -> Result<Response<Self::SyncPersistentPiecesStream>, Status> {
-        todo!()
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the remote host id from the request.
+        let remote_host_id = request.host_id;
+
+        // Get the task id from tae request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.clone());
+        Span::current().record("remote_host_id", remote_host_id.as_str());
+        Span::current().record("task_id", task_id.clone());
+        info!("sync persistent pieces in upload server");
+
+        // Get the interested piece numbers from the request.
+        let mut interested_piece_numbers = request.interested_piece_numbers.clone();
+
+        // Clone the persistent task.
+        let persistent_task_manager = self.persistent_task.clone();
+
+        // Get the download server info from the config.
+        let download_ip = self.config.host.ip.unwrap().to_string();
+        let download_tcp_port = self.config.storage.server.tcp_port;
+        let download_quic_port = self.config.storage.server.quic_port;
+
+        // Initialize stream channel.
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
+        tokio::spawn(
+            async move {
+                match persistent_task_manager.get(task_id.as_str()) {
+                    Ok(Some(task)) => {
+                        if task.is_failed() {
+                            error!("get persistent task {} failed", task_id);
+                            out_stream_tx
+                                .send_timeout(
+                                    Err(Status::internal(format!(
+                                        "persistent task {} failed",
+                                        task_id
+                                    ))),
+                                    super::REQUEST_TIMEOUT,
+                                )
+                                .await
+                                .unwrap_or_else(|err| {
+                                    error!(
+                                        "send persistent task {} failed to stream: {}",
+                                        task_id, err
+                                    );
+                                });
+
+                            return;
+                        }
+                    }
+                    Ok(None) => {
+                        error!("get persistent task {} not found", task_id);
+                        out_stream_tx
+                            .send_timeout(
+                                Err(Status::internal(format!(
+                                    "persistent task {} not found",
+                                    task_id
+                                ))),
+                                super::REQUEST_TIMEOUT,
+                            )
+                            .await
+                            .unwrap_or_else(|err| {
+                                error!(
+                                    "send persistent task {} not found to stream: {}",
+                                    task_id, err
+                                );
+                            });
+
+                        return;
+                    }
+                    Err(err) => {
+                        error!("get persistent task {}: {}", task_id, err);
+                        out_stream_tx
+                            .send_timeout(
+                                Err(Status::internal(err.to_string())),
+                                super::REQUEST_TIMEOUT,
+                            )
+                            .await
+                            .unwrap_or_else(|err| {
+                                error!("send persistent task {} to stream: {}", task_id, err);
+                            });
+
+                        return;
+                    }
+                }
+
+                loop {
+                    let mut finished_piece_numbers = Vec::new();
+                    for interested_piece_number in interested_piece_numbers.iter() {
+                        let piece = match persistent_task_manager.piece.get(
+                            persistent_task_manager
+                                .piece
+                                .persistent_id(task_id.as_str(), *interested_piece_number)
+                                .as_str(),
+                        ) {
+                            Ok(Some(piece)) => piece,
+                            Ok(None) => continue,
+                            Err(err) => {
+                                error!(
+                                    "send persistent piece metadata {}-{}: {}",
+                                    task_id, interested_piece_number, err
+                                );
+                                out_stream_tx
+                                    .send_timeout(
+                                        Err(Status::internal(err.to_string())),
+                                        super::REQUEST_TIMEOUT,
+                                    )
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        error!(
+                                            "send persistent piece metadata {}-{} to stream: {}",
+                                            task_id, interested_piece_number, err
+                                        );
+                                    });
+
+                                drop(out_stream_tx);
+                                return;
+                            }
+                        };
+
+                        // Send the piece metadata to the stream.
+                        if piece.is_finished() {
+                            match out_stream_tx
+                                .send_timeout(
+                                    Ok(SyncPersistentPiecesResponse {
+                                        number: piece.number,
+                                        offset: piece.offset,
+                                        length: piece.length,
+                                        ip: download_ip.clone(),
+                                        tcp_port: Some(download_tcp_port as i32),
+                                        quic_port: Some(download_quic_port as i32),
+                                    }),
+                                    super::REQUEST_TIMEOUT,
+                                )
+                                .await
+                            {
+                                Ok(_) => {
+                                    info!(
+                                        "send persistent piece metadata {}-{}",
+                                        task_id, piece.number
+                                    );
+                                }
+                                Err(err) => {
+                                    error!(
+                                        "send persistent piece metadata {}-{} to stream: {}",
+                                        task_id, interested_piece_number, err
+                                    );
+
+                                    drop(out_stream_tx);
+                                    return;
+                                }
+                            }
+
+                            // Add the finished piece number to the finished piece numbers.
+                            finished_piece_numbers.push(piece.number);
+                            continue;
+                        }
+                    }
+
+                    // Remove the finished piece numbers from the interested piece numbers.
+                    interested_piece_numbers
+                        .retain(|number| !finished_piece_numbers.contains(number));
+
+                    // If all the interested pieces are finished, return.
+                    if interested_piece_numbers.is_empty() {
+                        info!("all the interested persistent pieces are finished");
+                        drop(out_stream_tx);
+                        return;
+                    }
+
+                    // Wait for the piece to be finished.
+                    tokio::time::sleep(
+                        dragonfly_client_storage::DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL,
+                    )
+                    .await;
+                }
+            }
+            .in_current_span(),
+        );
+
+        Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
     /// download_persistent_piece provides the persistent piece content for parent.
     #[instrument(skip_all, fields(host_id, remote_host_id, task_id, piece_id))]
     async fn download_persistent_piece(
         &self,
-        _request: Request<DownloadPersistentPieceRequest>,
+        request: Request<DownloadPersistentPieceRequest>,
     ) -> Result<Response<DownloadPersistentPieceResponse>, Status> {
-        todo!()
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the remote host id from the request.
+        let remote_host_id = request.host_id;
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Get the interested piece number from the request.
+        let piece_number = request.piece_number;
+
+        // Generate the piece id.
+        let piece_id = self.task.piece.id(task_id.as_str(), piece_number);
+
+        // Span record the host id, task id and piece number.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("remote_host_id", remote_host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record("piece_id", piece_id.as_str());
+
+        // Get the piece metadata from the local storage.
+        let piece = self
+            .task
+            .piece
+            .get_persistent(piece_id.as_str())
+            .map_err(|err| {
+                error!(
+                    "upload persistent piece metadata from local storage: {}",
+                    err
+                );
+                Status::internal(err.to_string())
+            })?
+            .ok_or_else(|| {
+                error!("upload persistent piece metadata not found");
+                Status::not_found("persistent piece metadata not found")
+            })?;
+
+        // Collect upload piece started metrics.
+        collect_upload_piece_started_metrics();
+        info!("start upload persistent piece content");
+
+        // Get the piece content from the local storage.
+        let mut reader = self
+            .task
+            .piece
+            .upload_persistent_from_local_into_async_read(
+                piece_id.as_str(),
+                task_id.as_str(),
+                piece.length,
+                None,
+            )
+            .await
+            .map_err(|err| {
+                // Collect upload piece failure metrics.
+                collect_upload_piece_failure_metrics();
+
+                error!(
+                    "upload persistent piece content from local storage: {}",
+                    err
+                );
+                Status::internal(err.to_string())
+            })?;
+
+        // Read the content of the piece.
+        let mut content = vec![0; piece.length as usize];
+        reader.read_exact(&mut content).await.map_err(|err| {
+            // Collect upload piece failure metrics.
+            collect_upload_piece_failure_metrics();
+
+            error!("upload persistent piece content failed: {}", err);
+            Status::internal(err.to_string())
+        })?;
+        drop(reader);
+
+        // Collect upload piece finished metrics.
+        collect_upload_piece_finished_metrics();
+        info!("finished persistent upload piece content");
+
+        // Return the piece.
+        Ok(Response::new(DownloadPersistentPieceResponse {
+            piece: Some(Piece {
+                number: piece.number,
+                parent_id: piece.parent_id.clone(),
+                offset: piece.offset,
+                length: piece.length,
+                digest: piece.digest.clone(),
+                content: Some(content),
+                traffic_type: None,
+                cost: None,
+                created_at: None,
+            }),
+            // Calculate the digest of the piece metadata, including the number, offset, length and
+            // content digest. The digest is used to verify the integrity of the piece metadata.
+            digest: Some(piece.calculate_digest()),
+        }))
     }
 
     /// DownloadPersistentCacheTaskStream is the stream of the download persistent cache task response.
@@ -1965,7 +2735,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 
     /// stat_cache_task stats the cache task.
-    #[instrument(skip_all, fields(host_id, task_id, remote_ip, local_only))]
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_cache_task(
         &self,
         _request: Request<StatCacheTaskRequest>,

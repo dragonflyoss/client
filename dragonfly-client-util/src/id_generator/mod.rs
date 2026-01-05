@@ -50,6 +50,17 @@ pub enum TaskIDParameter {
     BlobDigestBased(String),
 }
 
+/// PersistentTaskIDParameter is the parameter of the persistent task id.
+pub enum PersistentTaskIDParameter {
+    /// FileContentBased uses the object storage url, region, endpoint, piece_length, tag and application
+    /// to generate the persistent task id.
+    FileContentBased {
+        url: String,
+        region: String,
+        endpoint: String,
+    },
+}
+
 /// PersistentCacheTaskIDParameter is the parameter of the persistent cache task id.
 pub enum PersistentCacheTaskIDParameter {
     /// Content uses the content to generate the persistent cache task id.
@@ -162,6 +173,28 @@ impl IDGenerator {
                     .ok_or_else(|| Error::InvalidURI(url))?
                     .encoded()
                     .to_string())
+            }
+        }
+    }
+
+    /// persistent_task_id generates the persistent task id.
+    #[inline]
+    pub fn persistent_task_id(&self, parameter: PersistentTaskIDParameter) -> Result<String> {
+        match parameter {
+            PersistentTaskIDParameter::FileContentBased {
+                url,
+                region,
+                endpoint,
+            } => {
+                // Calculate the hash of the file.
+                let mut hasher = Sha256::new();
+                hasher.update(url.as_bytes());
+                hasher.update(region.as_bytes());
+                hasher.update(endpoint.as_bytes());
+                hasher.update(TaskType::Persistent.as_str_name().as_bytes());
+
+                // Generate the persistent task id by sha256.
+                Ok(hex::encode(hasher.finalize()))
             }
         }
     }
@@ -357,6 +390,24 @@ mod tests {
 
         for (generator, parameter, expected_id) in test_cases {
             let task_id = generator.task_id(parameter).unwrap();
+            assert_eq!(task_id, expected_id);
+        }
+    }
+
+    #[test]
+    fn should_generate_persistent_task_id() {
+        let test_cases = vec![(
+            IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+            PersistentTaskIDParameter::FileContentBased {
+                url: "my-object-key".to_string(),
+                region: "us-west-1".to_string(),
+                endpoint: "https://s3.us-west-1.amazonaws.com".to_string(),
+            },
+            "b51f4f44921bb585277a5cbac13e7f6e2858238e98546f3ee6bfeb56369979c0",
+        )];
+
+        for (generator, parameter, expected_id) in test_cases {
+            let task_id = generator.persistent_task_id(parameter).unwrap();
             assert_eq!(task_id, expected_id);
         }
     }

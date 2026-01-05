@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.1.7"
+version = "1.1.15"
 authors = ["The Dragonfly Developers"]
 homepage = "https://d7y.io/"
 repository = "https://github.com/dragonflyoss/client.git"
@@ -23,18 +23,18 @@ readme = "README.md"
 edition = "2021"
 
 [workspace.dependencies]
-dragonfly-client = { path = "dragonfly-client", version = "1.1.7" }
-dragonfly-client-core = { path = "dragonfly-client-core", version = "1.1.7" }
-dragonfly-client-config = { path = "dragonfly-client-config", version = "1.1.7" }
-dragonfly-client-storage = { path = "dragonfly-client-storage", version = "1.1.7" }
-dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.1.7" }
-dragonfly-client-metric = { path = "dragonfly-client-metric", version = "1.1.7" }
-dragonfly-client-util = { path = "dragonfly-client-util", version = "1.1.7" }
-dragonfly-client-init = { path = "dragonfly-client-init", version = "1.1.7" }
-dragonfly-api = "=2.1.89"
+dragonfly-client = { path = "dragonfly-client", version = "1.1.15" }
+dragonfly-client-core = { path = "dragonfly-client-core", version = "1.1.15" }
+dragonfly-client-config = { path = "dragonfly-client-config", version = "1.1.15" }
+dragonfly-client-storage = { path = "dragonfly-client-storage", version = "1.1.15" }
+dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.1.15" }
+dragonfly-client-metric = { path = "dragonfly-client-metric", version = "1.1.15" }
+dragonfly-client-util = { path = "dragonfly-client-util", version = "1.1.15" }
+dragonfly-client-init = { path = "dragonfly-client-init", version = "1.1.15" }
+dragonfly-api = "=2.2.8"
 thiserror = "2.0"
 futures = "0.3.31"
-reqwest = { version = "0.12.4", features = [
+reqwest = { version = "0.12.28", features = [
     "stream",
     "native-tls",
     "default-tls",
@@ -45,7 +45,7 @@ reqwest = { version = "0.12.4", features = [
 reqwest-middleware = "0.4"
 rcgen = { version = "0.12.1", features = ["x509-parser"] }
 hyper = { version = "1.6", features = ["full"] }
-hyper-util = { version = "0.1.18", features = [
+hyper-util = { version = "0.1.19", features = [
     "client",
     "client-legacy",
     "tokio",
@@ -58,13 +58,13 @@ http-range-header = "0.4.2"
 tracing = "0.1"
 url = "2.5.4"
 rustls = { version = "0.23.35", default-features = false, features = ["tls12", "ring"] }
-rustls-pki-types = "1.13.0"
+rustls-pki-types = "1.13.2"
 rustls-pemfile = "2.2.0"
 sha2 = "0.10"
 crc32fast = "1.5.0"
 uuid = { version = "1.16", features = ["v4"] }
 hex = "0.4"
-rocksdb = "0.22.0"
+rocksdb = "0.24.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 http = "1"
@@ -82,6 +82,7 @@ prost-wkt-types = "0.6"
 chrono = { version = "0.4.42", features = ["serde", "clock"] }
 openssl = { version = "0.10", features = ["vendored"] }
 opendal = { version = "0.55.0", features = [
+    "services-fs",
     "services-s3",
     "services-azblob",
     "services-gcs",
@@ -90,7 +91,7 @@ opendal = { version = "0.55.0", features = [
     "services-cos",
     "services-webhdfs",
 ] }
-clap = { version = "4.5.51", features = ["derive"] }
+clap = { version = "4.5.53", features = ["derive"] }
 anyhow = "1.0.99"
 toml_edit = "0.23.7"
 toml = "0.8.23"
@@ -107,7 +108,7 @@ bytes = "1.11"
 local-ip-address = "0.6.5"
 sysinfo = { version = "0.32.1", default-features = false, features = ["component", "disk", "network", "system", "user"] }
 leaky-bucket = "1.1.2"
-vortex-protocol = "0.1.4"
+vortex-protocol = "0.1.5"
 dashmap = "6.1.0"
 hostname = "^0.4"
 tonic-health = "0.12.3"

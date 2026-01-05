@@ -15,10 +15,15 @@
  */
 
 use dashmap::{mapref::entry::Entry, DashMap};
-use dragonfly_client_core::{Error, Result};
+use dragonfly_api::common::v2::Range;
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Error, Result,
+};
 use dragonfly_client_util::tls::NoVerifier;
 use futures::TryStreamExt;
-use http::header::{HeaderName, HeaderValue, USER_AGENT};
+use http::header::{HeaderName, HeaderValue, RANGE, USER_AGENT};
+use lru::LruCache;
 use reqwest::header::HeaderMap;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
@@ -26,7 +31,10 @@ use reqwest_tracing::TracingMiddleware;
 use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
 use std::io::{Error as IOError, ErrorKind};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 use tokio_util::io::StreamReader;
 use tracing::{debug, error, info, instrument};
 
@@ -42,6 +50,16 @@ pub const USER_AGENT_HEADER: &str = "user-agent";
 /// DEFAULT_USER_AGENT is the default user agent.
 pub const DEFAULT_USER_AGENT: &str = concat!("dragonfly", "/", env!("CARGO_PKG_VERSION"));
 
+/// TemporaryRedirectEntry stores a temporary redirect entry with its creation time.
+#[derive(Clone, Debug)]
+struct TemporaryRedirectEntry {
+    /// url is the redirect Location URL.
+    url: String,
+
+    /// created_at is the time when the entry was created.
+    created_at: Instant,
+}
+
 /// HTTP is the HTTP backend.
 pub struct HTTP {
     /// scheme is the scheme of the HTTP backend.
@@ -53,6 +71,15 @@ pub struct HTTP {
     /// request_header is the custom request headers configurated in the dfdaemon config,
     /// which will insert to the each request if original header is not already set.
     request_header: Option<HashMap<String, String>>,
+
+    /// temporary_redirects stores 307 redirect url with TTL (LRU eviction).
+    temporary_redirects: Arc<Mutex<LruCache<String, TemporaryRedirectEntry>>>,
+
+    /// enable_cache_temporary_redirect indicates whether to enable caching 307 redirects.
+    enable_cache_temporary_redirect: bool,
+
+    /// cache_temporary_redirect_ttl is the TTL for cached 307 redirects.
+    cache_temporary_redirect_ttl: Duration,
 }
 
 /// HTTP implements the http interface.
@@ -60,8 +87,16 @@ impl HTTP {
     /// MAX_CONNECTIONS_PER_ADDRESS is the maximum number of connections per address.
     const MAX_CONNECTIONS_PER_ADDRESS: usize = 32;
 
+    /// DEFAULT_CACHE_TEMPORARY_REDIRECT_CAPACITY is the default capacity for temporary redirect cache.
+    const DEFAULT_CACHE_TEMPORARY_REDIRECT_CAPACITY: usize = 1000;
+
     /// new returns a new HTTP.
-    pub fn new(scheme: &str, request_header: Option<HashMap<String, String>>) -> Result<HTTP> {
+    pub fn new(
+        scheme: &str,
+        request_header: Option<HashMap<String, String>>,
+        enable_cache_temporary_redirect: bool,
+        cache_temporary_redirect_ttl: Duration,
+    ) -> Result<HTTP> {
         // Disable automatic compression to prevent double-decompression issues.
         //
         // Problem scenario:
@@ -98,6 +133,15 @@ impl HTTP {
                 .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
                 .http2_keep_alive_while_idle(true)
                 .http2_max_frame_size(Some(super::HTTP2_MAX_FRAME_SIZE))
+                .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                    if enable_cache_temporary_redirect
+                        && attempt.status() == reqwest::StatusCode::TEMPORARY_REDIRECT
+                    {
+                        attempt.stop()
+                    } else {
+                        attempt.follow()
+                    }
+                })) // Disable automatic redirects when status is 307.
                 .build()?;
 
             let retry_policy =
@@ -120,6 +164,11 @@ impl HTTP {
             scheme: scheme.to_string(),
             clients: Arc::new(clients),
             request_header,
+            temporary_redirects: Arc::new(Mutex::new(LruCache::new(
+                NonZeroUsize::new(Self::DEFAULT_CACHE_TEMPORARY_REDIRECT_CAPACITY).unwrap(),
+            ))),
+            enable_cache_temporary_redirect,
+            cache_temporary_redirect_ttl,
         })
     }
 
@@ -163,6 +212,18 @@ impl HTTP {
                     .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
                     .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
                     .http2_keep_alive_while_idle(true)
+                    .redirect(reqwest::redirect::Policy::custom({
+                        let enable_cache_temporary_redirect = self.enable_cache_temporary_redirect;
+                        move |attempt| {
+                            if enable_cache_temporary_redirect
+                                && attempt.status() == reqwest::StatusCode::TEMPORARY_REDIRECT
+                            {
+                                attempt.stop()
+                            } else {
+                                attempt.follow()
+                            }
+                        }
+                    })) // Disable automatic redirects when status is 307.
                     .build()?;
 
                 let retry_policy =
@@ -186,7 +247,19 @@ impl HTTP {
     }
 
     // Make custom request headers to the request header map.
-    fn make_request_headers(&self, request_header: &mut HeaderMap) -> Result<()> {
+    fn make_request_headers(
+        &self,
+        request_header: &mut HeaderMap,
+        range: Option<Range>,
+    ) -> Result<()> {
+        // Add Range header if present in the request.
+        if let Some(range) = &range {
+            request_header.insert(
+                RANGE,
+                format!("bytes={}-{}", range.start, range.start + range.length - 1).parse()?,
+            );
+        };
+
         // Make the user agent if not specified in header.
         request_header
             .entry(USER_AGENT)
@@ -202,6 +275,48 @@ impl HTTP {
 
         Ok(())
     }
+
+    /// get_temporary_redirect_url gets the cached temporary redirect URL if exists
+    /// and not expired.
+    async fn get_temporary_redirect_url(&self, url: &str) -> String {
+        let mut temporary_redirects = self.temporary_redirects.lock().await;
+        if let Some(entry) = temporary_redirects.get(url) {
+            if entry.created_at + self.cache_temporary_redirect_ttl > Instant::now() {
+                debug!(
+                    "found cached temporary redirect for {} -> {}",
+                    url, entry.url
+                );
+
+                return entry.url.clone();
+            } else {
+                debug!("cached temporary redirect for {} expired", url);
+                temporary_redirects.pop(url);
+            }
+        }
+
+        url.to_string()
+    }
+
+    /// store_temporary_redirect_url stores the temporary redirect URL in the cache.
+    async fn store_temporary_redirect_url(&self, original_url: &str, target_url: &str) {
+        if !self.enable_cache_temporary_redirect {
+            return;
+        }
+
+        debug!(
+            "caching temporary redirect {} -> {}",
+            original_url, target_url
+        );
+
+        let mut temporary_redirects = self.temporary_redirects.lock().await;
+        temporary_redirects.put(
+            original_url.to_string(),
+            TemporaryRedirectEntry {
+                url: target_url.to_string(),
+                created_at: Instant::now(),
+            },
+        );
+    }
 }
 
 /// Backend implements the Backend trait.
@@ -212,11 +327,11 @@ impl super::Backend for HTTP {
         self.scheme.clone()
     }
 
-    /// head gets the header of the request.
+    /// stat gets the metadata from the backend.
     #[instrument(skip_all)]
-    async fn head(&self, request: super::HeadRequest) -> Result<super::HeadResponse> {
+    async fn stat(&self, request: super::StatRequest) -> Result<super::StatResponse> {
         debug!(
-            "head request {} {}: {:?}",
+            "stat request {} {}: {:?}",
             request.task_id, request.url, request.http_header
         );
 
@@ -229,7 +344,10 @@ impl super::Backend for HTTP {
             })?;
 
         // Make the custom request headers.
-        self.make_request_headers(&mut request_header)?;
+        self.make_request_headers(&mut request_header, None)?;
+
+        // Check if we have a cached temporary redirect for this URL.
+        let target_url = self.get_temporary_redirect_url(&request.url).await;
 
         // The signature in the signed URL generated by the object storage client will include
         // the request method. Therefore, the signed URL of the GET method cannot be requested
@@ -237,7 +355,7 @@ impl super::Backend for HTTP {
         // to get header and status code.
         let response = match self
             .client(request.client_cert.clone())?
-            .get(&request.url)
+            .get(&target_url)
             .headers(request_header.clone())
             // Add Range header to ensure Content-Length is returned in response headers.
             // Some servers (especially when using Transfer-Encoding: chunked,
@@ -245,7 +363,7 @@ impl super::Backend for HTTP {
             // include Content-Length in HEAD requests. Using "bytes=0-" requests the
             // entire file starting from byte 0, forcing the server to include file size
             // information in the response headers.
-            .header(reqwest::header::RANGE, "bytes=0-")
+            .header(RANGE, "bytes=0-")
             .timeout(request.timeout)
             .send()
             .await
@@ -254,13 +372,13 @@ impl super::Backend for HTTP {
                 // For zero-byte files, some servers return 416 Range Not Satisfiable.
                 // Retry with a GET request without the Range header to retrieve headers.
                 info!(
-                    "head request got 416 Range Not Satisfiable, retrying with HEAD {} {}",
-                    request.task_id, request.url
+                    "stat request got 416 Range Not Satisfiable, retrying with HEAD {} {}",
+                    request.task_id, target_url
                 );
 
                 match self
                     .client(request.client_cert.clone())?
-                    .get(&request.url)
+                    .get(&target_url)
                     .headers(request_header.clone())
                     .timeout(request.timeout)
                     .send()
@@ -269,11 +387,11 @@ impl super::Backend for HTTP {
                     Ok(response) => response,
                     Err(err) => {
                         error!(
-                            "head request failed {} {}: {}",
-                            request.task_id, request.url, err
+                            "stat request failed {} {}: {}",
+                            request.task_id, target_url, err
                         );
 
-                        return Ok(super::HeadResponse {
+                        return Ok(super::StatResponse {
                             success: false,
                             content_length: None,
                             http_header: None,
@@ -284,14 +402,61 @@ impl super::Backend for HTTP {
                     }
                 }
             }
+            Ok(response) if response.status() == reqwest::StatusCode::TEMPORARY_REDIRECT => {
+                if let Some(location) = response.headers().get(reqwest::header::LOCATION) {
+                    let target_url = location.to_str().or_err(ErrorType::ParseError)?;
+                    self.store_temporary_redirect_url(&request.url, target_url)
+                        .await;
+
+                    match self
+                        .client(request.client_cert.clone())?
+                        .get(target_url)
+                        .headers(request_header.clone())
+                        .timeout(request.timeout)
+                        .send()
+                        .await
+                    {
+                        Ok(response) => response,
+                        Err(err) => {
+                            error!(
+                                "stat request failed {} {}: {}",
+                                request.task_id, target_url, err
+                            );
+
+                            return Ok(super::StatResponse {
+                                success: false,
+                                content_length: None,
+                                http_header: None,
+                                http_status_code: None,
+                                entries: Vec::new(),
+                                error_message: None,
+                            });
+                        }
+                    }
+                } else {
+                    error!(
+                        "stat request got 307 Temporary Redirect without Location header {} {}",
+                        request.task_id, target_url
+                    );
+
+                    return Ok(super::StatResponse {
+                        success: false,
+                        content_length: None,
+                        http_header: None,
+                        http_status_code: None,
+                        entries: Vec::new(),
+                        error_message: None,
+                    });
+                }
+            }
             Ok(response) => response,
             Err(err) => {
                 error!(
-                    "head request failed {} {}: {}",
-                    request.task_id, request.url, err
+                    "stat request failed {} {}: {}",
+                    request.task_id, target_url, err
                 );
 
-                return Ok(super::HeadResponse {
+                return Ok(super::StatResponse {
                     success: false,
                     content_length: None,
                     http_header: None,
@@ -306,9 +471,9 @@ impl super::Backend for HTTP {
         let response_status_code = response.status();
         let response_content_length = response.content_length();
         debug!(
-            "head response {} {}: {:?} {:?} {:?}",
+            "stat response {} {}: {:?} {:?} {:?}",
             request.task_id,
-            request.url,
+            target_url,
             response_status_code,
             response_content_length,
             response_header
@@ -316,7 +481,7 @@ impl super::Backend for HTTP {
 
         // Drop the response body to avoid reading it.
         drop(response);
-        Ok(super::HeadResponse {
+        Ok(super::StatResponse {
             success: response_status_code.is_success(),
             content_length: response_content_length,
             http_header: Some(response_header),
@@ -326,7 +491,7 @@ impl super::Backend for HTTP {
         })
     }
 
-    /// get gets the content of the request.
+    /// get gets the content from the backend.
     #[instrument(skip_all)]
     async fn get(&self, request: super::GetRequest) -> Result<super::GetResponse<super::Body>> {
         debug!(
@@ -343,12 +508,14 @@ impl super::Backend for HTTP {
             })?;
 
         // Make the custom request headers.
-        self.make_request_headers(&mut request_header)?;
+        self.make_request_headers(&mut request_header, request.range)?;
 
-        let response = match self
-            .client(request.client_cert)?
-            .get(&request.url)
-            .headers(request_header)
+        // Check if we have a cached temporary redirect for this URL.
+        let target_url = self.get_temporary_redirect_url(&request.url).await;
+        let mut response = match self
+            .client(request.client_cert.clone())?
+            .get(&target_url)
+            .headers(request_header.clone())
             .timeout(request.timeout)
             .send()
             .await
@@ -357,7 +524,7 @@ impl super::Backend for HTTP {
             Err(err) => {
                 error!(
                     "get request failed {} {} {}: {}",
-                    request.task_id, request.piece_id, request.url, err
+                    request.task_id, request.piece_id, target_url, err
                 );
 
                 return Ok(super::GetResponse {
@@ -370,8 +537,44 @@ impl super::Backend for HTTP {
             }
         };
 
+        // If the response is a 307 Temporary Redirect, follow the redirect manually.
+        if response.status() == reqwest::StatusCode::TEMPORARY_REDIRECT {
+            if let Some(location) = response.headers().get(reqwest::header::LOCATION) {
+                let target_url = location.to_str().or_err(ErrorType::ParseError)?;
+                self.store_temporary_redirect_url(&request.url, target_url)
+                    .await;
+
+                response = match self
+                    .client(request.client_cert.clone())?
+                    .get(target_url)
+                    .headers(request_header.clone())
+                    .timeout(request.timeout)
+                    .send()
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(err) => {
+                        error!(
+                            "get request failed {} {} {}: {}",
+                            request.task_id, request.piece_id, target_url, err
+                        );
+
+                        return Ok(super::GetResponse {
+                            success: false,
+                            http_header: None,
+                            http_status_code: None,
+                            reader: Box::new(tokio::io::empty()),
+                            error_message: Some(err.to_string()),
+                        });
+                    }
+                };
+            }
+        }
+
         let response_header = response.headers().clone();
         let response_status_code = response.status();
+
+        // Non-redirect response or redirect without Location header
         let response_reader = Box::new(StreamReader::new(
             response
                 .bytes_stream()
@@ -380,7 +583,7 @@ impl super::Backend for HTTP {
 
         debug!(
             "get response {} {}: {:?} {:?}",
-            request.task_id, request.piece_id, response_status_code, response_header
+            request.task_id, request.piece_id, response_status_code, response_header,
         );
 
         Ok(super::GetResponse {
@@ -391,6 +594,96 @@ impl super::Backend for HTTP {
             error_message: Some(response_status_code.to_string()),
         })
     }
+
+    /// put puts the content to the backend.
+    #[instrument(skip_all)]
+    async fn put(&self, _request: super::PutRequest) -> Result<super::PutResponse> {
+        unimplemented!()
+    }
+
+    /// exists checks whether the file exists in the backend.
+    #[instrument(skip_all)]
+    async fn exists(&self, request: super::ExistsRequest) -> Result<bool> {
+        debug!(
+            "exists request {} {}: {:?}",
+            request.task_id, request.url, request.http_header
+        );
+
+        // The header of the request is required.
+        let mut request_header = request
+            .http_header
+            .ok_or(Error::InvalidParameter)
+            .inspect_err(|_err| {
+                error!("request header is missing");
+            })?;
+
+        // Make the custom request headers.
+        self.make_request_headers(&mut request_header, None)?;
+
+        // The signature in the signed URL generated by the object storage client will include
+        // the request method. Therefore, the signed URL of the GET method cannot be requested
+        // through the HEAD method. Use GET request to replace of HEAD request
+        // to get header and status code.
+        let response = match self
+            .client(request.client_cert.clone())?
+            .get(&request.url)
+            .headers(request_header.clone())
+            // Add Range header to ensure Content-Length is returned in response headers.
+            // Some servers (especially when using Transfer-Encoding: chunked,
+            // refer to https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Transfer-Encoding.) may not
+            // include Content-Length in HEAD requests. Using "bytes=0-" requests the
+            // entire file starting from byte 0, forcing the server to include file size
+            // information in the response headers.
+            .header(RANGE, "bytes=0-")
+            .timeout(request.timeout)
+            .send()
+            .await
+        {
+            Ok(response) if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE => {
+                // For zero-byte files, some servers return 416 Range Not Satisfiable.
+                // Retry with a GET request without the Range header to retrieve headers.
+                info!(
+                    "exists request got 416 Range Not Satisfiable, retrying with HEAD {} {}",
+                    request.task_id, request.url
+                );
+
+                self.client(request.client_cert.clone())?
+                    .get(&request.url)
+                    .headers(request_header.clone())
+                    .timeout(request.timeout)
+                    .send()
+                    .await
+                    .inspect_err(|err| {
+                        error!(
+                            "exists request failed {} {}: {}",
+                            request.task_id, request.url, err
+                        );
+                    })?
+            }
+            Ok(response) => response,
+            Err(err) => {
+                error!(
+                    "exists request failed {} {}: {}",
+                    request.task_id, request.url, err
+                );
+
+                return Err(Error::ReqwestMiddlewareError(err));
+            }
+        };
+
+        let response_status_code = response.status();
+        debug!(
+            "exists response {} {}: {:?} {:?}",
+            request.task_id,
+            request.url,
+            response_status_code,
+            response.headers()
+        );
+
+        // Drop the response body to avoid reading it.
+        drop(response);
+        Ok(response_status_code.is_success())
+    }
 }
 
 #[cfg(test)]
@@ -398,7 +691,7 @@ mod tests {
     use super::*;
     use crate::{
         http::{HTTP, HTTPS_SCHEME, HTTP_SCHEME},
-        Backend, GetRequest, HeadRequest,
+        Backend, ExistsRequest, GetRequest, StatRequest,
     };
     use dragonfly_client_util::tls::{load_certs_from_pem, load_key_from_pem};
     use http::header::{HeaderValue, USER_AGENT};
@@ -559,10 +852,10 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     }
 
     #[tokio::test]
-    async fn should_get_head_response() {
+    async fn should_stat_response() {
         let server = wiremock::MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/head"))
+            .and(path("/stat"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .insert_header("Content-Type", "text/html; charset=UTF-8"),
@@ -570,11 +863,11 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None)
+        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600))
             .unwrap()
-            .head(HeadRequest {
+            .stat(StatRequest {
                 task_id: "test".to_string(),
-                url: format!("{}/head", server.uri()),
+                url: format!("{}/stat", server.uri()),
                 http_header: Some(HeaderMap::new()),
                 timeout: std::time::Duration::from_secs(5),
                 client_cert: None,
@@ -588,10 +881,10 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     }
 
     #[tokio::test]
-    async fn should_return_error_response_when_head_notexists() {
+    async fn should_return_error_response_when_stat_notexists() {
         let server = wiremock::MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/head"))
+            .and(path("/stat"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .insert_header("Content-Type", "text/html; charset=UTF-8"),
@@ -599,11 +892,11 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None)
+        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600))
             .unwrap()
-            .head(HeadRequest {
+            .stat(StatRequest {
                 task_id: "test".to_string(),
-                url: format!("{}/head", server.uri()),
+                url: format!("{}/stat", server.uri()),
                 http_header: None,
                 timeout: std::time::Duration::from_secs(5),
                 client_cert: None,
@@ -628,7 +921,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let mut resp = HTTP::new(HTTP_SCHEME, None)
+        let mut resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600))
             .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
@@ -649,11 +942,11 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     }
 
     #[tokio::test]
-    async fn should_get_head_response_with_self_signed_cert() {
+    async fn should_stat_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None)
+        let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600))
             .unwrap()
-            .head(HeadRequest {
+            .stat(StatRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
                 http_header: Some(HeaderMap::new()),
@@ -669,11 +962,11 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     }
 
     #[tokio::test]
-    async fn should_return_error_response_when_head_with_wrong_cert() {
+    async fn should_return_error_response_when_stat_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None)
+        let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600))
             .unwrap()
-            .head(HeadRequest {
+            .stat(StatRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
                 http_header: Some(HeaderMap::new()),
@@ -690,7 +983,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_get_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let mut resp = HTTP::new(HTTPS_SCHEME, None)
+        let mut resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600))
             .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
@@ -713,7 +1006,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_return_error_response_when_get_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None)
+        let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600))
             .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
@@ -732,11 +1025,11 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     }
 
     #[tokio::test]
-    async fn should_get_head_response_with_no_verifier() {
+    async fn should_stat_response_with_no_verifier() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None)
+        let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600))
             .unwrap()
-            .head(HeadRequest {
+            .stat(StatRequest {
                 task_id: "test".to_string(),
                 url: server_addr,
                 http_header: Some(HeaderMap::new()),
@@ -754,7 +1047,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_get_response_with_no_verifier() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let http_backend = HTTP::new(HTTPS_SCHEME, None);
+        let http_backend = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600));
         let mut resp = http_backend
             .unwrap()
             .get(GetRequest {
@@ -775,12 +1068,98 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
         assert_eq!(resp.text().await.unwrap(), "OK");
     }
 
+    #[tokio::test]
+    async fn should_exists_response() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/exists"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Type", "text/html; charset=UTF-8"),
+            )
+            .mount(&server)
+            .await;
+
+        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600))
+            .unwrap()
+            .exists(ExistsRequest {
+                task_id: "test".to_string(),
+                url: format!("{}/exists", server.uri()),
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(resp);
+    }
+
+    #[tokio::test]
+    async fn should_return_false_when_notexists() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/exists"))
+            .respond_with(
+                ResponseTemplate::new(404)
+                    .insert_header("Content-Type", "text/html; charset=UTF-8"),
+            )
+            .mount(&server)
+            .await;
+
+        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600))
+            .unwrap()
+            .exists(ExistsRequest {
+                task_id: "test".to_string(),
+                url: format!("{}/exists", server.uri()),
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!resp);
+    }
+
+    #[tokio::test]
+    async fn should_return_error_when_exists_header_missing() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/exists"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Type", "text/html; charset=UTF-8"),
+            )
+            .mount(&server)
+            .await;
+
+        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600))
+            .unwrap()
+            .exists(ExistsRequest {
+                task_id: "test".to_string(),
+                url: format!("{}/exists", server.uri()),
+                http_header: None,
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+            })
+            .await;
+
+        assert!(resp.is_err());
+    }
+
     #[test]
     fn should_make_request_headers() {
         // Apply default user-agent when not specified.
-        let http = HTTP::new(HTTP_SCHEME, None).unwrap();
+        let http = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600)).unwrap();
         let mut headers = HeaderMap::new();
-        http.make_request_headers(&mut headers).unwrap();
+        http.make_request_headers(&mut headers, None).unwrap();
         assert_eq!(
             headers.get(USER_AGENT).unwrap(),
             HeaderValue::from_static(DEFAULT_USER_AGENT)
@@ -789,10 +1168,25 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
         // Should not override existing user-agent.
         let mut headers = HeaderMap::new();
         headers.insert(USER_AGENT, HeaderValue::from_static("custom-agent/1.0"));
-        http.make_request_headers(&mut headers).unwrap();
+        http.make_request_headers(&mut headers, None).unwrap();
         assert_eq!(
             headers.get(USER_AGENT).unwrap(),
             HeaderValue::from_static("custom-agent/1.0")
+        );
+
+        // Apply range header when specified.
+        let mut headers = HeaderMap::new();
+        http.make_request_headers(
+            &mut headers,
+            Some(Range {
+                start: 1,
+                length: 100,
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            headers.get(RANGE).unwrap(),
+            HeaderValue::from_static("bytes=1-100")
         );
 
         // Apply custom request headers.
@@ -800,9 +1194,15 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
         custom_headers.insert("X-Custom-Header".to_string(), "custom-value".to_string());
         custom_headers.insert("Authorization".to_string(), "Bearer token123".to_string());
 
-        let http = HTTP::new(HTTP_SCHEME, Some(custom_headers)).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            Some(custom_headers),
+            true,
+            Duration::from_secs(600),
+        )
+        .unwrap();
         let mut headers = HeaderMap::new();
-        http.make_request_headers(&mut headers).unwrap();
+        http.make_request_headers(&mut headers, None).unwrap();
         assert_eq!(
             headers.get("X-Custom-Header").unwrap(),
             HeaderValue::from_static("custom-value")
@@ -823,7 +1223,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             HeaderValue::from_static("original-value"),
         );
         headers.insert("Authorization", HeaderValue::from_static("Bearer original"));
-        http.make_request_headers(&mut headers).unwrap();
+        http.make_request_headers(&mut headers, None).unwrap();
         assert_eq!(
             headers.get("X-Custom-Header").unwrap(),
             HeaderValue::from_static("original-value")
@@ -836,9 +1236,15 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
         // Return error for invalid header name.
         let mut custom_headers = HashMap::new();
         custom_headers.insert("Invalid Header Name".to_string(), "value".to_string());
-        let http = HTTP::new(HTTP_SCHEME, Some(custom_headers)).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            Some(custom_headers),
+            true,
+            Duration::from_secs(600),
+        )
+        .unwrap();
         let mut headers = HeaderMap::new();
-        assert!(http.make_request_headers(&mut headers).is_err());
+        assert!(http.make_request_headers(&mut headers, None).is_err());
 
         // Return error for invalid header value.
         let mut custom_headers = HashMap::new();
@@ -846,8 +1252,143 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             "X-Custom-Header".to_string(),
             "value\nwith\nnewlines".to_string(),
         );
-        let http = HTTP::new(HTTP_SCHEME, Some(custom_headers)).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            Some(custom_headers),
+            true,
+            Duration::from_secs(600),
+        )
+        .unwrap();
         let mut headers = HeaderMap::new();
-        assert!(http.make_request_headers(&mut headers).is_err());
+        assert!(http.make_request_headers(&mut headers, None).is_err());
+    }
+
+    #[tokio::test]
+    async fn should_cache_307_redirect_with_default_ttl() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/target"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("target content")
+                    .insert_header("Content-Type", "text/plain"),
+            )
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/redirect"))
+            .respond_with(
+                ResponseTemplate::new(307)
+                    .insert_header("Location", format!("{}/target", server.uri())),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // First request - should store redirect url.
+        let backend = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600)).unwrap();
+        let mut response = backend
+            .get(GetRequest {
+                task_id: "025a7b4c4615f86617acb34c7ec3404a0a475c2cfaf847ecead944c0bae6277d"
+                    .to_string(),
+                piece_id: "1".to_string(),
+                url: format!("{}/redirect", server.uri()),
+                range: None,
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.http_status_code, Some(StatusCode::OK));
+        assert_eq!(response.text().await.unwrap(), "target content");
+
+        // Second request - should use cached redirect with default TTL.
+        let mut response = backend
+            .get(GetRequest {
+                task_id: "025a7b4c4615f86617acb34c7ec3404a0a475c2cfaf847ecead944c0bae6277d"
+                    .to_string(),
+                piece_id: "1".to_string(),
+                url: format!("{}/redirect", server.uri()),
+                range: None,
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.http_status_code, Some(StatusCode::OK));
+        assert_eq!(response.text().await.unwrap(), "target content");
+    }
+
+    #[tokio::test]
+    async fn should_expire_cached_redirect_after_ttl() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/target"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("target content")
+                    .insert_header("Content-Type", "text/plain"),
+            )
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/redirect"))
+            .respond_with(
+                ResponseTemplate::new(307)
+                    .insert_header("Location", format!("{}/target", server.uri())),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        // Use a very short TTL for this test (1 second).
+        let backend = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(1)).unwrap();
+
+        // First request - should store redirect url.
+        let mut response = backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "1".to_string(),
+                url: format!("{}/redirect", server.uri()),
+                range: None,
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.http_status_code, Some(StatusCode::OK));
+        assert_eq!(response.text().await.unwrap(), "target content");
+
+        // Wait for cache to expire.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        // Second request after TTL expiry - should store redirect url again.
+        let mut response = backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "1".to_string(),
+                url: format!("{}/redirect", server.uri()),
+                range: None,
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.http_status_code, Some(StatusCode::OK));
+        assert_eq!(response.text().await.unwrap(), "target content");
     }
 }

@@ -17,12 +17,11 @@
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::resource::parent_selector::ParentSelector;
 use dragonfly_api::common::v2::{
-    Download, Hdfs, ObjectStorage, Peer, Piece, SizeScope, Task as CommonTask, TaskType,
-    TrafficType,
+    Download, Hdfs, ObjectStorage, Peer, Piece, Task as CommonTask, TrafficType,
 };
 use dragonfly_api::dfdaemon::{
     self,
-    v2::{download_task_response, DownloadTaskResponse},
+    v2::{download_task_response, DownloadTaskResponse, StatLocalTaskResponse},
 };
 use dragonfly_api::errordetails::v2::{Backend, Unknown};
 use dragonfly_api::scheduler::v2::{
@@ -34,7 +33,7 @@ use dragonfly_api::scheduler::v2::{
     DownloadPieceFailedRequest, DownloadPieceFinishedRequest, RegisterPeerRequest,
     ReschedulePeerRequest, StatTaskRequest,
 };
-use dragonfly_client_backend::{BackendFactory, HeadRequest};
+use dragonfly_client_backend::{BackendFactory, StatRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{BackendError, DownloadFromParentFailed, ErrorType, OrErr},
@@ -52,7 +51,6 @@ use dragonfly_client_util::{
 };
 use leaky_bucket::RateLimiter;
 use reqwest::header::HeaderMap;
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -197,7 +195,7 @@ impl Task {
             http::Method::HEAD.as_str(),
         );
         let response = backend
-            .head(HeadRequest {
+            .stat(StatRequest {
                 task_id: id.to_string(),
                 url: request.url,
                 http_header: Some(request_header),
@@ -1893,78 +1891,10 @@ impl Task {
         return Ok(finished_pieces);
     }
 
-    /// stat_task returns the task metadata.
+    /// stat_task returns the task metadata from scheduler.
     #[instrument(skip_all)]
-    pub async fn stat(
-        &self,
-        task_id: &str,
-        host_id: &str,
-        local_only: bool,
-    ) -> ClientResult<CommonTask> {
-        if local_only {
-            let Some(task_metadata) = self.storage.get_task(task_id).inspect_err(|err| {
-                error!("get task {} from local storage error: {:?}", task_id, err);
-            })?
-            else {
-                return Err(Error::TaskNotFound(task_id.to_owned()));
-            };
-
-            let piece_metadatas = self.piece.get_all(task_id).inspect_err(|err| {
-                error!(
-                    "get pieces for task {} from local storage error: {:?}",
-                    task_id, err
-                );
-            })?;
-
-            let pieces = piece_metadatas
-                .into_iter()
-                .filter(|piece| piece.is_finished())
-                .map(|piece| {
-                    // The traffic_type indicates whether the first download was from the source or hit the remote peer cache.
-                    // If the parent_id exists, the piece was downloaded from a remote peer. Otherwise, it was
-                    // downloaded from the source.
-                    let traffic_type = match piece.parent_id {
-                        None => TrafficType::BackToSource,
-                        Some(_) => TrafficType::RemotePeer,
-                    };
-
-                    Piece {
-                        number: piece.number,
-                        parent_id: piece.parent_id.clone(),
-                        offset: piece.offset,
-                        length: piece.length,
-                        digest: piece.digest.clone(),
-                        content: None,
-                        traffic_type: Some(traffic_type as i32),
-                        cost: piece.prost_cost(),
-                        created_at: Some(prost_wkt_types::Timestamp::from(piece.created_at)),
-                    }
-                })
-                .collect::<Vec<Piece>>();
-
-            return Ok(CommonTask {
-                id: task_metadata.id,
-                r#type: TaskType::Standard as i32,
-                url: String::new(),
-                digest: None,
-                tag: None,
-                application: None,
-                filtered_query_params: Vec::new(),
-                request_header: HashMap::new(),
-                content_length: task_metadata.content_length.unwrap_or(0),
-                piece_count: pieces.len() as u32,
-                size_scope: SizeScope::Normal as i32,
-                pieces,
-                state: String::new(),
-                peer_count: 0,
-                has_available_peer: false,
-                created_at: Some(prost_wkt_types::Timestamp::from(task_metadata.created_at)),
-                updated_at: Some(prost_wkt_types::Timestamp::from(task_metadata.updated_at)),
-            });
-        }
-
-        let task = self
-            .scheduler_client
+    pub async fn stat(&self, task_id: &str, host_id: &str) -> ClientResult<CommonTask> {
+        self.scheduler_client
             .stat_task(StatTaskRequest {
                 host_id: host_id.to_string(),
                 task_id: task_id.to_string(),
@@ -1972,9 +1902,32 @@ impl Task {
             .await
             .inspect_err(|err| {
                 error!("stat task failed: {}", err);
-            })?;
+            })
+    }
 
-        Ok(task)
+    /// stat_local returns the task metadata from local storage.
+    #[instrument(skip_all)]
+    pub async fn stat_local(&self, task_id: &str) -> ClientResult<StatLocalTaskResponse> {
+        let Some(task_metadata) = self.storage.get_task(task_id).inspect_err(|err| {
+            error!("get task {} from local storage error: {:?}", task_id, err);
+        })?
+        else {
+            return Err(Error::TaskNotFound(task_id.to_owned()));
+        };
+
+        Ok(StatLocalTaskResponse {
+            task_id: task_metadata.id,
+            piece_length: task_metadata.piece_length,
+            content_length: task_metadata.content_length,
+            response_header: task_metadata.response_header,
+            uploading_count: task_metadata.uploading_count as u64,
+            uploaded_count: task_metadata.uploaded_count,
+            created_at: Some(task_metadata.created_at.into()),
+            updated_at: Some(task_metadata.updated_at.into()),
+            prefetched_at: task_metadata.prefetched_at.map(Into::into),
+            failed_at: task_metadata.failed_at.map(Into::into),
+            finished_at: task_metadata.finished_at.map(Into::into),
+        })
     }
 
     /// Delete a task and reclaim local storage.

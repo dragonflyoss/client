@@ -1,5 +1,5 @@
 /*
- *     Copyright 2024 The Dragonfly Authors
+ *     Copyright 2025 The Dragonfly Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,11 +14,10 @@
  * limitations under the License.
  */
 
-use bytesize::ByteSize;
 use clap::Parser;
-use dragonfly_api::dfdaemon::v2::UploadPersistentCacheTaskRequest;
-use dragonfly_client::resource::piece::MIN_PIECE_LENGTH;
-use dragonfly_client_config::dfcache::default_dfcache_persistent_replica_count;
+use dragonfly_api::common::v2::ObjectStorage;
+use dragonfly_api::dfdaemon::v2::UploadPersistentTaskRequest;
+use dragonfly_client_config::dfstore::default_dfstore_persistent_replica_count;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -30,6 +29,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use termion::{color, style};
 use tracing::info;
+use url::Url;
 
 use super::*;
 
@@ -43,38 +43,17 @@ pub struct ImportCommand {
     path: PathBuf,
 
     #[arg(
-        long = "content-for-calculating-task-id",
-        help = "Specify the content used to calculate the persistent cache task ID. If it is set, use its value to calculate the task ID, Otherwise, calculate the persistent cache task ID based on url, piece-length, tag, application, and filtered-query-params."
+        long,
+        help = "Specify the URL for copying data to object storage. Format: scheme://<bucket>/<path>. Examples: s3://<bucket>/<path>, abs://<bucket>/<path>"
     )]
-    content_for_calculating_task_id: Option<String>,
+    url: Url,
 
     #[arg(
         long = "persistent-replica-count",
-        default_value_t = default_dfcache_persistent_replica_count(),
+        default_value_t = default_dfstore_persistent_replica_count(),
         help = "Specify the replica count of the persistent cache task"
     )]
     persistent_replica_count: u64,
-
-    #[arg(
-        long = "piece-length",
-        required = false,
-        help = "Specify the piece length for downloading file. If the piece length is not specified, the piece length will be calculated according to the file size. Different piece lengths will be divided into different persistent cache tasks. The value needs to be set with human readable format and needs to be greater than or equal to 4mib, for example: 4mib, 1gib"
-    )]
-    piece_length: Option<ByteSize>,
-
-    #[arg(
-        long = "application",
-        required = false,
-        help = "Different applications for the same url will be divided into different persistent cache tasks"
-    )]
-    application: Option<String>,
-
-    #[arg(
-        long = "tag",
-        required = false,
-        help = "Different tags for the same file will be divided into different persistent cache tasks"
-    )]
-    tag: Option<String>,
 
     #[arg(
         long = "ttl",
@@ -100,6 +79,49 @@ pub struct ImportCommand {
     )]
     endpoint: PathBuf,
 
+    #[arg(long, help = "Specify the region for the Object Storage Service")]
+    storage_region: Option<String>,
+
+    #[arg(long, help = "Specify the endpoint for the Object Storage Service")]
+    storage_endpoint: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the access key ID for the Object Storage Service"
+    )]
+    storage_access_key_id: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the access key secret for the Object Storage Service"
+    )]
+    storage_access_key_secret: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the security token for the Object Storage Service"
+    )]
+    storage_security_token: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the session token for Amazon Simple Storage Service(S3)"
+    )]
+    storage_session_token: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the local path to the credential file which is used for OAuth2 authentication for Google Cloud Storage Service(GCS)"
+    )]
+    storage_credential_path: Option<String>,
+
+    #[arg(
+        long,
+        default_value = "publicRead",
+        help = "Specify the predefined ACL for Google Cloud Storage Service(GCS)"
+    )]
+    storage_predefined_acl: Option<String>,
+
     #[arg(
         long,
         default_value_t = false,
@@ -123,7 +145,7 @@ pub struct ImportCommand {
 impl ImportCommand {
     /// Executes the import sub command with comprehensive validation and error handling.
     ///
-    /// This function serves as the main entry point for the dfcache import command execution.
+    /// This function serves as the main entry point for the dfstore import command execution.
     /// It handles the complete workflow including argument parsing, validation, logging setup,
     /// dfdaemon client connection, and import operation execution. The function provides
     /// detailed error reporting with colored terminal output and follows a fail-fast approach
@@ -313,13 +335,14 @@ impl ImportCommand {
         Ok(())
     }
 
-    /// Executes the cache import operation by uploading a file to the persistent cache system.
+    /// Executes the storage import operation by uploading a file to the persistent system.
     ///
-    /// This function handles the core import functionality by uploading a local file to the
-    /// dfdaemon persistent cache system. It provides visual feedback through a progress spinner,
-    /// converts the file path to absolute format, and configures the cache task with specified
-    /// parameters including TTL, replica count, and piece length. The operation is asynchronous
-    /// and provides completion feedback with the generated task ID.
+    /// This function handles the core import functionality by copying a local file to the
+    /// dfdaemon persistent system and provides persistence by copying data to object storage.
+    /// It provides visual feedback through a progress spinner, converts the file path to
+    /// absolute format, and configures the cache task with specified parameters including TTL,
+    /// replica count, and piece length. The operation is asynchronous and provides completion
+    /// feedback with the generated task ID.
     async fn run(&self, dfdaemon_download_client: DfdaemonDownloadClient) -> Result<()> {
         let absolute_path = Path::new(&self.path).absolutize()?;
         info!("import file: {}", absolute_path.to_string_lossy());
@@ -338,14 +361,21 @@ impl ImportCommand {
         );
         progress_bar.set_message("Importing...");
 
-        let persistent_cache_task = dfdaemon_download_client
-            .upload_persistent_cache_task(UploadPersistentCacheTaskRequest {
-                content_for_calculating_task_id: self.content_for_calculating_task_id.clone(),
+        dfdaemon_download_client
+            .upload_persistent_task(UploadPersistentTaskRequest {
+                url: self.url.to_string(),
+                object_storage: Some(ObjectStorage {
+                    region: self.storage_region.clone(),
+                    endpoint: self.storage_endpoint.clone(),
+                    access_key_id: self.storage_access_key_id.clone(),
+                    access_key_secret: self.storage_access_key_secret.clone(),
+                    security_token: self.storage_security_token.clone(),
+                    session_token: self.storage_session_token.clone(),
+                    credential_path: self.storage_credential_path.clone(),
+                    predefined_acl: self.storage_predefined_acl.clone(),
+                }),
                 path: absolute_path.to_string_lossy().to_string(),
                 persistent_replica_count: self.persistent_replica_count,
-                tag: self.tag.clone(),
-                application: self.application.clone(),
-                piece_length: self.piece_length.map(|piece_length| piece_length.as_u64()),
                 ttl: Some(
                     prost_wkt_types::Duration::try_from(self.ttl).or_err(ErrorType::ParseError)?,
                 ),
@@ -357,7 +387,7 @@ impl ImportCommand {
             })
             .await?;
 
-        progress_bar.finish_with_message(format!("Done: {}", persistent_cache_task.id));
+        progress_bar.finish_with_message(format!("Done: {}", self.url));
         Ok(())
     }
 
@@ -389,16 +419,6 @@ impl ImportCommand {
                 "path {} does not exist",
                 self.path.display()
             )));
-        }
-
-        if let Some(piece_length) = self.piece_length {
-            if piece_length.as_u64() < MIN_PIECE_LENGTH {
-                return Err(Error::ValidationError(format!(
-                    "piece length {} bytes is less than the minimum piece length {} bytes",
-                    piece_length.as_u64(),
-                    MIN_PIECE_LENGTH
-                )));
-            }
         }
 
         Ok(())

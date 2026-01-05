@@ -61,8 +61,8 @@ impl Content {
 
     /// available_space returns the available space of the disk.
     pub fn available_space(&self) -> Result<u64> {
-        let dist_threshold = self.config.gc.policy.dist_threshold;
-        if dist_threshold != ByteSize::default() {
+        let disk_threshold = self.config.gc.policy.disk_threshold;
+        if disk_threshold != ByteSize::default() {
             let usage_space = WalkDir::new(&self.dir)
                 .into_iter()
                 .filter_map(|entry| entry.ok())
@@ -70,16 +70,16 @@ impl Content {
                 .filter(|metadata| metadata.is_file())
                 .fold(0, |acc, m| acc + m.len());
 
-            if usage_space >= dist_threshold.as_u64() {
+            if usage_space >= disk_threshold.as_u64() {
                 warn!(
-                    "usage space {} is greater than dist threshold {}, no need to calculate available space",
-                    usage_space, dist_threshold
+                    "usage space {} is greater than disk threshold {}, no need to calculate available space",
+                    usage_space, disk_threshold
                 );
 
                 return Ok(0);
             }
 
-            return Ok(dist_threshold.as_u64() - usage_space);
+            return Ok(disk_threshold.as_u64() - usage_space);
         }
 
         let stat = fs2::statvfs(&self.dir)?;
@@ -88,10 +88,10 @@ impl Content {
 
     /// total_space returns the total space of the disk.
     pub fn total_space(&self) -> Result<u64> {
-        // If the dist_threshold is set, return it directly.
-        let dist_threshold = self.config.gc.policy.dist_threshold;
-        if dist_threshold != ByteSize::default() {
-            return Ok(dist_threshold.as_u64());
+        // If the disk_threshold is set, return it directly.
+        let disk_threshold = self.config.gc.policy.disk_threshold;
+        if disk_threshold != ByteSize::default() {
+            return Ok(disk_threshold.as_u64());
         }
 
         let stat = fs2::statvfs(&self.dir)?;
@@ -1296,7 +1296,7 @@ mod tests {
         assert!(!has_space);
 
         let mut config = Config::default();
-        config.gc.policy.dist_threshold = ByteSize::mib(10);
+        config.gc.policy.disk_threshold = ByteSize::mib(10);
         let config = Arc::new(config);
         let content = Content::new(config, temp_dir.path()).await.unwrap();
 

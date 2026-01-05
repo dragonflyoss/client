@@ -152,7 +152,7 @@ pub struct PersistentTask {
     pub content_length: u64,
 
     /// uploading_count is the count of the task being uploaded by other peers.
-    pub uploading_count: u64,
+    pub uploading_count: i64,
 
     /// uploaded_count is the count of the task has been uploaded by other peers.
     pub uploaded_count: u64,
@@ -251,7 +251,7 @@ pub struct PersistentCacheTask {
     pub content_length: u64,
 
     /// uploading_count is the count of the task being uploaded by other peers.
-    pub uploading_count: u64,
+    pub uploading_count: i64,
 
     /// uploaded_count is the count of the task has been uploaded by other peers.
     pub uploaded_count: u64,
@@ -357,9 +357,6 @@ pub struct CacheTask {
     /// created_at is the time when the task metadata is created.
     pub created_at: NaiveDateTime,
 
-    /// prefetched_at is the time when the task prefetched.
-    pub prefetched_at: Option<NaiveDateTime>,
-
     /// failed_at is the time when the task downloads failed.
     pub failed_at: Option<NaiveDateTime>,
 
@@ -388,11 +385,6 @@ impl CacheTask {
     /// is_expired returns whether the cache task is expired.
     pub fn is_expired(&self, ttl: Duration) -> bool {
         self.updated_at + ttl < Utc::now().naive_utc()
-    }
-
-    /// is_prefetched returns whether the cache task is prefetched.
-    pub fn is_prefetched(&self) -> bool {
-        self.prefetched_at.is_some()
     }
 
     /// is_failed returns whether the cache task downloads failed.
@@ -450,7 +442,7 @@ pub struct Piece {
     pub parent_id: Option<String>,
 
     /// DEPRECATED: uploading_count is the count of the piece being uploaded by other peers.
-    pub uploading_count: i64,
+    pub uploading_count: u64,
 
     /// DEPRECATED: uploaded_count is the count of the piece has been uploaded by other peers.
     pub uploaded_count: u64,
@@ -745,7 +737,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     /// is_task_exists checks if the task exists.
     #[instrument(skip_all)]
     pub fn is_task_exists(&self, id: &str) -> Result<bool> {
-        self.db.is_exist::<Task>(id.as_bytes())
+        self.db.exists::<Task>(id.as_bytes())
     }
 
     /// get_tasks gets the task metadatas.
@@ -971,7 +963,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     /// is_persistent_task_exists checks if the persistent task exists.
     #[instrument(skip_all)]
     pub fn is_persistent_task_exists(&self, id: &str) -> Result<bool> {
-        self.db.is_exist::<PersistentTask>(id.as_bytes())
+        self.db.exists::<PersistentTask>(id.as_bytes())
     }
 
     /// get_persistent_tasks gets the persistent task metadatas.
@@ -1186,7 +1178,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     /// is_persistent_cache_task_exists checks if the persistent cache task exists.
     #[instrument(skip_all)]
     pub fn is_persistent_cache_task_exists(&self, id: &str) -> Result<bool> {
-        self.db.is_exist::<PersistentCacheTask>(id.as_bytes())
+        self.db.exists::<PersistentCacheTask>(id.as_bytes())
     }
 
     /// get_persistent_cache_tasks gets the persistent cache task metadatas.
@@ -1276,45 +1268,6 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    /// prefetch_cache_task_started updates the metadata of the cache task when the cache task prefetch started.
-    #[instrument(skip_all)]
-    pub fn prefetch_cache_task_started(&self, id: &str) -> Result<CacheTask> {
-        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
-            Some(mut task) => {
-                // If the task is prefetched, return an error.
-                if task.is_prefetched() {
-                    return Err(Error::InvalidState("prefetched".to_string()));
-                }
-
-                task.updated_at = Utc::now().naive_utc();
-                task.prefetched_at = Some(Utc::now().naive_utc());
-                task.failed_at = None;
-                task
-            }
-            None => return Err(Error::TaskNotFound(id.to_string())),
-        };
-
-        self.db.put(id.as_bytes(), &task)?;
-        Ok(task)
-    }
-
-    /// prefetch_cache_task_failed updates the metadata of the cache task when the cache task prefetch failed.
-    #[instrument(skip_all)]
-    pub fn prefetch_cache_task_failed(&self, id: &str) -> Result<CacheTask> {
-        let task = match self.db.get::<CacheTask>(id.as_bytes())? {
-            Some(mut task) => {
-                task.updated_at = Utc::now().naive_utc();
-                task.prefetched_at = None;
-                task.failed_at = Some(Utc::now().naive_utc());
-                task
-            }
-            None => return Err(Error::TaskNotFound(id.to_string())),
-        };
-
-        self.db.put(id.as_bytes(), &task)?;
-        Ok(task)
-    }
-
     /// upload_cache_task_started updates the metadata of the cache task when the cache task uploads started.
     #[instrument(skip_all)]
     pub fn upload_cache_task_started(&self, id: &str) -> Result<CacheTask> {
@@ -1373,7 +1326,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     /// is_cache_task_exists checks if the cache task exists.
     #[instrument(skip_all)]
     pub fn is_cache_task_exists(&self, id: &str) -> Result<bool> {
-        self.db.is_exist::<CacheTask>(id.as_bytes())
+        self.db.exists::<CacheTask>(id.as_bytes())
     }
 
     /// get_cache_tasks gets the cache task metadatas.
@@ -1526,7 +1479,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     /// is_piece_exists checks if the piece exists.
     #[instrument(skip_all)]
     pub fn is_piece_exists(&self, piece_id: &str) -> Result<bool> {
-        self.db.is_exist::<Piece>(piece_id.as_bytes())
+        self.db.exists::<Piece>(piece_id.as_bytes())
     }
 
     /// get_pieces gets the piece metadatas.
@@ -1605,6 +1558,7 @@ impl Metadata<RocksdbStorageEngine> {
             &[
                 Task::NAMESPACE,
                 Piece::NAMESPACE,
+                PersistentTask::NAMESPACE,
                 PersistentCacheTask::NAMESPACE,
                 CacheTask::NAMESPACE,
             ],

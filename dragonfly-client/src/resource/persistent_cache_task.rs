@@ -141,9 +141,10 @@ impl PersistentCacheTask {
         path: PathBuf,
         request: UploadPersistentCacheTaskRequest,
     ) -> ClientResult<CommonPersistentCacheTask> {
-        // Convert prost_wkt_types::Duration to std::time::Duration.
-        let ttl = Duration::try_from(request.ttl.ok_or(Error::UnexpectedResponse)?)
-            .or_err(ErrorType::ParseError)?;
+        let ttl = match request.ttl {
+            Some(ttl) => Duration::try_from(ttl).or_err(ErrorType::ParseError)?,
+            None => self.config.gc.policy.persistent_cache_task_ttl,
+        };
 
         // Get the content length of the file asynchronously.
         let content_length = tokio::fs::metadata(path.as_path())
@@ -180,7 +181,7 @@ impl PersistentCacheTask {
                 piece_count: self
                     .piece
                     .calculate_piece_count(piece_length, content_length),
-                ttl: request.ttl,
+                ttl: Some(prost_wkt_types::Duration::try_from(ttl).or_err(ErrorType::ParseError)?),
             })
             .await
             .inspect_err(|err| error!("upload persistent cache task started: {}", err))?;
@@ -265,7 +266,10 @@ impl PersistentCacheTask {
                             content_length: metadata.content_length,
                             piece_count: response.piece_count,
                             state: response.state,
-                            ttl: request.ttl,
+                            ttl: Some(
+                                prost_wkt_types::Duration::try_from(ttl)
+                                    .or_err(ErrorType::ParseError)?,
+                            ),
                             created_at: response.created_at,
                             updated_at: response.updated_at,
                         })
@@ -839,7 +843,6 @@ impl PersistentCacheTask {
                                 application: request.application.clone(),
                                 piece_length: task.piece_length,
                                 output_path: request.output_path.clone(),
-                                timeout: request.timeout,
                                 concurrent_piece_count: Some(self.config.download.concurrent_piece_count),
                                 piece_count: task.piece_count(),
                             },
@@ -1210,7 +1213,6 @@ impl PersistentCacheTask {
                         number,
                         length,
                         parent.clone(),
-                        false,
                     )
                     .await
                     .map_err(|err| {
@@ -1248,8 +1250,6 @@ impl PersistentCacheTask {
                             task_id.as_str(),
                             metadata.length,
                             None,
-                            true,
-                            false,
                         )
                         .await
                         .inspect_err(|err| {
@@ -1493,8 +1493,6 @@ impl PersistentCacheTask {
                         task_id,
                         piece.length,
                         None,
-                        true,
-                        false,
                     )
                     .await
                     .inspect_err(|err| {
