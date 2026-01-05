@@ -262,8 +262,17 @@ mod tests {
             "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
         );
 
-        // Test URL with query parameters (e.g. containerd adds ?ns=docker.io for registry mirrors)
         let url = "https://index.docker.io/v2/library/alpine/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e?ns=docker.io";
+        let digest = Digest::extract_from_blob_url(url);
+        assert!(digest.is_some());
+        let digest = digest.unwrap();
+        assert_eq!(digest.algorithm(), Algorithm::Sha256);
+        assert_eq!(
+            digest.encoded(),
+            "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
+        );
+
+        let url = "http://localhost:5000/v2/myrepo/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e?id=12345";
         let digest = Digest::extract_from_blob_url(url);
         assert!(digest.is_some());
         let digest = digest.unwrap();
