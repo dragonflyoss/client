@@ -981,7 +981,7 @@ async fn proxy_via_dfdaemon(
 
 /// proxy_via_http proxies the HTTP request directly to the remote server.
 #[instrument(skip_all)]
-async fn proxy_via_http(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
+async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
     let Some(host) = request.uri().host() else {
         error!("CONNECT host is not socket addr: {:?}", request.uri());
         return Ok(make_error_response(
@@ -1006,6 +1006,18 @@ async fn proxy_via_http(request: Request<hyper::body::Incoming>) -> ClientResult
         }
     });
 
+    // Override Host header with full authority (including port) to handle
+    // containerd's behavior with non-443 HTTPS ports, which otherwise
+    // causes request failures.
+    let authority = request
+        .uri()
+        .authority()
+        .ok_or_else(|| ClientError::Unknown("request uri authority is not set".to_string()))?
+        .as_str()
+        .parse()
+        .or_err(ErrorType::ParseError)?;
+    request.headers_mut().insert(hyper::header::HOST, authority);
+
     let response = client.send_request(request).await?;
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }
@@ -1013,7 +1025,7 @@ async fn proxy_via_http(request: Request<hyper::body::Incoming>) -> ClientResult
 /// proxy_via_https proxies the HTTPS request directly to the remote server.
 #[instrument(skip_all)]
 async fn proxy_via_https(
-    request: Request<hyper::body::Incoming>,
+    mut request: Request<hyper::body::Incoming>,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     let client_config_builder = match registry_cert.as_ref() {
@@ -1038,8 +1050,20 @@ async fn proxy_via_https(
         .https_or_http()
         .enable_http1()
         .build();
-
     let client = Client::builder(TokioExecutor::new()).build(https);
+
+    // Override Host header with full authority (including port) to handle
+    // containerd's behavior with non-443 HTTPS ports, which otherwise
+    // causes request failures.
+    let authority = request
+        .uri()
+        .authority()
+        .ok_or_else(|| ClientError::Unknown("request uri authority is not set".to_string()))?
+        .as_str()
+        .parse()
+        .or_err(ErrorType::ParseError)?;
+    request.headers_mut().insert(hyper::header::HOST, authority);
+
     let response = client.request(request).await.inspect_err(|err| {
         error!("request failed: {:?}", err);
     })?;
