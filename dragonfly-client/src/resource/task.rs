@@ -68,6 +68,28 @@ use tonic::{Request, Status};
 use tracing::{debug, error, info, instrument, warn, Instrument};
 
 use super::*;
+use url::Url;
+
+/// filter_url_query_params removes filtered_query_params from the URL.
+fn filter_url_query_params(url_str: &str, filtered_params: &[String]) -> String {
+    if filtered_params.is_empty() {
+        return url_str.to_string();
+    }
+    let Ok(mut url) = Url::parse(url_str) else {
+        return url_str.to_string();
+    };
+    let query: Vec<_> = url
+        .query_pairs()
+        .filter(|(k, _)| !filtered_params.contains(&k.to_string()))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    if query.is_empty() {
+        url.set_query(None);
+    } else {
+        url.query_pairs_mut().clear().extend_pairs(query);
+    }
+    url.to_string()
+}
 
 /// Task represents a task manager.
 pub struct Task {
@@ -183,8 +205,12 @@ impl Task {
         // a 200 full content.
         request_header.remove(reqwest::header::RANGE);
 
+        // Filter query params from URL before making upstream request.
+        let filtered_url =
+            filter_url_query_params(&request.url, &request.filtered_query_params);
+
         // Head the url to get the content length.
-        let backend = self.backend_factory.build(request.url.as_str())?;
+        let backend = self.backend_factory.build(&filtered_url)?;
 
         // Record the start time.
         let start_time = Instant::now();
@@ -197,7 +223,7 @@ impl Task {
         let response = backend
             .stat(StatRequest {
                 task_id: id.to_string(),
-                url: request.url,
+                url: filtered_url,
                 http_header: Some(request_header),
                 timeout: self.config.download.piece_timeout,
                 client_cert: None,
@@ -1452,7 +1478,7 @@ impl Task {
             let task_id = task_id.to_string();
             let host_id = host_id.to_string();
             let peer_id = peer_id.to_string();
-            let url = request.url.clone();
+            let url = filter_url_query_params(&request.url, &request.filtered_query_params);
             let request_header = request_header.clone();
             let piece_manager = self.piece.clone();
             let download_progress_tx = download_progress_tx.clone();
@@ -1831,7 +1857,7 @@ impl Task {
             let task_id = task_id.to_string();
             let host_id = host_id.to_string();
             let peer_id = peer_id.to_string();
-            let url = request.url.clone();
+            let url = filter_url_query_params(&request.url, &request.filtered_query_params);
             let request_header = request_header.clone();
             let piece_manager = self.piece.clone();
             let download_progress_tx = download_progress_tx.clone();
