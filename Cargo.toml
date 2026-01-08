@@ -101,7 +101,7 @@ percent-encoding = "2.3.2"
 tempfile = "3.23.0"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 serde_json = "1.0.145"
-lru = "0.16.2"
+lru = "0.16.3"
 fs2 = "0.4.3"
 lazy_static = "1.5"
 bytes = "1.11"
