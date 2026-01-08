@@ -68,7 +68,7 @@ fn default_download_protocol() -> String {
 }
 
 /// default_download_request_rate_limit is the default rate limit of the download request in the
-/// download grpc server, default is 4000 req/s.
+/// download grpc server, default is 5000 req/s.
 pub fn default_download_request_rate_limit() -> u64 {
     5000
 }
@@ -98,7 +98,7 @@ fn default_upload_grpc_server_port() -> u16 {
 }
 
 /// default_upload_request_rate_limit is the default rate limit of the upload request in the
-/// upload grpc server, default is 4000 req/s.
+/// upload grpc server, default is 5000 req/s.
 pub fn default_upload_request_rate_limit() -> u64 {
     5000
 }
@@ -262,10 +262,10 @@ fn default_gc_interval() -> Duration {
     Duration::from_secs(900)
 }
 
-/// default_gc_policy_task_ttl is the default ttl of the task, default is 6 hours.
+/// default_gc_policy_task_ttl is the default ttl of the task, default is 30 day.
 #[inline]
 fn default_gc_policy_task_ttl() -> Duration {
-    Duration::from_secs(21_600)
+    Duration::from_secs(2_592_000)
 }
 
 /// default_gc_policy_task_ttl is the default ttl of the task, default is 1 day.
