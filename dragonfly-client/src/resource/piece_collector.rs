@@ -186,7 +186,7 @@ impl PieceCollector {
         // Only require multiple parents to trigger download when peer have at least two parents.
         // The timeout is set lower than collected_piece_timeout (1/10 of it) to avoid deadlocks when some parents fail to synchronize.
         let required_parent_count = Arc::new(Mutex::new(if parents.len() > 1 {
-            Some(parents.len())
+            Some(2)
         } else {
             None
         }));
