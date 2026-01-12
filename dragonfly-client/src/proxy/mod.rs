@@ -31,6 +31,7 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
+    net::join_host_port,
     shutdown,
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
@@ -604,7 +605,7 @@ pub async fn upgraded_handler(
         let builder = http::uri::Builder::new();
         *request.uri_mut() = builder
             .scheme("https")
-            .authority(format!("{}:{}", host, port))
+            .authority(join_host_port(&host, port))
             .path_and_query(
                 request
                     .uri()

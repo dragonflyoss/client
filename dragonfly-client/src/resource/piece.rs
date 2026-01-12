@@ -27,6 +27,7 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::id_generator::IDGenerator;
+use dragonfly_client_util::net::join_host_port;
 use leaky_bucket::RateLimiter;
 use reqwest::header::HeaderMap;
 use std::collections::HashMap;
@@ -444,22 +445,12 @@ impl Piece {
         ) {
             ("tcp", Some(ip), Some(port), _) => {
                 self.tcp_downloader
-                    .download_piece(
-                        format!("{}:{}", ip, port).as_str(),
-                        number,
-                        host_id,
-                        task_id,
-                    )
+                    .download_piece(&join_host_port(&ip, port as u16), number, host_id, task_id)
                     .await?
             }
             ("quic", Some(ip), _, Some(port)) => {
                 self.quic_downloader
-                    .download_piece(
-                        format!("{}:{}", ip, port).as_str(),
-                        number,
-                        host_id,
-                        task_id,
-                    )
+                    .download_piece(&join_host_port(&ip, port as u16), number, host_id, task_id)
                     .await?
             }
             _ => {
@@ -471,7 +462,7 @@ impl Piece {
 
                 self.grpc_downloader
                     .download_piece(
-                        format!("{}:{}", host.ip, host.port).as_str(),
+                        &join_host_port(&host.ip, host.port as u16),
                         number,
                         host_id,
                         task_id,
@@ -821,7 +812,7 @@ impl Piece {
             ("tcp", Some(ip), Some(port), _) => {
                 self.tcp_downloader
                     .download_persistent_piece(
-                        format!("{}:{}", ip, port).as_str(),
+                        &join_host_port(&ip, port as u16),
                         number,
                         host_id,
                         task_id,
@@ -833,7 +824,7 @@ impl Piece {
                     piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
                 quic_downloader
                     .download_persistent_piece(
-                        format!("{}:{}", ip, port).as_str(),
+                        &join_host_port(&ip, port as u16),
                         number,
                         host_id,
                         task_id,
@@ -849,7 +840,7 @@ impl Piece {
 
                 self.grpc_downloader
                     .download_persistent_piece(
-                        format!("{}:{}", host.ip, host.port).as_str(),
+                        &join_host_port(&host.ip, host.port as u16),
                         number,
                         host_id,
                         task_id,
@@ -1196,7 +1187,7 @@ impl Piece {
             ("tcp", Some(ip), Some(port), _) => {
                 self.tcp_downloader
                     .download_persistent_cache_piece(
-                        format!("{}:{}", ip, port).as_str(),
+                        &join_host_port(&ip, port as u16),
                         number,
                         host_id,
                         task_id,
@@ -1208,7 +1199,7 @@ impl Piece {
                     piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
                 quic_downloader
                     .download_persistent_cache_piece(
-                        format!("{}:{}", ip, port).as_str(),
+                        &join_host_port(&ip, port as u16),
                         number,
                         host_id,
                         task_id,
@@ -1224,7 +1215,7 @@ impl Piece {
 
                 self.grpc_downloader
                     .download_persistent_cache_piece(
-                        format!("{}:{}", host.ip, host.port).as_str(),
+                        &join_host_port(&host.ip, host.port as u16),
                         number,
                         host_id,
                         task_id,

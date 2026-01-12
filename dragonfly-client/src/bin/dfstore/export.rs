@@ -24,9 +24,8 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_util::fs::fallocate;
+use dragonfly_client_util::{fs::fallocate, net::best_effort_local_ip_string};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use local_ip_address::local_ip;
 use path_absolutize::*;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -507,7 +506,7 @@ impl ExportCommand {
                 need_piece_content,
                 force_hard_link: self.force_hard_link,
                 digest: self.digest.clone(),
-                remote_ip: Some(local_ip().unwrap().to_string()),
+                remote_ip: best_effort_local_ip_string(),
                 overwrite: self.overwrite,
             })
             .await

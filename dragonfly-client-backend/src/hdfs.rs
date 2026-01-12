@@ -17,6 +17,7 @@
 use dragonfly_api::common;
 use dragonfly_client_core::error::BackendError;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
+use dragonfly_client_util::net::join_url;
 use opendal::{layers::TimeoutLayer, Operator};
 use percent_encoding::percent_decode_str;
 use std::time::Duration;
@@ -62,9 +63,7 @@ impl Hdfs {
 
         // Initialize the HDFS operator.
         let mut builder = opendal::services::Webhdfs::default();
-        builder = builder
-            .root("/")
-            .endpoint(&format!("http://{}:{}", host, port));
+        builder = builder.root("/").endpoint(&join_url("http", &host, port));
 
         // If HDFS config is not None, set the config for builder.
         if let Some(config) = config {
