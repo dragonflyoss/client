@@ -32,7 +32,7 @@ fastrand.workspace = true
 dashmap.workspace = true
 lru.workspace = true
 reqwest-retry = "0.8"
-libloading = "0.8.9"
+libloading = "0.9.0"
 
 [dev-dependencies]
 tempfile.workspace = true
