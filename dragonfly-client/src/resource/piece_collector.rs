@@ -308,19 +308,17 @@ impl PieceCollector {
                     debug!("peer {} sync pieces finished", peer.id);
 
                     if join_set.is_empty() && !collected_pieces.is_empty() {
-                        let ready_numbers: Vec<u32> = collected_pieces
+                        for number in collected_pieces
                             .iter()
-                            .filter_map(|entry| {
-                                (!entry.value().parents.is_empty()).then_some(*entry.key())
-                            })
-                            .collect();
-
-                        for piece in ready_numbers.into_iter().filter_map(|number| {
-                            collected_pieces.remove(&number).map(|(_, piece)| piece)
-                        }) {
-                            collected_piece_tx.send(piece).await.inspect_err(|err| {
-                                error!("send CollectedPiece failed: {}", err);
-                            })?;
+                            .filter(|entry| !entry.value().parents.is_empty())
+                            .map(|entry| *entry.key())
+                            .collect::<Vec<u32>>()
+                        {
+                            if let Some((_, piece)) = collected_pieces.remove(&number) {
+                                collected_piece_tx.send(piece).await.inspect_err(|err| {
+                                    error!("send CollectedPiece failed: {}", err);
+                                })?;
+                            }
                         }
                     }
 
