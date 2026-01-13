@@ -385,7 +385,7 @@ pub async fn http_handler(
     let request_uri = request.uri();
     if let Some(rule) = find_matching_rule(
         config.proxy.rules.as_deref(),
-        request_uri.to_string().as_str(),
+        url::Url::parse(&request_uri.to_string()).or_err(ErrorType::ParseError)?,
     ) {
         info!(
             "proxy HTTP request via dfdaemon by rule config: {:?}",
@@ -617,9 +617,10 @@ pub async fn upgraded_handler(
     }
 
     // If find the matching rule, proxy the request via the dfdaemon.
+    let request_uri = request.uri();
     if let Some(rule) = find_matching_rule(
         config.proxy.rules.as_deref(),
-        request.uri().to_string().as_str(),
+        url::Url::parse(&request_uri.to_string()).or_err(ErrorType::ParseError)?,
     ) {
         info!(
             "proxy HTTPS request via dfdaemon by rule config: {:?}",
@@ -1271,8 +1272,16 @@ fn make_response_headers(
 
 /// find_matching_rule returns whether the dfdaemon should be used to download the task.
 /// If the dfdaemon should be used, return the matched rule.
-fn find_matching_rule(rules: Option<&[Rule]>, url: &str) -> Option<Rule> {
-    rules?.iter().find(|rule| rule.regex.is_match(url)).cloned()
+fn find_matching_rule(rules: Option<&[Rule]>, mut url: url::Url) -> Option<Rule> {
+    // Remove query params and fragment.
+    url.set_query(None);
+    url.set_fragment(None);
+
+    // Find the matching rule by the url.
+    rules?
+        .iter()
+        .find(|rule| rule.regex.is_match(url.as_str()))
+        .cloned()
 }
 
 /// make_error_response makes an error response with the given status and message.
