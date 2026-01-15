@@ -44,7 +44,7 @@ pub trait Selector: Send + Sync {
 const SEED_PEERS_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// DEFAULT_VNODES_PER_HOST is the default number of virtual nodes per host.
-const DEFAULT_VNODES_PER_HOST: usize = 3;
+const DEFAULT_VNODES_PER_HOST: usize = 256;
 
 /// SeedPeers holds the data of seed peers.
 struct SeedPeers {
