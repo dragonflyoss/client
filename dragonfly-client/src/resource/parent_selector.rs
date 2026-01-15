@@ -209,7 +209,7 @@ impl ParentSelector {
             let parent_host_id = parent_host.id.clone();
 
             // Seed a baseline weight so selection works even before the first sync_host response arrives.
-            let baseline_weight = parent_host
+            let base_weight = parent_host
                 .network
                 .as_ref()
                 .map(Self::calculate_weight_from_network)
@@ -222,7 +222,7 @@ impl ParentSelector {
                 });
             self.weights
                 .entry(parent_host_id.clone())
-                .or_insert(baseline_weight);
+                .or_insert(base_weight);
 
             match self.connections.entry(parent_host_id.clone()) {
                 dashmap::mapref::entry::Entry::Occupied(entry) => {
