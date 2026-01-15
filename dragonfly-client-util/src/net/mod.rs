@@ -15,6 +15,7 @@
  */
 
 use bytesize::ByteSize;
+use local_ip_address::{local_ip, local_ipv6};
 use pnet::datalink::{self, NetworkInterface};
 use std::cmp::min;
 use std::net::IpAddr;
@@ -26,6 +27,51 @@ use tracing::{info, warn};
 
 #[cfg(target_os = "linux")]
 use std::{io, mem, os::unix::io::RawFd};
+
+/// join_host_port formats a host and port into `host:port`, adding brackets for IPv6 literals.
+///
+/// Examples:
+/// - ("127.0.0.1", 80) -> "127.0.0.1:80"
+/// - ("::1", 80) -> "[::1]:80"
+pub fn join_host_port(host: &str, port: u16) -> String {
+    if host.is_empty() {
+        return format!(":{}", port);
+    }
+
+    // If already bracketed, don't double-bracket.
+    if host.starts_with('[') && host.ends_with(']') {
+        return format!("{}:{}", host, port);
+    }
+
+    if host.contains(':') {
+        format!("[{}]:{}", host, port)
+    } else {
+        format!("{}:{}", host, port)
+    }
+}
+
+/// join_url formats a scheme + host + port into a URL, adding brackets for IPv6 literals.
+///
+/// Examples:
+/// - ("http", "127.0.0.1", 80) -> "http://127.0.0.1:80"
+/// - ("http", "::1", 80) -> "http://[::1]:80"
+pub fn join_url(scheme: &str, host: &str, port: u16) -> String {
+    format!("{}://{}", scheme, join_host_port(host, port))
+}
+
+/// best_effort_local_ip_string returns a local IP address string if possible.
+///
+/// - Prefers IPv4 (current behaviour of existing code paths).
+/// - Falls back to IPv6 when IPv4 is unavailable (e.g. in IPv6-only environments).
+/// - Returns None if neither can be determined.
+///
+/// This is intentionally **non-panicking** to avoid `panic=abort` crashes in CLI tools.
+pub fn best_effort_local_ip_string() -> Option<String> {
+    local_ip()
+        .ok()
+        .map(|ip| ip.to_string())
+        .or_else(|| local_ipv6().ok().map(|ip| ip.to_string()))
+}
 
 /// Interface represents a network interface with its information.
 #[derive(Debug, Clone, Default)]
@@ -277,5 +323,60 @@ mod tests {
             let result = Interface::bytes_to_bits(input);
             assert_eq!(result, expected);
         }
+    }
+
+    #[test]
+    fn test_join_host_port_ipv4() {
+        assert_eq!(join_host_port("127.0.0.1", 80), "127.0.0.1:80");
+        assert_eq!(join_host_port("192.168.1.1", 8080), "192.168.1.1:8080");
+    }
+
+    #[test]
+    fn test_join_host_port_ipv6() {
+        assert_eq!(join_host_port("::1", 80), "[::1]:80");
+        assert_eq!(join_host_port("2001:db8::1", 8080), "[2001:db8::1]:8080");
+        assert_eq!(join_host_port("fe80::1%eth0", 443), "[fe80::1%eth0]:443");
+    }
+
+    #[test]
+    fn test_join_host_port_already_bracketed() {
+        assert_eq!(join_host_port("[::1]", 80), "[::1]:80");
+        assert_eq!(join_host_port("[2001:db8::1]", 8080), "[2001:db8::1]:8080");
+    }
+
+    #[test]
+    fn test_join_host_port_empty() {
+        assert_eq!(join_host_port("", 80), ":80");
+    }
+
+    #[test]
+    fn test_join_host_port_hostname() {
+        assert_eq!(join_host_port("example.com", 80), "example.com:80");
+        assert_eq!(join_host_port("localhost", 8080), "localhost:8080");
+    }
+
+    #[test]
+    fn test_join_url_ipv4() {
+        assert_eq!(join_url("http", "127.0.0.1", 80), "http://127.0.0.1:80");
+        assert_eq!(
+            join_url("https", "192.168.1.1", 443),
+            "https://192.168.1.1:443"
+        );
+    }
+
+    #[test]
+    fn test_join_url_ipv6() {
+        assert_eq!(join_url("http", "::1", 80), "http://[::1]:80");
+        assert_eq!(
+            join_url("https", "2001:db8::1", 443),
+            "https://[2001:db8::1]:443"
+        );
+    }
+
+    #[test]
+    fn test_best_effort_local_ip_string() {
+        // This test just verifies the function runs without panicking.
+        // The actual result depends on system configuration.
+        let _ = best_effort_local_ip_string();
     }
 }
