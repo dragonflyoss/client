@@ -22,7 +22,8 @@ use dragonfly_client_core::{
     Error as ClientError, Result as ClientResult,
 };
 use dragonfly_client_metric::{
-    collect_upload_piece_failure_metrics, collect_upload_piece_started_metrics,
+    collect_upload_piece_failure_metrics, collect_upload_piece_finished_metrics,
+    collect_upload_piece_started_metrics, collect_upload_piece_traffic_metrics,
 };
 use dragonfly_client_util::{
     id_generator::IDGenerator, shutdown, tls::generate_simple_self_signed_certs,
@@ -227,6 +228,7 @@ impl QUICServerHandler {
 
                 match self.handle_piece(piece_id.as_str(), task_id).await {
                     Ok((piece_content, mut content_reader)) => {
+                        let piece_length = piece_content.metadata().length;
                         let piece_content_bytes: Bytes = piece_content.into();
 
                         let header = Header::new_piece_content(piece_content_bytes.len() as u32);
@@ -237,12 +239,36 @@ impl QUICServerHandler {
                         response.extend_from_slice(&header_bytes);
                         response.extend_from_slice(&piece_content_bytes);
 
-                        self.write_response(response.freeze(), &mut writer).await?;
-                        self.write_stream(&mut content_reader, &mut writer).await?;
+                        self.write_response(response.freeze(), &mut writer)
+                            .await
+                            .inspect_err(|err| {
+                                error!("failed to send piece content response: {}", err);
+
+                                // Collect upload piece failure metrics.
+                                collect_upload_piece_failure_metrics();
+                            })?;
+
+                        self.write_stream(&mut content_reader, &mut writer)
+                            .await
+                            .inspect_err(|err| {
+                                error!("failed to send piece content stream: {}", err);
+
+                                // Collect upload piece failure metrics.
+                                collect_upload_piece_failure_metrics();
+                            })?;
 
                         if let Err(err) = writer.finish() {
                             error!("failed to finish stream: {}", err);
+
+                            // Collect upload piece failure metrics.
+                            collect_upload_piece_failure_metrics();
                         }
+
+                        // Collect upload piece finished metrics.
+                        collect_upload_piece_finished_metrics();
+
+                        // Collect upload piece traffic metrics.
+                        collect_upload_piece_traffic_metrics(piece_length)
                     }
                     Err(err) => {
                         // Collect upload piece failure metrics.
@@ -291,6 +317,7 @@ impl QUICServerHandler {
                     .await
                 {
                     Ok((persistent_piece_content, mut content_reader)) => {
+                        let persistent_piece_length = persistent_piece_content.metadata().length;
                         let persistent_piece_content_bytes: Bytes = persistent_piece_content.into();
 
                         let header = Header::new_persistent_piece_content(
@@ -304,12 +331,36 @@ impl QUICServerHandler {
                         response.extend_from_slice(&header_bytes);
                         response.extend_from_slice(&persistent_piece_content_bytes);
 
-                        self.write_response(response.freeze(), &mut writer).await?;
-                        self.write_stream(&mut content_reader, &mut writer).await?;
+                        self.write_response(response.freeze(), &mut writer)
+                            .await
+                            .inspect_err(|err| {
+                                error!("failed to send persistent piece content response: {}", err);
+
+                                // Collect upload piece failure metrics.
+                                collect_upload_piece_failure_metrics();
+                            })?;
+
+                        self.write_stream(&mut content_reader, &mut writer)
+                            .await
+                            .inspect_err(|err| {
+                                error!("failed to send persistent piece content stream: {}", err);
+
+                                // Collect upload piece failure metrics.
+                                collect_upload_piece_failure_metrics();
+                            })?;
 
                         if let Err(err) = writer.finish() {
                             error!("failed to finish stream: {}", err);
+
+                            // Collect upload piece failure metrics.
+                            collect_upload_piece_failure_metrics();
                         }
+
+                        // Collect upload piece finished metrics.
+                        collect_upload_piece_finished_metrics();
+
+                        // Collect upload piece traffic metrics.
+                        collect_upload_piece_traffic_metrics(persistent_piece_length)
                     }
                     Err(err) => {
                         // Collect upload piece failure metrics.
@@ -358,6 +409,8 @@ impl QUICServerHandler {
                     .await
                 {
                     Ok((persistent_cache_piece_content, mut content_reader)) => {
+                        let persistent_cache_piece_length =
+                            persistent_cache_piece_content.metadata().length;
                         let persistent_cache_piece_content_bytes: Bytes =
                             persistent_cache_piece_content.into();
 
@@ -372,12 +425,42 @@ impl QUICServerHandler {
                         response.extend_from_slice(&header_bytes);
                         response.extend_from_slice(&persistent_cache_piece_content_bytes);
 
-                        self.write_response(response.freeze(), &mut writer).await?;
-                        self.write_stream(&mut content_reader, &mut writer).await?;
+                        self.write_response(response.freeze(), &mut writer)
+                            .await
+                            .inspect_err(|err| {
+                                error!(
+                                    "failed to send persistent cache piece content response: {}",
+                                    err
+                                );
+
+                                // Collect upload piece failure metrics.
+                                collect_upload_piece_failure_metrics();
+                            })?;
+
+                        self.write_stream(&mut content_reader, &mut writer)
+                            .await
+                            .inspect_err(|err| {
+                                error!(
+                                    "failed to send persistent cache piece content stream: {}",
+                                    err
+                                );
+
+                                // Collect upload piece failure metrics.
+                                collect_upload_piece_failure_metrics();
+                            })?;
 
                         if let Err(err) = writer.finish() {
                             error!("failed to finish stream: {}", err);
+
+                            // Collect upload piece failure metrics.
+                            collect_upload_piece_failure_metrics();
                         }
+
+                        // Collect upload piece finished metrics.
+                        collect_upload_piece_finished_metrics();
+
+                        // Collect upload piece traffic metrics.
+                        collect_upload_piece_traffic_metrics(persistent_cache_piece_length)
                     }
                     Err(err) => {
                         // Collect upload piece failure metrics.

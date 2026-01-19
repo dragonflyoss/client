@@ -29,9 +29,6 @@ use uuid::Uuid;
 /// SEED_PEER_SUFFIX is the suffix of the seed peer.
 const SEED_PEER_SUFFIX: &str = "seed";
 
-/// PERSISTENT_CACHE_TASK_SUFFIX is the suffix of the persistent cache task.
-const PERSISTENT_CACHE_TASK_SUFFIX: &str = "persistent-cache-task";
-
 /// TaskIDParameter is the parameter of the task id.
 pub enum TaskIDParameter {
     /// Content uses the content to generate the task id.
@@ -268,15 +265,6 @@ impl IDGenerator {
 
         format!("{}-{}-{}", self.ip, self.hostname, Uuid::new_v4())
     }
-
-    /// task_type generates the task type by the task id.
-    pub fn task_type(&self, id: &str) -> TaskType {
-        if id.ends_with(PERSISTENT_CACHE_TASK_SUFFIX) {
-            return TaskType::PersistentCache;
-        }
-
-        TaskType::Standard
-    }
 }
 
 #[cfg(test)]
@@ -492,22 +480,6 @@ mod tests {
             if is_seed_peer {
                 assert!(peer_id.ends_with("-seed"));
             }
-        }
-    }
-
-    #[test]
-    fn should_generate_task_type() {
-        let test_cases = vec![
-            ("some-task-id", TaskType::Standard),
-            (
-                "some-task-id-persistent-cache-task",
-                TaskType::PersistentCache,
-            ),
-        ];
-
-        let generator = IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false);
-        for (id, expected_type) in test_cases {
-            assert_eq!(generator.task_type(id), expected_type);
         }
     }
 }
