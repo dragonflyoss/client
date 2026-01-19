@@ -30,6 +30,10 @@ pub enum DFError {
     #[error(transparent)]
     IO(#[from] std::io::Error),
 
+    /// VarError is the error for environment variable.
+    #[error(transparent)]
+    VarError(#[from] std::env::VarError),
+
     /// MpscSend is the error for send.
     #[error("mpsc send: {0}")]
     MpscSend(String),
