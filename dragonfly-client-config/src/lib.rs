@@ -59,11 +59,19 @@ pub const GIT_COMMIT_DATE: &str = {
 };
 
 lazy_static! {
-    /// INSTANCE_NAME is the name of the instance, formatted as pod_namespace-pod_name.
-    pub static ref INSTANCE_NAME: dragonfly_client_core::Result<String> = {
-        let namespace = std::env::var("POD_NAMESPACE")?;
-        let name = std::env::var("POD_NAME")?;
-        Ok(format!("{}-{}", namespace, name))
+    /// INSTANCE_NAME is the name of the instance, formatted as {POD_NAMESPACE}-{POD_NAME}.
+    pub static ref INSTANCE_NAME: String = {
+        if let (Some(pod_namespace), Some(pod_name)) = (
+            option_env!("POD_NAMESPACE"),
+            option_env!("POD_NAME")
+        ) {
+            format!("{}-{}", pod_namespace, pod_name)
+        } else {
+            hostname::get()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
+        }
     };
 }
 
