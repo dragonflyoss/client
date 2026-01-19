@@ -7,7 +7,9 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: Default
+      labels: [oracle-vm-32cpu-128gb-x86-64]
     timeout-minutes: 480
     strategy:
       matrix:
@@ -61,7 +63,7 @@ jobs:
         uses: taiki-e/install-action@daa3c1f1f9a9d46f686d9fc2f65773d0c293688b
         with:
           tool: cargo-generate-rpm
-          
+
       - name: Install dependencies
         run: |
           sudo apt-get update -y
@@ -109,8 +111,8 @@ jobs:
           name: release-${{ matrix.target }}
           path: |
             ${{ env.CLIENT_RPM_ASSET }}
-            ${{ env.CLIENT_DEB_ASSET }}            
-            ${{ env.CLIENT_TAR_ASSET }}          
+            ${{ env.CLIENT_DEB_ASSET }}
+            ${{ env.CLIENT_TAR_ASSET }}
 
   release-github:
     runs-on: ubuntu-latest
@@ -148,7 +150,7 @@ jobs:
           large-packages: true
           docker-images: true
           swap-storage: true
-            
+
       - name: Checkout
         uses: actions/checkout@v6
 

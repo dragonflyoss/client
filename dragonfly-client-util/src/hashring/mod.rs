@@ -17,41 +17,40 @@
 use hashring::HashRing;
 use std::fmt;
 use std::hash::Hash;
-use std::net::SocketAddr;
 
 /// A virtual node (vnode) on the consistent hash ring.
-/// Each physical node (SocketAddr) is represented by multiple vnodes to better
+/// Each physical node (String) is represented by multiple vnodes to better
 /// balance key distribution across the ring.
-#[derive(Debug, Copy, Clone, Hash, PartialEq)]
+#[derive(Debug, Clone, Hash, PartialEq)]
 pub struct VNode {
     /// The replica index of this vnode for its physical node (0..replica_count-1).
     id: usize,
 
-    /// The physical node address this vnode represents.
-    addr: SocketAddr,
+    /// The physical node name this vnode represents.
+    name: String,
 }
 
 /// VNode implements virtual node for consistent hashing.
 impl VNode {
-    /// Creates a new virtual node with the given replica id and physical address.
-    fn new(id: usize, addr: SocketAddr) -> Self {
-        VNode { id, addr }
+    /// Creates a new virtual node with the given replica id and physical name.
+    fn new(id: usize, name: String) -> Self {
+        VNode { id, name }
     }
 }
 
 /// VNode implements Display trait to format.
 impl fmt::Display for VNode {
-    /// Formats the virtual node as "address|id" as the key for the hash ring.
+    /// Formats the virtual node as "name|id" as the key for the hash ring.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}|{}", self.addr, self.id)
+        write!(f, "{}|{}", self.name, self.id)
     }
 }
 
 /// VNode implements methods for hash ring operations.
 impl VNode {
-    /// Returns a reference to the physical node address associated with this vnode.
-    pub fn addr(&self) -> &SocketAddr {
-        &self.addr
+    /// Returns a reference to the physical node name associated with this vnode.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -77,9 +76,9 @@ impl VNodeHashRing {
 
     /// Add `node` to the hash ring, it will add `virtual_nodes_count` virtual nodes
     /// to the ring for the given `node`.
-    pub fn add(&mut self, addr: SocketAddr) {
+    pub fn add(&mut self, name: String) {
         for id in 0..self.replica_count {
-            let vnode = VNode::new(id, addr);
+            let vnode = VNode::new(id, name.clone());
             self.ring.add(vnode);
         }
     }
@@ -111,28 +110,18 @@ impl VNodeHashRing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
     fn test_vnode_new() {
-        let vnode = VNode::new(
-            1,
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
-        );
+        let vnode = VNode::new(1, "default-pod-1".to_string());
         assert_eq!(vnode.id, 1);
-        assert_eq!(
-            vnode.addr,
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080)
-        );
+        assert_eq!(vnode.name, "default-pod-1");
     }
 
     #[test]
     fn test_vnode_to_string() {
-        let vnode = VNode::new(
-            1,
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080),
-        );
-        assert_eq!(vnode.to_string(), "127.0.0.1:8080|1");
+        let vnode = VNode::new(1, "default-pod-1".to_string());
+        assert_eq!(vnode.to_string(), "default-pod-1|1");
     }
 
     #[test]
@@ -146,15 +135,9 @@ mod tests {
     #[test]
     fn test_add_and_len() {
         let mut ring = VNodeHashRing::new(2);
-        ring.add(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            8080,
-        ));
+        ring.add("default-pod-1".to_string());
         assert_eq!(ring.len(), 2); // 1 node * 2 virtual nodes
-        ring.add(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            8081,
-        ));
+        ring.add("default-pod-2".to_string());
         assert_eq!(ring.len(), 4); // 2 nodes * 2 virtual nodes
         assert!(!ring.is_empty());
     }
@@ -169,20 +152,14 @@ mod tests {
     #[test]
     fn test_get_with_nodes() {
         let mut ring = VNodeHashRing::new(2);
-        ring.add(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            8080,
-        ));
-        ring.add(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            8081,
-        ));
+        ring.add("default-pod-1".to_string());
+        ring.add("default-pod-2".to_string());
 
         let key = "test_key";
         let node = ring.get(&key);
         assert!(node.is_some());
         let node = node.unwrap();
-        assert!(node.addr.port() == 8080 || node.addr.port() == 8081);
+        assert!(node.name() == "default-pod-1" || node.name() == "default-pod-2");
         assert!(node.id == 0 || node.id == 1);
     }
 
@@ -196,20 +173,14 @@ mod tests {
     #[test]
     fn test_get_with_replicas() {
         let mut ring = VNodeHashRing::new(2);
-        ring.add(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            8080,
-        ));
-        ring.add(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            8081,
-        ));
+        ring.add("default-pod-1".to_string());
+        ring.add("default-pod-2".to_string());
 
         let key = "test_key";
         let replicas = ring.get_with_replicas(&key, 3).unwrap();
         assert_eq!(replicas.len(), 4);
         assert!(replicas.iter().all(|vnode| {
-            (vnode.addr.port() == 8080 || vnode.addr.port() == 8081)
+            (vnode.name() == "default-pod-1" || vnode.name() == "default-pod-2")
                 && (vnode.id == 0 || vnode.id == 1)
         }));
     }
@@ -217,14 +188,8 @@ mod tests {
     #[test]
     fn test_get_with_replicas_exact_size() {
         let mut ring = VNodeHashRing::new(2);
-        ring.add(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            8080,
-        ));
-        ring.add(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            8081,
-        ));
+        ring.add("default-pod-1".to_string());
+        ring.add("default-pod-2".to_string());
 
         let key = "test_key";
         let replicas = ring.get_with_replicas(&key, 4).unwrap();
@@ -234,20 +199,14 @@ mod tests {
     #[test]
     fn test_get_with_replicas_smaller_size() {
         let mut ring = VNodeHashRing::new(2);
-        ring.add(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            8080,
-        ));
-        ring.add(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            8081,
-        ));
+        ring.add("default-pod-1".to_string());
+        ring.add("default-pod-2".to_string());
 
         let key = "test_key";
         let replicas = ring.get_with_replicas(&key, 2).unwrap();
         assert_eq!(replicas.len(), 3);
         assert!(replicas.iter().all(|vnode| {
-            (vnode.addr.port() == 8080 || vnode.addr.port() == 8081)
+            (vnode.name() == "default-pod-1" || vnode.name() == "default-pod-2")
                 && (vnode.id == 0 || vnode.id == 1)
         }));
     }
