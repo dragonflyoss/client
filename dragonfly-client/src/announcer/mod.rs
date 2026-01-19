@@ -19,9 +19,9 @@ use dragonfly_api::common::v2::{Build, Cpu, Disk, Host, Memory, Network};
 use dragonfly_api::scheduler::v2::{AnnounceHostRequest, DeleteHostRequest};
 use dragonfly_client_config::{
     dfdaemon::{Config, HostType},
-    CARGO_PKG_RUSTC_VERSION, CARGO_PKG_VERSION, GIT_COMMIT_SHORT_HASH,
+    CARGO_PKG_RUSTC_VERSION, CARGO_PKG_VERSION, GIT_COMMIT_SHORT_HASH, INSTANCE_NAME,
 };
-use dragonfly_client_core::error::{ErrorType, OrErr};
+use dragonfly_client_core::error::{ErrorType, ExternalError, OrErr};
 use dragonfly_client_core::Result;
 use dragonfly_client_util::{net::Interface, shutdown};
 use std::env;
@@ -236,6 +236,13 @@ impl SchedulerAnnouncer {
             scheduler_cluster_id: self.config.host.scheduler_cluster_id.unwrap_or_default(),
             disable_shared: self.config.upload.disable_shared,
             proxy_port: self.config.proxy.server.port as i32,
+            name: INSTANCE_NAME
+                .as_ref()
+                .map_err(|e| {
+                    ExternalError::new(ErrorType::ConfigError)
+                        .with_context(format!("failed to get instance name: {}", e))
+                })?
+                .clone(),
         };
 
         Ok(AnnounceHostRequest {

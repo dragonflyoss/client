@@ -15,6 +15,7 @@
  */
 
 use clap::{Arg, Command};
+use lazy_static::lazy_static;
 use std::path::PathBuf;
 
 pub mod dfcache;
@@ -38,7 +39,7 @@ pub const CARGO_PKG_RUSTC_VERSION: &str = env!("CARGO_PKG_RUST_VERSION");
 /// BUILD_PLATFORM is the platform of the build.
 pub const BUILD_PLATFORM: &str = env!("BUILD_PLATFORM");
 
-// BUILD_TIMESTAMP is the timestamp of the build.
+/// BUILD_TIMESTAMP is the timestamp of the build.
 pub const BUILD_TIMESTAMP: &str = env!("BUILD_TIMESTAMP");
 
 /// GIT_COMMIT_SHORT_HASH is the short git commit hash of the package.
@@ -56,6 +57,15 @@ pub const GIT_COMMIT_DATE: &str = {
         None => "unknown",
     }
 };
+
+lazy_static! {
+    /// INSTANCE_NAME is the name of the instance, formatted as pod_namespace-pod_name.
+    pub static ref INSTANCE_NAME: dragonfly_client_core::Result<String> = {
+        let namespace = std::env::var("POD_NAMESPACE")?;
+        let name = std::env::var("POD_NAME")?;
+        Ok(format!("{}-{}", namespace, name))
+    };
+}
 
 /// default_root_dir is the default root directory for client.
 pub fn default_root_dir() -> PathBuf {
