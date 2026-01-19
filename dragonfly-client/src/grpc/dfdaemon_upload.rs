@@ -17,18 +17,16 @@
 use crate::resource::{persistent_cache_task, persistent_task, task};
 use chrono::DateTime;
 use dragonfly_api::common::v2::{
-    CacheTask, Host, Network, PersistentCacheTask, PersistentTask, Piece, Priority, Task, TaskType,
+    CacheTask, Host, Network, PersistentCacheTask, PersistentTask, Priority, Task, TaskType,
 };
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient,
     dfdaemon_upload_server::{DfdaemonUpload, DfdaemonUploadServer as DfdaemonUploadGRPCServer},
     DeleteCacheTaskRequest, DeletePersistentCacheTaskRequest, DeletePersistentTaskRequest,
     DeleteTaskRequest, DownloadCachePieceRequest, DownloadCachePieceResponse,
-    DownloadCacheTaskRequest, DownloadCacheTaskResponse, DownloadPersistentCachePieceRequest,
-    DownloadPersistentCachePieceResponse, DownloadPersistentCacheTaskRequest,
-    DownloadPersistentCacheTaskResponse, DownloadPersistentPieceRequest,
-    DownloadPersistentPieceResponse, DownloadPersistentTaskRequest, DownloadPersistentTaskResponse,
-    DownloadPieceRequest, DownloadPieceResponse, DownloadTaskRequest, DownloadTaskResponse, Entry,
+    DownloadCacheTaskRequest, DownloadCacheTaskResponse, DownloadPersistentCacheTaskRequest,
+    DownloadPersistentCacheTaskResponse, DownloadPersistentTaskRequest,
+    DownloadPersistentTaskResponse, DownloadTaskRequest, DownloadTaskResponse, Entry,
     ExchangeIbVerbsQueuePairEndpointRequest, ExchangeIbVerbsQueuePairEndpointResponse,
     ListTaskEntriesRequest, ListTaskEntriesResponse, StatCacheTaskRequest, StatLocalTaskRequest,
     StatLocalTaskResponse, StatPersistentCacheTaskRequest, StatPersistentTaskRequest,
@@ -52,8 +50,7 @@ use dragonfly_client_metric::{
     collect_list_task_entries_started_metrics, collect_stat_local_task_failure_metrics,
     collect_stat_local_task_started_metrics, collect_stat_task_failure_metrics,
     collect_stat_task_started_metrics, collect_update_task_failure_metrics,
-    collect_update_task_started_metrics, collect_upload_piece_failure_metrics,
-    collect_upload_piece_finished_metrics, collect_upload_piece_started_metrics,
+    collect_update_task_started_metrics,
 };
 use dragonfly_client_util::{
     digest::{is_blob_url, verify_file_digest, Digest},
@@ -67,7 +64,6 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::Barrier;
@@ -1083,117 +1079,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// download_piece provides the piece content for parent.
-    #[instrument(
-        skip_all,
-        fields(host_id, remote_host_id, task_id, piece_id, piece_length)
-    )]
-    async fn download_piece(
-        &self,
-        request: Request<DownloadPieceRequest>,
-    ) -> Result<Response<DownloadPieceResponse>, Status> {
-        // If the parent context is set, use it as the parent context for the span.
-        if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
-        };
-
-        // Clone the request.
-        let request = request.into_inner();
-
-        // Generate the host id.
-        let host_id = self.task.id_generator.host_id();
-
-        // Get the remote host id from the request.
-        let remote_host_id = request.host_id;
-
-        // Get the task id from the request.
-        let task_id = request.task_id;
-
-        // Get the interested piece number from the request.
-        let piece_number = request.piece_number;
-
-        // Generate the piece id.
-        let piece_id = self.task.piece.id(task_id.as_str(), piece_number);
-
-        Span::current().record("host_id", host_id.as_str());
-        Span::current().record("remote_host_id", remote_host_id.as_str());
-        Span::current().record("task_id", task_id.as_str());
-        Span::current().record("piece_id", piece_id.as_str());
-
-        // Get the piece metadata from the local storage.
-        let piece = self
-            .task
-            .piece
-            .get(piece_id.as_str())
-            .map_err(|err| {
-                error!("upload piece metadata from local storage: {}", err);
-                Status::internal(err.to_string())
-            })?
-            .ok_or_else(|| {
-                error!("upload piece metadata not found");
-                Status::not_found("piece metadata not found")
-            })?;
-
-        Span::current().record("piece_length", piece.length);
-
-        // Collect upload piece started metrics.
-        collect_upload_piece_started_metrics();
-        info!("start upload piece content");
-
-        // Get the piece content from the local storage.
-        let mut reader = self
-            .task
-            .piece
-            .upload_from_local_into_async_read(
-                piece_id.as_str(),
-                task_id.as_str(),
-                piece.length,
-                None,
-                false,
-            )
-            .await
-            .map_err(|err| {
-                // Collect upload piece failure metrics.
-                collect_upload_piece_failure_metrics();
-
-                error!("upload piece content from local storage: {}", err);
-                Status::internal(err.to_string())
-            })?;
-
-        // Read the content of the piece.
-        let mut content = vec![0; piece.length as usize];
-        reader.read_exact(&mut content).await.map_err(|err| {
-            // Collect upload piece failure metrics.
-            collect_upload_piece_failure_metrics();
-
-            error!("upload piece content failed: {}", err);
-            Status::internal(err.to_string())
-        })?;
-        drop(reader);
-
-        // Collect upload piece finished metrics.
-        collect_upload_piece_finished_metrics();
-        info!("finished upload piece content");
-
-        // Return the piece.
-        Ok(Response::new(DownloadPieceResponse {
-            piece: Some(Piece {
-                number: piece.number,
-                parent_id: piece.parent_id.clone(),
-                offset: piece.offset,
-                length: piece.length,
-                digest: piece.digest.clone(),
-                content: Some(content),
-                traffic_type: None,
-                cost: None,
-                created_at: None,
-            }),
-            // Calculate the digest of the piece metadata, including the number, offset, length and
-            // content digest. The digest is used to verify the integrity of the piece metadata.
-            digest: Some(piece.calculate_digest()),
-        }))
-    }
-
     /// SyncHostStream is the stream of the sync host response.
     type SyncHostStream = ReceiverStream<Result<Host, Status>>;
 
@@ -1951,118 +1836,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// download_persistent_piece provides the persistent piece content for parent.
-    #[instrument(skip_all, fields(host_id, remote_host_id, task_id, piece_id))]
-    async fn download_persistent_piece(
-        &self,
-        request: Request<DownloadPersistentPieceRequest>,
-    ) -> Result<Response<DownloadPersistentPieceResponse>, Status> {
-        // If the parent context is set, use it as the parent context for the span.
-        if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
-        };
-
-        // Clone the request.
-        let request = request.into_inner();
-
-        // Generate the host id.
-        let host_id = self.task.id_generator.host_id();
-
-        // Get the remote host id from the request.
-        let remote_host_id = request.host_id;
-
-        // Get the task id from the request.
-        let task_id = request.task_id;
-
-        // Get the interested piece number from the request.
-        let piece_number = request.piece_number;
-
-        // Generate the piece id.
-        let piece_id = self.task.piece.id(task_id.as_str(), piece_number);
-
-        // Span record the host id, task id and piece number.
-        Span::current().record("host_id", host_id.as_str());
-        Span::current().record("remote_host_id", remote_host_id.as_str());
-        Span::current().record("task_id", task_id.as_str());
-        Span::current().record("piece_id", piece_id.as_str());
-
-        // Get the piece metadata from the local storage.
-        let piece = self
-            .task
-            .piece
-            .get_persistent(piece_id.as_str())
-            .map_err(|err| {
-                error!(
-                    "upload persistent piece metadata from local storage: {}",
-                    err
-                );
-                Status::internal(err.to_string())
-            })?
-            .ok_or_else(|| {
-                error!("upload persistent piece metadata not found");
-                Status::not_found("persistent piece metadata not found")
-            })?;
-
-        // Collect upload piece started metrics.
-        collect_upload_piece_started_metrics();
-        info!("start upload persistent piece content");
-
-        // Get the piece content from the local storage.
-        let mut reader = self
-            .task
-            .piece
-            .upload_persistent_from_local_into_async_read(
-                piece_id.as_str(),
-                task_id.as_str(),
-                piece.length,
-                None,
-            )
-            .await
-            .map_err(|err| {
-                // Collect upload piece failure metrics.
-                collect_upload_piece_failure_metrics();
-
-                error!(
-                    "upload persistent piece content from local storage: {}",
-                    err
-                );
-                Status::internal(err.to_string())
-            })?;
-
-        // Read the content of the piece.
-        let mut content = vec![0; piece.length as usize];
-        reader.read_exact(&mut content).await.map_err(|err| {
-            // Collect upload piece failure metrics.
-            collect_upload_piece_failure_metrics();
-
-            error!("upload persistent piece content failed: {}", err);
-            Status::internal(err.to_string())
-        })?;
-        drop(reader);
-
-        // Collect upload piece finished metrics.
-        collect_upload_piece_finished_metrics();
-        info!("finished persistent upload piece content");
-
-        // Return the piece.
-        Ok(Response::new(DownloadPersistentPieceResponse {
-            piece: Some(Piece {
-                number: piece.number,
-                parent_id: piece.parent_id.clone(),
-                offset: piece.offset,
-                length: piece.length,
-                digest: piece.digest.clone(),
-                content: Some(content),
-                traffic_type: None,
-                cost: None,
-                created_at: None,
-            }),
-            // Calculate the digest of the piece metadata, including the number, offset, length and
-            // content digest. The digest is used to verify the integrity of the piece metadata.
-            digest: Some(piece.calculate_digest()),
-        }))
-    }
-
     /// DownloadPersistentCacheTaskStream is the stream of the download persistent cache task response.
     type DownloadPersistentCacheTaskStream =
         ReceiverStream<Result<DownloadPersistentCacheTaskResponse, Status>>;
@@ -2625,118 +2398,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// download_persistent_cache_piece provides the persistent cache piece content for parent.
-    #[instrument(skip_all, fields(host_id, remote_host_id, task_id, piece_id))]
-    async fn download_persistent_cache_piece(
-        &self,
-        request: Request<DownloadPersistentCachePieceRequest>,
-    ) -> Result<Response<DownloadPersistentCachePieceResponse>, Status> {
-        // If the parent context is set, use it as the parent context for the span.
-        if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
-        };
-
-        // Clone the request.
-        let request = request.into_inner();
-
-        // Generate the host id.
-        let host_id = self.task.id_generator.host_id();
-
-        // Get the remote host id from the request.
-        let remote_host_id = request.host_id;
-
-        // Get the task id from the request.
-        let task_id = request.task_id;
-
-        // Get the interested piece number from the request.
-        let piece_number = request.piece_number;
-
-        // Generate the piece id.
-        let piece_id = self.task.piece.id(task_id.as_str(), piece_number);
-
-        // Span record the host id, task id and piece number.
-        Span::current().record("host_id", host_id.as_str());
-        Span::current().record("remote_host_id", remote_host_id.as_str());
-        Span::current().record("task_id", task_id.as_str());
-        Span::current().record("piece_id", piece_id.as_str());
-
-        // Get the piece metadata from the local storage.
-        let piece = self
-            .task
-            .piece
-            .get_persistent_cache(piece_id.as_str())
-            .map_err(|err| {
-                error!(
-                    "upload persistent cache piece metadata from local storage: {}",
-                    err
-                );
-                Status::internal(err.to_string())
-            })?
-            .ok_or_else(|| {
-                error!("upload persistent cache piece metadata not found");
-                Status::not_found("persistent cache piece metadata not found")
-            })?;
-
-        // Collect upload piece started metrics.
-        collect_upload_piece_started_metrics();
-        info!("start upload persistent cache piece content");
-
-        // Get the piece content from the local storage.
-        let mut reader = self
-            .task
-            .piece
-            .upload_persistent_cache_from_local_into_async_read(
-                piece_id.as_str(),
-                task_id.as_str(),
-                piece.length,
-                None,
-            )
-            .await
-            .map_err(|err| {
-                // Collect upload piece failure metrics.
-                collect_upload_piece_failure_metrics();
-
-                error!(
-                    "upload persistent cache piece content from local storage: {}",
-                    err
-                );
-                Status::internal(err.to_string())
-            })?;
-
-        // Read the content of the piece.
-        let mut content = vec![0; piece.length as usize];
-        reader.read_exact(&mut content).await.map_err(|err| {
-            // Collect upload piece failure metrics.
-            collect_upload_piece_failure_metrics();
-
-            error!("upload persistent cache piece content failed: {}", err);
-            Status::internal(err.to_string())
-        })?;
-        drop(reader);
-
-        // Collect upload piece finished metrics.
-        collect_upload_piece_finished_metrics();
-        info!("finished persistent cache upload piece content");
-
-        // Return the piece.
-        Ok(Response::new(DownloadPersistentCachePieceResponse {
-            piece: Some(Piece {
-                number: piece.number,
-                parent_id: piece.parent_id.clone(),
-                offset: piece.offset,
-                length: piece.length,
-                digest: piece.digest.clone(),
-                content: Some(content),
-                traffic_type: None,
-                cost: None,
-                created_at: None,
-            }),
-            // Calculate the digest of the piece metadata, including the number, offset, length and
-            // content digest. The digest is used to verify the integrity of the piece metadata.
-            digest: Some(piece.calculate_digest()),
-        }))
-    }
-
     // ExchangeIbVerbsQueuePairEndpoint exchanges the ib verbs queue pair endpoint.
     #[instrument(skip_all, fields(num, lid, gid))]
     async fn exchange_ib_verbs_queue_pair_endpoint(
@@ -2942,20 +2603,6 @@ impl DfdaemonUploadClient {
         Ok(response)
     }
 
-    /// download_piece provides the piece content for parent.
-    #[instrument(skip_all)]
-    pub async fn download_piece(
-        &self,
-        request: DownloadPieceRequest,
-        timeout: Duration,
-    ) -> ClientResult<DownloadPieceResponse> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(timeout);
-
-        let response = self.client.clone().download_piece(request).await?;
-        Ok(response.into_inner())
-    }
-
     /// sync_host provides the host info for parent.
     #[instrument(skip_all)]
     pub async fn sync_host(
@@ -3028,24 +2675,6 @@ impl DfdaemonUploadClient {
         let request = Self::make_request(request);
         let response = self.client.clone().sync_persistent_pieces(request).await?;
         Ok(response)
-    }
-
-    /// download_persistent_piece provides the persistent piece content for parent.
-    #[instrument(skip_all)]
-    pub async fn download_persistent_piece(
-        &self,
-        request: DownloadPersistentPieceRequest,
-        timeout: Duration,
-    ) -> ClientResult<DownloadPersistentPieceResponse> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(timeout);
-
-        let response = self
-            .client
-            .clone()
-            .download_persistent_piece(request)
-            .await?;
-        Ok(response.into_inner())
     }
 
     /// download_persistent_cache_task downloads the persistent cache task.
@@ -3122,24 +2751,6 @@ impl DfdaemonUploadClient {
             .sync_persistent_cache_pieces(request)
             .await?;
         Ok(response)
-    }
-
-    /// download_persistent_cache_piece provides the persistent cache piece content for parent.
-    #[instrument(skip_all)]
-    pub async fn download_persistent_cache_piece(
-        &self,
-        request: DownloadPersistentCachePieceRequest,
-        timeout: Duration,
-    ) -> ClientResult<DownloadPersistentCachePieceResponse> {
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(timeout);
-
-        let response = self
-            .client
-            .clone()
-            .download_persistent_cache_piece(request)
-            .await?;
-        Ok(response.into_inner())
     }
 
     /// exchange_ib_verbs_queue_pair_endpoint exchanges ib verbs queue pair endpoint.
