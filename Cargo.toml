@@ -31,7 +31,7 @@ dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.2.1
 dragonfly-client-metric = { path = "dragonfly-client-metric", version = "1.2.1" }
 dragonfly-client-util = { path = "dragonfly-client-util", version = "1.2.1" }
 dragonfly-client-init = { path = "dragonfly-client-init", version = "1.2.1" }
-dragonfly-api = "=2.2.8"
+dragonfly-api = "=2.2.9"
 thiserror = "2.0"
 futures = "0.3.31"
 reqwest = { version = "0.12.28", features = [
