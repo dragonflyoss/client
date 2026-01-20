@@ -15,11 +15,14 @@
  */
 
 use crate::hashring::VNodeHashRing;
+use crate::net::format_url;
 use crate::shutdown;
 use dragonfly_api::common::v2::Host;
 use dragonfly_api::scheduler::v2::{scheduler_client::SchedulerClient, ListHostsRequest};
 use dragonfly_client_core::{Error, Result};
 use std::collections::HashMap;
+use std::net::IpAddr;
+use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
@@ -122,7 +125,7 @@ impl SeedPeerSelector {
         // so here we directly use the number of seed peers as the concurrency for simultaneous health checks.
         let mut join_set = JoinSet::new();
         for peer in seed_peers {
-            let addr = format!("http://{}:{}", peer.ip, peer.port);
+            let addr = format_url("http", IpAddr::from_str(&peer.ip)?, peer.port as u16);
             join_set.spawn(
                 async move {
                     match Self::check_health(&addr).await {
@@ -224,6 +227,7 @@ impl Selector for SeedPeerSelector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::format_socket_addr;
     use dragonfly_api::common::v2::Host;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -268,12 +272,14 @@ mod tests {
 
     async fn add_test_host(selector: &SeedPeerSelector, host: Host) {
         let mut seed_peers = selector.seed_peers.write().await;
+        let ip = IpAddr::from_str(&host.ip).unwrap();
+
         seed_peers
             .hosts
-            .insert(format!("{}:{}", host.ip, host.port), host.clone());
+            .insert(format_socket_addr(ip, host.port as u16), host.clone());
         seed_peers
             .hashring
-            .add(format!("{}:{}", host.ip, host.port).parse().unwrap());
+            .add(format_socket_addr(ip, host.port as u16).parse().unwrap());
     }
 
     #[tokio::test]

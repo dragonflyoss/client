@@ -31,6 +31,7 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
+    net::format_socket_addr,
     shutdown,
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
@@ -51,7 +52,8 @@ use rcgen::Certificate;
 use rustls::{RootCertStore, ServerConfig};
 use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpListener;
@@ -604,7 +606,7 @@ pub async fn upgraded_handler(
         let builder = http::uri::Builder::new();
         *request.uri_mut() = builder
             .scheme("https")
-            .authority(format!("{}:{}", host, port))
+            .authority(format_socket_addr(IpAddr::from_str(&host)?, port))
             .path_and_query(
                 request
                     .uri()
