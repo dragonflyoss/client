@@ -225,7 +225,7 @@ impl StatCommand {
         let task = dfdaemon_download_client
             .stat_persistent_cache_task(StatPersistentCacheTaskRequest {
                 task_id: self.id.clone(),
-                remote_ip: Some(preferred_local_ip().unwrap().to_string()),
+                remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
             })
             .await?;
 

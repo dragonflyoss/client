@@ -507,7 +507,7 @@ impl ExportCommand {
                 need_piece_content,
                 force_hard_link: self.force_hard_link,
                 digest: self.digest.clone(),
-                remote_ip: Some(preferred_local_ip().unwrap().to_string()),
+                remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
                 overwrite: self.overwrite,
             })
             .await

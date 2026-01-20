@@ -368,7 +368,7 @@ impl ImportCommand {
                     prost_wkt_types::Duration::try_from(self.timeout)
                         .or_err(ErrorType::ParseError)?,
                 ),
-                remote_ip: Some(preferred_local_ip().unwrap().to_string()),
+                remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
             })
             .await?;
 

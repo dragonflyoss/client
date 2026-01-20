@@ -16,6 +16,7 @@
 
 use clap::{Arg, Command};
 use lazy_static::lazy_static;
+use std::env;
 use std::path::PathBuf;
 
 pub mod dfcache;
@@ -62,8 +63,8 @@ lazy_static! {
     /// INSTANCE_NAME is the name of the instance, formatted as {POD_NAMESPACE}-{POD_NAME}.
     pub static ref INSTANCE_NAME: String = {
         if let (Some(pod_namespace), Some(pod_name)) = (
-            option_env!("POD_NAMESPACE"),
-            option_env!("POD_NAME")
+            env::var("POD_NAMESPACE").ok(),
+            env::var("POD_NAME").ok()
         ) {
             format!("{}-{}", pod_namespace, pod_name)
         } else {
