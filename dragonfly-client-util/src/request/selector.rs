@@ -19,12 +19,8 @@ use crate::net::{join_host_port, join_url};
 use crate::shutdown;
 use dragonfly_api::common::v2::Host;
 use dragonfly_api::scheduler::v2::{scheduler_client::SchedulerClient, ListHostsRequest};
-use dragonfly_client_core::{
-    error::{ErrorType, OrErr},
-    Error, Result,
-};
+use dragonfly_client_core::{Error, Result};
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
@@ -45,7 +41,7 @@ pub trait Selector: Send + Sync {
 const SEED_PEERS_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// DEFAULT_VNODES_PER_HOST is the default number of virtual nodes per host.
-const DEFAULT_VNODES_PER_HOST: usize = 3;
+const DEFAULT_VNODES_PER_HOST: usize = 512;
 
 /// SeedPeers holds the data of seed peers.
 struct SeedPeers {
@@ -144,12 +140,9 @@ impl SeedPeerSelector {
         while let Some(result) = join_set.join_next().await {
             match result {
                 Ok(Ok(peer)) => {
-                    let addr: SocketAddr = join_host_port(&peer.ip, peer.port as u16)
-                        .parse()
-                        .or_err(ErrorType::ParseError)?;
-
-                    hashring.add(addr);
-                    hosts.insert(addr.to_string(), peer);
+                    let name = peer.name.to_string();
+                    hashring.add(name.clone());
+                    hosts.insert(name, peer);
                 }
                 Ok(Err(err)) => error!("health check failed: {}", err),
                 Err(err) => error!("task join error: {}", err),
@@ -216,7 +209,7 @@ impl Selector for SeedPeerSelector {
             .filter_map(|vnode| {
                 seed_peers
                     .hosts
-                    .get(vnode.addr().to_string().as_str())
+                    .get(vnode.name().to_string().as_str())
                     .cloned()
             })
             .collect();

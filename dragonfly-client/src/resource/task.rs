@@ -117,7 +117,6 @@ impl Task {
             backend_factory: backend_factory.clone(),
             piece: Arc::new(piece::Piece::new(
                 config.clone(),
-                id_generator.clone(),
                 storage.clone(),
                 backend_factory.clone(),
                 download_rate_limiter,
@@ -1628,7 +1627,7 @@ impl Task {
             }
 
             // Fake the download from the local.
-            self.piece.download_from_local(task_id, piece.length);
+            self.piece.download_from_local(piece.length);
             info!("finished piece {} from local", piece_id,);
 
             // Construct the piece.

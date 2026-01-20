@@ -7,15 +7,21 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: Default
+      labels: ${{ matrix.runner }}
     timeout-minutes: 480
     strategy:
       matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - x86_64-unknown-linux-musl
-          - aarch64-unknown-linux-gnu
-          - aarch64-unknown-linux-musl
+        include:
+          - runner: [oracle-vm-24cpu-96gb-x86-64]
+            target: x86_64-unknown-linux-gnu
+          - runner: [oracle-vm-24cpu-96gb-x86-64]
+            target: x86_64-unknown-linux-musl
+          - runner: [oracle-vm-32cpu-128gb-arm64]
+            target: aarch64-unknown-linux-gnu
+          - runner: [oracle-vm-32cpu-128gb-arm64]
+            target: aarch64-unknown-linux-musl
 
     steps:
       - name: Free Disk Space (Ubuntu)
@@ -52,7 +58,7 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Install cargo-deb
-        uses: taiki-e/cache-cargo-install-action@25ef9892608d184944df486ae09ffae168b3cda3
+        uses: taiki-e/cache-cargo-install-action@34ce5120836e5f9f1508d8713d7fdea0e8facd6f
         with:
           # Don't upgrade cargo-deb, refer to https://github.com/kornelski/cargo-deb/issues/169.
           tool: cargo-deb@2.10.0
@@ -61,7 +67,7 @@ jobs:
         uses: taiki-e/install-action@daa3c1f1f9a9d46f686d9fc2f65773d0c293688b
         with:
           tool: cargo-generate-rpm
-          
+
       - name: Install dependencies
         run: |
           sudo apt-get update -y
@@ -109,8 +115,8 @@ jobs:
           name: release-${{ matrix.target }}
           path: |
             ${{ env.CLIENT_RPM_ASSET }}
-            ${{ env.CLIENT_DEB_ASSET }}            
-            ${{ env.CLIENT_TAR_ASSET }}          
+            ${{ env.CLIENT_DEB_ASSET }}
+            ${{ env.CLIENT_TAR_ASSET }}
 
   release-github:
     runs-on: ubuntu-latest
@@ -135,7 +141,9 @@ jobs:
           draft: true
 
   publish-crates:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: Default
+      labels: [oracle-vm-24cpu-96gb-x86-64]
     timeout-minutes: 360
     steps:
       - name: Free Disk Space (Ubuntu)
@@ -148,7 +156,7 @@ jobs:
           large-packages: true
           docker-images: true
           swap-storage: true
-            
+
       - name: Checkout
         uses: actions/checkout@v6
 

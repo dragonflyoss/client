@@ -15,6 +15,7 @@
  */
 
 use clap::{Arg, Command};
+use lazy_static::lazy_static;
 use std::path::PathBuf;
 
 pub mod dfcache;
@@ -38,7 +39,7 @@ pub const CARGO_PKG_RUSTC_VERSION: &str = env!("CARGO_PKG_RUST_VERSION");
 /// BUILD_PLATFORM is the platform of the build.
 pub const BUILD_PLATFORM: &str = env!("BUILD_PLATFORM");
 
-// BUILD_TIMESTAMP is the timestamp of the build.
+/// BUILD_TIMESTAMP is the timestamp of the build.
 pub const BUILD_TIMESTAMP: &str = env!("BUILD_TIMESTAMP");
 
 /// GIT_COMMIT_SHORT_HASH is the short git commit hash of the package.
@@ -56,6 +57,23 @@ pub const GIT_COMMIT_DATE: &str = {
         None => "unknown",
     }
 };
+
+lazy_static! {
+    /// INSTANCE_NAME is the name of the instance, formatted as {POD_NAMESPACE}-{POD_NAME}.
+    pub static ref INSTANCE_NAME: String = {
+        if let (Some(pod_namespace), Some(pod_name)) = (
+            option_env!("POD_NAMESPACE"),
+            option_env!("POD_NAME")
+        ) {
+            format!("{}-{}", pod_namespace, pod_name)
+        } else {
+            hostname::get()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
+        }
+    };
+}
 
 /// default_root_dir is the default root directory for client.
 pub fn default_root_dir() -> PathBuf {
