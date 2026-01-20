@@ -210,4 +210,39 @@ mod tests {
                 && (vnode.id == 0 || vnode.id == 1)
         }));
     }
+
+    #[test]
+    fn test_add_order_does_not_affect_get_result_many_keys() {
+        use uuid::Uuid;
+
+        let nodes_a = vec![
+            "default-pod-1".to_string(),
+            "default-pod-2".to_string(),
+            "default-pod-3".to_string(),
+        ];
+        let nodes_b = vec![
+            "default-pod-3".to_string(),
+            "default-pod-1".to_string(),
+            "default-pod-2".to_string(),
+        ];
+
+        let mut ring_a = VNodeHashRing::new(150);
+        for n in nodes_a {
+            ring_a.add(n);
+        }
+
+        let mut ring_b = VNodeHashRing::new(150);
+        for n in nodes_b {
+            ring_b.add(n);
+        }
+
+        for _ in 0..200 {
+            let key = Uuid::new_v4().to_string();
+
+            let va = ring_a.get(&key).unwrap();
+            let vb = ring_b.get(&key).unwrap();
+
+            assert_eq!(va.to_string(), vb.to_string(), "key={}", key);
+        }
+    }
 }
