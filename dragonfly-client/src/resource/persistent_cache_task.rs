@@ -88,7 +88,7 @@ pub struct PersistentCacheTask {
 
 /// PersistentCacheTask is the implementation of PersistentCacheTask.
 impl PersistentCacheTask {
-    /// new creates a new PersistentCacheTask.
+    /// Creates a new PersistentCacheTask.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
@@ -124,13 +124,13 @@ impl PersistentCacheTask {
         })
     }
 
-    /// get gets a persistent cache task from local.
+    /// Gets a persistent cache task from local.
     #[instrument(skip_all)]
     pub fn get(&self, task_id: &str) -> ClientResult<Option<metadata::PersistentCacheTask>> {
         self.storage.get_persistent_cache_task(task_id)
     }
 
-    /// upload creates a persistent cache task from local.
+    /// Creates a persistent cache task from local.
     #[instrument(skip_all)]
     pub async fn upload(
         &self,
@@ -527,7 +527,7 @@ impl PersistentCacheTask {
         Ok(())
     }
 
-    /// download_started updates the metadata of the persistent cache task when the persistent cache task downloads started.
+    /// Updates the metadata of the persistent cache task when the persistent cache task downloads started.
     #[instrument(skip_all)]
     pub async fn download_started(
         &self,
@@ -615,13 +615,13 @@ impl PersistentCacheTask {
         Ok(task)
     }
 
-    /// download_finished updates the metadata of the persistent cache task when the task downloads finished.
+    /// Updates the metadata of the persistent cache task when the task downloads finished.
     #[instrument(skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::PersistentCacheTask> {
         self.storage.download_persistent_cache_task_finished(id)
     }
 
-    /// download_failed updates the metadata of the persistent cache task when the task downloads failed.
+    /// Updates the metadata of the persistent cache task when the task downloads failed.
     #[instrument(skip_all)]
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
         let _ = self
@@ -631,7 +631,7 @@ impl PersistentCacheTask {
         Ok(())
     }
 
-    /// is_same_dev_inode checks if the persistent cache task is on the same device inode as the given path.
+    /// Checks if the persistent cache task is on the same device inode as the given path.
     pub async fn is_same_dev_inode(&self, id: &str, to: &Path) -> ClientResult<bool> {
         self.storage
             .is_same_dev_inode_as_persistent_cache_task(id, to)

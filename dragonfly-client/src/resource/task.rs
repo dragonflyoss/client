@@ -95,7 +95,7 @@ pub struct Task {
 
 /// Task implements the task manager.
 impl Task {
-    /// new returns a new Task.
+    /// Creates a new Task.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
@@ -132,13 +132,13 @@ impl Task {
         })
     }
 
-    /// get gets the metadata of the task.
+    /// Gets the metadata of the task.
     #[instrument(skip_all)]
     pub fn get(&self, id: &str) -> ClientResult<Option<metadata::Task>> {
         self.storage.get_task(id)
     }
 
-    /// download_started updates the metadata of the task when the task downloads started.
+    /// Updates the metadata of the task when the task downloads started.
     #[instrument(skip_all)]
     pub async fn download_started(
         &self,
@@ -289,31 +289,31 @@ impl Task {
         task
     }
 
-    /// download_finished updates the metadata of the task when the task downloads finished.
+    /// Updates the metadata of the task when the task downloads finished.
     #[instrument(skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.download_task_finished(id)
     }
 
-    /// download_failed updates the metadata of the task when the task downloads failed.
+    /// Updates the metadata of the task when the task downloads failed.
     #[instrument(skip_all)]
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
         self.storage.download_task_failed(id).await.map(|_| ())
     }
 
-    /// prefetch_task_started updates the metadata of the task when the task prefetch started.
+    /// Updates the metadata of the task when the task prefetch started.
     #[instrument(skip_all)]
     pub async fn prefetch_task_started(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.prefetch_task_started(id).await
     }
 
-    /// prefetch_task_failed updates the metadata of the task when the task prefetch failed.
+    /// Updates the metadata of the task when the task prefetch failed.
     #[instrument(skip_all)]
     pub async fn prefetch_task_failed(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.prefetch_task_failed(id).await
     }
 
-    /// is_same_dev_inode checks if the task is on the same device inode as the given path.
+    /// Checks if the task is on the same device inode as the given path.
     pub async fn is_same_dev_inode(&self, id: &str, to: &Path) -> ClientResult<bool> {
         self.storage.is_same_dev_inode_as_task(id, to).await
     }
@@ -1895,7 +1895,7 @@ impl Task {
         return Ok(finished_pieces);
     }
 
-    /// stat_task returns the task metadata from scheduler.
+    /// Gets the task metadata from scheduler.
     #[instrument(skip_all)]
     pub async fn stat(&self, task_id: &str, host_id: &str) -> ClientResult<CommonTask> {
         self.scheduler_client
@@ -1909,7 +1909,7 @@ impl Task {
             })
     }
 
-    /// stat_local returns the task metadata from local storage.
+    /// Gets the task metadata from local storage.
     #[instrument(skip_all)]
     pub async fn stat_local(&self, task_id: &str) -> ClientResult<StatLocalTaskResponse> {
         let Some(task_metadata) = self.storage.get_task(task_id).inspect_err(|err| {

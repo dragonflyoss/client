@@ -101,7 +101,7 @@ pub struct PersistentTask {
 
 /// PersistentTask is the implementation of PersistentTask.
 impl PersistentTask {
-    /// new creates a new PersistentTask.
+    /// Creates a new PersistentTask.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
@@ -138,13 +138,13 @@ impl PersistentTask {
         })
     }
 
-    /// get gets a persistent task from local.
+    /// Gets a persistent task from local.
     #[instrument(skip_all)]
     pub fn get(&self, task_id: &str) -> ClientResult<Option<metadata::PersistentTask>> {
         self.storage.get_persistent_task(task_id)
     }
 
-    /// upload creates a persistent task from local.
+    /// Creates a persistent task from local.
     #[instrument(skip_all)]
     pub async fn upload(
         &self,
@@ -623,7 +623,7 @@ impl PersistentTask {
         Ok(())
     }
 
-    /// download_started updates the metadata of the persistent task when the persistent task downloads started.
+    /// Updates the metadata of the persistent task when the persistent task downloads started.
     #[instrument(skip_all)]
     pub async fn download_started(
         &self,
@@ -804,20 +804,20 @@ impl PersistentTask {
         Ok(task)
     }
 
-    /// download_finished updates the metadata of the persistent task when the task downloads finished.
+    /// Updates the metadata of the persistent task when the task downloads finished.
     #[instrument(skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::PersistentTask> {
         self.storage.download_persistent_task_finished(id)
     }
 
-    /// download_failed updates the metadata of the persistent task when the task downloads failed.
+    /// Updates the metadata of the persistent task when the task downloads failed.
     #[instrument(skip_all)]
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
         let _ = self.storage.download_persistent_task_failed(id).await?;
         Ok(())
     }
 
-    /// is_same_dev_inode checks if the persistent task is on the same device inode as the given path.
+    /// Checks if the persistent task is on the same device inode as the given path.
     pub async fn is_same_dev_inode(&self, id: &str, to: &Path) -> ClientResult<bool> {
         self.storage
             .is_same_dev_inode_as_persistent_task(id, to)

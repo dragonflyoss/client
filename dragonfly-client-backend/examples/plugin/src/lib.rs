@@ -33,18 +33,18 @@ impl Hdfs {
 /// Implement the Backend trait for Hdfs.
 #[tonic::async_trait]
 impl Backend for Hdfs {
-    /// scheme returns the scheme of the backend.
+    /// Returns the scheme of the backend.
     fn scheme(&self) -> String {
         "hdfs".to_string()
     }
 
-    /// stat gets the metadata from the backend.
+    /// Gets the metadata from the backend.
     async fn stat(&self, request: StatRequest) -> Result<StatResponse> {
         println!("HDFS stat url: {}", request.url);
         Err(Error::Unimplemented)
     }
 
-    /// get gets the content from the backend.
+    /// Gets the content from the backend.
     async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>> {
         println!("HDFS get url: {}", request.url);
         Err(Error::Unimplemented)
@@ -56,7 +56,7 @@ impl Backend for Hdfs {
         Err(Error::Unimplemented)
     }
 
-    /// exists checks if the object exists in the backend.
+    /// Checks if the object exists in the backend.
     async fn exists(&self, request: ExistsRequest) -> Result<bool> {
         println!("HDFS exists url: {}", request.url);
         Err(Error::Unimplemented)

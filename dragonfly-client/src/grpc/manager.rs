@@ -41,7 +41,7 @@ pub struct ManagerClient {
 
 /// ManagerClient implements the grpc client of the manager.
 impl ManagerClient {
-    /// new creates a new ManagerClient.
+    /// Creates a new ManagerClient.
     pub async fn new(config: Arc<Config>, addr: String) -> Result<Self> {
         let domain_name = Url::parse(addr.as_str())?
             .host_str()
@@ -115,7 +115,7 @@ impl ManagerClient {
         Ok(response.into_inner())
     }
 
-    /// update_seed_peer updates the seed peer information.
+    /// Updates the seed peer information.
     #[instrument(skip_all)]
     pub async fn update_seed_peer(&self, request: UpdateSeedPeerRequest) -> Result<SeedPeer> {
         let request = Self::make_request(request);
@@ -131,7 +131,7 @@ impl ManagerClient {
         Ok(())
     }
 
-    /// make_request creates a new request with timeout.
+    /// Creates a new request with timeout.
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);

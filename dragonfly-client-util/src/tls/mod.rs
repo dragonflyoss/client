@@ -52,7 +52,7 @@ pub struct NoVerifier(Arc<rustls::crypto::CryptoProvider>);
 
 /// Implement the NoVerifier.
 impl NoVerifier {
-    /// new creates a new NoVerifier.
+    /// Creates a new NoVerifier.
     pub fn new() -> Arc<Self> {
         Arc::new(Self(Arc::new(rustls::crypto::ring::default_provider())))
     }

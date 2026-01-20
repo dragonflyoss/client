@@ -109,7 +109,7 @@ pub struct DfdaemonUploadServer {
 
 /// DfdaemonUploadServer implements the grpc server of the upload.
 impl DfdaemonUploadServer {
-    /// new creates a new DfdaemonUploadServer.
+    /// Creates a new DfdaemonUploadServer.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
@@ -664,7 +664,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// stat_task stats the task.
+    /// Gets the task.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_task(&self, request: Request<StatTaskRequest>) -> Result<Response<Task>, Status> {
         // If the parent context is set, use it as the parent context for the span.
@@ -759,7 +759,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         }
     }
 
-    /// list_tasks lists the tasks.
+    /// Lists the tasks.
     #[instrument(skip_all, fields(task_id, url, remote_ip))]
     async fn list_task_entries(
         &self,
@@ -839,7 +839,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         }))
     }
 
-    /// delete_task deletes the task.
+    /// Deletes the task.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn delete_task(
         &self,

@@ -318,7 +318,7 @@ pub struct BackendFactory {
 /// The backend plugin implementation can refer to
 /// https://github.com/dragonflyoss/client/tree/main/dragonfly-client-backend/examples/plugin/.
 impl BackendFactory {
-    /// new returns a new BackendFactory.
+    /// Creates a new BackendFactory.
     pub fn new(config: Arc<Config>, plugin_dir: Option<&Path>) -> Result<Self> {
         let mut backend_factory = Self {
             config: config.clone(),
@@ -340,12 +340,12 @@ impl BackendFactory {
         Ok(backend_factory)
     }
 
-    /// unsupported_download_directory returns whether the scheme does not support directory download.
+    /// Returns whether the scheme does not support directory download.
     pub fn unsupported_download_directory(scheme: &str) -> bool {
         scheme == http::HTTP_SCHEME || scheme == http::HTTPS_SCHEME
     }
 
-    /// build returns the backend by the scheme of the url.
+    /// Returns the backend by the scheme of the url.
     pub fn build(&self, url: &str) -> Result<&(dyn Backend + Send + Sync)> {
         let url = Url::parse(url).or_err(ErrorType::ParseError)?;
         let scheme = url.scheme();
@@ -358,7 +358,7 @@ impl BackendFactory {
             })
     }
 
-    /// load_builtin_backends loads the builtin backends.
+    /// Loads the builtin backends.
     fn load_builtin_backends(
         &mut self,
         enable_cache_temporary_redirect: bool,
@@ -447,7 +447,7 @@ impl BackendFactory {
         Ok(())
     }
 
-    /// load_plugin_backends loads the plugin backends.
+    /// Loads the plugin backends.
     fn load_plugin_backends(&mut self, plugin_dir: &Path) -> Result<()> {
         let backend_plugin_dir = plugin_dir.join(NAME);
         if !backend_plugin_dir.exists() {

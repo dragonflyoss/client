@@ -64,7 +64,7 @@ pub struct Dynconfig {
 
 /// Dynconfig is the implementation of Dynconfig.
 impl Dynconfig {
-    /// new creates a new Dynconfig.
+    /// Creates a new Dynconfig.
     pub async fn new(
         config: Arc<Config>,
         manager_client: Arc<ManagerClient>,
@@ -167,7 +167,7 @@ impl Dynconfig {
             .await
     }
 
-    /// get_available_schedulers gets the available schedulers.
+    /// Gets the available schedulers.
     #[instrument(skip_all)]
     async fn get_available_schedulers(&self, schedulers: &[Scheduler]) -> Result<Vec<Scheduler>> {
         let mut available_schedulers: Vec<Scheduler> = Vec::new();

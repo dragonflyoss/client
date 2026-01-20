@@ -728,19 +728,19 @@ impl<E: StorageEngineOwned> Metadata<E> {
         Ok(task)
     }
 
-    /// get_task gets the task metadata.
+    /// Gets the task metadata.
     #[instrument(skip_all)]
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         self.db.get(id.as_bytes())
     }
 
-    /// is_task_exists checks if the task exists.
+    /// Checks if the task exists.
     #[instrument(skip_all)]
     pub fn is_task_exists(&self, id: &str) -> Result<bool> {
         self.db.exists::<Task>(id.as_bytes())
     }
 
-    /// get_tasks gets the task metadatas.
+    /// Gets the task metadatas.
     #[instrument(skip_all)]
     pub fn get_tasks(&self) -> Result<Vec<Task>> {
         let tasks = self
@@ -960,13 +960,13 @@ impl<E: StorageEngineOwned> Metadata<E> {
         self.db.get(id.as_bytes())
     }
 
-    /// is_persistent_task_exists checks if the persistent task exists.
+    /// Checks if the persistent task exists.
     #[instrument(skip_all)]
     pub fn is_persistent_task_exists(&self, id: &str) -> Result<bool> {
         self.db.exists::<PersistentTask>(id.as_bytes())
     }
 
-    /// get_persistent_tasks gets the persistent task metadatas.
+    /// Gets the persistent task metadatas.
     #[instrument(skip_all)]
     pub fn get_persistent_tasks(&self) -> Result<Vec<PersistentTask>> {
         let iter = self.db.iter::<PersistentTask>()?;
@@ -1175,13 +1175,13 @@ impl<E: StorageEngineOwned> Metadata<E> {
         self.db.get(id.as_bytes())
     }
 
-    /// is_persistent_cache_task_exists checks if the persistent cache task exists.
+    /// Checks if the persistent cache task exists.
     #[instrument(skip_all)]
     pub fn is_persistent_cache_task_exists(&self, id: &str) -> Result<bool> {
         self.db.exists::<PersistentCacheTask>(id.as_bytes())
     }
 
-    /// get_persistent_cache_tasks gets the persistent cache task metadatas.
+    /// Gets the persistent cache task metadatas.
     #[instrument(skip_all)]
     pub fn get_persistent_cache_tasks(&self) -> Result<Vec<PersistentCacheTask>> {
         let iter = self.db.iter::<PersistentCacheTask>()?;
@@ -1323,13 +1323,13 @@ impl<E: StorageEngineOwned> Metadata<E> {
         self.db.get(id.as_bytes())
     }
 
-    /// is_cache_task_exists checks if the cache task exists.
+    /// Checks if the cache task exists.
     #[instrument(skip_all)]
     pub fn is_cache_task_exists(&self, id: &str) -> Result<bool> {
         self.db.exists::<CacheTask>(id.as_bytes())
     }
 
-    /// get_cache_tasks gets the cache task metadatas.
+    /// Gets the cache task metadatas.
     #[instrument(skip_all)]
     pub fn get_cache_tasks(&self) -> Result<Vec<CacheTask>> {
         let tasks = self

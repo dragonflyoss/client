@@ -98,7 +98,7 @@ pub struct Proxy {
 
 /// Proxy implements the proxy server.
 impl Proxy {
-    /// new creates a new Proxy.
+    /// Creates a new Proxy.
     pub fn new(
         config: Arc<Config>,
         task: Arc<Task>,
@@ -1184,8 +1184,7 @@ fn make_download_task_request(
     })
 }
 
-/// need_prefetch returns whether the prefetch is needed by the configuration and the request
-/// header.
+/// Returns whether the prefetch is needed by the configuration and the request header.
 fn need_prefetch(config: Arc<Config>, header: &http::HeaderMap) -> bool {
     // If the header not contains the range header, the request does not need prefetch.
     if !header.contains_key(reqwest::header::RANGE) {
@@ -1307,7 +1306,7 @@ fn make_error_response(
     response
 }
 
-/// empty returns an empty body.
+/// Returns an empty body.
 fn empty() -> BoxBody<Bytes, ClientError> {
     Empty::<Bytes>::new()
         .map_err(|never| match never {})

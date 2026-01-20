@@ -66,7 +66,7 @@ pub struct Stats {
 
 /// Stats implements the stats server.
 impl Stats {
-    /// new creates a new Stats.
+    /// Creates a new Stats.
     pub fn new(
         addr: SocketAddr,
         shutdown: shutdown::Shutdown,

@@ -147,7 +147,7 @@ impl FromStr for ErrorType {
     }
 }
 
-/// get_tag gets the tag from http header.
+/// Gets the tag from http header.
 pub fn get_tag(header: &HeaderMap) -> Option<String> {
     header
         .get(DRAGONFLY_TAG_HEADER)
@@ -155,7 +155,7 @@ pub fn get_tag(header: &HeaderMap) -> Option<String> {
         .map(|tag| tag.to_string())
 }
 
-/// get_application gets the application from http header.
+/// Gets the application from http header.
 pub fn get_application(header: &HeaderMap) -> Option<String> {
     header
         .get(DRAGONFLY_APPLICATION_HEADER)
@@ -163,7 +163,7 @@ pub fn get_application(header: &HeaderMap) -> Option<String> {
         .map(|application| application.to_string())
 }
 
-/// get_priority gets the priority from http header.
+/// Gets the priority from http header.
 pub fn get_priority(header: &HeaderMap) -> i32 {
     let default_priority = Priority::Level6 as i32;
     match header.get(DRAGONFLY_PRIORITY_HEADER) {
@@ -184,7 +184,7 @@ pub fn get_priority(header: &HeaderMap) -> i32 {
     }
 }
 
-/// get_registry gets the custom address of container registry from http header.
+/// Gets the custom address of container registry from http header.
 pub fn get_registry(header: &HeaderMap) -> Option<String> {
     header
         .get(DRAGONFLY_REGISTRY_HEADER)
@@ -192,7 +192,7 @@ pub fn get_registry(header: &HeaderMap) -> Option<String> {
         .map(|registry| registry.to_string())
 }
 
-/// get_filters gets the filters from http header.
+/// Gets the filters from http header.
 pub fn get_filtered_query_params(
     header: &HeaderMap,
     default_filtered_query_params: Vec<String>,
@@ -209,7 +209,7 @@ pub fn get_filtered_query_params(
     }
 }
 
-/// get_use_p2p gets the use p2p from http header.
+/// Gets the use p2p from http header.
 pub fn get_use_p2p(header: &HeaderMap) -> bool {
     match header.get(DRAGONFLY_USE_P2P_HEADER) {
         Some(value) => match value.to_str() {
@@ -223,7 +223,7 @@ pub fn get_use_p2p(header: &HeaderMap) -> bool {
     }
 }
 
-/// get_prefetch gets the prefetch from http header.
+/// Gets the prefetch from http header.
 pub fn get_prefetch(header: &HeaderMap) -> Option<bool> {
     match header.get(DRAGONFLY_PREFETCH_HEADER) {
         Some(value) => match value.to_str() {
@@ -237,7 +237,7 @@ pub fn get_prefetch(header: &HeaderMap) -> Option<bool> {
     }
 }
 
-/// get_output_path gets the output path from http header.
+/// Gets the output path from http header.
 pub fn get_output_path(header: &HeaderMap) -> Option<String> {
     header
         .get(DRAGONFLY_OUTPUT_PATH_HEADER)
@@ -245,7 +245,7 @@ pub fn get_output_path(header: &HeaderMap) -> Option<String> {
         .map(|output_path| output_path.to_string())
 }
 
-/// get_force_hard_link gets the force hard link from http header.
+/// Gets the force hard link from http header.
 pub fn get_force_hard_link(header: &HeaderMap) -> bool {
     match header.get(DRAGONFLY_FORCE_HARD_LINK_HEADER) {
         Some(value) => match value.to_str() {
@@ -259,7 +259,7 @@ pub fn get_force_hard_link(header: &HeaderMap) -> bool {
     }
 }
 
-/// get_piece_length gets the piece length from http header.
+/// Gets the piece length from http header.
 pub fn get_piece_length(header: &HeaderMap) -> Option<ByteSize> {
     match header.get(DRAGONFLY_PIECE_LENGTH_HEADER) {
         Some(piece_length) => match piece_length.to_str() {
@@ -279,7 +279,7 @@ pub fn get_piece_length(header: &HeaderMap) -> Option<ByteSize> {
     }
 }
 
-/// get_content_for_calculating_task_id gets the content for calculating task id from http header.
+/// Gets the content for calculating task id from http header.
 pub fn get_content_for_calculating_task_id(header: &HeaderMap) -> Option<String> {
     header
         .get(DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID_HEADER)

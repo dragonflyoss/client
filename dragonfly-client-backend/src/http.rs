@@ -90,7 +90,7 @@ impl HTTP {
     /// DEFAULT_CACHE_TEMPORARY_REDIRECT_CAPACITY is the default capacity for temporary redirect cache.
     const DEFAULT_CACHE_TEMPORARY_REDIRECT_CAPACITY: usize = 1000;
 
-    /// new returns a new HTTP.
+    /// Creates a new HTTP.
     pub fn new(
         scheme: &str,
         request_header: Option<HashMap<String, String>>,
@@ -172,7 +172,7 @@ impl HTTP {
         })
     }
 
-    /// client returns a new reqwest client.
+    /// Returns a new reqwest client.
     fn client(
         &self,
         client_cert: Option<Vec<CertificateDer<'static>>>,
@@ -276,7 +276,7 @@ impl HTTP {
         Ok(())
     }
 
-    /// get_temporary_redirect_url gets the cached temporary redirect URL if exists
+    /// Gets the cached temporary redirect URL if exists
     /// and not expired.
     async fn get_temporary_redirect_url(&self, url: &str) -> String {
         let mut temporary_redirects = self.temporary_redirects.lock().await;
@@ -322,12 +322,12 @@ impl HTTP {
 /// Backend implements the Backend trait.
 #[tonic::async_trait]
 impl super::Backend for HTTP {
-    /// scheme returns the scheme of the HTTP backend.
+    /// Returns the scheme of the HTTP backend.
     fn scheme(&self) -> String {
         self.scheme.clone()
     }
 
-    /// stat gets the metadata from the backend.
+    /// Gets the metadata from the backend.
     #[instrument(skip_all)]
     async fn stat(&self, request: super::StatRequest) -> Result<super::StatResponse> {
         debug!(
@@ -491,7 +491,7 @@ impl super::Backend for HTTP {
         })
     }
 
-    /// get gets the content from the backend.
+    /// Gets the content from the backend.
     #[instrument(skip_all)]
     async fn get(&self, request: super::GetRequest) -> Result<super::GetResponse<super::Body>> {
         debug!(
@@ -601,7 +601,7 @@ impl super::Backend for HTTP {
         unimplemented!()
     }
 
-    /// exists checks whether the file exists in the backend.
+    /// Checks whether the file exists in the backend.
     #[instrument(skip_all)]
     async fn exists(&self, request: super::ExistsRequest) -> Result<bool> {
         debug!(

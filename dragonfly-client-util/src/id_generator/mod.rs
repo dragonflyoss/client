@@ -86,7 +86,7 @@ pub struct IDGenerator {
 
 /// IDGenerator implements the IDGenerator.
 impl IDGenerator {
-    /// new creates a new IDGenerator.
+    /// Creates a new IDGenerator.
     pub fn new(ip: String, hostname: String, is_seed_peer: bool) -> Self {
         IDGenerator {
             ip,

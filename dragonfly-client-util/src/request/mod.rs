@@ -194,7 +194,7 @@ pub struct Builder {
 
 /// Builder implements Default trait.
 impl Default for Builder {
-    /// default returns a default Builder.
+    /// Returns a default Builder.
     fn default() -> Self {
         Self {
             scheduler_endpoint: "".to_string(),

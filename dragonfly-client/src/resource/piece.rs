@@ -84,7 +84,7 @@ pub struct Piece {
 
 /// Piece implements the piece manager.
 impl Piece {
-    /// new returns a new Piece.
+    /// Creates a new Piece.
     pub fn new(
         config: Arc<Config>,
         storage: Arc<Storage>,
@@ -112,7 +112,7 @@ impl Piece {
         self.storage.piece_id(task_id, number)
     }
 
-    /// get gets a piece from the local storage.
+    /// Gets a piece from the local storage.
     pub fn get(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
         self.storage.get_piece(piece_id)
     }
@@ -646,13 +646,13 @@ impl Piece {
         self.storage.persistent_piece_id(task_id, number)
     }
 
-    /// get_persistent gets a persistent piece from the local storage.
+    /// Gets a persistent piece from the local storage.
     #[instrument(skip_all)]
     pub fn get_persistent(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
         self.storage.get_persistent_piece(piece_id)
     }
 
-    /// create_persistent creates a new persistent piece.
+    /// Creates a new persistent piece.
     #[instrument(skip_all)]
     pub async fn create_persistent<R: AsyncRead + Unpin + ?Sized>(
         &self,
@@ -981,13 +981,13 @@ impl Piece {
         self.storage.persistent_cache_piece_id(task_id, number)
     }
 
-    /// get_persistent_cache gets a persistent cache piece from the local storage.
+    /// Gets a persistent cache piece from the local storage.
     #[instrument(skip_all)]
     pub fn get_persistent_cache(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
         self.storage.get_persistent_cache_piece(piece_id)
     }
 
-    /// create_persistent_cache creates a new persistent cache piece.
+    /// Creates a new persistent cache piece.
     #[instrument(skip_all)]
     pub async fn create_persistent_cache<R: AsyncRead + Unpin + ?Sized>(
         &self,

@@ -72,7 +72,7 @@ pub struct SeedPeerSelector {
 
 /// SeedPeerSelector implements a selector that selects seed peers from the scheduler service.
 impl SeedPeerSelector {
-    /// new creates a new seed peer selector.
+    /// Creates a new seed peer selector.
     pub async fn new(
         scheduler_client: SchedulerClient<Channel>,
         health_check_interval: Duration,

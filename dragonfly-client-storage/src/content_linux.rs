@@ -41,7 +41,7 @@ pub struct Content {
 
 /// Content implements the content storage.
 impl Content {
-    /// new returns a new content.
+    /// Creates a new Content instance.
     pub async fn new(config: Arc<Config>, dir: &Path) -> Result<Content> {
         let dir = dir.join(super::content::DEFAULT_CONTENT_DIR);
 
@@ -59,7 +59,7 @@ impl Content {
         Ok(Content { config, dir })
     }
 
-    /// available_space returns the available space of the disk.
+    /// Returns the available space of the disk.
     pub fn available_space(&self) -> Result<u64> {
         let disk_threshold = self.config.gc.policy.disk_threshold;
         if disk_threshold != ByteSize::default() {
@@ -86,7 +86,7 @@ impl Content {
         Ok(stat.available_space())
     }
 
-    /// total_space returns the total space of the disk.
+    /// Returns the total space of the disk.
     pub fn total_space(&self) -> Result<u64> {
         // If the disk_threshold is set, return it directly.
         let disk_threshold = self.config.gc.policy.disk_threshold;
@@ -98,7 +98,7 @@ impl Content {
         Ok(stat.total_space())
     }
 
-    /// has_enough_space checks if the storage has enough space to store the content.
+    /// Checks if the storage has enough space to store the content.
     pub fn has_enough_space(&self, content_length: u64) -> Result<bool> {
         let available_space = self.available_space()?;
         if available_space < content_length {
@@ -113,7 +113,7 @@ impl Content {
         Ok(true)
     }
 
-    /// is_same_dev_inode checks if the source and target are the same device and inode.
+    /// Checks if the source and target are the same device and inode.
     async fn is_same_dev_inode<P: AsRef<Path>, Q: AsRef<Path>>(
         &self,
         source: P,
@@ -126,13 +126,13 @@ impl Content {
             && source_metadata.ino() == target_metadata.ino())
     }
 
-    /// is_same_dev_inode_as_task checks if the task and target are the same device and inode.
+    /// Checks if the task and target are the same device and inode.
     pub async fn is_same_dev_inode_as_task(&self, task_id: &str, to: &Path) -> Result<bool> {
         let task_path = self.get_task_path(task_id);
         self.is_same_dev_inode(&task_path, to).await
     }
 
-    /// create_task creates a new task content.
+    /// Creates a new task content.
     ///
     /// Behavior of `create_task`:
     /// 1. If the task already exists, return the task path.
@@ -378,7 +378,7 @@ impl Content {
         })
     }
 
-    /// get_task_path returns the task path by task id.
+    /// Returns the task path by task id.
     fn get_task_path(&self, task_id: &str) -> PathBuf {
         // The task needs split by the first 3 characters of task id(sha256) to
         // avoid too many files in one directory.
@@ -389,7 +389,7 @@ impl Content {
             .join(task_id)
     }
 
-    /// is_same_dev_inode_as_persistent_task checks if the persistent task and target
+    /// Checks if the persistent task and target
     /// are the same device and inode.
     pub async fn is_same_dev_inode_as_persistent_task(
         &self,
@@ -400,7 +400,7 @@ impl Content {
         self.is_same_dev_inode(&task_path, to).await
     }
 
-    /// create_persistent_task creates a new persistent task content.
+    /// Creates a new persistent task content.
     ///
     /// Behavior of `create_persistent_task`:
     /// 1. If the persistent task already exists, return the persistent task path.
@@ -617,7 +617,7 @@ impl Content {
         Ok(())
     }
 
-    /// get_persistent_task_path returns the persistent task path by task id.
+    /// Returns the persistent task path by task id.
     fn get_persistent_task_path(&self, task_id: &str) -> PathBuf {
         // The persistent task needs split by the first 3 characters of task id(sha256) to
         // avoid too many files in one directory.
@@ -627,7 +627,7 @@ impl Content {
             .join(task_id)
     }
 
-    /// is_same_dev_inode_as_persistent_cache_task checks if the persistent cache task and target
+    /// Checks if the persistent cache task and target
     /// are the same device and inode.
     pub async fn is_same_dev_inode_as_persistent_cache_task(
         &self,
@@ -638,7 +638,7 @@ impl Content {
         self.is_same_dev_inode(&task_path, to).await
     }
 
-    /// create_persistent_cache_task creates a new persistent cache task content.
+    /// Creates a new persistent cache task content.
     ///
     /// Behavior of `create_persistent_cache_task`:
     /// 1. If the persistent cache task already exists, return the persistent cache task path.
@@ -863,7 +863,7 @@ impl Content {
         Ok(())
     }
 
-    /// get_persistent_cache_task_path returns the persistent cache task path by task id.
+    /// Returns the persistent cache task path by task id.
     fn get_persistent_cache_task_path(&self, task_id: &str) -> PathBuf {
         // The persistent cache task needs split by the first 3 characters of task id(sha256) to
         // avoid too many files in one directory.
