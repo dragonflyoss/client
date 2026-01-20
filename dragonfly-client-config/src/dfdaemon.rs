@@ -1603,8 +1603,9 @@ impl Config {
             self.host.ip = if self.network.enable_ipv6 {
                 Some(local_ipv6().unwrap())
             } else {
-                Some(local_ip().unwrap())
-            }
+                // Try to get ipv4 first, then ipv6.
+                local_ip().ok().or_else(|| local_ipv6().ok())
+            };
         }
 
         // Convert upload gRPC server listen ip.

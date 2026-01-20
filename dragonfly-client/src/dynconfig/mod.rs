@@ -21,7 +21,10 @@ use dragonfly_api::manager::v2::{
 };
 use dragonfly_client_config::{dfdaemon::Config, CARGO_PKG_VERSION, GIT_COMMIT_SHORT_HASH};
 use dragonfly_client_core::{Error, Result};
+use dragonfly_client_util::net::format_url;
 use dragonfly_client_util::shutdown;
+use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tonic_health::pb::health_check_response::ServingStatus;
@@ -181,7 +184,11 @@ impl Dynconfig {
                 }
             }
 
-            let addr = format!("http://{}:{}", scheduler.ip, scheduler.port);
+            let addr = format_url(
+                "http",
+                IpAddr::from_str(&scheduler.ip)?,
+                scheduler.port as u16,
+            );
             let domain_name = Url::parse(addr.as_str())?
                 .host_str()
                 .ok_or(Error::InvalidParameter)
@@ -192,7 +199,7 @@ impl Dynconfig {
 
             // Check the health of the scheduler.
             let health_client = match HealthClient::new(
-                &format!("http://{}:{}", scheduler.ip, scheduler.port),
+                &addr,
                 self.config
                     .scheduler
                     .load_client_tls_config(domain_name.as_str())

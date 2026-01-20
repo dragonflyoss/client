@@ -138,9 +138,13 @@ pub enum DFError {
     #[error("invalid parameter")]
     InvalidParameter,
 
-    /// Infallible is the error for infallible.
+    /// NetAddrParseError is the error for net address parse.
     #[error(transparent)]
-    Infallible(#[from] std::convert::Infallible),
+    NetAddrParseError(#[from] std::net::AddrParseError),
+
+    /// ConvertInfallible is the error for infallible.
+    #[error(transparent)]
+    ConvertInfallible(#[from] std::convert::Infallible),
 
     /// Utf8 is the error for utf8.
     #[error(transparent)]

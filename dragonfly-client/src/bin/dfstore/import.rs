@@ -22,8 +22,8 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
+use dragonfly_client_util::net::preferred_local_ip;
 use indicatif::{ProgressBar, ProgressStyle};
-use local_ip_address::local_ip;
 use path_absolutize::*;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -383,7 +383,7 @@ impl ImportCommand {
                     prost_wkt_types::Duration::try_from(self.timeout)
                         .or_err(ErrorType::ParseError)?,
                 ),
-                remote_ip: Some(local_ip().unwrap().to_string()),
+                remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
             })
             .await?;
 

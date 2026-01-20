@@ -17,8 +17,11 @@
 use dragonfly_api::common;
 use dragonfly_client_core::error::BackendError;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
+use dragonfly_client_util::net::format_url;
 use opendal::{layers::TimeoutLayer, Operator};
 use percent_encoding::percent_decode_str;
+use std::net::IpAddr;
+use std::str::FromStr;
 use std::time::Duration;
 use tokio_util::io::StreamReader;
 use tracing::{debug, error, instrument};
@@ -64,7 +67,7 @@ impl Hdfs {
         let mut builder = opendal::services::Webhdfs::default();
         builder = builder
             .root("/")
-            .endpoint(&format!("http://{}:{}", host, port));
+            .endpoint(&format_url("http", IpAddr::from_str(&host)?, port));
 
         // If HDFS config is not None, set the config for builder.
         if let Some(config) = config {

@@ -15,6 +15,7 @@
  */
 
 use bytesize::ByteSize;
+use local_ip_address::{local_ip, local_ipv6};
 use pnet::datalink::{self, NetworkInterface};
 use std::cmp::min;
 use std::net::IpAddr;
@@ -26,6 +27,30 @@ use tracing::{info, warn};
 
 #[cfg(target_os = "linux")]
 use std::{io, mem, os::unix::io::RawFd};
+
+/// Formats an IP address and port into a socket address string.
+///
+/// IPv4 addresses are formatted as `ip:port` (e.g., "192.168.1.1:8080")
+/// IPv6 addresses are formatted as `[ip]:port` (e.g., "[::1]:8080")
+pub fn format_socket_addr(ip: IpAddr, port: u16) -> String {
+    match ip {
+        IpAddr::V4(v4) => format!("{}:{}", v4, port),
+        IpAddr::V6(v6) => format!("[{}]:{}", v6, port),
+    }
+}
+
+/// Formats a complete URL with scheme, IP address, and port.
+pub fn format_url(scheme: &str, ip: IpAddr, port: u16) -> String {
+    format!("{}://{}", scheme, format_socket_addr(ip, port))
+}
+
+/// Get the local IP address of the machine.
+///
+/// Attempts to retrieve the local IPv4 address first. If unavailable or if the
+/// operation fails, falls back to attempting IPv6 address retrieval.
+pub fn preferred_local_ip() -> Option<IpAddr> {
+    local_ip().ok().or_else(|| local_ipv6().ok())
+}
 
 /// Interface represents a network interface with its information.
 #[derive(Debug, Clone, Default)]
@@ -239,6 +264,7 @@ pub fn set_tcp_fastopen(fd: RawFd) -> io::Result<()> {
 mod tests {
     use super::*;
     use bytesize::ByteSize;
+    use std::str::FromStr;
 
     #[test]
     fn test_byte_size_to_bits() {
@@ -277,5 +303,62 @@ mod tests {
             let result = Interface::bytes_to_bits(input);
             assert_eq!(result, expected);
         }
+    }
+
+    #[test]
+    fn test_format_socket_addr_ipv4() {
+        assert_eq!(
+            format_socket_addr(IpAddr::from_str("127.0.0.1").unwrap(), 80),
+            "127.0.0.1:80"
+        );
+
+        assert_eq!(
+            format_socket_addr(IpAddr::from_str("192.168.1.1").unwrap(), 8080),
+            "192.168.1.1:8080"
+        );
+    }
+
+    #[test]
+    fn test_format_socket_addr_ipv6() {
+        assert_eq!(
+            format_socket_addr(IpAddr::from_str("::1").unwrap(), 80),
+            "[::1]:80"
+        );
+
+        assert_eq!(
+            format_socket_addr(IpAddr::from_str("2001:db8::1").unwrap(), 8080),
+            "[2001:db8::1]:8080"
+        );
+    }
+
+    #[test]
+    fn test_format_url_ipv4() {
+        assert_eq!(
+            format_url("http", IpAddr::from_str("127.0.0.1").unwrap(), 80),
+            "http://127.0.0.1:80"
+        );
+
+        assert_eq!(
+            format_url("https", IpAddr::from_str("192.168.1.1").unwrap(), 443),
+            "https://192.168.1.1:443"
+        );
+    }
+
+    #[test]
+    fn test_format_url_ipv6() {
+        assert_eq!(
+            format_url("http", IpAddr::from_str("::1").unwrap(), 80),
+            "http://[::1]:80"
+        );
+        assert_eq!(
+            format_url("https", IpAddr::from_str("2001:db8::1").unwrap(), 443),
+            "https://[2001:db8::1]:443"
+        );
+    }
+
+    #[test]
+    fn test_preferred_local_ip() {
+        let ip = preferred_local_ip();
+        assert!(ip.is_some());
     }
 }

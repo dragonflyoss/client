@@ -19,13 +19,14 @@ mod selector;
 
 use crate::http::{headermap_to_hashmap, query_params::default_proxy_rule_filtered_query_params};
 use crate::id_generator::{IDGenerator, TaskIDParameter};
+use crate::net::format_url;
+use crate::net::preferred_local_ip;
 use crate::pool::{Builder as PoolBuilder, Entry, Factory, Pool};
 use bytes::BytesMut;
 use dragonfly_api::scheduler::v2::scheduler_client::SchedulerClient;
 use errors::{BackendError, DfdaemonError, Error, ProxyError};
 use futures::TryStreamExt;
 use hostname;
-use local_ip_address::local_ip;
 use reqwest::{header::HeaderMap, header::HeaderValue, Client};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_tracing::TracingMiddleware;
@@ -33,6 +34,8 @@ use rustix::path::Arg;
 use rustls_pki_types::CertificateDer;
 use selector::{SeedPeerSelector, Selector};
 use std::io::{Error as IOError, ErrorKind};
+use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
@@ -269,7 +272,8 @@ impl Builder {
         });
 
         // Get local IP address and hostname.
-        let local_ip = local_ip().unwrap().to_string();
+        // In IPv6-only environments, IPv4 detection may fail, so we use a best-effort IPv4->IPv6 fallback.
+        let local_ip = preferred_local_ip().unwrap().to_string();
         let hostname = hostname::get().unwrap().to_string_lossy().to_string();
         let id_generator = IDGenerator::new(local_ip, hostname, true);
         let proxy = Proxy {
@@ -451,7 +455,11 @@ impl Proxy {
         let mut client_entries = Vec::with_capacity(seed_peers.len());
         for peer in seed_peers.iter() {
             // TODO(chlins): Support client https scheme.
-            let addr = format!("http://{}:{}", peer.ip, peer.proxy_port);
+            let addr = format_url(
+                "http",
+                IpAddr::from_str(&peer.ip).map_err(|err| Error::Internal(err.to_string()))?,
+                peer.proxy_port as u16,
+            );
             let client_entry = self.client_pool.entry(&addr, &addr).await?;
             client_entries.push(client_entry);
         }
