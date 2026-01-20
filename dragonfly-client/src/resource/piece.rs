@@ -26,10 +26,12 @@ use dragonfly_client_metric::{
     collect_upload_piece_traffic_metrics,
 };
 use dragonfly_client_storage::{metadata, Storage};
-use dragonfly_client_util::net::join_host_port;
+use dragonfly_client_util::net::format_socket_addr;
 use leaky_bucket::RateLimiter;
 use reqwest::header::HeaderMap;
 use std::collections::HashMap;
+use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -427,12 +429,22 @@ impl Piece {
         ) {
             ("tcp", Some(ip), Some(port), _) => {
                 self.tcp_downloader
-                    .download_piece(&join_host_port(&ip, port as u16), number, host_id, task_id)
+                    .download_piece(
+                        &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
+                        number,
+                        host_id,
+                        task_id,
+                    )
                     .await?
             }
             ("quic", Some(ip), _, Some(port)) => {
                 self.quic_downloader
-                    .download_piece(&join_host_port(&ip, port as u16), number, host_id, task_id)
+                    .download_piece(
+                        &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
+                        number,
+                        host_id,
+                        task_id,
+                    )
                     .await?
             }
             _ => {
@@ -444,7 +456,7 @@ impl Piece {
 
                 self.tcp_downloader
                     .download_piece(
-                        &join_host_port(&host.ip, host.port as u16),
+                        &format_socket_addr(IpAddr::from_str(&host.ip)?, host.port as u16),
                         number,
                         host_id,
                         task_id,
@@ -754,7 +766,7 @@ impl Piece {
             ("tcp", Some(ip), Some(port), _) => {
                 self.tcp_downloader
                     .download_persistent_piece(
-                        &join_host_port(&ip, port as u16),
+                        &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
                         number,
                         host_id,
                         task_id,
@@ -766,7 +778,7 @@ impl Piece {
                     piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
                 quic_downloader
                     .download_persistent_piece(
-                        &join_host_port(&ip, port as u16),
+                        &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
                         number,
                         host_id,
                         task_id,
@@ -782,7 +794,7 @@ impl Piece {
 
                 self.tcp_downloader
                     .download_persistent_piece(
-                        &join_host_port(&host.ip, host.port as u16),
+                        &format_socket_addr(IpAddr::from_str(&host.ip)?, host.port as u16),
                         number,
                         host_id,
                         task_id,
@@ -1089,7 +1101,7 @@ impl Piece {
             ("tcp", Some(ip), Some(port), _) => {
                 self.tcp_downloader
                     .download_persistent_cache_piece(
-                        &join_host_port(&ip, port as u16),
+                        &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
                         number,
                         host_id,
                         task_id,
@@ -1101,7 +1113,7 @@ impl Piece {
                     piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
                 quic_downloader
                     .download_persistent_cache_piece(
-                        &join_host_port(&ip, port as u16),
+                        &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
                         number,
                         host_id,
                         task_id,
@@ -1117,7 +1129,7 @@ impl Piece {
 
                 self.tcp_downloader
                     .download_persistent_cache_piece(
-                        &join_host_port(&host.ip, host.port as u16),
+                        &format_socket_addr(IpAddr::from_str(&host.ip)?, host.port as u16),
                         number,
                         host_id,
                         task_id,

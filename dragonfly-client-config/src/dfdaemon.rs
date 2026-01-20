@@ -1600,11 +1600,10 @@ impl Config {
     fn convert(&mut self) {
         // Convert advertise ip.
         if self.host.ip.is_none() {
-            // In IPv6-only environments, IPv4 detection may fail.
-            // Avoid panics and fall back between v4/v6 best-effort based on enable_ipv6.
             self.host.ip = if self.network.enable_ipv6 {
-                local_ipv6().ok().or_else(|| local_ip().ok())
+                Some(local_ipv6().unwrap())
             } else {
+                // Try to get ipv4 first, then ipv6.
                 local_ip().ok().or_else(|| local_ipv6().ok())
             };
         }

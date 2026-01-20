@@ -19,7 +19,7 @@ mod selector;
 
 use crate::http::{headermap_to_hashmap, query_params::default_proxy_rule_filtered_query_params};
 use crate::id_generator::{IDGenerator, TaskIDParameter};
-use crate::net::join_url;
+use crate::net::format_url;
 use crate::net::preferred_local_ip;
 use crate::pool::{Builder as PoolBuilder, Entry, Factory, Pool};
 use bytes::BytesMut;
@@ -34,6 +34,8 @@ use rustix::path::Arg;
 use rustls_pki_types::CertificateDer;
 use selector::{SeedPeerSelector, Selector};
 use std::io::{Error as IOError, ErrorKind};
+use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
@@ -453,7 +455,11 @@ impl Proxy {
         let mut client_entries = Vec::with_capacity(seed_peers.len());
         for peer in seed_peers.iter() {
             // TODO(chlins): Support client https scheme.
-            let addr = join_url("http", &peer.ip, peer.proxy_port as u16);
+            let addr = format_url(
+                "http",
+                IpAddr::from_str(&peer.ip).map_err(|err| Error::Internal(err.to_string()))?,
+                peer.proxy_port as u16,
+            );
             let client_entry = self.client_pool.entry(&addr, &addr).await?;
             client_entries.push(client_entry);
         }

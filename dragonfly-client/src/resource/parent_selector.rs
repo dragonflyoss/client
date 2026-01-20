@@ -22,10 +22,12 @@ use dragonfly_api::dfdaemon::v2::SyncHostRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
 use dragonfly_client_util::id_generator::IDGenerator;
-use dragonfly_client_util::net::join_url;
+use dragonfly_client_util::net::format_url;
 use dragonfly_client_util::shutdown::{self, Shutdown};
 use rand::distr::weighted::WeightedIndex;
 use rand::distr::Distribution;
+use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -218,7 +220,11 @@ impl ParentSelector {
                 dashmap::mapref::entry::Entry::Vacant(entry) => {
                     let dfdaemon_upload_client = DfdaemonUploadClient::new(
                         self.config.clone(),
-                        join_url("http", &parent_host.ip, parent_host.port as u16),
+                        format_url(
+                            "http",
+                            IpAddr::from_str(&parent_host.ip)?,
+                            parent_host.port as u16,
+                        ),
                         false,
                     )
                     .await?;
@@ -517,7 +523,11 @@ impl PersistentParentSelector {
                 dashmap::mapref::entry::Entry::Vacant(entry) => {
                     let dfdaemon_upload_client = DfdaemonUploadClient::new(
                         self.config.clone(),
-                        join_url("http", &parent_host.ip, parent_host.port as u16),
+                        format_url(
+                            "http",
+                            IpAddr::from_str(&parent_host.ip)?,
+                            parent_host.port as u16,
+                        ),
                         false,
                     )
                     .await?;
@@ -819,7 +829,11 @@ impl PersistentCacheParentSelector {
                 dashmap::mapref::entry::Entry::Vacant(entry) => {
                     let dfdaemon_upload_client = DfdaemonUploadClient::new(
                         self.config.clone(),
-                        join_url("http", &parent_host.ip, parent_host.port as u16),
+                        format_url(
+                            "http",
+                            IpAddr::from_str(&parent_host.ip)?,
+                            parent_host.port as u16,
+                        ),
                         false,
                     )
                     .await?;
