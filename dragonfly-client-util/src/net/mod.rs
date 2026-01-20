@@ -59,18 +59,14 @@ pub fn join_url(scheme: &str, host: &str, port: u16) -> String {
     format!("{}://{}", scheme, join_host_port(host, port))
 }
 
-/// best_effort_local_ip_string returns a local IP address string if possible.
+/// Get the local IP address of the machine.
 ///
-/// - Prefers IPv4 (current behaviour of existing code paths).
-/// - Falls back to IPv6 when IPv4 is unavailable (e.g. in IPv6-only environments).
-/// - Returns None if neither can be determined.
-///
-/// This is intentionally **non-panicking** to avoid `panic=abort` crashes in CLI tools.
-pub fn best_effort_local_ip_string() -> Option<String> {
-    local_ip()
+/// Attempts to retrieve the local IPv4 address first. If unavailable or if the
+/// operation fails, falls back to attempting IPv6 address retrieval.
+pub fn preferred_local_ip() -> Option<IpAddr> {
+    local_ip_address::local_ip()
         .ok()
-        .map(|ip| ip.to_string())
-        .or_else(|| local_ipv6().ok().map(|ip| ip.to_string()))
+        .or_else(|| local_ipv6().ok())
 }
 
 /// Interface represents a network interface with its information.
@@ -374,9 +370,8 @@ mod tests {
     }
 
     #[test]
-    fn test_best_effort_local_ip_string() {
-        // This test just verifies the function runs without panicking.
-        // The actual result depends on system configuration.
-        let _ = best_effort_local_ip_string();
+    fn test_preferred_local_ip() {
+        let ip = preferred_local_ip();
+        assert!(ip.is_some());
     }
 }

@@ -30,9 +30,10 @@ use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
+use dragonfly_client_util::net::preferred_local_ip;
 use dragonfly_client_util::{
     fs::fallocate, http::header_vec_to_hashmap,
-    http::query_params::default_proxy_rule_filtered_query_params, net::best_effort_local_ip_string,
+    http::query_params::default_proxy_rule_filtered_query_params,
 };
 use glob::Pattern;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressState, ProgressStyle};
@@ -925,7 +926,7 @@ async fn download(
                 hdfs,
                 force_hard_link: args.force_hard_link,
                 content_for_calculating_task_id: args.content_for_calculating_task_id,
-                remote_ip: best_effort_local_ip_string(),
+                remote_ip: Some(preferred_local_ip().unwrap().to_string()),
                 concurrent_piece_count: None,
                 overwrite: args.overwrite,
                 actual_piece_length: None,
@@ -1126,7 +1127,7 @@ async fn get_entries(
             certificate_chain: Vec::new(),
             object_storage,
             hdfs,
-            remote_ip: best_effort_local_ip_string(),
+            remote_ip: Some(preferred_local_ip().unwrap().to_string()),
         })
         .await
         .inspect_err(|err| {

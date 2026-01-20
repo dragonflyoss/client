@@ -21,7 +21,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_util::net::best_effort_local_ip_string;
+use dragonfly_client_util::net::preferred_local_ip;
 use humantime::format_duration;
 use std::time::Duration;
 use tabled::{
@@ -225,7 +225,7 @@ impl StatCommand {
         let task = dfdaemon_download_client
             .stat_persistent_cache_task(StatPersistentCacheTaskRequest {
                 task_id: self.id.clone(),
-                remote_ip: best_effort_local_ip_string(),
+                remote_ip: Some(preferred_local_ip().unwrap().to_string()),
             })
             .await?;
 

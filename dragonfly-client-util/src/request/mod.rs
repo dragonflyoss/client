@@ -19,7 +19,8 @@ mod selector;
 
 use crate::http::{headermap_to_hashmap, query_params::default_proxy_rule_filtered_query_params};
 use crate::id_generator::{IDGenerator, TaskIDParameter};
-use crate::net::{best_effort_local_ip_string, join_url};
+use crate::net::join_url;
+use crate::net::preferred_local_ip;
 use crate::pool::{Builder as PoolBuilder, Entry, Factory, Pool};
 use bytes::BytesMut;
 use dragonfly_api::scheduler::v2::scheduler_client::SchedulerClient;
@@ -270,12 +271,8 @@ impl Builder {
 
         // Get local IP address and hostname.
         // In IPv6-only environments, IPv4 detection may fail, so we use a best-effort IPv4->IPv6 fallback.
-        let local_ip = best_effort_local_ip_string()
-            .ok_or_else(|| Error::Internal("failed to detect local ip".to_string()))?;
-        let hostname = hostname::get()
-            .map_err(|err| Error::Internal(format!("failed to get hostname: {}", err)))?
-            .to_string_lossy()
-            .to_string();
+        let local_ip = preferred_local_ip().unwrap().to_string();
+        let hostname = hostname::get().unwrap().to_string_lossy().to_string();
         let id_generator = IDGenerator::new(local_ip, hostname, true);
         let proxy = Proxy {
             seed_peer_selector,
