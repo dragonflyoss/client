@@ -22,7 +22,9 @@ use dragonfly_client_core::{
 };
 use dragonfly_client_util::tls::NoVerifier;
 use futures::TryStreamExt;
-use http::header::{HeaderName, HeaderValue, RANGE, USER_AGENT};
+use http::header::{
+    HeaderName, HeaderValue, CONTENT_LENGTH, LOCATION, RANGE, TRANSFER_ENCODING, USER_AGENT,
+};
 use lru::LruCache;
 use reqwest::header::HeaderMap;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
@@ -121,18 +123,12 @@ impl HTTP {
                 .no_brotli()
                 .no_zstd()
                 .no_deflate()
+                .http1_only()
                 .hickory_dns(true)
                 .use_preconfigured_tls(client_config_builder)
                 .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
                 .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
                 .tcp_nodelay(true)
-                .http2_adaptive_window(false)
-                .http2_initial_stream_window_size(Some(super::HTTP2_STREAM_WINDOW_SIZE))
-                .http2_initial_connection_window_size(Some(super::HTTP2_CONNECTION_WINDOW_SIZE))
-                .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
-                .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
-                .http2_keep_alive_while_idle(true)
-                .http2_max_frame_size(Some(super::HTTP2_MAX_FRAME_SIZE))
                 .redirect(reqwest::redirect::Policy::custom(move |attempt| {
                     if enable_cache_temporary_redirect
                         && attempt.status() == reqwest::StatusCode::TEMPORARY_REDIRECT
@@ -203,15 +199,12 @@ impl HTTP {
                     .no_brotli()
                     .no_zstd()
                     .no_deflate()
+                    .http1_only()
                     .hickory_dns(true)
                     .use_preconfigured_tls(client_config_builder)
+                    .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
+                    .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
                     .tcp_nodelay(true)
-                    .http2_adaptive_window(true)
-                    .http2_initial_stream_window_size(Some(super::HTTP2_STREAM_WINDOW_SIZE))
-                    .http2_initial_connection_window_size(Some(super::HTTP2_CONNECTION_WINDOW_SIZE))
-                    .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
-                    .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
-                    .http2_keep_alive_while_idle(true)
                     .redirect(reqwest::redirect::Policy::custom({
                         let enable_cache_temporary_redirect = self.enable_cache_temporary_redirect;
                         move |attempt| {
@@ -357,53 +350,12 @@ impl super::Backend for HTTP {
             .client(request.client_cert.clone())?
             .get(&target_url)
             .headers(request_header.clone())
-            // Add Range header to ensure Content-Length is returned in response headers.
-            // Some servers (especially when using Transfer-Encoding: chunked,
-            // refer to https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Transfer-Encoding.) may not
-            // include Content-Length in HEAD requests. Using "bytes=0-" requests the
-            // entire file starting from byte 0, forcing the server to include file size
-            // information in the response headers.
-            .header(RANGE, "bytes=0-")
             .timeout(request.timeout)
             .send()
             .await
         {
-            Ok(response) if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE => {
-                // For zero-byte files, some servers return 416 Range Not Satisfiable.
-                // Retry with a GET request without the Range header to retrieve headers.
-                info!(
-                    "stat request got 416 Range Not Satisfiable, retrying with HEAD {} {}",
-                    request.task_id, target_url
-                );
-
-                match self
-                    .client(request.client_cert.clone())?
-                    .get(&target_url)
-                    .headers(request_header.clone())
-                    .timeout(request.timeout)
-                    .send()
-                    .await
-                {
-                    Ok(response) => response,
-                    Err(err) => {
-                        error!(
-                            "stat request failed {} {}: {}",
-                            request.task_id, target_url, err
-                        );
-
-                        return Ok(super::StatResponse {
-                            success: false,
-                            content_length: None,
-                            http_header: None,
-                            http_status_code: None,
-                            entries: Vec::new(),
-                            error_message: None,
-                        });
-                    }
-                }
-            }
             Ok(response) if response.status() == reqwest::StatusCode::TEMPORARY_REDIRECT => {
-                if let Some(location) = response.headers().get(reqwest::header::LOCATION) {
+                if let Some(location) = response.headers().get(LOCATION) {
                     let target_url = location.to_str().or_err(ErrorType::ParseError)?;
                     self.store_temporary_redirect_url(&request.url, target_url)
                         .await;
@@ -449,10 +401,47 @@ impl super::Backend for HTTP {
                     });
                 }
             }
+            Ok(response)
+                if response.headers().get(TRANSFER_ENCODING).is_some()
+                    && response.headers().get(CONTENT_LENGTH).is_none() =>
+            {
+                // If the response has Transfer-Encoding header but no Content-Length header,
+                // retry with HEAD request to get the correct Content-Length.
+                info!(
+                    "stat request got Transfer-Encoding header, retrying with HEAD {} {}",
+                    request.task_id, request.url,
+                );
+
+                match self
+                    .client(request.client_cert.clone())?
+                    .head(&target_url)
+                    .headers(request_header.clone())
+                    .timeout(request.timeout)
+                    .send()
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(err) => {
+                        error!(
+                            "stat request failed with HEAD {} {}: {}",
+                            request.task_id, target_url, err
+                        );
+
+                        return Ok(super::StatResponse {
+                            success: false,
+                            content_length: None,
+                            http_header: None,
+                            http_status_code: None,
+                            entries: Vec::new(),
+                            error_message: None,
+                        });
+                    }
+                }
+            }
             Ok(response) => response,
             Err(err) => {
                 error!(
-                    "stat request failed {} {}: {}",
+                    "stat request failed with GET {} {}: {}",
                     request.task_id, target_url, err
                 );
 
@@ -539,7 +528,7 @@ impl super::Backend for HTTP {
 
         // If the response is a 307 Temporary Redirect, follow the redirect manually.
         if response.status() == reqwest::StatusCode::TEMPORARY_REDIRECT {
-            if let Some(location) = response.headers().get(reqwest::header::LOCATION) {
+            if let Some(location) = response.headers().get(LOCATION) {
                 let target_url = location.to_str().or_err(ErrorType::ParseError)?;
                 self.store_temporary_redirect_url(&request.url, target_url)
                     .await;
