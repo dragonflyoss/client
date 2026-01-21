@@ -1312,6 +1312,7 @@ pub struct Security {
 #[serde(default, rename_all = "camelCase")]
 pub struct Network {
     /// enable_ipv6 indicates whether enable ipv6.
+    #[serde(rename = "enableIPv6")]
     pub enable_ipv6: bool,
 }
 
