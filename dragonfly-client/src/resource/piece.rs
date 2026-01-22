@@ -75,14 +75,17 @@ pub struct Piece {
     /// backend_factory is the backend factory.
     backend_factory: Arc<BackendFactory>,
 
-    /// download_rate_limiter is the rate limiter of the download speed in bps(bytes per second).
-    download_rate_limiter: Arc<RateLimiter>,
+    /// download_bandwidth_limiter is the rate limiter of the download speed in bps(bytes per second).
+    download_bandwidth_limiter: Arc<RateLimiter>,
 
-    /// upload_rate_limiter is the rate limiter of the upload speed in bps(bytes per second).
-    upload_rate_limiter: Arc<RateLimiter>,
+    /// upload_bandwidth_limiter is the rate limiter of the upload speed in bps(bytes per second).
+    upload_bandwidth_limiter: Arc<RateLimiter>,
 
-    /// prefetch_rate_limiter is the rate limiter of the prefetch speed in bps(bytes per second).
-    prefetch_rate_limiter: Arc<RateLimiter>,
+    /// prefetch_bandwidth_limiter is the rate limiter of the prefetch speed in bps(bytes per second).
+    prefetch_bandwidth_limiter: Arc<RateLimiter>,
+
+    /// back_to_source_bandwidth_limiter is the rate limiter of the back to source speed in bps(bytes per second).
+    back_to_source_bandwidth_limiter: Arc<RateLimiter>,
 }
 
 /// Piece implements the piece manager.
@@ -92,9 +95,10 @@ impl Piece {
         config: Arc<Config>,
         storage: Arc<Storage>,
         backend_factory: Arc<BackendFactory>,
-        download_rate_limiter: Arc<RateLimiter>,
-        upload_rate_limiter: Arc<RateLimiter>,
-        prefetch_rate_limiter: Arc<RateLimiter>,
+        download_bandwidth_limiter: Arc<RateLimiter>,
+        upload_bandwidth_limiter: Arc<RateLimiter>,
+        prefetch_bandwidth_limiter: Arc<RateLimiter>,
+        back_to_source_bandwidth_limiter: Arc<RateLimiter>,
     ) -> Result<Self> {
         Ok(Self {
             config: config.clone(),
@@ -103,9 +107,10 @@ impl Piece {
                 .build(),
             quic_downloader: piece_downloader::DownloaderFactory::new("quic", config)?.build(),
             backend_factory,
-            download_rate_limiter,
-            upload_rate_limiter,
-            prefetch_rate_limiter,
+            download_bandwidth_limiter,
+            upload_bandwidth_limiter,
+            prefetch_bandwidth_limiter,
+            back_to_source_bandwidth_limiter,
         })
     }
 
@@ -326,7 +331,7 @@ impl Piece {
 
         // Acquire the upload rate limiter.
         if !disable_rate_limit {
-            self.upload_rate_limiter.acquire(length as usize).await;
+            self.upload_bandwidth_limiter.acquire(length as usize).await;
         }
 
         // Upload the piece content.
@@ -357,10 +362,14 @@ impl Piece {
         if !disable_rate_limit {
             if is_prefetch {
                 // Acquire the prefetch rate limiter.
-                self.prefetch_rate_limiter.acquire(length as usize).await;
+                self.prefetch_bandwidth_limiter
+                    .acquire(length as usize)
+                    .await;
             } else {
                 // Acquire the download rate limiter.
-                self.download_rate_limiter.acquire(length as usize).await;
+                self.download_bandwidth_limiter
+                    .acquire(length as usize)
+                    .await;
             }
         }
 
@@ -415,10 +424,14 @@ impl Piece {
 
         if is_prefetch {
             // Acquire the prefetch rate limiter.
-            self.prefetch_rate_limiter.acquire(length as usize).await;
+            self.prefetch_bandwidth_limiter
+                .acquire(length as usize)
+                .await;
         } else {
             // Acquire the download rate limiter.
-            self.download_rate_limiter.acquire(length as usize).await;
+            self.download_bandwidth_limiter
+                .acquire(length as usize)
+                .await;
         }
 
         let (mut reader, offset, digest) = match (
@@ -539,11 +552,20 @@ impl Piece {
 
         if is_prefetch {
             // Acquire the prefetch rate limiter.
-            self.prefetch_rate_limiter.acquire(length as usize).await;
+            self.prefetch_bandwidth_limiter
+                .acquire(length as usize)
+                .await;
         } else {
             // Acquire the download rate limiter.
-            self.download_rate_limiter.acquire(length as usize).await;
+            self.download_bandwidth_limiter
+                .acquire(length as usize)
+                .await;
         }
+
+        // Acquire the back to source rate limiter.
+        self.back_to_source_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
 
         // Download the piece from the source.
         let backend = self.backend_factory.build(url).inspect_err(|err| {
@@ -558,6 +580,7 @@ impl Piece {
             backend.scheme().as_str(),
             http::Method::GET.as_str(),
         );
+
         let mut response = backend
             .get(GetRequest {
                 task_id: task_id.to_string(),
@@ -698,7 +721,9 @@ impl Piece {
         Span::current().record("piece_length", length);
 
         // Acquire the download rate limiter.
-        self.download_rate_limiter.acquire(length as usize).await;
+        self.download_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
 
         // Upload the piece content.
         self.storage
@@ -741,7 +766,9 @@ impl Piece {
         });
 
         // Acquire the download rate limiter.
-        self.download_rate_limiter.acquire(length as usize).await;
+        self.download_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
 
         // Record the start of downloading piece.
         let piece = self
@@ -878,7 +905,14 @@ impl Piece {
         }
 
         // Acquire the download rate limiter.
-        self.download_rate_limiter.acquire(length as usize).await;
+        self.download_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
+
+        // Acquire the back to source rate limiter.
+        self.back_to_source_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
 
         // Download the piece from the source.
         let backend = self.backend_factory.build(url).inspect_err(|err| {
@@ -1033,7 +1067,9 @@ impl Piece {
         Span::current().record("piece_length", length);
 
         // Acquire the download rate limiter.
-        self.download_rate_limiter.acquire(length as usize).await;
+        self.download_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
 
         // Upload the piece content.
         self.storage
@@ -1076,7 +1112,9 @@ impl Piece {
         });
 
         // Acquire the download rate limiter.
-        self.download_rate_limiter.acquire(length as usize).await;
+        self.download_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
 
         // Record the start of downloading piece.
         let piece = self
@@ -1193,17 +1231,19 @@ mod tests {
         let backend_factory = BackendFactory::new(config.clone(), None).unwrap();
         let backend_factory = Arc::new(backend_factory);
 
-        let download_rate_limiter = Arc::new(RateLimiter::builder().build());
-        let upload_rate_limiter = Arc::new(RateLimiter::builder().build());
-        let prefetch_rate_limiter = Arc::new(RateLimiter::builder().build());
+        let download_bandwidth_limiter = Arc::new(RateLimiter::builder().build());
+        let upload_bandwidth_limiter = Arc::new(RateLimiter::builder().build());
+        let prefetch_bandwidth_limiter = Arc::new(RateLimiter::builder().build());
+        let back_to_source_bandwidth_limiter = Arc::new(RateLimiter::builder().build());
 
         let piece = Piece::new(
             config.clone(),
             storage.clone(),
             backend_factory.clone(),
-            download_rate_limiter,
-            upload_rate_limiter,
-            prefetch_rate_limiter,
+            download_bandwidth_limiter,
+            upload_bandwidth_limiter,
+            prefetch_bandwidth_limiter,
+            back_to_source_bandwidth_limiter,
         )
         .unwrap();
 
