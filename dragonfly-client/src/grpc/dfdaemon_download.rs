@@ -73,7 +73,7 @@ use tonic::{
     transport::{Channel, Endpoint, Server, Uri},
     Code, Request, Response, Status,
 };
-use tower::{service_fn, ServiceBuilder};
+use tower::{limit::rate::RateLimitLayer, service_fn, ServiceBuilder};
 use tracing::{error, info, instrument, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
@@ -168,9 +168,9 @@ impl DfdaemonDownloadServer {
         // TODO(Gaius): RateLimitLayer is not implemented Clone, so we can't use it here.
         // Only use the LoadShed layer and the ConcurrencyLimit layer.
         let rate_limit_layer = ServiceBuilder::new()
-            .concurrency_limit(self.config.download.server.request_rate_limit as usize)
             .load_shed()
-            .into_inner();
+            .buffer(100)
+            .concurrency_limit(200);
 
         let uds_stream = UnixListenerStream::new(uds);
         let server = Server::builder()
@@ -181,6 +181,11 @@ impl DfdaemonDownloadServer {
             .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
             .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
             .layer(rate_limit_layer)
+            .concurrency_limit_per_connection(100)
+            .layer(RateLimitLayer::new(
+                500,
+                Duration::from_secs(1),
+            ))
             .add_service(reflection)
             .add_service(health_service)
             .add_service(service)
