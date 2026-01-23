@@ -456,23 +456,23 @@ impl super::Backend for HTTP {
             }
         };
 
-        let response_header = response.headers().clone();
         let response_status_code = response.status();
-        let response_content_length = response.content_length();
+        let response_header = response.headers().clone();
+        let content_length = match response_header.get(CONTENT_LENGTH) {
+            Some(content_length) => content_length.to_str()?.parse::<u64>().ok(),
+            None => response.content_length(),
+        };
+
         debug!(
             "stat response {} {}: {:?} {:?} {:?}",
-            request.task_id,
-            target_url,
-            response_status_code,
-            response_content_length,
-            response_header
+            request.task_id, target_url, response_status_code, content_length, response_header
         );
 
         // Drop the response body to avoid reading it.
         drop(response);
         Ok(super::StatResponse {
             success: response_status_code.is_success(),
-            content_length: response_content_length,
+            content_length,
             http_header: Some(response_header),
             http_status_code: Some(response_status_code),
             error_message: Some(response_status_code.to_string()),
