@@ -210,6 +210,10 @@ pub enum DFError {
     #[error(transparent)]
     HTTTHeaderInvalidHeaderValue(#[from] http::header::InvalidHeaderValue),
 
+    // HTTTHeaderToStrError is the error for header to str.
+    #[error(transparent)]
+    HTTTHeaderToStrError(#[from] http::header::ToStrError),
+
     /// URLParseError is the error for url parse.
     #[error(transparent)]
     URLParseError(#[from] url::ParseError),
