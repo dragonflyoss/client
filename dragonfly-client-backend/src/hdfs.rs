@@ -42,7 +42,7 @@ pub struct Hdfs {
 
 /// Hdfs implements the Backend trait.
 impl Hdfs {
-    /// new returns a new HDFS backend.
+    /// Creates a new HDFS backend.
     pub fn new() -> Self {
         Self {
             scheme: HDFS_SCHEME.to_string(),
@@ -85,12 +85,12 @@ impl Hdfs {
 /// Implement the Backend trait for Hdfs.
 #[tonic::async_trait]
 impl super::Backend for Hdfs {
-    /// scheme returns the scheme of the HDFS backend.
+    /// Returns the scheme of the HDFS backend.
     fn scheme(&self) -> String {
         self.scheme.clone()
     }
 
-    /// stat gets the metadata from the backend.
+    /// Gets the metadata from the backend.
     #[instrument(skip_all)]
     async fn stat(&self, request: super::StatRequest) -> ClientResult<super::StatResponse> {
         debug!(
@@ -173,7 +173,7 @@ impl super::Backend for Hdfs {
         })
     }
 
-    /// get gets the content from the backend.
+    /// Gets the content from the backend.
     #[instrument(skip_all)]
     async fn get(
         &self,
@@ -254,7 +254,7 @@ impl super::Backend for Hdfs {
         unimplemented!()
     }
 
-    /// exists checks whether the file exists in the backend.
+    /// Checks whether the file exists in the backend.
     #[instrument(skip_all)]
     async fn exists(&self, request: super::ExistsRequest) -> ClientResult<bool> {
         debug!(

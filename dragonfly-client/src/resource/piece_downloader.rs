@@ -72,7 +72,7 @@ pub struct DownloaderFactory {
 
 /// DownloadFactory implements the DownloadFactory trait.
 impl DownloaderFactory {
-    /// new returns a new DownloadFactory.
+    /// Creates a new DownloadFactory.
     pub fn new(protocol: &str, config: Arc<Config>) -> Result<Self> {
         let downloader: Arc<dyn Downloader> = match protocol {
             "tcp" => Arc::new(TCPDownloader::new(
@@ -94,7 +94,7 @@ impl DownloaderFactory {
         Ok(Self { downloader })
     }
 
-    /// build returns the downloader.
+    /// Returns the downloader.
     pub fn build(&self) -> Arc<dyn Downloader> {
         self.downloader.clone()
     }
@@ -129,7 +129,7 @@ impl QUICDownloader {
     /// MAX_CONNECTIONS_PER_ADDRESS is the maximum number of connections per address.
     const MAX_CONNECTIONS_PER_ADDRESS: usize = 32;
 
-    /// new returns a new QUICDownloader.
+    /// Creates a new QUICDownloader.
     pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
         Self {
             client_pool: PoolBuilder::new(QUICClientFactory {
@@ -280,7 +280,7 @@ impl TCPDownloader {
     /// MAX_CONNECTIONS_PER_ADDRESS is the maximum number of connections per address.
     const MAX_CONNECTIONS_PER_ADDRESS: usize = 32;
 
-    /// new returns a new TCPDownloader.
+    /// Creates a new TCPDownloader.
     pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
         Self {
             client_pool: PoolBuilder::new(TCPClientFactory {

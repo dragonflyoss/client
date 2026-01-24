@@ -54,7 +54,7 @@ pub struct SchedulerAnnouncer {
 
 /// SchedulerAnnouncer implements the scheduler announcer of the dfdaemon.
 impl SchedulerAnnouncer {
-    /// new creates a new scheduler announcer.
+    /// Creates a new scheduler announcer.
     pub async fn new(
         config: Arc<Config>,
         host_id: String,

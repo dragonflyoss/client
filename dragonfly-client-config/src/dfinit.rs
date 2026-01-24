@@ -27,37 +27,37 @@ use validator::Validate;
 /// NAME is the name of dfinit.
 pub const NAME: &str = "dfinit";
 
-/// default_dfinit_config_path is the default config path for dfinit.
+/// Returns the default config path for dfinit.
 #[inline]
 pub fn default_dfinit_config_path() -> PathBuf {
     crate::default_config_dir().join("dfinit.yaml")
 }
 
-/// default_container_runtime_containerd_config_path is the default containerd configuration path.
+/// Returns the default containerd configuration path.
 #[inline]
 fn default_container_runtime_containerd_config_path() -> PathBuf {
     PathBuf::from("/etc/containerd/config.toml")
 }
 
-/// default_container_runtime_docker_config_path is the default docker configuration path.
+/// Returns the default docker configuration path.
 #[inline]
 fn default_container_runtime_docker_config_path() -> PathBuf {
     PathBuf::from("/etc/docker/daemon.json")
 }
 
-/// default_container_runtime_crio_config_path is the default cri-o configuration path.
+/// Returns the default cri-o configuration path.
 #[inline]
 fn default_container_runtime_crio_config_path() -> PathBuf {
     PathBuf::from("/etc/containers/registries.conf")
 }
 
-/// default_container_runtime_podman_config_path is the default podman configuration path.
+/// Returns the default podman configuration path.
 #[inline]
 fn default_container_runtime_podman_config_path() -> PathBuf {
     PathBuf::from("/etc/containers/registries.conf")
 }
 
-/// default_container_runtime_crio_unqualified_search_registries is the default unqualified search registries of cri-o,
+/// Returns the default unqualified search registries of cri-o,
 /// refer to https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md#global-settings.
 #[inline]
 fn default_container_runtime_crio_unqualified_search_registries() -> Vec<String> {
@@ -68,7 +68,7 @@ fn default_container_runtime_crio_unqualified_search_registries() -> Vec<String>
     ]
 }
 
-/// default_container_runtime_podman_unqualified_search_registries is the default unqualified search registries of cri-o,
+/// Returns the default unqualified search registries of podman,
 /// refer to https://github.com/containers/image/blob/main/docs/containers-registries.conf.5.md#global-settings.
 #[inline]
 fn default_container_runtime_podman_unqualified_search_registries() -> Vec<String> {
@@ -79,7 +79,7 @@ fn default_container_runtime_podman_unqualified_search_registries() -> Vec<Strin
     ]
 }
 
-/// default_proxy_addr is the default proxy address of dfdaemon.
+/// Returns the default proxy address of dfdaemon.
 #[inline]
 fn default_proxy_addr() -> String {
     format!(
@@ -89,8 +89,7 @@ fn default_proxy_addr() -> String {
     )
 }
 
-/// default_container_runtime_containerd_registry_host_capabilities is the default
-/// capabilities of the containerd registry.
+/// Returns the default capabilities of the containerd registry.
 #[inline]
 fn default_container_runtime_containerd_registry_capabilities() -> Vec<String> {
     vec!["pull".to_string(), "resolve".to_string()]
@@ -330,7 +329,7 @@ pub struct Config {
 
 /// Config implements the config operation of dfinit.
 impl Config {
-    /// load loads configuration from file.
+    /// Loads configuration from file.
     #[instrument(skip_all)]
     pub fn load(path: &PathBuf) -> Result<Config> {
         // Load configuration from file.

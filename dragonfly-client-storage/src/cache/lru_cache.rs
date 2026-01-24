@@ -135,7 +135,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         }
     }
 
-    /// get gets the value of the key.
+    /// Gets the value of the key.
     pub fn get<'a, Q>(&'a mut self, k: &Q) -> Option<&'a V>
     where
         K: Borrow<Q>,

@@ -44,273 +44,273 @@ use validator::Validate;
 /// NAME is the name of dfdaemon.
 pub const NAME: &str = "dfdaemon";
 
-/// default_dfdaemon_config_path is the default config path for dfdaemon.
+/// Returns the default config path for dfdaemon.
 #[inline]
 pub fn default_dfdaemon_config_path() -> PathBuf {
     crate::default_config_dir().join("dfdaemon.yaml")
 }
 
-/// default_dfdaemon_log_dir is the default log directory for dfdaemon.
+/// Returns the default log directory for dfdaemon.
 #[inline]
 pub fn default_dfdaemon_log_dir() -> PathBuf {
     crate::default_log_dir().join(NAME)
 }
 
-/// default_download_unix_socket_path is the default unix socket path for download gRPC service.
+/// Returns the default unix socket path for download gRPC service.
 pub fn default_download_unix_socket_path() -> PathBuf {
     crate::default_root_dir().join("dfdaemon.sock")
 }
 
-/// default_download_protocol is the default protocol of downloading.
+/// Returns the default protocol of downloading.
 #[inline]
 fn default_download_protocol() -> String {
     "tcp".to_string()
 }
 
-/// default_download_request_rate_limit is the default rate limit of the download request in the
+/// Returns the default rate limit of the download request in the
 /// download grpc server, default is 5000 req/s.
 pub fn default_download_request_rate_limit() -> u64 {
     5000
 }
 
-/// default_host_hostname is the default hostname of the host.
+/// Returns the default hostname of the host.
 #[inline]
 fn default_host_hostname() -> String {
     hostname::get().unwrap().to_string_lossy().to_string()
 }
 
-/// default_dfdaemon_plugin_dir is the default plugin directory for dfdaemon.
+/// Returns the default plugin directory for dfdaemon.
 #[inline]
 fn default_dfdaemon_plugin_dir() -> PathBuf {
     crate::default_plugin_dir().join(NAME)
 }
 
-/// default_dfdaemon_cache_dir is the default cache directory for dfdaemon.
+/// Returns the default cache directory for dfdaemon.
 #[inline]
 fn default_dfdaemon_cache_dir() -> PathBuf {
     crate::default_cache_dir().join(NAME)
 }
 
-/// default_upload_grpc_server_port is the default port of the upload gRPC server.
+/// Returns the default port of the upload gRPC server.
 #[inline]
 fn default_upload_grpc_server_port() -> u16 {
     4000
 }
 
-/// default_upload_request_rate_limit is the default rate limit of the upload request in the
+/// Returns the default rate limit of the upload request in the
 /// upload grpc server, default is 5000 req/s.
 pub fn default_upload_request_rate_limit() -> u64 {
     5000
 }
 
-/// default_upload_rate_limit is the default rate limit of the upload speed in GiB/Mib/Kib per second.
+/// Returnsupload_rate_limit is the default rate limit of the upload speed in GiB/Mib/Kib per second.
 #[inline]
 fn default_upload_rate_limit() -> ByteSize {
     // Default rate limit is 10GiB/s.
     ByteSize::gib(10)
 }
 
-/// default_health_server_port is the default port of the health server.
+/// Returnshealth_server_port is the default port of the health server.
 #[inline]
 fn default_health_server_port() -> u16 {
     4003
 }
 
-/// default_metrics_server_port is the default port of the metrics server.
+/// Returnsmetrics_server_port is the default port of the metrics server.
 #[inline]
 fn default_metrics_server_port() -> u16 {
     4002
 }
 
-/// default_stats_server_port is the default port of the stats server.
+/// Returnsstats_server_port is the default port of the stats server.
 #[inline]
 fn default_stats_server_port() -> u16 {
     4004
 }
 
-/// default_download_rate_limit is the default rate limit of the download speed in GiB/Mib/Kib per second.
+/// Returnsdownload_rate_limit is the default rate limit of the download speed in GiB/Mib/Kib per second.
 #[inline]
 fn default_download_rate_limit() -> ByteSize {
     // Default rate limit is 10GiB/s.
     ByteSize::gib(10)
 }
 
-/// default_download_piece_timeout is the default timeout for downloading a piece from source.
+/// Returnsdownload_piece_timeout is the default timeout for downloading a piece from source.
 #[inline]
 fn default_download_piece_timeout() -> Duration {
     Duration::from_secs(360)
 }
 
-/// default_collected_download_piece_timeout is the default timeout for collecting one piece from the parent in the stream.
+/// Returnscollected_download_piece_timeout is the default timeout for collecting one piece from the parent in the stream.
 #[inline]
 fn default_collected_download_piece_timeout() -> Duration {
     Duration::from_secs(360)
 }
 
-/// default_download_concurrent_piece_count is the default number of concurrent pieces to download.
+/// Returnsdownload_concurrent_piece_count is the default number of concurrent pieces to download.
 #[inline]
 fn default_download_concurrent_piece_count() -> u32 {
     8
 }
 
-/// default_backend_enable_cache_temporary_redirect is the default value for caching temporary redirects.
+/// Returnsbackend_enable_cache_temporary_redirect is the default value for caching temporary redirects.
 #[inline]
 fn default_backend_enable_cache_temporary_redirect() -> bool {
     true
 }
 
-/// default_backend_cache_temporary_redirect_ttl is the default TTL for cached 307 redirects, default is 10 minutes.
+/// Returnsbackend_cache_temporary_redirect_ttl is the default TTL for cached 307 redirects, default is 10 minutes.
 #[inline]
 fn default_backend_cache_temporary_redirect_ttl() -> Duration {
     Duration::from_secs(600)
 }
 
-/// default_backend_put_concurrent_chunk_count is the default number of concurrent chunks to upload.
+/// Returnsbackend_put_concurrent_chunk_count is the default number of concurrent chunks to upload.
 #[inline]
 fn default_backend_put_concurrent_chunk_count() -> u32 {
     16
 }
 
-/// default_backend_put_chunk_size is the default chunk size for uploading, default is 8MiB.
+/// Returnsbackend_put_chunk_size is the default chunk size for uploading, default is 8MiB.
 fn default_backend_put_chunk_size() -> ByteSize {
     ByteSize::mib(8)
 }
 
-/// default_backend_put_timeout is the default timeout for uploading a file to backend, default is
+/// Returnsbackend_put_timeout is the default timeout for uploading a file to backend, default is
 /// 15 minutes.
 fn default_backend_put_timeout() -> Duration {
     Duration::from_secs(900)
 }
 
-/// default_download_max_schedule_count is the default max count of schedule.
+/// Returnsdownload_max_schedule_count is the default max count of schedule.
 #[inline]
 fn default_download_max_schedule_count() -> u32 {
     5
 }
 
-/// default_tracing_path is the default tracing path for dfdaemon.
+/// Returnstracing_path is the default tracing path for dfdaemon.
 #[inline]
 fn default_tracing_path() -> Option<PathBuf> {
     Some(PathBuf::from("/v1/traces"))
 }
 
-/// default_scheduler_announce_interval is the default interval to announce peer to the scheduler.
+/// Returnsscheduler_announce_interval is the default interval to announce peer to the scheduler.
 #[inline]
 fn default_scheduler_announce_interval() -> Duration {
     Duration::from_secs(300)
 }
 
-/// default_scheduler_schedule_timeout is the default timeout for scheduling.
+/// Returnsscheduler_schedule_timeout is the default timeout for scheduling.
 #[inline]
 fn default_scheduler_schedule_timeout() -> Duration {
     Duration::from_secs(3 * 60 * 60)
 }
 
-/// default_dynconfig_refresh_interval is the default interval to refresh dynamic configuration from manager.
+/// Returnsdynconfig_refresh_interval is the default interval to refresh dynamic configuration from manager.
 #[inline]
 fn default_dynconfig_refresh_interval() -> Duration {
     Duration::from_secs(300)
 }
 
-/// default_storage_server_tcp_port is the default port of the storage tcp server.
+/// Returnsstorage_server_tcp_port is the default port of the storage tcp server.
 #[inline]
 fn default_storage_server_tcp_port() -> u16 {
     4005
 }
 
-/// default_storage_server_quic_port is the default port of the storage quic server.
+/// Returnsstorage_server_quic_port is the default port of the storage quic server.
 #[inline]
 fn default_storage_server_quic_port() -> u16 {
     4006
 }
 
-/// default_storage_keep is the default keep of the task's metadata and content when the dfdaemon restarts.
+/// Returnsstorage_keep is the default keep of the task's metadata and content when the dfdaemon restarts.
 #[inline]
 fn default_storage_keep() -> bool {
     false
 }
 
-/// default_storage_write_piece_timeout is the default timeout for writing a piece to storage(e.g., disk
+/// Returnsstorage_write_piece_timeout is the default timeout for writing a piece to storage(e.g., disk
 /// or cache).
 #[inline]
 fn default_storage_write_piece_timeout() -> Duration {
     Duration::from_secs(360)
 }
 
-/// default_storage_write_buffer_size is the default buffer size for writing piece to disk, default is 4MB.
+/// Returnsstorage_write_buffer_size is the default buffer size for writing piece to disk, default is 4MB.
 #[inline]
 fn default_storage_write_buffer_size() -> usize {
     4 * 1024 * 1024
 }
 
-/// default_storage_read_buffer_size is the default buffer size for reading piece from disk, default is 4MB.
+/// Returnsstorage_read_buffer_size is the default buffer size for reading piece from disk, default is 4MB.
 #[inline]
 fn default_storage_read_buffer_size() -> usize {
     4 * 1024 * 1024
 }
 
-/// default_storage_cache_capacity is the default cache capacity for the storage server, default is
+/// Returnsstorage_cache_capacity is the default cache capacity for the storage server, default is
 /// 64MiB.
 #[inline]
 fn default_storage_cache_capacity() -> ByteSize {
     ByteSize::mib(64)
 }
 
-/// default_gc_interval is the default interval to do gc.
+/// Returnsgc_interval is the default interval to do gc.
 #[inline]
 fn default_gc_interval() -> Duration {
     Duration::from_secs(900)
 }
 
-/// default_gc_policy_task_ttl is the default ttl of the task, default is 30 day.
+/// Returnsgc_policy_task_ttl is the default ttl of the task, default is 30 day.
 #[inline]
 fn default_gc_policy_task_ttl() -> Duration {
     Duration::from_secs(2_592_000)
 }
 
-/// default_gc_policy_task_ttl is the default ttl of the task, default is 1 day.
+/// Returnsgc_policy_task_ttl is the default ttl of the task, default is 1 day.
 #[inline]
 fn default_gc_policy_persistent_task_ttl() -> Duration {
     Duration::from_secs(86_400)
 }
 
-/// default_gc_policy_task_ttl is the default ttl of the task, default is 1 day.
+/// Returnsgc_policy_task_ttl is the default ttl of the task, default is 1 day.
 #[inline]
 fn default_gc_policy_persistent_cache_task_ttl() -> Duration {
     Duration::from_secs(86_400)
 }
 
-/// default_gc_policy_disk_threshold is the default threshold of the disk usage to do gc.
+/// Returnsgc_policy_disk_threshold is the default threshold of the disk usage to do gc.
 #[inline]
 fn default_gc_policy_disk_threshold() -> ByteSize {
     ByteSize::default()
 }
 
-/// default_gc_policy_disk_high_threshold_percent is the default high threshold percent of the disk usage.
+/// Returnsgc_policy_disk_high_threshold_percent is the default high threshold percent of the disk usage.
 #[inline]
 fn default_gc_policy_disk_high_threshold_percent() -> u8 {
     80
 }
 
-/// default_gc_policy_disk_low_threshold_percent is the default low threshold percent of the disk usage.
+/// Returnsgc_policy_disk_low_threshold_percent is the default low threshold percent of the disk usage.
 #[inline]
 fn default_gc_policy_disk_low_threshold_percent() -> u8 {
     60
 }
 
-/// default_proxy_server_port is the default port of the proxy server.
+/// Returnsproxy_server_port is the default port of the proxy server.
 #[inline]
 pub fn default_proxy_server_port() -> u16 {
     4001
 }
 
-/// default_proxy_read_buffer_size is the default buffer size for reading piece, default is 4MB.
+/// Returnsproxy_read_buffer_size is the default buffer size for reading piece, default is 4MB.
 #[inline]
 pub fn default_proxy_read_buffer_size() -> usize {
     4 * 1024 * 1024
 }
 
-/// default_prefetch_rate_limit is the default rate limit of the prefetch speed in GiB/Mib/Kib per second. The prefetch request
+/// Returnsprefetch_rate_limit is the default rate limit of the prefetch speed in GiB/Mib/Kib per second. The prefetch request
 /// has lower priority so limit the rate to avoid occupying the bandwidth impact other download tasks.
 #[inline]
 fn default_prefetch_rate_limit() -> ByteSize {
@@ -318,13 +318,13 @@ fn default_prefetch_rate_limit() -> ByteSize {
     ByteSize::gib(2)
 }
 
-/// default_proxy_registry_mirror_addr is the default registry mirror address.
+/// Returnsproxy_registry_mirror_addr is the default registry mirror address.
 #[inline]
 fn default_proxy_registry_mirror_addr() -> String {
     "https://index.docker.io".to_string()
 }
 
-/// default_enable_task_id_based_blob_digest is the default value for enable_task_id_based_blob_digest.
+/// Returnsenable_task_id_based_blob_digest is the default value for enable_task_id_based_blob_digest.
 /// It indicates whether to calculate the task ID based on the blob's SHA256 digest for OCI registry
 /// blob download URLs.
 #[inline]

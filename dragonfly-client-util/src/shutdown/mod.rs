@@ -33,7 +33,7 @@ pub struct Shutdown {
 
 /// Shutdown implements the shutdown signal.
 impl Shutdown {
-    /// new creates a new Shutdown.
+    /// Creates a new Shutdown.
     pub fn new() -> Shutdown {
         let (sender, receiver) = broadcast::channel(1);
         Self {
@@ -43,7 +43,7 @@ impl Shutdown {
         }
     }
 
-    /// is_shutdown returns true if the shutdown signal has been received.
+    /// Returns true if the shutdown signal has been received.
     pub fn is_shutdown(&self) -> bool {
         self.is_shutdown
     }
@@ -70,7 +70,7 @@ impl Shutdown {
 
 // Default implements the Default trait.
 impl Default for Shutdown {
-    // default returns a new default Shutdown.
+    // Returns a new default Shutdown.
     fn default() -> Self {
         Self::new()
     }
@@ -78,7 +78,7 @@ impl Default for Shutdown {
 
 /// Clone implements the Clone trait.
 impl Clone for Shutdown {
-    /// clone returns a new Shutdown.
+    /// Returns a new Shutdown.
     fn clone(&self) -> Self {
         let sender = self.sender.clone();
         let receiver = self.sender.subscribe();

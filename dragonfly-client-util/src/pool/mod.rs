@@ -36,7 +36,7 @@ pub struct RequestGuard {
 
 /// RequestGuard implements the request guard pattern.
 impl RequestGuard {
-    /// Create a new request guard.
+    /// Creates a new request guard.
     fn new(active_requests: Arc<AtomicUsize>) -> Self {
         active_requests.fetch_add(1, Ordering::SeqCst);
         Self { active_requests }
@@ -66,7 +66,7 @@ pub struct Entry<T> {
 
 /// Entry methods for managing client state.
 impl<T> Entry<T> {
-    /// Create a new entry with the given client.
+    /// Creates a new entry with the given client.
     fn new(client: T) -> Self {
         Self {
             client,
@@ -144,7 +144,7 @@ where
     T: Clone,
     F: Factory<A, T>,
 {
-    /// Create a new client pool builder.
+    /// Creates a new client pool builder.
     pub fn new(factory: F) -> Self {
         Self {
             factory,

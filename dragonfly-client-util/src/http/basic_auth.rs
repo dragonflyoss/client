@@ -32,7 +32,7 @@ pub struct Credentials {
 
 /// Credentials is the basic auth.
 impl Credentials {
-    /// new returns a new Credentials.
+    /// Creates a new Credentials.
     pub fn new(username: &str, password: &str) -> Credentials {
         Self {
             username: username.to_string(),

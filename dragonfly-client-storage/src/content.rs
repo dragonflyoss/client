@@ -66,13 +66,12 @@ pub struct WritePersistentCacheTaskResponse {
     pub hash: String,
 }
 
-/// new_content creates a new Content instance to support linux and macos.
+/// Creates a new Content instance to support linux and macos.
 pub async fn new_content(config: Arc<Config>, dir: &Path) -> Result<Content> {
     Content::new(config, dir).await
 }
 
-/// calculate_piece_range calculates the target offset and length based on the piece range and
-/// request range.
+/// Calculates the target offset and length based on the piece range and request range.
 pub fn calculate_piece_range(offset: u64, length: u64, range: Option<Range>) -> (u64, u64) {
     if let Some(range) = range {
         let target_offset = max(offset, range.start);

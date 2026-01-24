@@ -746,7 +746,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         }
     }
 
-    /// stat_local_task stats the local task.
+    /// Gets the local task.
     #[instrument(skip_all, fields(task_id, remote_ip))]
     async fn stat_local_task(
         &self,
@@ -794,7 +794,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         }
     }
 
-    /// list_tasks lists the tasks.
+    /// Lists the tasks.
     #[instrument(skip_all, fields(task_id, url, remote_ip))]
     async fn list_task_entries(
         &self,
@@ -921,7 +921,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(()))
     }
 
-    /// delete_host calls the scheduler to delete the host.
+    /// Calls the scheduler to delete the host.
     #[instrument(skip_all, fields(host_id))]
     async fn delete_host(&self, request: Request<()>) -> Result<Response<()>, Status> {
         // If the parent context is set, use it as the parent context for the span.

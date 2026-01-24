@@ -35,7 +35,7 @@ pub struct Health {
 
 /// Health implements the health server.
 impl Health {
-    /// new creates a new Health.
+    /// Creates a new Health.
     pub fn new(
         addr: SocketAddr,
         shutdown: shutdown::Shutdown,

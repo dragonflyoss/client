@@ -86,7 +86,7 @@ impl Interface {
     /// DEFAULT_NETWORKS_REFRESH_INTERVAL is the default interval for refreshing network data.
     const DEFAULT_NETWORKS_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
-    /// new creates a new Interface instance based on the provided IP address and rate limit.
+    /// Creates a new Interface instance based on the provided IP address and rate limit.
     pub fn new(ip: IpAddr, rate_limit: ByteSize) -> Interface {
         let rate_limit = Self::byte_size_to_bits(rate_limit); // convert to bps
         let Some(interface) = Self::get_network_interface_by_ip(ip) else {
@@ -171,7 +171,7 @@ impl Interface {
         }
     }
 
-    /// get_speed returns the speed of the network interface in Mbps.
+    /// Returns the speed of the network interface in Mbps.
     pub fn get_speed(name: &str) -> Option<u64> {
         #[cfg(target_os = "linux")]
         {
@@ -188,8 +188,7 @@ impl Interface {
         }
     }
 
-    /// get_network_interface_by_ip returns the network interface that has the specified
-    /// IP address.
+    /// Returns the network interface that has the specified IP address.
     pub fn get_network_interface_by_ip(ip: IpAddr) -> Option<NetworkInterface> {
         datalink::interfaces()
             .into_iter()

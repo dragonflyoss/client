@@ -84,7 +84,7 @@ pub struct SchedulerClient {
 
 /// SchedulerClient implements the grpc client of the scheduler.
 impl SchedulerClient {
-    /// new creates a new SchedulerClient.
+    /// Creates a new SchedulerClient.
     pub async fn new(config: Arc<Config>, dynconfig: Arc<Dynconfig>) -> Result<Self> {
         let client = Self {
             config,
@@ -114,7 +114,7 @@ impl SchedulerClient {
         Ok(response)
     }
 
-    /// stat_peer gets the status of the peer.
+    /// Gets the status of the peer.
     #[instrument(skip(self))]
     pub async fn stat_peer(&self, request: StatPeerRequest) -> Result<Peer> {
         let task_id = request.task_id.clone();
@@ -139,7 +139,7 @@ impl SchedulerClient {
         Ok(())
     }
 
-    /// stat_task gets the status of the task.
+    /// Gets the status of the task.
     #[instrument(skip(self))]
     pub async fn stat_task(&self, request: StatTaskRequest) -> Result<Task> {
         let task_id = request.task_id.clone();
@@ -351,7 +351,7 @@ impl SchedulerClient {
         Ok(response)
     }
 
-    /// stat_persistent_peer gets the status of the persistent peer.
+    /// Gets the status of the persistent peer.
     #[instrument(skip(self))]
     pub async fn stat_persistent_peer(
         &self,
@@ -425,7 +425,7 @@ impl SchedulerClient {
         Ok(())
     }
 
-    /// stat_persistent_task gets the status of the persistent task.
+    /// Gets the status of the persistent task.
     #[instrument(skip(self))]
     pub async fn stat_persistent_task(
         &self,
@@ -648,7 +648,7 @@ impl SchedulerClient {
         )
     }
 
-    /// update_available_scheduler_addrs updates the addresses of available schedulers.
+    /// Updates the addresses of available schedulers.
     #[instrument(skip(self))]
     async fn update_available_scheduler_addrs(&self) -> Result<()> {
         // Get the endpoints of available schedulers.

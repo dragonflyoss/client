@@ -52,7 +52,7 @@ pub struct GC {
 }
 
 impl GC {
-    /// new creates a new GC.
+    /// Creates a new GC.
     pub fn new(
         config: Arc<Config>,
         host_id: String,

@@ -65,7 +65,7 @@ pub struct Storage {
 
 /// Storage implements the storage.
 impl Storage {
-    /// new returns a new storage.
+    /// Creates a new storage.
     pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf) -> Result<Self> {
         let metadata = metadata::Metadata::new(config.clone(), dir, &log_dir)?;
         let content = content::new_content(config.clone(), dir).await?;
@@ -79,17 +79,17 @@ impl Storage {
         })
     }
 
-    /// total_space returns the total space of the disk.
+    /// Returns the total space of the disk.
     pub fn total_space(&self) -> Result<u64> {
         self.content.total_space()
     }
 
-    /// available_space returns the available space of the disk.
+    /// Returns the available space of the disk.
     pub fn available_space(&self) -> Result<u64> {
         self.content.available_space()
     }
 
-    /// has_enough_space checks if the storage has enough space to store the content.
+    /// Checks if the storage has enough space to store the content.
     pub fn has_enough_space(&self, content_length: u64) -> Result<bool> {
         self.content.has_enough_space(content_length)
     }
@@ -106,7 +106,7 @@ impl Storage {
         self.content.copy_task(id, to).await
     }
 
-    /// is_same_dev_inode_as_task checks if the task content is on the same device inode as the
+    /// Checks if the task content is on the same device inode as the
     /// destination.
     pub async fn is_same_dev_inode_as_task(&self, id: &str, to: &Path) -> Result<bool> {
         self.content.is_same_dev_inode_as_task(id, to).await
@@ -164,19 +164,19 @@ impl Storage {
         self.metadata.upload_task_finished(id)
     }
 
-    /// get_task returns the task metadata.
+    /// Returns the task metadata.
     #[instrument(skip_all)]
     pub fn get_task(&self, id: &str) -> Result<Option<metadata::Task>> {
         self.metadata.get_task(id)
     }
 
-    /// is_task_exists returns whether the task exists.
+    /// Returns whether the task exists.
     #[instrument(skip_all)]
     pub fn is_task_exists(&self, id: &str) -> Result<bool> {
         self.metadata.is_task_exists(id)
     }
 
-    /// get_tasks returns the task metadatas.
+    /// Returns the task metadatas.
     #[instrument(skip_all)]
     pub fn get_tasks(&self) -> Result<Vec<metadata::Task>> {
         self.metadata.get_tasks()
@@ -223,7 +223,7 @@ impl Storage {
         self.content.copy_persistent_task(id, to).await
     }
 
-    /// is_same_dev_inode_as_persistent_task checks if the persistent task content is on the same device inode as the
+    /// Checks if the persistent task content is on the same device inode as the
     /// destination.
     pub async fn is_same_dev_inode_as_persistent_task(&self, id: &str, to: &Path) -> Result<bool> {
         self.content
@@ -323,7 +323,7 @@ impl Storage {
         self.metadata.upload_persistent_task_finished(id)
     }
 
-    /// get_persistent_task returns the persistent task metadata.
+    /// Returns the persistent task metadata.
     #[instrument(skip_all)]
     pub fn get_persistent_task(&self, id: &str) -> Result<Option<metadata::PersistentTask>> {
         self.metadata.get_persistent_task(id)
@@ -335,13 +335,13 @@ impl Storage {
         self.metadata.persist_persistent_task(id)
     }
 
-    /// is_persistent_task_exists returns whether the persistent task exists.
+    /// Returns whether the persistent task exists.
     #[instrument(skip_all)]
     pub fn is_persistent_task_exists(&self, id: &str) -> Result<bool> {
         self.metadata.is_persistent_task_exists(id)
     }
 
-    /// get_tasks returns the task metadatas.
+    /// Returns the task metadatas.
     #[instrument(skip_all)]
     pub fn get_persistent_tasks(&self) -> Result<Vec<metadata::PersistentTask>> {
         self.metadata.get_persistent_tasks()
@@ -394,7 +394,7 @@ impl Storage {
         self.content.copy_persistent_cache_task(id, to).await
     }
 
-    /// is_same_dev_inode_as_persistent_cache_task checks if the persistent cache task content is on the same device inode as the
+    /// Checks if the persistent cache task content is on the same device inode as the
     /// destination.
     pub async fn is_same_dev_inode_as_persistent_cache_task(
         &self,
@@ -507,7 +507,7 @@ impl Storage {
         self.metadata.upload_persistent_cache_task_finished(id)
     }
 
-    /// get_persistent_cache_task returns the persistent cache task metadata.
+    /// Returns the persistent cache task metadata.
     #[instrument(skip_all)]
     pub fn get_persistent_cache_task(
         &self,
@@ -522,13 +522,13 @@ impl Storage {
         self.metadata.persist_persistent_cache_task(id)
     }
 
-    /// is_persistent_cache_task_exists returns whether the persistent cache task exists.
+    /// Returns whether the persistent cache task exists.
     #[instrument(skip_all)]
     pub fn is_persistent_cache_task_exists(&self, id: &str) -> Result<bool> {
         self.metadata.is_persistent_cache_task_exists(id)
     }
 
-    /// get_tasks returns the task metadatas.
+    /// Returns the task metadatas.
     #[instrument(skip_all)]
     pub fn get_persistent_cache_tasks(&self) -> Result<Vec<metadata::PersistentCacheTask>> {
         self.metadata.get_persistent_cache_tasks()
@@ -590,13 +590,13 @@ impl Storage {
         self.metadata.upload_cache_task_finished(id)
     }
 
-    /// get_cache_task returns the cache task metadata.
+    /// Returns the cache task metadata.
     #[instrument(skip_all)]
     pub fn get_cache_task(&self, id: &str) -> Result<Option<metadata::CacheTask>> {
         self.metadata.get_cache_task(id)
     }
 
-    /// is_cache_task_exists returns whether the cache task exists.
+    /// Returns whether the cache task exists.
     #[instrument(skip_all)]
     pub fn is_cache_task_exists(&self, id: &str) -> Result<bool> {
         self.metadata.is_cache_task_exists(id)

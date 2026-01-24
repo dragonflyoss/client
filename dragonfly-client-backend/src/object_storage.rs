@@ -102,7 +102,7 @@ pub struct ParsedURL {
 
 /// ParsedURL implements the ParsedURL trait.
 impl ParsedURL {
-    /// is_dir returns true if the URL path ends with a slash.
+    /// Returns true if the URL path ends with a slash.
     pub fn is_dir(&self) -> bool {
         self.url.path().ends_with('/')
     }
@@ -502,12 +502,12 @@ impl ObjectStorage {
 /// Backend implements the Backend trait.
 #[tonic::async_trait]
 impl crate::Backend for ObjectStorage {
-    /// scheme returns the scheme of the object storage.
+    /// Returns the scheme of the object storage.
     fn scheme(&self) -> String {
         self.scheme.to_string()
     }
 
-    /// stat gets the metadata from the backend.
+    /// Gets the metadata from the backend.
     #[instrument(skip_all)]
     async fn stat(&self, request: super::StatRequest) -> ClientResult<super::StatResponse> {
         debug!(
@@ -594,7 +594,7 @@ impl crate::Backend for ObjectStorage {
         })
     }
 
-    /// get gets the content from the backend.
+    /// Gets the content from the backend.
     #[instrument(skip_all)]
     async fn get(
         &self,
@@ -777,7 +777,7 @@ impl crate::Backend for ObjectStorage {
         })
     }
 
-    /// exists checks whether the file exists in the backend.
+    /// Checks whether the file exists in the backend.
     #[instrument(skip_all)]
     async fn exists(&self, request: super::ExistsRequest) -> ClientResult<bool> {
         debug!(

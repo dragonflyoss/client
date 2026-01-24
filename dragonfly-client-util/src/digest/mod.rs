@@ -32,7 +32,7 @@ lazy_static! {
     static ref BLOB_URL_REGEX: Regex = Regex::new(r"^(.*)://(.*)/v2/(.*)/blobs/([^?]+)(?:\?.*)?$").unwrap();
 }
 
-/// is_blob_url checks if the url is an oci blob url.
+/// Checks if the URL is an OCI blob URL.
 pub fn is_blob_url(url: &str) -> bool {
     BLOB_URL_REGEX.is_match(url)
 }
@@ -88,7 +88,7 @@ pub struct Digest {
 
 /// Digest implements the Digest.
 impl Digest {
-    /// new returns a new Digest.
+    /// Creates a new Digest.
     pub fn new(algorithm: Algorithm, encoded: String) -> Self {
         Self { algorithm, encoded }
     }
@@ -103,7 +103,7 @@ impl Digest {
             .ok()
     }
 
-    /// algorithm returns the algorithm of the digest.
+    /// Returns the algorithm of the digest.
     pub fn algorithm(&self) -> Algorithm {
         self.algorithm
     }
@@ -171,7 +171,7 @@ impl FromStr for Digest {
     }
 }
 
-/// calculate_file_digest calculates the digest of a file.
+/// Calculates the digest of a file.
 #[instrument(skip_all)]
 pub fn calculate_file_digest(algorithm: Algorithm, path: &Path) -> ClientResult<Digest> {
     let f = std::fs::File::open(path)?;
