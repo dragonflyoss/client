@@ -706,6 +706,13 @@ async fn proxy_via_dfdaemon(
     {
         Ok(response) => response,
         Err(err) => match err {
+            ClientError::TonicStatus(err) if err.code() == tonic::Code::ResourceExhausted => {
+                return Ok(make_error_response(
+                    header::ErrorType::Proxy,
+                    http::StatusCode::TOO_MANY_REQUESTS,
+                    None,
+                ));
+            }
             ClientError::TonicStatus(err) => {
                 match serde_json::from_slice::<Backend>(err.details()) {
                     Ok(backend) => {

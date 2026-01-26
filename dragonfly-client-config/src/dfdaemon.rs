@@ -68,9 +68,15 @@ fn default_download_protocol() -> String {
 }
 
 /// default_download_request_rate_limit is the default rate limit of the download request in the
-/// download grpc server, default is 5000 req/s.
+/// download grpc server, default is 4000 req/s.
 pub fn default_download_request_rate_limit() -> u64 {
-    5000
+    4000
+}
+
+// default_download_request_buffer_size is the default buffer size for download request channel,
+// default is 1000.
+pub fn default_download_request_buffer_size() -> usize {
+    1000
 }
 
 /// default_host_hostname is the default hostname of the host.
@@ -98,9 +104,15 @@ fn default_upload_grpc_server_port() -> u16 {
 }
 
 /// default_upload_request_rate_limit is the default rate limit of the upload request in the
-/// upload grpc server, default is 5000 req/s.
+/// upload grpc server, default is 4000 req/s.
 pub fn default_upload_request_rate_limit() -> u64 {
-    5000
+    4000
+}
+
+/// default_upload_request_buffer_size is the default buffer size for upload request channel,
+/// default is 1000.
+pub fn default_upload_request_buffer_size() -> usize {
+    1000
 }
 
 /// default_upload_rate_limit is the default rate limit of the upload speed in GiB/Mib/Kib per second.
@@ -400,10 +412,22 @@ pub struct DownloadServer {
     #[serde(default = "default_download_unix_socket_path")]
     pub socket_path: PathBuf,
 
-    /// Request rate limit is the rate limit of the download request in the download grpc server,
-    /// default is 5000 req/s.
+    /// The rate limit for download requests on the gRPC server.
+    ///
+    /// This limit applies to the total number of gRPC requests per second,
+    /// including:
+    /// - Multiple requests within a single connection.
+    /// - Single requests across different connections.
     #[serde(default = "default_download_request_rate_limit")]
     pub request_rate_limit: u64,
+
+    /// The buffer size for the download request channel on the gRPC server.
+    ///
+    /// This controls the capacity of the bounded channel used to queue
+    /// incoming gRPC requests before they are processed. If the buffer is full,
+    /// new requests will return a `RESOURCE_EXHAUSTED` error.
+    #[serde(default = "default_download_request_buffer_size")]
+    pub request_buffer_size: usize,
 }
 
 /// DownloadServer implements Default.
@@ -412,6 +436,7 @@ impl Default for DownloadServer {
         DownloadServer {
             socket_path: default_download_unix_socket_path(),
             request_rate_limit: default_download_request_rate_limit(),
+            request_buffer_size: default_download_request_buffer_size(),
         }
     }
 }
@@ -488,10 +513,22 @@ pub struct UploadServer {
     /// mutual TLS.
     pub key: Option<PathBuf>,
 
-    /// Request rate limit is the rate limit of the upload request in the upload grpc server,
-    /// default is 5000 req/s.
+    /// The rate limit for upload requests on the gRPC server.
+    ///
+    /// This limit applies to the total number of gRPC requests per second,
+    /// including:
+    /// - Multiple requests within a single connection.
+    /// - Single requests across different connections.
     #[serde(default = "default_upload_request_rate_limit")]
     pub request_rate_limit: u64,
+
+    /// The buffer size for the upload request channel on the gRPC server.
+    ///
+    /// This controls the capacity of the bounded channel used to queue
+    /// incoming gRPC requests before they are processed. If the buffer is full,
+    /// new requests will return a `RESOURCE_EXHAUSTED` error.
+    #[serde(default = "default_upload_request_buffer_size")]
+    pub request_buffer_size: usize,
 }
 
 /// UploadServer implements Default.
@@ -504,6 +541,7 @@ impl Default for UploadServer {
             cert: None,
             key: None,
             request_rate_limit: default_upload_request_rate_limit(),
+            request_buffer_size: default_upload_request_buffer_size(),
         }
     }
 }
