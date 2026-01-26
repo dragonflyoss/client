@@ -57,7 +57,7 @@ hyper-rustls = { version = "0.27.7", default-features = false, features = ["http
 http-range-header = "0.4.2"
 tracing = "0.1"
 url = "2.5.4"
-rustls = { version = "0.23.35", default-features = false, features = ["tls12", "ring"] }
+rustls = { version = "0.23.36", default-features = false, features = ["tls12", "ring"] }
 rustls-pki-types = "1.13.2"
 rustls-pemfile = "2.2.0"
 sha2 = "0.10"
