@@ -23,7 +23,6 @@ use dragonfly_client_core::{error::BackendError, Error, Result};
 use dragonfly_client_metric::{
     collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
     collect_backend_request_started_metrics, collect_download_piece_traffic_metrics,
-    collect_upload_piece_traffic_metrics,
 };
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::net::format_socket_addr;
@@ -75,16 +74,13 @@ pub struct Piece {
     /// backend_factory is the backend factory.
     backend_factory: Arc<BackendFactory>,
 
-    /// download_bandwidth_limiter is the rate limiter of the download speed in bps(bytes per second).
+    /// download_bandwidth_limiter is the rate limiter of the download speed in bytes per second.
     download_bandwidth_limiter: Arc<RateLimiter>,
 
-    /// upload_bandwidth_limiter is the rate limiter of the upload speed in bps(bytes per second).
-    upload_bandwidth_limiter: Arc<RateLimiter>,
-
-    /// prefetch_bandwidth_limiter is the rate limiter of the prefetch speed in bps(bytes per second).
+    /// prefetch_bandwidth_limiter is the rate limiter of the prefetch speed in bytes per second.
     prefetch_bandwidth_limiter: Arc<RateLimiter>,
 
-    /// back_to_source_bandwidth_limiter is the rate limiter of the back to source speed in bps(bytes per second).
+    /// back_to_source_bandwidth_limiter is the rate limiter of the back to source speed in bytes per second.
     back_to_source_bandwidth_limiter: Arc<RateLimiter>,
 }
 
@@ -96,7 +92,6 @@ impl Piece {
         storage: Arc<Storage>,
         backend_factory: Arc<BackendFactory>,
         download_bandwidth_limiter: Arc<RateLimiter>,
-        upload_bandwidth_limiter: Arc<RateLimiter>,
         prefetch_bandwidth_limiter: Arc<RateLimiter>,
         back_to_source_bandwidth_limiter: Arc<RateLimiter>,
     ) -> Result<Self> {
@@ -108,7 +103,6 @@ impl Piece {
             quic_downloader: piece_downloader::DownloaderFactory::new("quic", config)?.build(),
             backend_factory,
             download_bandwidth_limiter,
-            upload_bandwidth_limiter,
             prefetch_bandwidth_limiter,
             back_to_source_bandwidth_limiter,
         })
@@ -315,34 +309,6 @@ impl Piece {
         (content_length as f64 / piece_length as f64).ceil() as u32
     }
 
-    /// upload_from_local_into_async_read uploads a single piece from local cache.
-    #[instrument(skip_all, fields(piece_id))]
-    pub async fn upload_from_local_into_async_read(
-        &self,
-        piece_id: &str,
-        task_id: &str,
-        length: u64,
-        range: Option<Range>,
-        disable_rate_limit: bool,
-    ) -> Result<impl AsyncRead> {
-        // Span record the piece_id.
-        Span::current().record("piece_id", piece_id);
-        Span::current().record("piece_length", length);
-
-        // Acquire the upload rate limiter.
-        if !disable_rate_limit {
-            self.upload_bandwidth_limiter.acquire(length as usize).await;
-        }
-
-        // Upload the piece content.
-        self.storage
-            .upload_piece(piece_id, task_id, range)
-            .await
-            .inspect(|_| {
-                collect_upload_piece_traffic_metrics(length);
-            })
-    }
-
     /// download_from_local_into_async_read downloads a single piece from local cache.
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_local_into_async_read(
@@ -351,27 +317,10 @@ impl Piece {
         task_id: &str,
         length: u64,
         range: Option<Range>,
-        disable_rate_limit: bool,
-        is_prefetch: bool,
     ) -> Result<impl AsyncRead> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
-
-        // Acquire the download rate limiter.
-        if !disable_rate_limit {
-            if is_prefetch {
-                // Acquire the prefetch rate limiter.
-                self.prefetch_bandwidth_limiter
-                    .acquire(length as usize)
-                    .await;
-            } else {
-                // Acquire the download rate limiter.
-                self.download_bandwidth_limiter
-                    .acquire(length as usize)
-                    .await;
-            }
-        }
 
         // Upload the piece content.
         self.storage.upload_piece(piece_id, task_id, range).await
@@ -427,12 +376,12 @@ impl Piece {
             self.prefetch_bandwidth_limiter
                 .acquire(length as usize)
                 .await;
-        } else {
-            // Acquire the download rate limiter.
-            self.download_bandwidth_limiter
-                .acquire(length as usize)
-                .await;
         }
+
+        // Acquire the download rate limiter.
+        self.download_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
 
         let (mut reader, offset, digest) = match (
             self.config.download.protocol.as_str(),
@@ -555,15 +504,15 @@ impl Piece {
             self.prefetch_bandwidth_limiter
                 .acquire(length as usize)
                 .await;
-        } else {
-            // Acquire the download rate limiter.
-            self.download_bandwidth_limiter
-                .acquire(length as usize)
-                .await;
         }
 
         // Acquire the back to source rate limiter.
         self.back_to_source_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
+
+        // Acquire the download rate limiter.
+        self.download_bandwidth_limiter
             .acquire(length as usize)
             .await;
 
@@ -719,11 +668,6 @@ impl Piece {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
-
-        // Acquire the download rate limiter.
-        self.download_bandwidth_limiter
-            .acquire(length as usize)
-            .await;
 
         // Upload the piece content.
         self.storage
@@ -904,13 +848,13 @@ impl Piece {
             return Ok(piece);
         }
 
-        // Acquire the download rate limiter.
-        self.download_bandwidth_limiter
+        // Acquire the back to source rate limiter.
+        self.back_to_source_bandwidth_limiter
             .acquire(length as usize)
             .await;
 
-        // Acquire the back to source rate limiter.
-        self.back_to_source_bandwidth_limiter
+        // Acquire the download rate limiter.
+        self.download_bandwidth_limiter
             .acquire(length as usize)
             .await;
 
@@ -1065,11 +1009,6 @@ impl Piece {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
-
-        // Acquire the download rate limiter.
-        self.download_bandwidth_limiter
-            .acquire(length as usize)
-            .await;
 
         // Upload the piece content.
         self.storage
@@ -1232,7 +1171,6 @@ mod tests {
         let backend_factory = Arc::new(backend_factory);
 
         let download_bandwidth_limiter = Arc::new(RateLimiter::builder().build());
-        let upload_bandwidth_limiter = Arc::new(RateLimiter::builder().build());
         let prefetch_bandwidth_limiter = Arc::new(RateLimiter::builder().build());
         let back_to_source_bandwidth_limiter = Arc::new(RateLimiter::builder().build());
 
@@ -1241,7 +1179,6 @@ mod tests {
             storage.clone(),
             backend_factory.clone(),
             download_bandwidth_limiter,
-            upload_bandwidth_limiter,
             prefetch_bandwidth_limiter,
             back_to_source_bandwidth_limiter,
         )

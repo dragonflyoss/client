@@ -73,7 +73,12 @@ use tonic::{
     transport::{Channel, Server},
     Code, Request, Response, Status,
 };
-use tower::ServiceBuilder;
+use tower::{
+    buffer::BufferLayer,
+    limit::rate::RateLimitLayer,
+    load_shed::{error::Overloaded, LoadShedLayer},
+    ServiceBuilder,
+};
 use tracing::{debug, error, info, instrument, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
@@ -158,13 +163,6 @@ impl DfdaemonUploadServer {
         // Initialize health reporter.
         let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
 
-        // TODO(Gaius): RateLimitLayer is not implemented Clone, so we can't use it here.
-        // Only use the LoadShed layer and the ConcurrencyLimit layer.
-        let rate_limit_layer = ServiceBuilder::new()
-            .concurrency_limit(self.config.upload.server.request_rate_limit as usize)
-            .load_shed()
-            .into_inner();
-
         // Start upload grpc server.
         let mut server_builder = Server::builder();
         if let Ok(Some(server_tls_config)) =
@@ -178,7 +176,24 @@ impl DfdaemonUploadServer {
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
-            .layer(rate_limit_layer)
+            .layer(
+                ServiceBuilder::new()
+                    .map_err(|err: Box<dyn std::error::Error + Send + Sync>| {
+                        if err.is::<Overloaded>() {
+                            Status::resource_exhausted("Server is overloaded, please retry later")
+                        } else {
+                            Status::internal(err.to_string())
+                        }
+                    })
+                    .layer(LoadShedLayer::new()),
+            )
+            .layer(BufferLayer::new(
+                self.config.upload.server.request_buffer_size,
+            ))
+            .layer(RateLimitLayer::new(
+                self.config.upload.server.request_rate_limit,
+                Duration::from_secs(1),
+            ))
             .add_service(reflection)
             .add_service(health_service)
             .add_service(service)
