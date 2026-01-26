@@ -42,7 +42,7 @@ reqwest = { version = "0.12.28", features = [
     "blocking",
     "hickory-dns",
 ] }
-reqwest-middleware = "0.4"
+reqwest-middleware = "0.5"
 rcgen = { version = "0.12.1", features = ["x509-parser"] }
 hyper = { version = "1.6", features = ["full"] }
 hyper-util = { version = "0.1.19", features = [
