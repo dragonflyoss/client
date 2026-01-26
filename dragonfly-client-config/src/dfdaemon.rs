@@ -115,11 +115,11 @@ pub fn default_upload_request_buffer_size() -> usize {
     1000
 }
 
-/// default_upload_rate_limit is the default rate limit of the upload speed in GiB/Mib/Kib per second.
+/// default_upload_bandwidth_limit is the default rate limit of the upload speed in GB/MB/KB per second.
 #[inline]
-fn default_upload_rate_limit() -> ByteSize {
-    // Default rate limit is 10GiB/s.
-    ByteSize::gib(10)
+fn default_upload_bandwidth_limit() -> ByteSize {
+    // Default rate limit is 10GB/s.
+    ByteSize::gb(10)
 }
 
 /// default_health_server_port is the default port of the health server.
@@ -140,11 +140,18 @@ fn default_stats_server_port() -> u16 {
     4004
 }
 
-/// default_download_rate_limit is the default rate limit of the download speed in GiB/Mib/Kib per second.
+/// default_download_bandwidth_limit is the default rate limit of the download speed in GB/MB/KB per second.
 #[inline]
-fn default_download_rate_limit() -> ByteSize {
-    // Default rate limit is 10GiB/s.
-    ByteSize::gib(10)
+fn default_download_bandwidth_limit() -> ByteSize {
+    // Default rate limit is 10GB/s.
+    ByteSize::gb(10)
+}
+
+/// default_back_to_source_bandwidth_limit is the default rate limit of the back to source speed in GB/MB/KB per second.
+#[inline]
+fn default_back_to_source_bandwidth_limit() -> ByteSize {
+    // Default rate limit is 10GB/s.
+    ByteSize::gb(10)
 }
 
 /// default_download_piece_timeout is the default timeout for downloading a piece from source.
@@ -322,12 +329,12 @@ pub fn default_proxy_read_buffer_size() -> usize {
     4 * 1024 * 1024
 }
 
-/// default_prefetch_rate_limit is the default rate limit of the prefetch speed in GiB/Mib/Kib per second. The prefetch request
+/// default_prefetch_bandwidth_limit is the default rate limit of the prefetch speed in GB/MB/KB per second. The prefetch request
 /// has lower priority so limit the rate to avoid occupying the bandwidth impact other download tasks.
 #[inline]
-fn default_prefetch_rate_limit() -> ByteSize {
-    // Default rate limit is 2GiB/s.
-    ByteSize::gib(2)
+fn default_prefetch_bandwidth_limit() -> ByteSize {
+    // Default rate limit is 2GB/s.
+    ByteSize::gb(5)
 }
 
 /// default_proxy_registry_mirror_addr is the default registry mirror address.
@@ -454,9 +461,16 @@ pub struct Download {
     #[serde(default = "default_download_protocol")]
     pub protocol: String,
 
-    /// Rate limit is the rate limit of the download speed in GiB/Mib/Kib per second.
-    #[serde(with = "bytesize_serde", default = "default_download_rate_limit")]
-    pub rate_limit: ByteSize,
+    /// Bandwidth limit is the rate limit of the download speed in GB/MB/KB per second.
+    #[serde(with = "bytesize_serde", default = "default_download_bandwidth_limit")]
+    pub bandwidth_limit: ByteSize,
+
+    /// Back to source bandwidth limit is the rate limit of the back to source speed in GB/MB/KB per second.
+    #[serde(
+        with = "bytesize_serde",
+        default = "default_back_to_source_bandwidth_limit"
+    )]
+    pub back_to_source_bandwidth_limit: ByteSize,
 
     /// Piece timeout is the timeout for downloading a piece from source.
     #[serde(default = "default_download_piece_timeout", with = "humantime_serde")]
@@ -482,7 +496,8 @@ impl Default for Download {
         Download {
             server: DownloadServer::default(),
             protocol: default_download_protocol(),
-            rate_limit: default_download_rate_limit(),
+            bandwidth_limit: default_download_bandwidth_limit(),
+            back_to_source_bandwidth_limit: default_back_to_source_bandwidth_limit(),
             piece_timeout: default_download_piece_timeout(),
             collected_piece_timeout: default_collected_download_piece_timeout(),
             concurrent_piece_count: default_download_concurrent_piece_count(),
@@ -631,9 +646,9 @@ pub struct Upload {
     /// Disable shared indicates whether disable to share data for other peers.
     pub disable_shared: bool,
 
-    /// Rate limit is the rate limit of the upload speed in GiB/Mib/Kib per second.
-    #[serde(with = "bytesize_serde", default = "default_upload_rate_limit")]
-    pub rate_limit: ByteSize,
+    /// Bandwidth limit is the rate limit of the upload speed in GB/MB/KB per second.
+    #[serde(with = "bytesize_serde", default = "default_upload_bandwidth_limit")]
+    pub bandwidth_limit: ByteSize,
 }
 
 /// Upload implements Default.
@@ -643,7 +658,7 @@ impl Default for Upload {
             server: UploadServer::default(),
             client: UploadClient::default(),
             disable_shared: false,
-            rate_limit: default_upload_rate_limit(),
+            bandwidth_limit: default_upload_bandwidth_limit(),
         }
     }
 }
@@ -1309,10 +1324,10 @@ pub struct Proxy {
     /// Prefetch pre-downloads full of the task when download with range request.
     pub prefetch: bool,
 
-    /// Prefetch rate limit is the rate limit of the prefetch speed in GiB/Mib/Kib per second. The prefetch request
+    /// Prefetch bandwidth limit is the rate limit of the prefetch speed in GB/MB/KB per second. The prefetch request
     /// has lower priority so limit the rate to avoid occupying the bandwidth impact other download tasks.
-    #[serde(with = "bytesize_serde", default = "default_prefetch_rate_limit")]
-    pub prefetch_rate_limit: ByteSize,
+    #[serde(with = "bytesize_serde", default = "default_prefetch_bandwidth_limit")]
+    pub prefetch_bandwidth_limit: ByteSize,
 
     /// Read buffer size specifies the buffer size for reading piece data from disk.
     /// Larger buffers can improve throughput for sequential reads but consume more memory.
@@ -1331,7 +1346,7 @@ impl Default for Proxy {
             registry_mirror: RegistryMirror::default(),
             disable_back_to_source: false,
             prefetch: false,
-            prefetch_rate_limit: default_prefetch_rate_limit(),
+            prefetch_bandwidth_limit: default_prefetch_bandwidth_limit(),
             read_buffer_size: default_proxy_read_buffer_size(),
         }
     }
@@ -1732,7 +1747,7 @@ mod tests {
                 "requestRateLimit": 4000
             },
             "protocol": "quic",
-            "rateLimit": "50GiB",
+            "bandwidthLimit": "50GB",
             "pieceTimeout": "30s",
             "concurrentPieceCount": 10
         }"#;
@@ -1744,7 +1759,7 @@ mod tests {
         );
         assert_eq!(download.server.request_rate_limit, 4000);
         assert_eq!(download.protocol, "quic".to_string());
-        assert_eq!(download.rate_limit, ByteSize::gib(50));
+        assert_eq!(download.bandwidth_limit, ByteSize::gb(50));
         assert_eq!(download.piece_timeout, Duration::from_secs(30));
         assert_eq!(download.concurrent_piece_count, 10);
     }
@@ -1766,7 +1781,7 @@ mod tests {
                 "key": "/etc/ssl/private/client.pem"
             },
             "disableShared": false,
-            "rateLimit": "10GiB"
+            "bandwidthLimit": "10GB"
         }"#;
 
         let upload: Upload = serde_json::from_str(json_data).unwrap();
@@ -1801,7 +1816,7 @@ mod tests {
             Some(PathBuf::from("/etc/ssl/private/client.pem"))
         );
         assert!(!upload.disable_shared);
-        assert_eq!(upload.rate_limit, ByteSize::gib(10));
+        assert_eq!(upload.bandwidth_limit, ByteSize::gb(10));
     }
 
     #[test]
@@ -2160,7 +2175,7 @@ key: /etc/ssl/private/client.pem
             },
             "disableBackToSource": true,
             "prefetch": true,
-            "prefetchRateLimit": "1GiB",
+            "prefetchBandwidthLimit": "1GB",
             "readBufferSize": 8388608,
             "customHeaders": {
                 "X-Custom-Header": "custom-value"
@@ -2203,7 +2218,7 @@ key: /etc/ssl/private/client.pem
 
         assert!(proxy.disable_back_to_source);
         assert!(proxy.prefetch);
-        assert_eq!(proxy.prefetch_rate_limit, ByteSize::gib(1));
+        assert_eq!(proxy.prefetch_bandwidth_limit, ByteSize::gb(1));
         assert_eq!(proxy.read_buffer_size, 8 * 1024 * 1024);
     }
 
