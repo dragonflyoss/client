@@ -73,7 +73,12 @@ use tonic::{
     transport::{Channel, Endpoint, Server, Uri},
     Code, Request, Response, Status,
 };
-use tower::{service_fn, ServiceBuilder};
+use tower::{
+    buffer::BufferLayer,
+    limit::rate::RateLimitLayer,
+    load_shed::{error::Overloaded, LoadShedLayer},
+    service_fn, ServiceBuilder,
+};
 use tracing::{error, info, instrument, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
@@ -165,13 +170,6 @@ impl DfdaemonDownloadServer {
         let perms = std::fs::Permissions::from_mode(0o777);
         fs::set_permissions(&self.socket_path, perms).await?;
 
-        // TODO(Gaius): RateLimitLayer is not implemented Clone, so we can't use it here.
-        // Only use the LoadShed layer and the ConcurrencyLimit layer.
-        let rate_limit_layer = ServiceBuilder::new()
-            .concurrency_limit(self.config.download.server.request_rate_limit as usize)
-            .load_shed()
-            .into_inner();
-
         let uds_stream = UnixListenerStream::new(uds);
         let server = Server::builder()
             .max_frame_size(super::MAX_FRAME_SIZE)
@@ -180,7 +178,22 @@ impl DfdaemonDownloadServer {
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
             .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
             .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
-            .layer(rate_limit_layer)
+            .layer(
+                ServiceBuilder::new()
+                    .map_err(|err: Box<dyn std::error::Error + Send + Sync>| {
+                        if err.is::<Overloaded>() {
+                            Status::resource_exhausted("Server is overloaded, please retry later")
+                        } else {
+                            Status::internal(err.to_string())
+                        }
+                    })
+                    .layer(LoadShedLayer::new())
+            )
+            .layer(BufferLayer::new(self.config.download.server.request_buffer_size))
+            .layer(RateLimitLayer::new(
+                self.config.download.server.request_rate_limit,
+                Duration::from_secs(1),
+            ))
             .add_service(reflection)
             .add_service(health_service)
             .add_service(service)

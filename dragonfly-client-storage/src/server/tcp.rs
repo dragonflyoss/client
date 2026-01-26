@@ -76,7 +76,7 @@ impl TCPServer {
         addr: SocketAddr,
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
-        upload_rate_limiter: Arc<RateLimiter>,
+        upload_bandwidth_limiter: Arc<RateLimiter>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -86,7 +86,7 @@ impl TCPServer {
             handler: TCPServerHandler {
                 id_generator,
                 storage,
-                upload_rate_limiter,
+                upload_bandwidth_limiter,
             },
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
@@ -172,8 +172,8 @@ pub struct TCPServerHandler {
     /// storage is the local storage.
     storage: Arc<Storage>,
 
-    /// upload_rate_limiter is the rate limiter of the upload speed in bps(bytes per second).
-    upload_rate_limiter: Arc<RateLimiter>,
+    /// upload_bandwidth_limiter is the rate limiter of the upload speed in bytes per second.
+    upload_bandwidth_limiter: Arc<RateLimiter>,
 }
 
 /// TCPServerHandler implements the request handler.
@@ -472,8 +472,8 @@ impl TCPServerHandler {
             }
         };
 
-        // Acquire the upload rate limiter.
-        self.upload_rate_limiter
+        // Acquire the upload bandwidth limiter.
+        self.upload_bandwidth_limiter
             .acquire(piece.length as usize)
             .await;
 
@@ -536,8 +536,8 @@ impl TCPServerHandler {
             }
         };
 
-        // Acquire the upload rate limiter.
-        self.upload_rate_limiter
+        // Acquire the upload bandwidth limiter.
+        self.upload_bandwidth_limiter
             .acquire(piece.length as usize)
             .await;
 
@@ -600,8 +600,8 @@ impl TCPServerHandler {
             }
         };
 
-        // Acquire the upload rate limiter.
-        self.upload_rate_limiter
+        // Acquire the upload bandwidth limiter.
+        self.upload_bandwidth_limiter
             .acquire(piece.length as usize)
             .await;
 
