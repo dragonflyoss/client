@@ -110,7 +110,6 @@ impl PersistentTask {
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
         download_bandwidth_limiter: Arc<RateLimiter>,
-        upload_bandwidth_limiter: Arc<RateLimiter>,
         prefetch_bandwidth_limiter: Arc<RateLimiter>,
         back_to_source_bandwidth_limiter: Arc<RateLimiter>,
         shutdown: shutdown::Shutdown,
@@ -127,7 +126,6 @@ impl PersistentTask {
                 storage.clone(),
                 backend_factory.clone(),
                 download_bandwidth_limiter,
-                upload_bandwidth_limiter,
                 prefetch_bandwidth_limiter,
                 back_to_source_bandwidth_limiter,
             )?),
@@ -2354,8 +2352,6 @@ impl PersistentTask {
                             task_id.as_str(),
                             metadata.length,
                             None,
-                            true,
-                            false,
                         )
                         .await
                         .inspect_err(|err| {

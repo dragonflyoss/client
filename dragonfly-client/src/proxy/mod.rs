@@ -867,8 +867,6 @@ async fn proxy_via_dfdaemon(
                                     message.task_id.as_str(),
                                     piece.length,
                                     download_task_started_response.range,
-                                    true,
-                                    false,
                                 )
                                 .await
                             {

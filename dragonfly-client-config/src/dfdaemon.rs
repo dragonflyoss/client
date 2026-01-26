@@ -115,11 +115,10 @@ pub fn default_upload_request_buffer_size() -> usize {
     1000
 }
 
-/// default_upload_bandwidth_limit is the default rate limit of the upload speed in GB/MB/KB per second.
+/// default_upload_bandwidth_limit is the default rate limit of the upload speed in GB/MB/KB per second, default is 50GB/s.
 #[inline]
 fn default_upload_bandwidth_limit() -> ByteSize {
-    // Default rate limit is 10GB/s.
-    ByteSize::gb(10)
+    ByteSize::gb(50)
 }
 
 /// default_health_server_port is the default port of the health server.
@@ -140,18 +139,16 @@ fn default_stats_server_port() -> u16 {
     4004
 }
 
-/// default_download_bandwidth_limit is the default rate limit of the download speed in GB/MB/KB per second.
+/// default_download_bandwidth_limit is the default rate limit of the download speed in GB/MB/KB per second, default is 50GB/s.
 #[inline]
 fn default_download_bandwidth_limit() -> ByteSize {
-    // Default rate limit is 10GB/s.
-    ByteSize::gb(10)
+    ByteSize::gb(50)
 }
 
-/// default_back_to_source_bandwidth_limit is the default rate limit of the back to source speed in GB/MB/KB per second.
+/// default_back_to_source_bandwidth_limit is the default rate limit of the back to source speed in GB/MB/KB per second, default is 50GB/s.
 #[inline]
 fn default_back_to_source_bandwidth_limit() -> ByteSize {
-    // Default rate limit is 10GB/s.
-    ByteSize::gb(10)
+    ByteSize::gb(50)
 }
 
 /// default_download_piece_timeout is the default timeout for downloading a piece from source.
@@ -329,12 +326,11 @@ pub fn default_proxy_read_buffer_size() -> usize {
     4 * 1024 * 1024
 }
 
-/// default_prefetch_bandwidth_limit is the default rate limit of the prefetch speed in GB/MB/KB per second. The prefetch request
+/// default_prefetch_bandwidth_limit is the default rate limit of the prefetch speed in GB/MB/KB per second, default is 10GB/s. The prefetch request
 /// has lower priority so limit the rate to avoid occupying the bandwidth impact other download tasks.
 #[inline]
 fn default_prefetch_bandwidth_limit() -> ByteSize {
-    // Default rate limit is 2GB/s.
-    ByteSize::gb(5)
+    ByteSize::gb(10)
 }
 
 /// default_proxy_registry_mirror_addr is the default registry mirror address.
