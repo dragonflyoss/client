@@ -215,33 +215,44 @@ async fn main() -> Result<(), anyhow::Error> {
     let backend_factory = Arc::new(backend_factory);
 
     // Initialize download rate limiter.
-    let download_rate_limiter = Arc::new(
+    let download_bandwidth_limiter = Arc::new(
         RateLimiter::builder()
-            .initial(config.download.rate_limit.as_u64() as usize)
-            .refill(config.download.rate_limit.as_u64() as usize)
-            .max(config.download.rate_limit.as_u64() as usize)
+            .initial(config.download.bandwidth_limit.as_u64() as usize)
+            .refill(config.download.bandwidth_limit.as_u64() as usize)
+            .max(config.download.bandwidth_limit.as_u64() as usize)
             .interval(Duration::from_secs(1))
             .fair(false)
             .build(),
     );
 
     // Initialize upload rate limiter.
-    let upload_rate_limiter = Arc::new(
+    let upload_bandwidth_limiter = Arc::new(
         RateLimiter::builder()
-            .initial(config.upload.rate_limit.as_u64() as usize)
-            .refill(config.upload.rate_limit.as_u64() as usize)
-            .max(config.upload.rate_limit.as_u64() as usize)
+            .initial(config.upload.bandwidth_limit.as_u64() as usize)
+            .refill(config.upload.bandwidth_limit.as_u64() as usize)
+            .max(config.upload.bandwidth_limit.as_u64() as usize)
             .interval(Duration::from_secs(1))
             .fair(false)
             .build(),
     );
 
     // Initialize prefetch rate limiter.
-    let prefetch_rate_limiter = Arc::new(
+    let prefetch_bandwidth_limiter = Arc::new(
         RateLimiter::builder()
-            .initial(config.proxy.prefetch_rate_limit.as_u64() as usize)
-            .refill(config.proxy.prefetch_rate_limit.as_u64() as usize)
-            .max(config.proxy.prefetch_rate_limit.as_u64() as usize)
+            .initial(config.proxy.prefetch_bandwidth_limit.as_u64() as usize)
+            .refill(config.proxy.prefetch_bandwidth_limit.as_u64() as usize)
+            .max(config.proxy.prefetch_bandwidth_limit.as_u64() as usize)
+            .interval(Duration::from_secs(1))
+            .fair(false)
+            .build(),
+    );
+
+    // Initialize back to source rate limiter.
+    let back_to_source_bandwidth_limiter = Arc::new(
+        RateLimiter::builder()
+            .initial(config.download.back_to_source_bandwidth_limit.as_u64() as usize)
+            .refill(config.download.back_to_source_bandwidth_limit.as_u64() as usize)
+            .max(config.download.back_to_source_bandwidth_limit.as_u64() as usize)
             .interval(Duration::from_secs(1))
             .fair(false)
             .build(),
@@ -254,9 +265,10 @@ async fn main() -> Result<(), anyhow::Error> {
         storage.clone(),
         scheduler_client.clone(),
         backend_factory.clone(),
-        download_rate_limiter.clone(),
-        upload_rate_limiter.clone(),
-        prefetch_rate_limiter.clone(),
+        download_bandwidth_limiter.clone(),
+        upload_bandwidth_limiter.clone(),
+        prefetch_bandwidth_limiter.clone(),
+        back_to_source_bandwidth_limiter.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     )?;
@@ -269,9 +281,10 @@ async fn main() -> Result<(), anyhow::Error> {
         storage.clone(),
         scheduler_client.clone(),
         backend_factory.clone(),
-        download_rate_limiter.clone(),
-        upload_rate_limiter.clone(),
-        prefetch_rate_limiter.clone(),
+        download_bandwidth_limiter.clone(),
+        upload_bandwidth_limiter.clone(),
+        prefetch_bandwidth_limiter.clone(),
+        back_to_source_bandwidth_limiter.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     )?;
@@ -284,15 +297,16 @@ async fn main() -> Result<(), anyhow::Error> {
         storage.clone(),
         scheduler_client.clone(),
         backend_factory.clone(),
-        download_rate_limiter.clone(),
-        upload_rate_limiter.clone(),
-        prefetch_rate_limiter.clone(),
+        download_bandwidth_limiter.clone(),
+        upload_bandwidth_limiter.clone(),
+        prefetch_bandwidth_limiter.clone(),
+        back_to_source_bandwidth_limiter.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     )?;
     let persistent_cache_task = Arc::new(persistent_cache_task);
 
-    let interface = Interface::new(config.host.ip.unwrap(), config.upload.rate_limit);
+    let interface = Interface::new(config.host.ip.unwrap(), config.upload.bandwidth_limit);
     let interface = Arc::new(interface);
 
     // Initialize health server.
@@ -325,7 +339,7 @@ async fn main() -> Result<(), anyhow::Error> {
         ),
         id_generator.clone(),
         storage.clone(),
-        upload_rate_limiter.clone(),
+        upload_bandwidth_limiter.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
@@ -338,7 +352,7 @@ async fn main() -> Result<(), anyhow::Error> {
         ),
         id_generator.clone(),
         storage.clone(),
-        upload_rate_limiter.clone(),
+        upload_bandwidth_limiter.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
