@@ -415,7 +415,7 @@ pub struct DownloadServer {
     #[serde(default = "default_download_unix_socket_path")]
     pub socket_path: PathBuf,
 
-    /// The rate limit for download requests on the gRPC server.
+    /// The rate limit for the requests on the download gRPC server.
     ///
     /// This limit applies to the total number of gRPC requests per second,
     /// including:
@@ -424,7 +424,7 @@ pub struct DownloadServer {
     #[serde(default = "default_download_request_rate_limit")]
     pub request_rate_limit: u64,
 
-    /// The buffer size for the download request channel on the gRPC server.
+    /// The buffer size for the request channel on the download gRPC server.
     ///
     /// This controls the capacity of the bounded channel used to queue
     /// incoming gRPC requests before they are processed. If the buffer is full,
@@ -524,7 +524,7 @@ pub struct UploadServer {
     /// mutual TLS.
     pub key: Option<PathBuf>,
 
-    /// The rate limit for upload requests on the gRPC server.
+    /// The rate limit for the requests on the upload gRPC server.
     ///
     /// This limit applies to the total number of gRPC requests per second,
     /// including:
@@ -533,7 +533,7 @@ pub struct UploadServer {
     #[serde(default = "default_upload_request_rate_limit")]
     pub request_rate_limit: u64,
 
-    /// The buffer size for the upload request channel on the gRPC server.
+    /// The buffer size for the request channel on the upload gRPC server.
     ///
     /// This controls the capacity of the bounded channel used to queue
     /// incoming gRPC requests before they are processed. If the buffer is full,
