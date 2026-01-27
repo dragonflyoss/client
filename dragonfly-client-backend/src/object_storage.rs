@@ -177,6 +177,9 @@ pub struct ObjectStorage {
 
     /// client is the reqwest client.
     client: reqwest::Client,
+
+    // insecure_client is the reqwest insecure client.
+    insecure_client: reqwest::Client,
 }
 
 /// ObjectStorage implements the ObjectStorage trait.
@@ -201,10 +204,29 @@ impl ObjectStorage {
             .http2_keep_alive_while_idle(true)
             .build()?;
 
+        let insecure_client = reqwest::Client::builder()
+            .no_gzip()
+            .no_brotli()
+            .no_zstd()
+            .no_deflate()
+            .hickory_dns(true)
+            .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
+            .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
+            .tcp_nodelay(true)
+            .http2_adaptive_window(true)
+            .http2_initial_stream_window_size(Some(super::HTTP2_STREAM_WINDOW_SIZE))
+            .http2_initial_connection_window_size(Some(super::HTTP2_CONNECTION_WINDOW_SIZE))
+            .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+            .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+            .http2_keep_alive_while_idle(true)
+            .danger_accept_invalid_certs(true)
+            .build()?;
+
         Ok(Self {
             scheme,
             config,
             client,
+            insecure_client,
         })
     }
 
@@ -280,10 +302,17 @@ impl ObjectStorage {
             builder = builder.session_token(session_token);
         }
 
+        // Configure the http client whether insecure or not.
+        let http_client = if object_storage.insecure_skip_verify.unwrap_or(false) {
+            self.insecure_client.clone()
+        } else {
+            self.client.clone()
+        };
+
         Ok(Operator::new(builder)?
             .finish()
             .layer(TimeoutLayer::new().with_timeout(timeout))
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
+            .layer(HttpClientLayer::new(HttpClient::with(http_client))))
     }
 
     /// gcs_operator initializes the GCS operator with the parsed URL and object storage.
@@ -313,10 +342,17 @@ impl ObjectStorage {
             builder = builder.predefined_acl(predefined_acl);
         }
 
+        // Configure the http client whether insecure or not.
+        let http_client = if object_storage.insecure_skip_verify.unwrap_or(false) {
+            self.insecure_client.clone()
+        } else {
+            self.client.clone()
+        };
+
         Ok(Operator::new(builder)?
             .finish()
             .layer(TimeoutLayer::new().with_timeout(timeout))
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
+            .layer(HttpClientLayer::new(HttpClient::with(http_client))))
     }
 
     /// abs_operator initializes the ABS operator with the parsed URL and object storage.
@@ -355,10 +391,17 @@ impl ObjectStorage {
             .container(&parsed_url.bucket)
             .endpoint(endpoint);
 
+        // Configure the http client whether insecure or not.
+        let http_client = if object_storage.insecure_skip_verify.unwrap_or(false) {
+            self.insecure_client.clone()
+        } else {
+            self.client.clone()
+        };
+
         Ok(Operator::new(builder)?
             .finish()
             .layer(TimeoutLayer::new().with_timeout(timeout))
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
+            .layer(HttpClientLayer::new(HttpClient::with(http_client))))
     }
 
     /// oss_operator initializes the OSS operator with the parsed URL and object storage.
@@ -408,10 +451,17 @@ impl ObjectStorage {
                 .bucket(&parsed_url.bucket)
         };
 
+        // Configure the http client whether insecure or not.
+        let http_client = if object_storage.insecure_skip_verify.unwrap_or(false) {
+            self.insecure_client.clone()
+        } else {
+            self.client.clone()
+        };
+
         Ok(Operator::new(builder)?
             .finish()
             .layer(TimeoutLayer::new().with_timeout(timeout))
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
+            .layer(HttpClientLayer::new(HttpClient::with(http_client))))
     }
 
     /// obs_operator initializes the OBS operator with the parsed URL and object storage.
@@ -450,10 +500,17 @@ impl ObjectStorage {
             .endpoint(endpoint)
             .bucket(&parsed_url.bucket);
 
+        // Configure the http client whether insecure or not.
+        let http_client = if object_storage.insecure_skip_verify.unwrap_or(false) {
+            self.insecure_client.clone()
+        } else {
+            self.client.clone()
+        };
+
         Ok(Operator::new(builder)?
             .finish()
             .layer(TimeoutLayer::new().with_timeout(timeout))
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
+            .layer(HttpClientLayer::new(HttpClient::with(http_client))))
     }
 
     /// cos_operator initializes the COS operator with the parsed URL and object storage.
@@ -492,10 +549,17 @@ impl ObjectStorage {
             .endpoint(endpoint)
             .bucket(&parsed_url.bucket);
 
+        // Configure the http client whether insecure or not.
+        let http_client = if object_storage.insecure_skip_verify.unwrap_or(false) {
+            self.insecure_client.clone()
+        } else {
+            self.client.clone()
+        };
+
         Ok(Operator::new(builder)?
             .finish()
             .layer(TimeoutLayer::new().with_timeout(timeout))
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
+            .layer(HttpClientLayer::new(HttpClient::with(http_client))))
     }
 }
 
@@ -1410,6 +1474,50 @@ mod tests {
 
             assert!(result.is_err());
             assert_eq!(result.unwrap_err().to_string(), error_message);
+        }
+    }
+
+    #[test]
+    fn should_handle_insecure_skip_verify_parameter() {
+        let test_cases = vec![
+            // Test with insecure_skip_verify = true
+            ObjectStorageInfo {
+                endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
+                access_key_id: Some("test-access-key-id".into()),
+                access_key_secret: Some("test-access-key-secret".into()),
+                insecure_skip_verify: Some(true),
+                ..Default::default()
+            },
+            // Test with insecure_skip_verify = false
+            ObjectStorageInfo {
+                endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
+                access_key_id: Some("test-access-key-id".into()),
+                access_key_secret: Some("test-access-key-secret".into()),
+                insecure_skip_verify: Some(false),
+                ..Default::default()
+            },
+            // Test with insecure_skip_verify = None (default)
+            ObjectStorageInfo {
+                endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
+                access_key_id: Some("test-access-key-id".into()),
+                access_key_secret: Some("test-access-key-secret".into()),
+                insecure_skip_verify: None,
+                ..Default::default()
+            },
+        ];
+
+        for object_storage in test_cases {
+            let config = Arc::new(Config::default());
+            let object_storage_impl = ObjectStorage::new(Scheme::OSS, config).unwrap();
+            let url: Url = "oss://test-bucket/file".parse().unwrap();
+            let parsed_url: ParsedURL = url.try_into().unwrap();
+
+            let result = object_storage_impl.operator(
+                &parsed_url,
+                Some(object_storage),
+                Duration::from_secs(3),
+            );
+            assert!(result.is_ok());
         }
     }
 }

@@ -267,6 +267,12 @@ struct Args {
 
     #[arg(
         long,
+        help = "Specify whether to skip verify TLS certification for object storage service"
+    )]
+    storage_insecure_tls: Option<bool>,
+
+    #[arg(
+        long,
         help = "Specify the delegation token for Hadoop Distributed File System(HDFS)"
     )]
     hdfs_delegation_token: Option<String>,
@@ -658,6 +664,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         endpoint: args.storage_endpoint.clone(),
         credential_path: args.storage_credential_path.clone(),
         predefined_acl: args.storage_predefined_acl.clone(),
+        insecure_skip_verify: args.storage_insecure_tls,
     });
 
     let hdfs = Some(Hdfs {
@@ -870,6 +877,7 @@ async fn download(
             endpoint: args.storage_endpoint.clone(),
             credential_path: args.storage_credential_path.clone(),
             predefined_acl: args.storage_predefined_acl.clone(),
+            insecure_skip_verify: args.storage_insecure_tls,
         }),
         Err(_) => None,
     };
