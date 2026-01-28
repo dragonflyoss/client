@@ -248,6 +248,12 @@ struct Args {
 
     #[arg(
         long,
+        help = "Specify whether to skip verify TLS certification for object storage service"
+    )]
+    storage_insecure_skip_verify: Option<bool>,
+
+    #[arg(
+        long,
         help = "Specify the session token for Amazon Simple Storage Service(S3)"
     )]
     storage_session_token: Option<String>,
@@ -264,12 +270,6 @@ struct Args {
         help = "Specify the predefined ACL for Google Cloud Storage Service(GCS)"
     )]
     storage_predefined_acl: Option<String>,
-
-    #[arg(
-        long,
-        help = "Specify whether to skip verify TLS certification for object storage service"
-    )]
-    storage_insecure_tls: Option<bool>,
 
     #[arg(
         long,
@@ -664,7 +664,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         endpoint: args.storage_endpoint.clone(),
         credential_path: args.storage_credential_path.clone(),
         predefined_acl: args.storage_predefined_acl.clone(),
-        insecure_skip_verify: args.storage_insecure_tls,
+        insecure_skip_verify: args.storage_insecure_skip_verify,
     });
 
     let hdfs = Some(Hdfs {
@@ -877,7 +877,7 @@ async fn download(
             endpoint: args.storage_endpoint.clone(),
             credential_path: args.storage_credential_path.clone(),
             predefined_acl: args.storage_predefined_acl.clone(),
-            insecure_skip_verify: args.storage_insecure_tls,
+            insecure_skip_verify: args.storage_insecure_skip_verify,
         }),
         Err(_) => None,
     };

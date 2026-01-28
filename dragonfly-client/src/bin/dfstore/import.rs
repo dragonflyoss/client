@@ -105,6 +105,12 @@ pub struct ImportCommand {
 
     #[arg(
         long,
+        help = "Specify whether to skip verify TLS certification for object storage service"
+    )]
+    storage_insecure_skip_verify: Option<bool>,
+
+    #[arg(
+        long,
         help = "Specify the session token for Amazon Simple Storage Service(S3)"
     )]
     storage_session_token: Option<String>,
@@ -121,12 +127,6 @@ pub struct ImportCommand {
         help = "Specify the predefined ACL for Google Cloud Storage Service(GCS)"
     )]
     storage_predefined_acl: Option<String>,
-
-    #[arg(
-        long,
-        help = "Specify whether to skip verify TLS certification for object storage service"
-    )]
-    storage_insecure_tls: Option<bool>,
 
     #[arg(
         long,
@@ -379,7 +379,7 @@ impl ImportCommand {
                     session_token: self.storage_session_token.clone(),
                     credential_path: self.storage_credential_path.clone(),
                     predefined_acl: self.storage_predefined_acl.clone(),
-                    insecure_skip_verify: self.storage_insecure_tls,
+                    insecure_skip_verify: self.storage_insecure_skip_verify,
                 }),
                 path: absolute_path.to_string_lossy().to_string(),
                 persistent_replica_count: self.persistent_replica_count,

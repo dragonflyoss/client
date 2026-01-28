@@ -18,6 +18,7 @@ use dragonfly_api::common;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::error::BackendError;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
+use dragonfly_client_util::tls::NoVerifier;
 use opendal::{layers::HttpClientLayer, layers::TimeoutLayer, raw::HttpClient, Operator};
 use percent_encoding::percent_decode_str;
 use std::fmt;
@@ -178,8 +179,8 @@ pub struct ObjectStorage {
     /// client is the reqwest client.
     client: reqwest::Client,
 
-    // insecure_client is the reqwest insecure client.
-    insecure_client: reqwest::Client,
+    // danger_client is the reqwest dangerous client, which skips certificate verification.
+    danger_client: reqwest::Client,
 }
 
 /// ObjectStorage implements the ObjectStorage trait.
@@ -204,12 +205,19 @@ impl ObjectStorage {
             .http2_keep_alive_while_idle(true)
             .build()?;
 
-        let insecure_client = reqwest::Client::builder()
+        // Initialize the reqwest dangerous client.
+        let client_config_builder = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(NoVerifier::new())
+            .with_no_client_auth();
+
+        let danger_client = reqwest::Client::builder()
             .no_gzip()
             .no_brotli()
             .no_zstd()
             .no_deflate()
             .hickory_dns(true)
+            .use_preconfigured_tls(client_config_builder)
             .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
             .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
             .tcp_nodelay(true)
@@ -219,14 +227,13 @@ impl ObjectStorage {
             .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
             .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
             .http2_keep_alive_while_idle(true)
-            .danger_accept_invalid_certs(true)
             .build()?;
 
         Ok(Self {
             scheme,
             config,
             client,
-            insecure_client,
+            danger_client,
         })
     }
 
@@ -302,11 +309,10 @@ impl ObjectStorage {
             builder = builder.session_token(session_token);
         }
 
-        // Configure the http client whether insecure or not.
-        let http_client = if object_storage.insecure_skip_verify.unwrap_or(false) {
-            self.insecure_client.clone()
-        } else {
-            self.client.clone()
+        // Choose the http client using dangerous client or not by insecure_skip_verify.
+        let http_client = match object_storage.insecure_skip_verify {
+            Some(true) => self.danger_client.clone(),
+            _ => self.client.clone(),
         };
 
         Ok(Operator::new(builder)?
@@ -342,11 +348,10 @@ impl ObjectStorage {
             builder = builder.predefined_acl(predefined_acl);
         }
 
-        // Configure the http client whether insecure or not.
-        let http_client = if object_storage.insecure_skip_verify.unwrap_or(false) {
-            self.insecure_client.clone()
-        } else {
-            self.client.clone()
+        // Choose the http client using dangerous client or not by insecure_skip_verify.
+        let http_client = match object_storage.insecure_skip_verify {
+            Some(true) => self.danger_client.clone(),
+            _ => self.client.clone(),
         };
 
         Ok(Operator::new(builder)?
@@ -391,11 +396,10 @@ impl ObjectStorage {
             .container(&parsed_url.bucket)
             .endpoint(endpoint);
 
-        // Configure the http client whether insecure or not.
-        let http_client = if object_storage.insecure_skip_verify.unwrap_or(false) {
-            self.insecure_client.clone()
-        } else {
-            self.client.clone()
+        // Choose the http client using dangerous client or not by insecure_skip_verify.
+        let http_client = match object_storage.insecure_skip_verify {
+            Some(true) => self.danger_client.clone(),
+            _ => self.client.clone(),
         };
 
         Ok(Operator::new(builder)?
@@ -451,11 +455,10 @@ impl ObjectStorage {
                 .bucket(&parsed_url.bucket)
         };
 
-        // Configure the http client whether insecure or not.
-        let http_client = if object_storage.insecure_skip_verify.unwrap_or(false) {
-            self.insecure_client.clone()
-        } else {
-            self.client.clone()
+        // Choose the http client using dangerous client or not by insecure_skip_verify.
+        let http_client = match object_storage.insecure_skip_verify {
+            Some(true) => self.danger_client.clone(),
+            _ => self.client.clone(),
         };
 
         Ok(Operator::new(builder)?
@@ -500,11 +503,10 @@ impl ObjectStorage {
             .endpoint(endpoint)
             .bucket(&parsed_url.bucket);
 
-        // Configure the http client whether insecure or not.
-        let http_client = if object_storage.insecure_skip_verify.unwrap_or(false) {
-            self.insecure_client.clone()
-        } else {
-            self.client.clone()
+        // Choose the http client using dangerous client or not by insecure_skip_verify.
+        let http_client = match object_storage.insecure_skip_verify {
+            Some(true) => self.danger_client.clone(),
+            _ => self.client.clone(),
         };
 
         Ok(Operator::new(builder)?
@@ -549,11 +551,10 @@ impl ObjectStorage {
             .endpoint(endpoint)
             .bucket(&parsed_url.bucket);
 
-        // Configure the http client whether insecure or not.
-        let http_client = if object_storage.insecure_skip_verify.unwrap_or(false) {
-            self.insecure_client.clone()
-        } else {
-            self.client.clone()
+        // Choose the http client using dangerous client or not by insecure_skip_verify.
+        let http_client = match object_storage.insecure_skip_verify {
+            Some(true) => self.danger_client.clone(),
+            _ => self.client.clone(),
         };
 
         Ok(Operator::new(builder)?
@@ -1480,7 +1481,6 @@ mod tests {
     #[test]
     fn should_handle_insecure_skip_verify_parameter() {
         let test_cases = vec![
-            // Test with insecure_skip_verify = true
             ObjectStorageInfo {
                 endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
                 access_key_id: Some("test-access-key-id".into()),
@@ -1488,7 +1488,6 @@ mod tests {
                 insecure_skip_verify: Some(true),
                 ..Default::default()
             },
-            // Test with insecure_skip_verify = false
             ObjectStorageInfo {
                 endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
                 access_key_id: Some("test-access-key-id".into()),
@@ -1496,7 +1495,6 @@ mod tests {
                 insecure_skip_verify: Some(false),
                 ..Default::default()
             },
-            // Test with insecure_skip_verify = None (default)
             ObjectStorageInfo {
                 endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
                 access_key_id: Some("test-access-key-id".into()),
@@ -1508,15 +1506,12 @@ mod tests {
 
         for object_storage in test_cases {
             let config = Arc::new(Config::default());
-            let object_storage_impl = ObjectStorage::new(Scheme::OSS, config).unwrap();
+            let backend = ObjectStorage::new(Scheme::OSS, config).unwrap();
             let url: Url = "oss://test-bucket/file".parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
-            let result = object_storage_impl.operator(
-                &parsed_url,
-                Some(object_storage),
-                Duration::from_secs(3),
-            );
+            let result =
+                backend.operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
             assert!(result.is_ok());
         }
     }
