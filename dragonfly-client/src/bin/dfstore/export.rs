@@ -124,6 +124,12 @@ pub struct ExportCommand {
 
     #[arg(
         long,
+        help = "Specify whether to skip verify TLS certification for object storage service"
+    )]
+    storage_insecure_skip_verify: Option<bool>,
+
+    #[arg(
+        long,
         help = "Specify the session token for Amazon Simple Storage Service(S3)"
     )]
     storage_session_token: Option<String>,
@@ -495,6 +501,7 @@ impl ExportCommand {
                     session_token: self.storage_session_token.clone(),
                     credential_path: self.storage_credential_path.clone(),
                     predefined_acl: self.storage_predefined_acl.clone(),
+                    insecure_skip_verify: self.storage_insecure_skip_verify,
                 }),
                 // When scheduler triggers the export task, it will set true. If the export task is
                 // triggered by the user, it will set false.
