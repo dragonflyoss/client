@@ -21,13 +21,14 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::digest::{Algorithm, Digest};
 use reqwest::header::HeaderMap;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncRead;
-use tokio::io::AsyncReadExt;
-use tokio::time::sleep;
+use tokio::{
+    fs,
+    io::{AsyncRead, AsyncReadExt},
+    time::sleep,
+};
 use tokio_util::either::Either;
 use tokio_util::io::InspectReader;
 use tracing::{debug, error, info, instrument, warn};
@@ -47,6 +48,16 @@ pub mod storage_engine;
 
 /// DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL is the default interval for waiting for the piece to be finished.
 pub const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Default temporary directory name for output operations.
+///
+/// When users need to hardlink files from the client DaemonSet Pod's cache to the output
+/// directory within a user's Pod (to avoid the time overhead of copying), they can use this
+/// tmp directory as the output location. This works around a Kubernetes limitation:
+/// when ephemeral-storage limits are set, Kubernetes assigns project quota ID to
+/// hostPath mount point, which prevents hardlinks from being created across different
+/// quota contexts.
+pub const DEFAULT_TMP_DIR: &str = "tmp";
 
 /// Storage is the storage of the task.
 pub struct Storage {
@@ -71,6 +82,8 @@ impl Storage {
         let content = content::new_content(config.clone(), dir).await?;
         let cache = cache::Cache::new(config.clone());
 
+        // Create temporary directory for output operations.
+        fs::create_dir_all(&dir.join(DEFAULT_TMP_DIR)).await?;
         Ok(Storage {
             config,
             metadata,
