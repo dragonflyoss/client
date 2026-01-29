@@ -24,35 +24,35 @@ use std::path::Path;
 use std::str::FromStr;
 use tracing::instrument;
 
-/// SEPARATOR is the separator of digest.
+/// The separator character for digest formatting.
 pub const SEPARATOR: &str = ":";
 
 lazy_static! {
-    /// BLOB_URL_REGEX is the regex for oci blob url, e.g. http(s)://<registry>/v2/<repository>/blobs/<digest>.
+    /// Regex pattern for OCI blob URLs, e.g. http(s)://<registry>/v2/<repository>/blobs/<digest>.
     static ref BLOB_URL_REGEX: Regex = Regex::new(r"^(.*)://(.*)/v2/(.*)/blobs/([^?]+)(?:\?.*)?$").unwrap();
 }
 
-/// is_blob_url checks if the url is an oci blob url.
+/// Checks if the URL is an OCI blob URL.
 pub fn is_blob_url(url: &str) -> bool {
     BLOB_URL_REGEX.is_match(url)
 }
 
-/// Algorithm is an enum of the algorithm that is used to generate digest.
+/// Algorithm for generating digests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Algorithm {
-    /// Crc32 is crc32 algorithm for generate digest.
+    /// CRC32 algorithm for generating digests.
     Crc32,
 
-    /// Sha256 is sha256 algorithm for generate digest.
+    /// SHA-256 algorithm for generating digests.
     Sha256,
 
-    /// Sha512 is sha512 algorithm for generate digest.
+    /// SHA-512 algorithm for generating digests.
     Sha512,
 }
 
 /// Algorithm implements the Display.
 impl fmt::Display for Algorithm {
-    /// fmt formats the value using the given formatter.
+    /// Formats the value using the given formatter.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Algorithm::Crc32 => write!(f, "crc32"),
@@ -66,7 +66,7 @@ impl fmt::Display for Algorithm {
 impl FromStr for Algorithm {
     type Err = String;
 
-    /// from_str parses an algorithm string.
+    /// Parses an algorithm string.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "crc32" => Ok(Algorithm::Crc32),
@@ -77,23 +77,23 @@ impl FromStr for Algorithm {
     }
 }
 
-/// Digest is a struct that is used to generate digest.
+/// A digest value with its associated algorithm.
 pub struct Digest {
-    /// algorithm is the algorithm that is used to generate digest.
+    /// The algorithm used to generate the digest.
     algorithm: Algorithm,
 
-    /// encoded is the encoded digest.
+    /// The encoded digest value.
     encoded: String,
 }
 
 /// Digest implements the Digest.
 impl Digest {
-    /// new returns a new Digest.
+    /// Creates a new digest with the specified algorithm and encoded value.
     pub fn new(algorithm: Algorithm, encoded: String) -> Self {
         Self { algorithm, encoded }
     }
 
-    /// extract_from_blob_url extracts the digest from the oci blob url, e.g. http(s)://<registry>/v2/<repository>/blobs/<digest>.
+    /// Extracts the digest from an OCI blob URL, e.g. http(s)://<registry>/v2/<repository>/blobs/<digest>.
     pub fn extract_from_blob_url(url: &str) -> Option<Self> {
         BLOB_URL_REGEX
             .captures(url)
@@ -103,12 +103,12 @@ impl Digest {
             .ok()
     }
 
-    /// algorithm returns the algorithm of the digest.
+    /// Returns the algorithm of the digest.
     pub fn algorithm(&self) -> Algorithm {
         self.algorithm
     }
 
-    /// encoded returns the encoded digest.
+    /// Returns the encoded digest value.
     pub fn encoded(&self) -> &str {
         &self.encoded
     }
@@ -116,7 +116,7 @@ impl Digest {
 
 /// Digest implements the Display.
 impl fmt::Display for Digest {
-    /// fmt formats the value using the given formatter.
+    /// Formats the value using the given formatter.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}{}{}", self.algorithm, SEPARATOR, self.encoded)
     }
@@ -126,7 +126,7 @@ impl fmt::Display for Digest {
 impl FromStr for Digest {
     type Err = String;
 
-    /// from_str parses a digest string.
+    /// Parses a digest string.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.splitn(2, SEPARATOR).collect();
         if parts.len() != 2 {
@@ -171,7 +171,7 @@ impl FromStr for Digest {
     }
 }
 
-/// calculate_file_digest calculates the digest of a file.
+/// Calculates the digest of a file.
 #[instrument(skip_all)]
 pub fn calculate_file_digest(algorithm: Algorithm, path: &Path) -> ClientResult<Digest> {
     let f = std::fs::File::open(path)?;
@@ -204,7 +204,7 @@ pub fn calculate_file_digest(algorithm: Algorithm, path: &Path) -> ClientResult<
     }
 }
 
-/// verify_file_digest verifies the digest of a file against an expected digest.
+/// Verifies the digest of a file against an expected digest.
 pub fn verify_file_digest(expected_digest: Digest, file_path: &Path) -> ClientResult<()> {
     let digest = match calculate_file_digest(expected_digest.algorithm(), file_path) {
         Ok(digest) => digest,
