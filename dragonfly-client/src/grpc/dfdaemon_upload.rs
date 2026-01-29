@@ -85,18 +85,18 @@ use url::Url;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 
-/// DfdaemonUploadServer is the grpc server of the upload.
+/// gRPC server for upload operations.
 pub struct DfdaemonUploadServer {
-    /// config is the configuration of the dfdaemon.
+    /// Configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// addr is the address of the grpc server.
+    /// Address of the gRPC server.
     addr: SocketAddr,
 
-    /// task is the task manager.
+    /// Task manager.
     task: Arc<task::Task>,
 
-    /// persistent_task is the persistent task manager.
+    /// Persistent task manager.
     persistent_task: Arc<persistent_task::PersistentTask>,
 
     /// persistent_cache_task is the persistent cache task manager.
