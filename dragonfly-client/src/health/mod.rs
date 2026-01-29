@@ -20,22 +20,22 @@ use tokio::sync::mpsc;
 use tracing::{info, instrument};
 use warp::{Filter, Rejection, Reply};
 
-/// Health is the health server.
+/// Health check server.
 #[derive(Debug)]
 pub struct Health {
-    /// addr is the address of the health server.
+    /// Address of the health server.
     addr: SocketAddr,
 
-    /// shutdown is used to shutdown the health server.
+    /// Used to shut down the health server.
     shutdown: shutdown::Shutdown,
 
-    /// _shutdown_complete is used to notify the health server is shutdown.
+    /// Used to notify that the health server shutdown is complete.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
 /// Health implements the health server.
 impl Health {
-    /// new creates a new Health.
+    /// Creates a new health server.
     pub fn new(
         addr: SocketAddr,
         shutdown: shutdown::Shutdown,
@@ -48,7 +48,7 @@ impl Health {
         }
     }
 
-    /// run starts the health server.
+    /// Starts the health server.
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -73,7 +73,7 @@ impl Health {
         }
     }
 
-    /// health_handler handles the health check request.
+    /// Handles the health check request.
     #[instrument(skip_all)]
     async fn health_handler() -> Result<impl Reply, Rejection> {
         Ok(warp::reply())

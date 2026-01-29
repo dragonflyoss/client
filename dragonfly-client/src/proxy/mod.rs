@@ -66,35 +66,34 @@ use tracing::{debug, error, info, instrument, Instrument, Span};
 pub mod header;
 
 lazy_static! {
-  /// SUPPORTED_HTTP_PROTOCOLS is the supported HTTP protocols, including http/1.1 and http/1.0.
+  /// Supported HTTP protocols, including HTTP/1.1 and HTTP/1.0.
   static ref SUPPORTED_HTTP_PROTOCOLS: Vec<Vec<u8>> = vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()];
 }
 
-/// Response is the response of the proxy server.
+/// Response type for the proxy server.
 pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
 
-/// Proxy is the proxy server.
+/// Proxy server for intercepting and handling HTTP requests.
 pub struct Proxy {
-    /// config is the configuration of the dfdaemon.
+    /// Configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// task is the task manager.
+    /// Task manager.
     task: Arc<Task>,
 
-    /// addr is the address of the proxy server.
+    /// Address of the proxy server.
     addr: SocketAddr,
 
-    /// registry_cert is the certificate of the client for the registry.
+    /// Certificate of the client for the registry.
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 
-    /// server_ca_cert is the CA certificate of the proxy server to
-    /// sign the self-signed certificate.
+    /// CA certificate of the proxy server to sign the self-signed certificate.
     server_ca_cert: Arc<Option<Certificate>>,
 
-    /// shutdown is used to shutdown the proxy server.
+    /// Used to shut down the proxy server.
     shutdown: shutdown::Shutdown,
 
-    /// _shutdown_complete is used to notify the proxy server is shutdown.
+    /// Used to notify that the proxy server shutdown is complete.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 

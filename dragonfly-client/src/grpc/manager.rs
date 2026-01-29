@@ -32,16 +32,16 @@ use url::Url;
 
 use super::interceptor::InjectTracingInterceptor;
 
-/// ManagerClient is a wrapper of ManagerGRPCClient.
+/// Wrapper around the gRPC manager client.
 #[derive(Clone)]
 pub struct ManagerClient {
-    /// client is the grpc client of the manager.
+    /// gRPC client for the manager.
     pub client: ManagerGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>,
 }
 
 /// ManagerClient implements the grpc client of the manager.
 impl ManagerClient {
-    /// new creates a new ManagerClient.
+    /// Creates a new manager client.
     pub async fn new(config: Arc<Config>, addr: String) -> Result<Self> {
         let domain_name = Url::parse(addr.as_str())?
             .host_str()

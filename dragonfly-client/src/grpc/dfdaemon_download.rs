@@ -85,33 +85,33 @@ use url::Url;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 
-/// DfdaemonDownloadServer is the grpc unix server of the download.
+/// gRPC Unix server for download operations.
 pub struct DfdaemonDownloadServer {
-    /// config is the configuration of the dfdaemon.
+    /// Configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// socket_path is the path of the unix domain socket.
+    /// Path of the Unix domain socket.
     socket_path: PathBuf,
 
-    /// task is the task manager.
+    /// Task manager.
     task: Arc<task::Task>,
 
-    /// persistent_task is the persistent cache task manager.
+    /// Persistent cache task manager.
     persistent_task: Arc<persistent_task::PersistentTask>,
 
-    /// persistent_cache_task is the persistent cache task manager.
+    /// Persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 
-    /// shutdown is used to shutdown the grpc server.
+    /// Used to shut down the gRPC server.
     shutdown: shutdown::Shutdown,
 
-    /// _shutdown_complete is used to notify the grpc server is shutdown.
+    /// Used to notify that the gRPC server shutdown is complete.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
 /// DfdaemonDownloadServer implements the grpc server of the download.
 impl DfdaemonDownloadServer {
-    /// new creates a new DfdaemonServer.
+    /// Creates a new download server.
     pub fn new(
         config: Arc<Config>,
         socket_path: PathBuf,
@@ -132,7 +132,7 @@ impl DfdaemonDownloadServer {
         }
     }
 
-    /// run starts the download server with unix domain socket.
+    /// Starts the download server with Unix domain socket.
     pub async fn run(&mut self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         // Initialize the grpc service.
         let service = DfdaemonDownloadGRPCServer::with_interceptor(
@@ -237,31 +237,31 @@ impl DfdaemonDownloadServer {
     }
 }
 
-/// DfdaemonDownloadServerHandler is the handler of the dfdaemon download grpc service.
+/// Handler for the dfdaemon download gRPC service.
 pub struct DfdaemonDownloadServerHandler {
-    /// config is the configuration of the dfdaemon.
+    /// Configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// socket_path is the path of the unix domain socket.
+    /// Path of the Unix domain socket.
     socket_path: PathBuf,
 
-    /// task is the task manager.
+    /// Task manager.
     task: Arc<task::Task>,
 
-    /// persistent_task is the persistent task manager.
+    /// Persistent task manager.
     persistent_task: Arc<persistent_task::PersistentTask>,
 
-    /// persistent_cache_task is the persistent cache task manager.
+    /// Persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 }
 
 /// DfdaemonDownloadServerHandler implements the dfdaemon download grpc service.
 #[tonic::async_trait]
 impl DfdaemonDownload for DfdaemonDownloadServerHandler {
-    /// DownloadTaskStream is the stream of the download task response.
+    /// Stream of download task responses.
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
-    /// download_task tells the dfdaemon to download the task.
+    /// Tells the dfdaemon to download the task.
     #[instrument(
         skip_all,
         fields(host_id, task_id, peer_id, url, remote_ip, content_length)

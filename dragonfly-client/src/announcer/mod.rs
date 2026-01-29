@@ -31,30 +31,30 @@ use sysinfo::System;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, instrument};
 
-/// Announcer is used to announce the dfdaemon information to the manager and scheduler.
+/// Announcer for broadcasting dfdaemon information to the manager and scheduler.
 pub struct SchedulerAnnouncer {
-    /// config is the configuration of the dfdaemon.
+    /// Configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// host_id is the id of the host.
+    /// ID of the host.
     host_id: String,
 
-    /// scheduler_client is the grpc client of the scheduler.
+    /// gRPC client for the scheduler.
     scheduler_client: Arc<SchedulerClient>,
 
-    /// interface is the network interface.
+    /// Network interface for monitoring.
     interface: Arc<Interface>,
 
-    /// shutdown is used to shutdown the announcer.
+    /// Used to shut down the announcer.
     shutdown: shutdown::Shutdown,
 
-    /// _shutdown_complete is used to notify the announcer is shutdown.
+    /// Used to notify that the announcer shutdown is complete.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
 /// SchedulerAnnouncer implements the scheduler announcer of the dfdaemon.
 impl SchedulerAnnouncer {
-    /// new creates a new scheduler announcer.
+    /// Creates a new scheduler announcer.
     pub async fn new(
         config: Arc<Config>,
         host_id: String,
@@ -80,7 +80,7 @@ impl SchedulerAnnouncer {
         Ok(announcer)
     }
 
-    /// run announces the dfdaemon information to the scheduler.
+    /// Announces the dfdaemon information to the scheduler.
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -117,7 +117,7 @@ impl SchedulerAnnouncer {
         }
     }
 
-    /// make_announce_host_request makes the announce host request.
+    /// Makes the announce host request.
     #[instrument(skip_all)]
     async fn make_announce_host_request(&self, interval: Duration) -> Result<AnnounceHostRequest> {
         // If the seed peer is enabled, we should announce the seed peer to the scheduler.

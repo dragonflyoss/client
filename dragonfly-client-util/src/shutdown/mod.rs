@@ -18,22 +18,22 @@ use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::broadcast;
 use tracing::info;
 
-/// Shutdown is a signal to shutdown.
+/// A shutdown signal for graceful termination.
 #[derive(Debug)]
 pub struct Shutdown {
-    /// is_shutdown is true if the shutdown signal has been received.
+    /// True if the shutdown signal has been received.
     is_shutdown: bool,
 
-    /// sender is used to send the shutdown signal.
+    /// Used to send the shutdown signal.
     sender: broadcast::Sender<()>,
 
-    /// receiver is used to receive the shutdown signal.
+    /// Used to receive the shutdown signal.
     receiver: broadcast::Receiver<()>,
 }
 
 /// Shutdown implements the shutdown signal.
 impl Shutdown {
-    /// new creates a new Shutdown.
+    /// Creates a new shutdown signal.
     pub fn new() -> Shutdown {
         let (sender, receiver) = broadcast::channel(1);
         Self {
@@ -43,17 +43,17 @@ impl Shutdown {
         }
     }
 
-    /// is_shutdown returns true if the shutdown signal has been received.
+    /// Returns true if the shutdown signal has been received.
     pub fn is_shutdown(&self) -> bool {
         self.is_shutdown
     }
 
-    /// trigger triggers the shutdown signal.
+    /// Triggers the shutdown signal.
     pub fn trigger(&self) {
         let _ = self.sender.send(());
     }
 
-    /// recv waits for the shutdown signal.
+    /// Waits for the shutdown signal.
     pub async fn recv(&mut self) {
         // Return immediately if the shutdown signal has already been received.
         if self.is_shutdown {
@@ -68,9 +68,9 @@ impl Shutdown {
     }
 }
 
-// Default implements the Default trait.
+/// Default implements the Default trait.
 impl Default for Shutdown {
-    // default returns a new default Shutdown.
+    /// Returns a new default shutdown signal.
     fn default() -> Self {
         Self::new()
     }
@@ -78,7 +78,7 @@ impl Default for Shutdown {
 
 /// Clone implements the Clone trait.
 impl Clone for Shutdown {
-    /// clone returns a new Shutdown.
+    /// Returns a cloned shutdown signal.
     fn clone(&self) -> Self {
         let sender = self.sender.clone();
         let receiver = self.sender.subscribe();
@@ -90,7 +90,7 @@ impl Clone for Shutdown {
     }
 }
 
-/// shutdown_signal returns a future that will resolve when a SIGINT, SIGTERM or SIGQUIT signal is
+/// Returns a future that will resolve when a SIGINT, SIGTERM or SIGQUIT signal is
 /// received by the process.
 pub async fn shutdown_signal() {
     let mut sigint = signal(SignalKind::interrupt()).unwrap();

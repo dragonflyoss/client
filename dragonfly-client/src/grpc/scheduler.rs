@@ -48,43 +48,43 @@ use url::Url;
 
 use super::interceptor::InjectTracingInterceptor;
 
-/// VNode is the virtual node of the hashring.
+/// Virtual node of the hashring.
 #[derive(Debug, Copy, Clone, Hash, PartialEq)]
 struct VNode {
-    /// addr is the address of the virtual node.
+    /// Address of the virtual node.
     addr: SocketAddr,
 }
 
 /// VNode implements the Display trait.
 impl std::fmt::Display for VNode {
-    /// fmt formats the virtual node.
+    /// Formats the virtual node.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.addr)
     }
 }
 
-/// SchedulerClient is a wrapper of SchedulerGRPCClient.
+/// Wrapper around the gRPC scheduler client.
 #[derive(Clone)]
 pub struct SchedulerClient {
-    /// config is the configuration of the dfdaemon.
+    /// Configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// dynconfig is the dynamic configuration of the dfdaemon.
+    /// Dynamic configuration of the dfdaemon.
     dynconfig: Arc<Dynconfig>,
 
-    /// available_schedulers is the available schedulers.
+    /// Available schedulers.
     available_schedulers: Arc<RwLock<Vec<Scheduler>>>,
 
-    /// available_scheduler_addrs is the addresses of available schedulers.
+    /// Addresses of available schedulers.
     available_scheduler_addrs: Arc<RwLock<Vec<SocketAddr>>>,
 
-    /// hashring is the hashring of the scheduler.
+    /// Hashring of the scheduler.
     hashring: Arc<RwLock<HashRing<VNode>>>,
 }
 
 /// SchedulerClient implements the grpc client of the scheduler.
 impl SchedulerClient {
-    /// new creates a new SchedulerClient.
+    /// Creates a new scheduler client.
     pub async fn new(config: Arc<Config>, dynconfig: Arc<Dynconfig>) -> Result<Self> {
         let client = Self {
             config,
