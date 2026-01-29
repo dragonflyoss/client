@@ -26,33 +26,33 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{error, info, instrument};
 
-// DOWNLOAD_TASK_TIMEOUT is the timeout of downloading the task. If the task download timeout, the
-// task will be garbage collected by disk usage, default 2 hours.
+/// Timeout for downloading tasks. Tasks that exceed this timeout will be
+/// garbage collected by disk usage. Default is 2 hours.
 pub const DOWNLOAD_TASK_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 
-/// GC is the garbage collector of dfdaemon.
+/// Garbage collector for dfdaemon.
 pub struct GC {
-    /// config is the configuration of the dfdaemon.
+    /// Configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// host_id is the id of the host.
+    /// ID of the host.
     host_id: String,
 
-    /// storage is the local storage.
+    /// Local storage instance.
     storage: Arc<Storage>,
 
-    /// scheduler_client is the grpc client of the scheduler.
+    /// gRPC client for the scheduler.
     scheduler_client: Arc<SchedulerClient>,
 
-    /// shutdown is used to shutdown the garbage collector.
+    /// Used to shut down the garbage collector.
     shutdown: shutdown::Shutdown,
 
-    /// _shutdown_complete is used to notify the garbage collector is shutdown.
+    /// Used to notify that the garbage collector shutdown is complete.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
 impl GC {
-    /// new creates a new GC.
+    /// Creates a new garbage collector.
     pub fn new(
         config: Arc<Config>,
         host_id: String,
@@ -71,7 +71,7 @@ impl GC {
         }
     }
 
-    /// run runs the garbage collector.
+    /// Runs the garbage collector.
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -120,7 +120,7 @@ impl GC {
         }
     }
 
-    /// evict_task_by_ttl evicts the task by ttl.
+    /// Evicts tasks that have exceeded their TTL.
     #[instrument(skip_all)]
     async fn evict_task_by_ttl(&self) -> Result<()> {
         info!("start to evict by task ttl");
@@ -139,7 +139,7 @@ impl GC {
         Ok(())
     }
 
-    /// evict_task_by_disk_usage evicts the task by disk usage.
+    /// Evicts tasks when disk usage exceeds the threshold.
     #[instrument(skip_all)]
     async fn evict_task_by_disk_usage(&self) -> Result<()> {
         let available_space = self.storage.available_space()?;
@@ -169,7 +169,7 @@ impl GC {
         Ok(())
     }
 
-    /// evict_task_space evicts the task by the given space.
+    /// Evicts tasks to free up the given amount of space.
     #[instrument(skip_all)]
     async fn evict_task_space(&self, need_evict_space: u64) -> Result<()> {
         let mut tasks = self.storage.get_tasks()?;
@@ -226,7 +226,7 @@ impl GC {
         Ok(())
     }
 
-    /// delete_task_from_scheduler deletes the task from the scheduler.
+    /// Deletes the task from the scheduler.
     #[instrument(skip_all)]
     async fn delete_task_from_scheduler(&self, task: metadata::Task) {
         self.scheduler_client
@@ -240,7 +240,7 @@ impl GC {
             });
     }
 
-    /// evict_persistent_task_by_ttl evicts the persistent task by ttl.
+    /// Evicts persistent tasks that have exceeded their TTL.
     #[instrument(skip_all)]
     async fn evict_persistent_task_by_ttl(&self) -> Result<()> {
         info!("start to evict by persistent task ttl");
@@ -256,7 +256,7 @@ impl GC {
         Ok(())
     }
 
-    /// evict_persistent_task_by_disk_usage evicts the persistent task by disk usage.
+    /// Evicts persistent tasks when disk usage exceeds the threshold.
     #[instrument(skip_all)]
     async fn evict_persistent_task_by_disk_usage(&self) -> Result<()> {
         let available_space = self.storage.available_space()?;
@@ -289,7 +289,7 @@ impl GC {
         Ok(())
     }
 
-    /// evict_persistent_cache_task_by_ttl evicts the persistent cache task by ttl.
+    /// Evicts persistent cache tasks that have exceeded their TTL.
     #[instrument(skip_all)]
     async fn evict_persistent_cache_task_by_ttl(&self) -> Result<()> {
         info!("start to evict by persistent cache task ttl");
@@ -305,7 +305,7 @@ impl GC {
         Ok(())
     }
 
-    /// evict_persistent_cache_task_by_disk_usage evicts the persistent cache task by disk usage.
+    /// Evicts persistent cache tasks when disk usage exceeds the threshold.
     #[instrument(skip_all)]
     async fn evict_persistent_cache_task_by_disk_usage(&self) -> Result<()> {
         let available_space = self.storage.available_space()?;
@@ -338,7 +338,7 @@ impl GC {
         Ok(())
     }
 
-    /// evict_persistent_task_space evicts the persistent task by the given space.
+    /// Evicts persistent tasks to free up the given amount of space.
     #[instrument(skip_all)]
     async fn evict_persistent_task_space(&self, need_evict_space: u64) -> Result<()> {
         let mut tasks = self.storage.get_persistent_tasks()?;
@@ -383,7 +383,7 @@ impl GC {
         Ok(())
     }
 
-    /// evict_persistent_cache_task_space evicts the persistent cache task by the given space.
+    /// Evicts persistent cache tasks to free up the given amount of space.
     #[instrument(skip_all)]
     async fn evict_persistent_cache_task_space(&self, need_evict_space: u64) -> Result<()> {
         let mut tasks = self.storage.get_persistent_cache_tasks()?;

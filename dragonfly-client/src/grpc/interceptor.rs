@@ -17,17 +17,17 @@
 use tonic::{metadata, service::Interceptor, Request, Status};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-/// MetadataMap is a tracing meda data map container for span context.
+/// Tracing metadata map container for span context.
 struct MetadataMap<'a>(&'a mut metadata::MetadataMap);
 
 /// MetadataMap implements the otel tracing Extractor.
 impl opentelemetry::propagation::Extractor for MetadataMap<'_> {
-    /// Get a value for a key from the `MetadataMap`.  If the value can't be converted to &str, returns None
+    /// Gets a value for a key from the `MetadataMap`.  If the value can't be converted to &str, returns None
     fn get(&self, key: &str) -> Option<&str> {
         self.0.get(key).and_then(|metadata| metadata.to_str().ok())
     }
 
-    /// Collect all the keys from the `MetadataMap`.
+    /// Collects all the keys from the `MetadataMap`.
     fn keys(&self) -> Vec<&str> {
         self.0
             .keys()
@@ -41,7 +41,7 @@ impl opentelemetry::propagation::Extractor for MetadataMap<'_> {
 
 /// MetadataMap implements the otel tracing Injector.
 impl opentelemetry::propagation::Injector for MetadataMap<'_> {
-    /// set a key-value pair to the injector.
+    /// Sets a key-value pair to the injector.
     fn set(&mut self, key: &str, value: String) {
         if let Ok(key) = metadata::MetadataKey::from_bytes(key.as_bytes()) {
             if let Ok(val) = metadata::MetadataValue::try_from(&value) {
@@ -51,13 +51,13 @@ impl opentelemetry::propagation::Injector for MetadataMap<'_> {
     }
 }
 
-/// InjectTracingInterceptor is a auto-inject tracing gRPC interceptor.
+/// Auto-inject tracing gRPC interceptor.
 #[derive(Clone)]
 pub struct InjectTracingInterceptor;
 
 /// InjectTracingInterceptor implements the tonic Interceptor interface.
 impl Interceptor for InjectTracingInterceptor {
-    /// call and inject tracing context into lgobal propagator.
+    /// Calls and injects tracing context into global propagator.
     fn call(&mut self, mut request: Request<()>) -> std::result::Result<Request<()>, Status> {
         let context = tracing::Span::current().context();
         opentelemetry::global::get_text_map_propagator(|prop| {
@@ -68,13 +68,13 @@ impl Interceptor for InjectTracingInterceptor {
     }
 }
 
-/// ExtractTracingInterceptor is a auto-extract tracing gRPC interceptor.
+/// Auto-extract tracing gRPC interceptor.
 #[derive(Clone)]
 pub struct ExtractTracingInterceptor;
 
 /// ExtractTracingInterceptor implements the tonic Interceptor interface.
 impl Interceptor for ExtractTracingInterceptor {
-    /// call and inject tracing context into lgobal propagator.
+    /// Calls and injects tracing context into global propagator.
     fn call(&mut self, mut request: Request<()>) -> std::result::Result<Request<()>, Status> {
         let parent_cx = opentelemetry::global::get_text_map_propagator(|prop| {
             prop.extract(&MetadataMap(request.metadata_mut()))
