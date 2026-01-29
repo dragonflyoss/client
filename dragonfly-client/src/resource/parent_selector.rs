@@ -17,7 +17,7 @@
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::resource::piece_collector::CollectedParent;
 use dashmap::DashMap;
-use dragonfly_api::common::v2::{Host, Peer, PersistentCachePeer, PersistentPeer};
+use dragonfly_api::common::v2::{Host, Network, Peer, PersistentCachePeer, PersistentPeer};
 use dragonfly_api::dfdaemon::v2::SyncHostRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
@@ -180,12 +180,11 @@ impl ParentSelector {
             })
             .collect();
 
-        match WeightedIndex::new(weights) {
+        match WeightedIndex::new(weights.clone()) {
             Ok(dist) => {
                 let mut rng = rand::rng();
                 let index = dist.sample(&mut rng);
                 let selected_parent = &parents[index];
-                debug!("selected parent {}", selected_parent.id);
 
                 selected_parent.clone()
             }
@@ -211,6 +210,22 @@ impl ParentSelector {
                 continue;
             };
             let parent_host_id = parent_host.id.clone();
+
+            // Seed a baseline weight so selection works even before the first sync_host response arrives.
+            let base_weight = parent_host
+                .network
+                .as_ref()
+                .map(Self::calculate_weight_from_network)
+                .unwrap_or_else(|| {
+                    Self::calculate_weight_from_network(&Network {
+                        max_tx_bandwidth: self.config.upload.rate_limit.as_u64(),
+                        tx_bandwidth: Some(0),
+                        ..Network::default()
+                    })
+                });
+            self.weights
+                .entry(parent_host_id.clone())
+                .or_insert(base_weight);
 
             match self.connections.entry(parent_host_id.clone()) {
                 dashmap::mapref::entry::Entry::Occupied(entry) => {
@@ -339,10 +354,15 @@ impl ParentSelector {
                         error!("sync host info from parent {} failed: {}", parent_host_id, err);
                     })? {
                         Some(message) => {
-                            let idle_tx_bandwidth = Self::get_idle_tx_bandwidth(&message);
+                            let weight = message
+                                .network
+                                .as_ref()
+                                .map(Self::calculate_weight_from_network)
+                                .unwrap_or(0);
 
-                            debug!("update host {} idle TX bandwidth to {}", parent_host_id, idle_tx_bandwidth);
-                            weights.insert(parent_host_id.clone(), idle_tx_bandwidth);
+                            debug!("update host {} weight to {}", parent_host_id, weight);
+
+                            weights.insert(parent_host_id.clone(), weight);
                         }
                         None => break,
                     }
@@ -361,24 +381,13 @@ impl ParentSelector {
         Ok(())
     }
 
-    /// Calculates the idle transmission bandwidth of a host.
-    #[instrument(skip_all)]
-    fn get_idle_tx_bandwidth(host: &Host) -> u64 {
-        let network = match &host.network {
-            Some(network) => network,
-            None => return 0,
-        };
+    /// Calculates the weight of a host based on its idle bandwidth.
+    fn calculate_weight_from_network(network: &Network) -> u64 {
+        let tx_bw = network.tx_bandwidth();
+        let max_bw = network.max_tx_bandwidth;
 
-        debug!("host {} network info: {:?}", host.id, network);
-        let Some(tx_bandwidth) = network.tx_bandwidth else {
-            return 0;
-        };
-
-        if tx_bandwidth < network.max_tx_bandwidth {
-            network.max_tx_bandwidth - tx_bandwidth
-        } else {
-            0
-        }
+        // calculate weight, at least 10% of max tx bandwidth.
+        max_bw.saturating_sub(tx_bw).max(max_bw / 10)
     }
 }
 

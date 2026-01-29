@@ -85,7 +85,7 @@ pub struct PieceCollector {
     interested_pieces: Vec<metadata::Piece>,
 
     /// collected_pieces is a map to store the collected pieces from different parents.
-    collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
+    collected_pieces: Arc<DashMap<u32, CollectedPiece>>,
 }
 
 /// PieceCollector is used to collect pieces from peers.
@@ -100,7 +100,14 @@ impl PieceCollector {
     ) -> Self {
         let collected_pieces = Arc::new(DashMap::with_capacity(interested_pieces.len()));
         for interested_piece in &interested_pieces {
-            collected_pieces.insert(interested_piece.number, Vec::new());
+            collected_pieces.insert(
+                interested_piece.number,
+                CollectedPiece {
+                    number: interested_piece.number,
+                    length: interested_piece.length,
+                    parents: Vec::new(),
+                },
+            );
         }
 
         Self {
@@ -174,10 +181,12 @@ impl PieceCollector {
         task_id: &str,
         parents: Vec<CollectedParent>,
         interested_pieces: Vec<metadata::Piece>,
-        collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
+        collected_pieces: Arc<DashMap<u32, CollectedPiece>>,
         collected_piece_tx: Sender<CollectedPiece>,
         collected_piece_timeout: Duration,
     ) -> Result<()> {
+        // Only require multiple parents to trigger download when peer have at least two parents.
+        let required_parent_count = if parents.len() > 1 { 2 } else { 0 };
         // Create a task to collect pieces from peers.
         let mut join_set = JoinSet::new();
         for parent in parents.iter() {
@@ -188,11 +197,12 @@ impl PieceCollector {
                 task_id: String,
                 mut parent: CollectedParent,
                 interested_pieces: Vec<metadata::Piece>,
-                collected_pieces: Arc<DashMap<u32, Vec<CollectedParent>>>,
+                collected_pieces: Arc<DashMap<u32, CollectedPiece>>,
                 collected_piece_tx: Sender<CollectedPiece>,
                 collected_piece_timeout: Duration,
+                required_parent_count: u8,
             ) -> Result<CollectedParent> {
-                debug!("sync pieces from parent {}", parent.id);
+                info!("sync pieces from parent {}", parent.id);
 
                 // If candidate_parent.host is None, skip it.
                 let host = parent.host.clone().ok_or_else(|| {
@@ -237,11 +247,16 @@ impl PieceCollector {
                 })? {
                     let message = message?;
 
-                    if let Some(mut parents) = collected_pieces.get_mut(&message.number) {
+                    if let Some(mut piece) = collected_pieces.get_mut(&message.number) {
                         parent.download_ip = Some(message.ip);
                         parent.download_tcp_port = message.tcp_port;
                         parent.download_quic_port = message.quic_port;
-                        parents.push(parent.clone());
+                        piece.parents.push(parent.clone());
+                        if required_parent_count != 0
+                            && piece.parents.len() < required_parent_count as usize
+                        {
+                            continue;
+                        }
                     } else {
                         continue;
                     }
@@ -249,8 +264,8 @@ impl PieceCollector {
                     // Wait for collecting the piece from different parents when the first
                     // piece is collected.
                     tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS).await;
-                    let parents = match collected_pieces.remove(&message.number) {
-                        Some((_, parents)) => parents,
+                    let piece = match collected_pieces.remove(&message.number) {
+                        Some((_, piece)) => piece,
                         None => continue,
                     };
 
@@ -258,19 +273,16 @@ impl PieceCollector {
                         "receive piece {}-{} metadata from parents {:?}",
                         task_id,
                         message.number,
-                        parents.iter().map(|p| &p.id).collect::<Vec<&String>>()
+                        piece
+                            .parents
+                            .iter()
+                            .map(|p| &p.id)
+                            .collect::<Vec<&String>>()
                     );
 
-                    collected_piece_tx
-                        .send(CollectedPiece {
-                            number: message.number,
-                            length: message.length,
-                            parents,
-                        })
-                        .await
-                        .inspect_err(|err| {
-                            error!("send CollectedPiece failed: {}", err);
-                        })?;
+                    collected_piece_tx.send(piece).await.inspect_err(|err| {
+                        error!("send CollectedPiece failed: {}", err);
+                    })?;
                 }
 
                 Ok(parent)
@@ -286,6 +298,7 @@ impl PieceCollector {
                     collected_pieces.clone(),
                     collected_piece_tx.clone(),
                     collected_piece_timeout,
+                    required_parent_count,
                 )
                 .in_current_span(),
             );
@@ -296,6 +309,21 @@ impl PieceCollector {
             match message {
                 Ok(Ok(peer)) => {
                     debug!("peer {} sync pieces finished", peer.id);
+
+                    if join_set.is_empty() && !collected_pieces.is_empty() {
+                        for number in collected_pieces
+                            .iter()
+                            .filter(|entry| !entry.value().parents.is_empty())
+                            .map(|entry| *entry.key())
+                            .collect::<Vec<u32>>()
+                        {
+                            if let Some((_, piece)) = collected_pieces.remove(&number) {
+                                collected_piece_tx.send(piece).await.inspect_err(|err| {
+                                    error!("send CollectedPiece failed: {}", err);
+                                })?;
+                            }
+                        }
+                    }
 
                     // If all pieces are collected, abort all tasks.
                     if collected_pieces.is_empty() {
