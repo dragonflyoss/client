@@ -44,10 +44,10 @@ pub struct GC {
     /// gRPC client for the scheduler.
     scheduler_client: Arc<SchedulerClient>,
 
-    /// Used to shutdown the garbage collector.
+    /// Used to shut down the garbage collector.
     shutdown: shutdown::Shutdown,
 
-    /// Used to notify the garbage collector shutdown is complete.
+    /// Used to notify that the garbage collector shutdown is complete.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
