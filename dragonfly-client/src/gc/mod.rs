@@ -26,8 +26,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{error, info, instrument};
 
-// DOWNLOAD_TASK_TIMEOUT is the timeout of downloading the task. If the task download timeout, the
-// task will be garbage collected by disk usage, default 2 hours.
+/// DOWNLOAD_TASK_TIMEOUT is the timeout of downloading the task. If the task download timeout, the
+/// task will be garbage collected by disk usage, default 2 hours.
 pub const DOWNLOAD_TASK_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 
 /// GC is the garbage collector of dfdaemon.

@@ -68,9 +68,9 @@ impl Shutdown {
     }
 }
 
-// Default implements the Default trait.
+/// Default implements the Default trait.
 impl Default for Shutdown {
-    // default returns a new default Shutdown.
+    /// default returns a new default Shutdown.
     fn default() -> Self {
         Self::new()
     }

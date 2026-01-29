@@ -108,7 +108,7 @@ impl Digest {
         self.algorithm
     }
 
-    // encoded returns the encoded digest.
+    /// encoded returns the encoded digest.
     pub fn encoded(&self) -> &str {
         &self.encoded
     }
