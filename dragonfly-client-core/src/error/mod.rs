@@ -261,6 +261,10 @@ pub enum DFError {
     /// ValidationError is the error for validate.
     #[error("validate failed: {0}")]
     ValidationError(String),
+
+    /// CgroupsFSError is the error for cgroups fs.
+    #[error(transparent)]
+    CgroupsFSError(#[from] cgroups_rs::fs::error::Error),
 }
 
 /// SendError is the error for send.

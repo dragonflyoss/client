@@ -24,3 +24,4 @@ opendal.workspace = true
 url.workspace = true
 headers.workspace = true
 vortex-protocol.workspace = true
+cgroups-rs.workspace = true
