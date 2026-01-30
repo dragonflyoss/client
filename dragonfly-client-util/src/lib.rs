@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+pub mod container;
 pub mod digest;
 pub mod fs;
 pub mod hashring;
