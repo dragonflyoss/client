@@ -1162,97 +1162,161 @@ mod tests {
 
     #[test]
     fn test_collect_upload_task_metrics() {
+        // Use unique labels for this test to avoid interference with other tests
+        let tag = "test-upload-tag";
+        let app = "test-upload-app";
+
         // Test upload task started metrics
-        collect_upload_task_started_metrics(1, "test-tag", "test-app");
+        collect_upload_task_started_metrics(1, tag, app);
 
         // Get the counter value to verify it was incremented
-        let counter = UPLOAD_TASK_COUNT
-            .with_label_values(&["1", "test-tag", "test-app"])
+        let counter = UPLOAD_TASK_COUNT.with_label_values(&["1", tag, app]).get();
+        assert!(counter >= 1);
+
+        // Check gauge was incremented
+        let gauge_before = CONCURRENT_UPLOAD_TASK_GAUGE
+            .with_label_values(&["1", tag, app])
             .get();
-        assert!(counter > 0);
 
         // Test upload task finished metrics
         let duration = Duration::from_millis(100);
-        collect_upload_task_finished_metrics(1, "test-tag", "test-app", 1024, duration);
+        collect_upload_task_finished_metrics(1, tag, app, 1024, duration);
+
+        // Check gauge was decremented after finished
+        let gauge_after = CONCURRENT_UPLOAD_TASK_GAUGE
+            .with_label_values(&["1", tag, app])
+            .get();
+        assert_eq!(gauge_after, gauge_before - 1);
 
         // Test upload task failure metrics
-        collect_upload_task_failure_metrics(1, "test-tag", "test-app");
+        collect_upload_task_started_metrics(1, tag, app);
+        let gauge_before_failure = CONCURRENT_UPLOAD_TASK_GAUGE
+            .with_label_values(&["1", tag, app])
+            .get();
+
+        collect_upload_task_failure_metrics(1, tag, app);
 
         let failure_counter = UPLOAD_TASK_FAILURE_COUNT
-            .with_label_values(&["1", "test-tag", "test-app"])
+            .with_label_values(&["1", tag, app])
             .get();
-        assert!(failure_counter > 0);
+        assert!(failure_counter >= 1);
+
+        // Check gauge was decremented after failure
+        let gauge_after_failure = CONCURRENT_UPLOAD_TASK_GAUGE
+            .with_label_values(&["1", tag, app])
+            .get();
+        assert_eq!(gauge_after_failure, gauge_before_failure - 1);
     }
 
     #[test]
     fn test_collect_download_task_metrics() {
+        // Use unique labels for this test to avoid interference with other tests
+        let tag = "test-download-tag";
+        let app = "test-download-app";
+        let priority = "5";
+
         // Test download task started metrics
-        collect_download_task_started_metrics(2, "test-tag", "test-app", "5");
+        collect_download_task_started_metrics(2, tag, app, priority);
 
         let counter = DOWNLOAD_TASK_COUNT
-            .with_label_values(&["2", "test-tag", "test-app", "5"])
+            .with_label_values(&["2", tag, app, priority])
             .get();
-        assert!(counter > 0);
+        assert!(counter >= 1);
+
+        // Check gauge was incremented
+        let gauge_before = CONCURRENT_DOWNLOAD_TASK_GAUGE
+            .with_label_values(&["2", tag, app, priority])
+            .get();
 
         // Test download task finished metrics
         let duration = Duration::from_millis(200);
-        collect_download_task_finished_metrics(
-            2,
-            "test-tag",
-            "test-app",
-            "5",
-            1024 * 1024,
-            None,
-            duration,
-        );
+        collect_download_task_finished_metrics(2, tag, app, priority, 1024 * 1024, None, duration);
+
+        // Check gauge was decremented after finished
+        let gauge_after = CONCURRENT_DOWNLOAD_TASK_GAUGE
+            .with_label_values(&["2", tag, app, priority])
+            .get();
+        assert_eq!(gauge_after, gauge_before - 1);
 
         // Test download task failure metrics
-        collect_download_task_failure_metrics(2, "test-tag", "test-app", "5");
+        collect_download_task_started_metrics(2, tag, app, priority);
+        let gauge_before_failure = CONCURRENT_DOWNLOAD_TASK_GAUGE
+            .with_label_values(&["2", tag, app, priority])
+            .get();
+
+        collect_download_task_failure_metrics(2, tag, app, priority);
 
         let failure_counter = DOWNLOAD_TASK_FAILURE_COUNT
-            .with_label_values(&["2", "test-tag", "test-app", "5"])
+            .with_label_values(&["2", tag, app, priority])
             .get();
-        assert!(failure_counter > 0);
+        assert!(failure_counter >= 1);
+
+        // Check gauge was decremented after failure
+        let gauge_after_failure = CONCURRENT_DOWNLOAD_TASK_GAUGE
+            .with_label_values(&["2", tag, app, priority])
+            .get();
+        assert_eq!(gauge_after_failure, gauge_before_failure - 1);
     }
 
     #[test]
     fn test_collect_prefetch_task_metrics() {
-        // Test prefetch task started metrics
-        collect_prefetch_task_started_metrics(3, "test-tag", "test-app", "5");
+        // Use unique labels for this test to avoid interference with other tests
+        let tag = "test-prefetch-tag";
+        let app = "test-prefetch-app";
+        let priority = "5";
 
-        let counter = PREFETCH_TASK_COUNT
-            .with_label_values(&["3", "test-tag", "test-app", "5"])
+        // Test prefetch task started metrics
+        let counter_before = PREFETCH_TASK_COUNT
+            .with_label_values(&["3", tag, app, priority])
             .get();
-        assert!(counter > 0);
+        collect_prefetch_task_started_metrics(3, tag, app, priority);
+
+        let counter_after = PREFETCH_TASK_COUNT
+            .with_label_values(&["3", tag, app, priority])
+            .get();
+        assert_eq!(counter_after, counter_before + 1);
 
         // Test prefetch task failure metrics
-        collect_prefetch_task_failure_metrics(3, "test-tag", "test-app", "5");
-
-        let failure_counter = PREFETCH_TASK_FAILURE_COUNT
-            .with_label_values(&["3", "test-tag", "test-app", "5"])
+        let failure_before = PREFETCH_TASK_FAILURE_COUNT
+            .with_label_values(&["3", tag, app, priority])
             .get();
-        assert!(failure_counter > 0);
+        collect_prefetch_task_failure_metrics(3, tag, app, priority);
+
+        let failure_after = PREFETCH_TASK_FAILURE_COUNT
+            .with_label_values(&["3", tag, app, priority])
+            .get();
+        assert_eq!(failure_after, failure_before + 1);
     }
 
     #[test]
     fn test_collect_upload_piece_metrics() {
         // Test upload piece started metrics
+        let gauge_before = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
         collect_upload_piece_started_metrics();
 
-        let gauge = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
-        assert!(gauge > 0);
+        let gauge_after_start = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
+        assert_eq!(gauge_after_start, gauge_before + 1);
 
         // Test upload piece finished metrics
         collect_upload_piece_finished_metrics();
 
+        let gauge_after_finish = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
+        assert_eq!(gauge_after_finish, gauge_after_start - 1);
+
         // Test upload piece traffic metrics
+        let traffic_before = UPLOAD_TRAFFIC.with_label_values(&[]).get();
         collect_upload_piece_traffic_metrics(1024);
 
-        let traffic = UPLOAD_TRAFFIC.with_label_values(&[]).get();
-        assert!(traffic >= 1024);
+        let traffic_after = UPLOAD_TRAFFIC.with_label_values(&[]).get();
+        assert_eq!(traffic_after, traffic_before + 1024);
 
         // Test upload piece failure metrics
+        collect_upload_piece_started_metrics();
+        let gauge_before_failure = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
         collect_upload_piece_failure_metrics();
+
+        let gauge_after_failure = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
+        assert_eq!(gauge_after_failure, gauge_before_failure - 1);
     }
 
     #[test]
@@ -1415,43 +1479,52 @@ mod tests {
 
     #[test]
     fn test_task_size_level1_slow_download() {
-        // This test verifies that Level1 tasks with slow download are logged
-        // We can't directly test the warning log, but we can ensure the metric is recorded
+        // This test verifies that Level1 tasks with slow download duration are properly
+        // recorded in metrics (note: the actual warning log is produced by the function
+        // but cannot be directly verified in this unit test)
+        let tag = "slow-download-tag";
+        let app = "slow-download-app";
         let small_size = 512 * 1024; // 512 KB - Level1
         let slow_duration = Duration::from_millis(600); // Above threshold
 
-        collect_download_task_started_metrics(1, "slow-tag", "slow-app", "5");
-        collect_download_task_finished_metrics(
-            1,
-            "slow-tag",
-            "slow-app",
-            "5",
-            small_size,
-            None,
-            slow_duration,
-        );
+        collect_download_task_started_metrics(1, tag, app, "5");
 
-        // Verify the histogram recorded the observation
-        let histogram = DOWNLOAD_TASK_DURATION
+        let histogram_before = DOWNLOAD_TASK_DURATION
             .with_label_values(&["1", "1"])
             .get_sample_count();
-        assert!(histogram > 0);
+
+        collect_download_task_finished_metrics(1, tag, app, "5", small_size, None, slow_duration);
+
+        // Verify the histogram recorded the observation
+        let histogram_after = DOWNLOAD_TASK_DURATION
+            .with_label_values(&["1", "1"])
+            .get_sample_count();
+        assert_eq!(histogram_after, histogram_before + 1);
     }
 
     #[test]
     fn test_task_size_level1_slow_upload() {
-        // This test verifies that Level1 tasks with slow upload are logged
+        // This test verifies that Level1 tasks with slow upload duration are properly
+        // recorded in metrics (note: the actual warning log is produced by the function
+        // but cannot be directly verified in this unit test)
+        let tag = "slow-upload-tag";
+        let app = "slow-upload-app";
         let small_size = 512 * 1024; // 512 KB - Level1
         let slow_duration = Duration::from_millis(600); // Above threshold
 
-        collect_upload_task_started_metrics(1, "slow-tag", "slow-app");
-        collect_upload_task_finished_metrics(1, "slow-tag", "slow-app", small_size, slow_duration);
+        collect_upload_task_started_metrics(1, tag, app);
 
-        // Verify the histogram recorded the observation
-        let histogram = UPLOAD_TASK_DURATION
+        let histogram_before = UPLOAD_TASK_DURATION
             .with_label_values(&["1", "1"])
             .get_sample_count();
-        assert!(histogram > 0);
+
+        collect_upload_task_finished_metrics(1, tag, app, small_size, slow_duration);
+
+        // Verify the histogram recorded the observation
+        let histogram_after = UPLOAD_TASK_DURATION
+            .with_label_values(&["1", "1"])
+            .get_sample_count();
+        assert_eq!(histogram_after, histogram_before + 1);
     }
 
     #[test]
