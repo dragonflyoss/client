@@ -1286,6 +1286,7 @@ dependencies = [
 name = "dragonfly-client-core"
 version = "1.2.10"
 dependencies = [
+ "cgroups-rs",
  "headers 0.4.1",
  "http 1.4.0",
  "hyper 1.8.1",
