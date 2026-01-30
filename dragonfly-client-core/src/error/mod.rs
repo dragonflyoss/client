@@ -264,7 +264,7 @@ pub enum DFError {
 
     /// CgroupsFSError is the error for cgroups fs.
     #[error(transparent)]
-    CgroupsFSError(cgroups_rs::fs::error::Error),
+    CgroupsFSError(#[from] cgroups_rs::fs::error::Error),
 }
 
 /// SendError is the error for send.

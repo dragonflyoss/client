@@ -16,6 +16,7 @@
 
 use cgroups_rs::fs::{cgroup::get_cgroups_relative_paths_by_pid, hierarchies, Cgroup};
 use dragonfly_client_core::{Error, Result};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Retrieves the cgroup associated with a given process ID, supporting both cgroup v1 and v2.
