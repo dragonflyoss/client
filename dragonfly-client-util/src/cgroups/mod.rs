@@ -14,11 +14,9 @@
  * limitations under the License.
  */
 
-use cgroups_rs::fs::{
-    cgroup::get_cgroups_relative_paths_by_pid, cpu::CpuController, hierarchies,
-    memory::MemController, Cgroup,
-};
+use cgroups_rs::fs::{cgroup::get_cgroups_relative_paths_by_pid, hierarchies, Cgroup};
 use dragonfly_client_core::{Error, Result};
+use std::path::{Path, PathBuf};
 
 /// Retrieves the cgroup associated with a given process ID, supporting both cgroup v1 and v2.
 ///
@@ -54,11 +52,15 @@ pub fn get_cgroups_by_pid(pid: u32) -> Result<Cgroup> {
     // and load the cgroup configuration for the specified PID.
     let hierarchies = hierarchies::auto();
     if hierarchies.v2() {
-        let path = get_cgroups_v2_path_by_pid(pid);
-        Cgroup::load(hierarchies, path)
+        let path = get_cgroups_v2_path_by_pid(pid)?;
+        Ok(Cgroup::load(hierarchies, path))
     } else {
-        let path = get_cgroups_relative_paths_by_pid(pid).unwrap();
-        Cgroup::load_with_relative_paths(hierarchies::auto(), Path::new("."), path)
+        let relative_paths = get_cgroups_relative_paths_by_pid(pid)?;
+        Ok(Cgroup::load_with_relative_paths(
+            hierarchies::auto(),
+            Path::new("."),
+            relative_paths,
+        ))
     }
 }
 
