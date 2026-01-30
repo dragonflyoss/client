@@ -982,3 +982,502 @@ impl Metrics {
         Ok(Vec::new())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_task_size_calculate_size_level() {
+        // Test Level0 - unknown size
+        assert_eq!(TaskSize::calculate_size_level(0), TaskSize::Level0);
+
+        // Test Level1 - 0 to 1M
+        assert_eq!(TaskSize::calculate_size_level(1), TaskSize::Level1);
+        assert_eq!(TaskSize::calculate_size_level(512 * 1024), TaskSize::Level1);
+        assert_eq!(
+            TaskSize::calculate_size_level(1024 * 1024 - 1),
+            TaskSize::Level1
+        );
+
+        // Test Level2 - 1M to 4M
+        assert_eq!(
+            TaskSize::calculate_size_level(1024 * 1024),
+            TaskSize::Level2
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(2 * 1024 * 1024),
+            TaskSize::Level2
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(4 * 1024 * 1024 - 1),
+            TaskSize::Level2
+        );
+
+        // Test Level3 - 4M to 8M
+        assert_eq!(
+            TaskSize::calculate_size_level(4 * 1024 * 1024),
+            TaskSize::Level3
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(6 * 1024 * 1024),
+            TaskSize::Level3
+        );
+
+        // Test Level4 - 8M to 16M
+        assert_eq!(
+            TaskSize::calculate_size_level(8 * 1024 * 1024),
+            TaskSize::Level4
+        );
+
+        // Test Level5 - 16M to 32M
+        assert_eq!(
+            TaskSize::calculate_size_level(16 * 1024 * 1024),
+            TaskSize::Level5
+        );
+
+        // Test Level6 - 32M to 64M
+        assert_eq!(
+            TaskSize::calculate_size_level(32 * 1024 * 1024),
+            TaskSize::Level6
+        );
+
+        // Test Level7 - 64M to 128M
+        assert_eq!(
+            TaskSize::calculate_size_level(64 * 1024 * 1024),
+            TaskSize::Level7
+        );
+
+        // Test Level8 - 128M to 256M
+        assert_eq!(
+            TaskSize::calculate_size_level(128 * 1024 * 1024),
+            TaskSize::Level8
+        );
+
+        // Test Level9 - 256M to 512M
+        assert_eq!(
+            TaskSize::calculate_size_level(256 * 1024 * 1024),
+            TaskSize::Level9
+        );
+
+        // Test Level10 - 512M to 1G
+        assert_eq!(
+            TaskSize::calculate_size_level(512 * 1024 * 1024),
+            TaskSize::Level10
+        );
+
+        // Test Level11 - 1G to 4G
+        assert_eq!(
+            TaskSize::calculate_size_level(1024 * 1024 * 1024),
+            TaskSize::Level11
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(2 * 1024 * 1024 * 1024),
+            TaskSize::Level11
+        );
+
+        // Test Level12 - 4G to 8G
+        assert_eq!(
+            TaskSize::calculate_size_level(4 * 1024 * 1024 * 1024),
+            TaskSize::Level12
+        );
+
+        // Test Level13 - 8G to 16G
+        assert_eq!(
+            TaskSize::calculate_size_level(8 * 1024 * 1024 * 1024),
+            TaskSize::Level13
+        );
+
+        // Test Level14 - 16G to 32G
+        assert_eq!(
+            TaskSize::calculate_size_level(16 * 1024 * 1024 * 1024),
+            TaskSize::Level14
+        );
+
+        // Test Level15 - 32G to 64G
+        assert_eq!(
+            TaskSize::calculate_size_level(32 * 1024 * 1024 * 1024),
+            TaskSize::Level15
+        );
+
+        // Test Level16 - 64G to 128G
+        assert_eq!(
+            TaskSize::calculate_size_level(64 * 1024 * 1024 * 1024),
+            TaskSize::Level16
+        );
+
+        // Test Level17 - 128G to 256G
+        assert_eq!(
+            TaskSize::calculate_size_level(128 * 1024 * 1024 * 1024),
+            TaskSize::Level17
+        );
+
+        // Test Level18 - 256G to 512G
+        assert_eq!(
+            TaskSize::calculate_size_level(256 * 1024 * 1024 * 1024),
+            TaskSize::Level18
+        );
+
+        // Test Level19 - 512G to 1T
+        assert_eq!(
+            TaskSize::calculate_size_level(512 * 1024 * 1024 * 1024),
+            TaskSize::Level19
+        );
+
+        // Test Level20 - greater than 1T
+        assert_eq!(
+            TaskSize::calculate_size_level(1024 * 1024 * 1024 * 1024),
+            TaskSize::Level20
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(2 * 1024 * 1024 * 1024 * 1024),
+            TaskSize::Level20
+        );
+    }
+
+    #[test]
+    fn test_task_size_display() {
+        assert_eq!(format!("{}", TaskSize::Level0), "0");
+        assert_eq!(format!("{}", TaskSize::Level1), "1");
+        assert_eq!(format!("{}", TaskSize::Level2), "2");
+        assert_eq!(format!("{}", TaskSize::Level3), "3");
+        assert_eq!(format!("{}", TaskSize::Level4), "4");
+        assert_eq!(format!("{}", TaskSize::Level5), "5");
+        assert_eq!(format!("{}", TaskSize::Level6), "6");
+        assert_eq!(format!("{}", TaskSize::Level7), "7");
+        assert_eq!(format!("{}", TaskSize::Level8), "8");
+        assert_eq!(format!("{}", TaskSize::Level9), "9");
+        assert_eq!(format!("{}", TaskSize::Level10), "10");
+        assert_eq!(format!("{}", TaskSize::Level11), "11");
+        assert_eq!(format!("{}", TaskSize::Level12), "12");
+        assert_eq!(format!("{}", TaskSize::Level13), "13");
+        assert_eq!(format!("{}", TaskSize::Level14), "14");
+        assert_eq!(format!("{}", TaskSize::Level15), "15");
+        assert_eq!(format!("{}", TaskSize::Level16), "16");
+        assert_eq!(format!("{}", TaskSize::Level17), "17");
+        assert_eq!(format!("{}", TaskSize::Level18), "18");
+        assert_eq!(format!("{}", TaskSize::Level19), "19");
+        assert_eq!(format!("{}", TaskSize::Level20), "20");
+    }
+
+    #[test]
+    fn test_collect_upload_task_metrics() {
+        // Test upload task started metrics
+        collect_upload_task_started_metrics(1, "test-tag", "test-app");
+
+        // Get the counter value to verify it was incremented
+        let counter = UPLOAD_TASK_COUNT
+            .with_label_values(&["1", "test-tag", "test-app"])
+            .get();
+        assert!(counter > 0);
+
+        // Test upload task finished metrics
+        let duration = Duration::from_millis(100);
+        collect_upload_task_finished_metrics(1, "test-tag", "test-app", 1024, duration);
+
+        // Test upload task failure metrics
+        collect_upload_task_failure_metrics(1, "test-tag", "test-app");
+
+        let failure_counter = UPLOAD_TASK_FAILURE_COUNT
+            .with_label_values(&["1", "test-tag", "test-app"])
+            .get();
+        assert!(failure_counter > 0);
+    }
+
+    #[test]
+    fn test_collect_download_task_metrics() {
+        // Test download task started metrics
+        collect_download_task_started_metrics(2, "test-tag", "test-app", "5");
+
+        let counter = DOWNLOAD_TASK_COUNT
+            .with_label_values(&["2", "test-tag", "test-app", "5"])
+            .get();
+        assert!(counter > 0);
+
+        // Test download task finished metrics
+        let duration = Duration::from_millis(200);
+        collect_download_task_finished_metrics(
+            2,
+            "test-tag",
+            "test-app",
+            "5",
+            1024 * 1024,
+            None,
+            duration,
+        );
+
+        // Test download task failure metrics
+        collect_download_task_failure_metrics(2, "test-tag", "test-app", "5");
+
+        let failure_counter = DOWNLOAD_TASK_FAILURE_COUNT
+            .with_label_values(&["2", "test-tag", "test-app", "5"])
+            .get();
+        assert!(failure_counter > 0);
+    }
+
+    #[test]
+    fn test_collect_prefetch_task_metrics() {
+        // Test prefetch task started metrics
+        collect_prefetch_task_started_metrics(3, "test-tag", "test-app", "5");
+
+        let counter = PREFETCH_TASK_COUNT
+            .with_label_values(&["3", "test-tag", "test-app", "5"])
+            .get();
+        assert!(counter > 0);
+
+        // Test prefetch task failure metrics
+        collect_prefetch_task_failure_metrics(3, "test-tag", "test-app", "5");
+
+        let failure_counter = PREFETCH_TASK_FAILURE_COUNT
+            .with_label_values(&["3", "test-tag", "test-app", "5"])
+            .get();
+        assert!(failure_counter > 0);
+    }
+
+    #[test]
+    fn test_collect_upload_piece_metrics() {
+        // Test upload piece started metrics
+        collect_upload_piece_started_metrics();
+
+        let gauge = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
+        assert!(gauge > 0);
+
+        // Test upload piece finished metrics
+        collect_upload_piece_finished_metrics();
+
+        // Test upload piece traffic metrics
+        collect_upload_piece_traffic_metrics(1024);
+
+        let traffic = UPLOAD_TRAFFIC.with_label_values(&[]).get();
+        assert!(traffic >= 1024);
+
+        // Test upload piece failure metrics
+        collect_upload_piece_failure_metrics();
+    }
+
+    #[test]
+    fn test_collect_download_piece_traffic_metrics() {
+        // Test download piece traffic metrics
+        let traffic_type = TrafficType::RemotePeer;
+        collect_download_piece_traffic_metrics(&traffic_type, 2048);
+
+        let traffic = DOWNLOAD_TRAFFIC
+            .with_label_values(&[traffic_type.as_str_name()])
+            .get();
+        assert!(traffic >= 2048);
+    }
+
+    #[test]
+    fn test_collect_backend_request_metrics() {
+        // Test backend request started metrics
+        collect_backend_request_started_metrics("http", "GET");
+
+        let counter = BACKEND_REQUEST_COUNT
+            .with_label_values(&["http", "GET"])
+            .get();
+        assert!(counter > 0);
+
+        // Test backend request failure metrics
+        collect_backend_request_failure_metrics("http", "GET");
+
+        let failure_counter = BACKEND_REQUEST_FAILURE_COUNT
+            .with_label_values(&["http", "GET"])
+            .get();
+        assert!(failure_counter > 0);
+
+        // Test backend request finished metrics
+        let duration = Duration::from_millis(150);
+        collect_backend_request_finished_metrics("http", "POST", duration);
+
+        // Verify histogram observation
+        let histogram = BACKEND_REQUEST_DURATION
+            .with_label_values(&["http", "POST"])
+            .get_sample_count();
+        assert!(histogram > 0);
+    }
+
+    #[test]
+    fn test_collect_proxy_request_metrics() {
+        // Test proxy request started metrics
+        collect_proxy_request_started_metrics();
+
+        let counter = PROXY_REQUEST_COUNT.with_label_values(&[]).get();
+        assert!(counter > 0);
+
+        // Test proxy request failure metrics
+        collect_proxy_request_failure_metrics();
+
+        let failure_counter = PROXY_REQUEST_FAILURE_COUNT.with_label_values(&[]).get();
+        assert!(failure_counter > 0);
+
+        // Test proxy request via dfdaemon metrics
+        collect_proxy_request_via_dfdaemon_metrics();
+
+        let via_dfdaemon_counter = PROXY_REQUEST_VIA_DFDAEMON_COUNT
+            .with_label_values(&[])
+            .get();
+        assert!(via_dfdaemon_counter > 0);
+    }
+
+    #[test]
+    fn test_collect_update_task_metrics() {
+        // Test update task started metrics
+        collect_update_task_started_metrics(1);
+
+        let counter = UPDATE_TASK_COUNT.with_label_values(&["1"]).get();
+        assert!(counter > 0);
+
+        // Test update task failure metrics
+        collect_update_task_failure_metrics(1);
+
+        let failure_counter = UPDATE_TASK_FAILURE_COUNT.with_label_values(&["1"]).get();
+        assert!(failure_counter > 0);
+    }
+
+    #[test]
+    fn test_collect_stat_task_metrics() {
+        // Test stat task started metrics
+        collect_stat_task_started_metrics(2);
+
+        let counter = STAT_TASK_COUNT.with_label_values(&["2"]).get();
+        assert!(counter > 0);
+
+        // Test stat task failure metrics
+        collect_stat_task_failure_metrics(2);
+
+        let failure_counter = STAT_TASK_FAILURE_COUNT.with_label_values(&["2"]).get();
+        assert!(failure_counter > 0);
+    }
+
+    #[test]
+    fn test_collect_stat_local_task_metrics() {
+        // Test stat local task started metrics
+        collect_stat_local_task_started_metrics(3);
+
+        let counter = STAT_LOCAL_TASK_COUNT.with_label_values(&["3"]).get();
+        assert!(counter > 0);
+
+        // Test stat local task failure metrics
+        collect_stat_local_task_failure_metrics(3);
+
+        let failure_counter = STAT_LOCAL_TASK_FAILURE_COUNT
+            .with_label_values(&["3"])
+            .get();
+        assert!(failure_counter > 0);
+    }
+
+    #[test]
+    fn test_collect_list_task_entries_metrics() {
+        // Test list task entries started metrics
+        collect_list_task_entries_started_metrics(4);
+
+        let counter = LIST_TASK_ENTRIES_COUNT.with_label_values(&["4"]).get();
+        assert!(counter > 0);
+
+        // Test list task entries failure metrics
+        collect_list_task_entries_failure_metrics(4);
+
+        let failure_counter = LIST_TASK_ENTRIES_FAILURE_COUNT
+            .with_label_values(&["4"])
+            .get();
+        assert!(failure_counter > 0);
+    }
+
+    #[test]
+    fn test_collect_delete_task_metrics() {
+        // Test delete task started metrics
+        collect_delete_task_started_metrics(5);
+
+        let counter = DELETE_TASK_COUNT.with_label_values(&["5"]).get();
+        assert!(counter > 0);
+
+        // Test delete task failure metrics
+        collect_delete_task_failure_metrics(5);
+
+        let failure_counter = DELETE_TASK_FAILURE_COUNT.with_label_values(&["5"]).get();
+        assert!(failure_counter > 0);
+    }
+
+    #[test]
+    fn test_collect_delete_host_metrics() {
+        // Test delete host started metrics
+        collect_delete_host_started_metrics();
+
+        let counter = DELETE_HOST_COUNT.with_label_values(&[]).get();
+        assert!(counter > 0);
+
+        // Test delete host failure metrics
+        collect_delete_host_failure_metrics();
+
+        let failure_counter = DELETE_HOST_FAILURE_COUNT.with_label_values(&[]).get();
+        assert!(failure_counter > 0);
+    }
+
+    #[test]
+    fn test_task_size_level1_slow_download() {
+        // This test verifies that Level1 tasks with slow download are logged
+        // We can't directly test the warning log, but we can ensure the metric is recorded
+        let small_size = 512 * 1024; // 512 KB - Level1
+        let slow_duration = Duration::from_millis(600); // Above threshold
+
+        collect_download_task_started_metrics(1, "slow-tag", "slow-app", "5");
+        collect_download_task_finished_metrics(
+            1,
+            "slow-tag",
+            "slow-app",
+            "5",
+            small_size,
+            None,
+            slow_duration,
+        );
+
+        // Verify the histogram recorded the observation
+        let histogram = DOWNLOAD_TASK_DURATION
+            .with_label_values(&["1", "1"])
+            .get_sample_count();
+        assert!(histogram > 0);
+    }
+
+    #[test]
+    fn test_task_size_level1_slow_upload() {
+        // This test verifies that Level1 tasks with slow upload are logged
+        let small_size = 512 * 1024; // 512 KB - Level1
+        let slow_duration = Duration::from_millis(600); // Above threshold
+
+        collect_upload_task_started_metrics(1, "slow-tag", "slow-app");
+        collect_upload_task_finished_metrics(1, "slow-tag", "slow-app", small_size, slow_duration);
+
+        // Verify the histogram recorded the observation
+        let histogram = UPLOAD_TASK_DURATION
+            .with_label_values(&["1", "1"])
+            .get_sample_count();
+        assert!(histogram > 0);
+    }
+
+    #[test]
+    fn test_download_task_with_range() {
+        // Test download task finished metrics with range
+        let range = Range {
+            start: 0,
+            length: 1024,
+        };
+        let duration = Duration::from_millis(50);
+
+        collect_download_task_started_metrics(1, "range-tag", "range-app", "5");
+        collect_download_task_finished_metrics(
+            1,
+            "range-tag",
+            "range-app",
+            "5",
+            10240,
+            Some(range),
+            duration,
+        );
+
+        // Verify the histogram recorded the observation
+        let histogram = DOWNLOAD_TASK_DURATION
+            .with_label_values(&["1", "1"])
+            .get_sample_count();
+        assert!(histogram > 0);
+    }
+}
