@@ -65,7 +65,7 @@ impl SystemMonitor {
     /// ```
     pub fn new(ip: IpAddr, network_bandwidth_limit: ByteSize) -> Self {
         Self {
-            cpu: cpu::CPU::default(),
+            cpu: cpu::CPU::new(),
             memory: memory::Memory::default(),
             disk: disk::Disk::new(),
             network: network::Network::new(ip, network_bandwidth_limit),

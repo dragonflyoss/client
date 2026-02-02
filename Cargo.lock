@@ -1394,6 +1394,7 @@ dependencies = [
  "local-ip-address",
  "lru",
  "mocktail",
+ "num_cpus",
  "openssl",
  "pnet",
  "protobuf 3.7.2",

@@ -125,14 +125,19 @@ impl Memory {
 
             match get_cgroup_by_pid(pid) {
                 Ok(cgroup) => {
-                    if let Ok(memory_controller) = cgroup.controller_of::<MemController>() {
+                    if let Some(memory_controller) = cgroup.controller_of::<MemController>() {
                         let memory_stats = memory_controller.memory_stats();
                         return Some(CgroupMemoryStats {
                             limit: memory_stats.limit_in_bytes,
                             usage: memory_stats.usage_in_bytes,
-                            used_percent: (memory_stats.usage_in_bytes as f64
-                                / memory_stats.limit_in_bytes as f64)
-                                * 100.0,
+                            used_percent: if memory_stats.limit_in_bytes == -1 {
+                                (memory_stats.usage_in_bytes as f64 / self.get_stats().total as f64)
+                                    * 100.0
+                            } else {
+                                (memory_stats.usage_in_bytes as f64
+                                    / memory_stats.limit_in_bytes as f64)
+                                    * 100.0
+                            },
                         });
                     }
                 }
