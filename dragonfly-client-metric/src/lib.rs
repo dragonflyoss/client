@@ -982,3 +982,482 @@ impl Metrics {
         Ok(Vec::new())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_task_size_calculate_size_level() {
+        assert_eq!(TaskSize::calculate_size_level(0), TaskSize::Level0);
+        assert_eq!(TaskSize::calculate_size_level(1), TaskSize::Level1);
+        assert_eq!(TaskSize::calculate_size_level(512 * 1024), TaskSize::Level1);
+        assert_eq!(
+            TaskSize::calculate_size_level(1024 * 1024 - 1),
+            TaskSize::Level1
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(1024 * 1024),
+            TaskSize::Level2
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(2 * 1024 * 1024),
+            TaskSize::Level2
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(4 * 1024 * 1024 - 1),
+            TaskSize::Level2
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(4 * 1024 * 1024),
+            TaskSize::Level3
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(6 * 1024 * 1024),
+            TaskSize::Level3
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(8 * 1024 * 1024),
+            TaskSize::Level4
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(16 * 1024 * 1024),
+            TaskSize::Level5
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(32 * 1024 * 1024),
+            TaskSize::Level6
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(64 * 1024 * 1024),
+            TaskSize::Level7
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(128 * 1024 * 1024),
+            TaskSize::Level8
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(256 * 1024 * 1024),
+            TaskSize::Level9
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(512 * 1024 * 1024),
+            TaskSize::Level10
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(1024 * 1024 * 1024),
+            TaskSize::Level11
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(2 * 1024 * 1024 * 1024),
+            TaskSize::Level11
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(4 * 1024 * 1024 * 1024),
+            TaskSize::Level12
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(8 * 1024 * 1024 * 1024),
+            TaskSize::Level13
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(16 * 1024 * 1024 * 1024),
+            TaskSize::Level14
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(32 * 1024 * 1024 * 1024),
+            TaskSize::Level15
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(64 * 1024 * 1024 * 1024),
+            TaskSize::Level16
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(128 * 1024 * 1024 * 1024),
+            TaskSize::Level17
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(256 * 1024 * 1024 * 1024),
+            TaskSize::Level18
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(512 * 1024 * 1024 * 1024),
+            TaskSize::Level19
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(1024 * 1024 * 1024 * 1024),
+            TaskSize::Level20
+        );
+        assert_eq!(
+            TaskSize::calculate_size_level(2 * 1024 * 1024 * 1024 * 1024),
+            TaskSize::Level20
+        );
+    }
+
+    #[test]
+    fn test_task_size_display() {
+        assert_eq!(format!("{}", TaskSize::Level0), "0");
+        assert_eq!(format!("{}", TaskSize::Level1), "1");
+        assert_eq!(format!("{}", TaskSize::Level2), "2");
+        assert_eq!(format!("{}", TaskSize::Level3), "3");
+        assert_eq!(format!("{}", TaskSize::Level4), "4");
+        assert_eq!(format!("{}", TaskSize::Level5), "5");
+        assert_eq!(format!("{}", TaskSize::Level6), "6");
+        assert_eq!(format!("{}", TaskSize::Level7), "7");
+        assert_eq!(format!("{}", TaskSize::Level8), "8");
+        assert_eq!(format!("{}", TaskSize::Level9), "9");
+        assert_eq!(format!("{}", TaskSize::Level10), "10");
+        assert_eq!(format!("{}", TaskSize::Level11), "11");
+        assert_eq!(format!("{}", TaskSize::Level12), "12");
+        assert_eq!(format!("{}", TaskSize::Level13), "13");
+        assert_eq!(format!("{}", TaskSize::Level14), "14");
+        assert_eq!(format!("{}", TaskSize::Level15), "15");
+        assert_eq!(format!("{}", TaskSize::Level16), "16");
+        assert_eq!(format!("{}", TaskSize::Level17), "17");
+        assert_eq!(format!("{}", TaskSize::Level18), "18");
+        assert_eq!(format!("{}", TaskSize::Level19), "19");
+        assert_eq!(format!("{}", TaskSize::Level20), "20");
+    }
+
+    #[test]
+    fn test_collect_upload_task_metrics() {
+        let tag = "test-upload-tag";
+        let app = "test-upload-app";
+
+        collect_upload_task_started_metrics(1, tag, app);
+
+        let counter = UPLOAD_TASK_COUNT.with_label_values(&["1", tag, app]).get();
+        assert!(counter >= 1);
+
+        let gauge_before = CONCURRENT_UPLOAD_TASK_GAUGE
+            .with_label_values(&["1", tag, app])
+            .get();
+
+        let duration = Duration::from_millis(100);
+        collect_upload_task_finished_metrics(1, tag, app, 1024, duration);
+
+        let gauge_after = CONCURRENT_UPLOAD_TASK_GAUGE
+            .with_label_values(&["1", tag, app])
+            .get();
+        assert_eq!(gauge_after, gauge_before - 1);
+
+        collect_upload_task_started_metrics(1, tag, app);
+        let gauge_before_failure = CONCURRENT_UPLOAD_TASK_GAUGE
+            .with_label_values(&["1", tag, app])
+            .get();
+
+        collect_upload_task_failure_metrics(1, tag, app);
+
+        let failure_counter = UPLOAD_TASK_FAILURE_COUNT
+            .with_label_values(&["1", tag, app])
+            .get();
+        assert!(failure_counter >= 1);
+
+        let gauge_after_failure = CONCURRENT_UPLOAD_TASK_GAUGE
+            .with_label_values(&["1", tag, app])
+            .get();
+        assert_eq!(gauge_after_failure, gauge_before_failure - 1);
+    }
+
+    #[test]
+    fn test_collect_download_task_metrics() {
+        let tag = "test-download-tag";
+        let app = "test-download-app";
+        let priority = "5";
+
+        collect_download_task_started_metrics(2, tag, app, priority);
+
+        let counter = DOWNLOAD_TASK_COUNT
+            .with_label_values(&["2", tag, app, priority])
+            .get();
+        assert!(counter >= 1);
+
+        let gauge_before = CONCURRENT_DOWNLOAD_TASK_GAUGE
+            .with_label_values(&["2", tag, app, priority])
+            .get();
+
+        let duration = Duration::from_millis(200);
+        collect_download_task_finished_metrics(2, tag, app, priority, 1024 * 1024, None, duration);
+
+        let gauge_after = CONCURRENT_DOWNLOAD_TASK_GAUGE
+            .with_label_values(&["2", tag, app, priority])
+            .get();
+        assert_eq!(gauge_after, gauge_before - 1);
+
+        collect_download_task_started_metrics(2, tag, app, priority);
+        let gauge_before_failure = CONCURRENT_DOWNLOAD_TASK_GAUGE
+            .with_label_values(&["2", tag, app, priority])
+            .get();
+
+        collect_download_task_failure_metrics(2, tag, app, priority);
+
+        let failure_counter = DOWNLOAD_TASK_FAILURE_COUNT
+            .with_label_values(&["2", tag, app, priority])
+            .get();
+        assert!(failure_counter >= 1);
+
+        let gauge_after_failure = CONCURRENT_DOWNLOAD_TASK_GAUGE
+            .with_label_values(&["2", tag, app, priority])
+            .get();
+        assert_eq!(gauge_after_failure, gauge_before_failure - 1);
+    }
+
+    #[test]
+    fn test_collect_prefetch_task_metrics() {
+        let tag = "test-prefetch-tag";
+        let app = "test-prefetch-app";
+        let priority = "5";
+
+        let counter_before = PREFETCH_TASK_COUNT
+            .with_label_values(&["3", tag, app, priority])
+            .get();
+        collect_prefetch_task_started_metrics(3, tag, app, priority);
+
+        let counter_after = PREFETCH_TASK_COUNT
+            .with_label_values(&["3", tag, app, priority])
+            .get();
+        assert_eq!(counter_after, counter_before + 1);
+
+        let failure_before = PREFETCH_TASK_FAILURE_COUNT
+            .with_label_values(&["3", tag, app, priority])
+            .get();
+        collect_prefetch_task_failure_metrics(3, tag, app, priority);
+
+        let failure_after = PREFETCH_TASK_FAILURE_COUNT
+            .with_label_values(&["3", tag, app, priority])
+            .get();
+        assert_eq!(failure_after, failure_before + 1);
+    }
+
+    #[test]
+    fn test_collect_upload_piece_metrics() {
+        let gauge_before = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
+        collect_upload_piece_started_metrics();
+
+        let gauge_after_start = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
+        assert_eq!(gauge_after_start, gauge_before + 1);
+
+        collect_upload_piece_finished_metrics();
+
+        let gauge_after_finish = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
+        assert_eq!(gauge_after_finish, gauge_after_start - 1);
+
+        let traffic_before = UPLOAD_TRAFFIC.with_label_values(&[]).get();
+        collect_upload_piece_traffic_metrics(1024);
+
+        let traffic_after = UPLOAD_TRAFFIC.with_label_values(&[]).get();
+        assert_eq!(traffic_after, traffic_before + 1024);
+
+        collect_upload_piece_started_metrics();
+        let gauge_before_failure = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
+        collect_upload_piece_failure_metrics();
+
+        let gauge_after_failure = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
+        assert_eq!(gauge_after_failure, gauge_before_failure - 1);
+    }
+
+    #[test]
+    fn test_collect_download_piece_traffic_metrics() {
+        let traffic_type = TrafficType::RemotePeer;
+        collect_download_piece_traffic_metrics(&traffic_type, 2048);
+
+        let traffic = DOWNLOAD_TRAFFIC
+            .with_label_values(&[traffic_type.as_str_name()])
+            .get();
+        assert!(traffic >= 2048);
+    }
+
+    #[test]
+    fn test_collect_backend_request_metrics() {
+        collect_backend_request_started_metrics("http", "GET");
+
+        let counter = BACKEND_REQUEST_COUNT
+            .with_label_values(&["http", "GET"])
+            .get();
+        assert!(counter > 0);
+
+        collect_backend_request_failure_metrics("http", "GET");
+
+        let failure_counter = BACKEND_REQUEST_FAILURE_COUNT
+            .with_label_values(&["http", "GET"])
+            .get();
+        assert!(failure_counter > 0);
+
+        let duration = Duration::from_millis(150);
+        collect_backend_request_finished_metrics("http", "POST", duration);
+
+        let histogram = BACKEND_REQUEST_DURATION
+            .with_label_values(&["http", "POST"])
+            .get_sample_count();
+        assert!(histogram > 0);
+    }
+
+    #[test]
+    fn test_collect_proxy_request_metrics() {
+        collect_proxy_request_started_metrics();
+
+        let counter = PROXY_REQUEST_COUNT.with_label_values(&[]).get();
+        assert!(counter > 0);
+
+        collect_proxy_request_failure_metrics();
+
+        let failure_counter = PROXY_REQUEST_FAILURE_COUNT.with_label_values(&[]).get();
+        assert!(failure_counter > 0);
+
+        collect_proxy_request_via_dfdaemon_metrics();
+
+        let via_dfdaemon_counter = PROXY_REQUEST_VIA_DFDAEMON_COUNT
+            .with_label_values(&[])
+            .get();
+        assert!(via_dfdaemon_counter > 0);
+    }
+
+    #[test]
+    fn test_collect_update_task_metrics() {
+        collect_update_task_started_metrics(1);
+
+        let counter = UPDATE_TASK_COUNT.with_label_values(&["1"]).get();
+        assert!(counter > 0);
+
+        collect_update_task_failure_metrics(1);
+
+        let failure_counter = UPDATE_TASK_FAILURE_COUNT.with_label_values(&["1"]).get();
+        assert!(failure_counter > 0);
+    }
+
+    #[test]
+    fn test_collect_stat_task_metrics() {
+        collect_stat_task_started_metrics(2);
+
+        let counter = STAT_TASK_COUNT.with_label_values(&["2"]).get();
+        assert!(counter > 0);
+
+        collect_stat_task_failure_metrics(2);
+
+        let failure_counter = STAT_TASK_FAILURE_COUNT.with_label_values(&["2"]).get();
+        assert!(failure_counter > 0);
+    }
+
+    #[test]
+    fn test_collect_stat_local_task_metrics() {
+        collect_stat_local_task_started_metrics(3);
+
+        let counter = STAT_LOCAL_TASK_COUNT.with_label_values(&["3"]).get();
+        assert!(counter > 0);
+
+        collect_stat_local_task_failure_metrics(3);
+
+        let failure_counter = STAT_LOCAL_TASK_FAILURE_COUNT
+            .with_label_values(&["3"])
+            .get();
+        assert!(failure_counter > 0);
+    }
+
+    #[test]
+    fn test_collect_list_task_entries_metrics() {
+        collect_list_task_entries_started_metrics(4);
+
+        let counter = LIST_TASK_ENTRIES_COUNT.with_label_values(&["4"]).get();
+        assert!(counter > 0);
+
+        collect_list_task_entries_failure_metrics(4);
+
+        let failure_counter = LIST_TASK_ENTRIES_FAILURE_COUNT
+            .with_label_values(&["4"])
+            .get();
+        assert!(failure_counter > 0);
+    }
+
+    #[test]
+    fn test_collect_delete_task_metrics() {
+        collect_delete_task_started_metrics(5);
+
+        let counter = DELETE_TASK_COUNT.with_label_values(&["5"]).get();
+        assert!(counter > 0);
+
+        collect_delete_task_failure_metrics(5);
+
+        let failure_counter = DELETE_TASK_FAILURE_COUNT.with_label_values(&["5"]).get();
+        assert!(failure_counter > 0);
+    }
+
+    #[test]
+    fn test_collect_delete_host_metrics() {
+        collect_delete_host_started_metrics();
+
+        let counter = DELETE_HOST_COUNT.with_label_values(&[]).get();
+        assert!(counter > 0);
+
+        collect_delete_host_failure_metrics();
+
+        let failure_counter = DELETE_HOST_FAILURE_COUNT.with_label_values(&[]).get();
+        assert!(failure_counter > 0);
+    }
+
+    #[test]
+    fn test_task_size_level1_slow_download() {
+        let tag = "slow-download-tag";
+        let app = "slow-download-app";
+        let small_size = 512 * 1024;
+        let slow_duration = Duration::from_millis(600);
+
+        collect_download_task_started_metrics(1, tag, app, "5");
+
+        let histogram_before = DOWNLOAD_TASK_DURATION
+            .with_label_values(&["1", "1"])
+            .get_sample_count();
+
+        collect_download_task_finished_metrics(1, tag, app, "5", small_size, None, slow_duration);
+
+        let histogram_after = DOWNLOAD_TASK_DURATION
+            .with_label_values(&["1", "1"])
+            .get_sample_count();
+        assert_eq!(histogram_after, histogram_before + 1);
+    }
+
+    #[test]
+    fn test_task_size_level1_slow_upload() {
+        let tag = "slow-upload-tag";
+        let app = "slow-upload-app";
+        let small_size = 512 * 1024;
+        let slow_duration = Duration::from_millis(600);
+
+        collect_upload_task_started_metrics(1, tag, app);
+
+        let histogram_before = UPLOAD_TASK_DURATION
+            .with_label_values(&["1", "1"])
+            .get_sample_count();
+
+        collect_upload_task_finished_metrics(1, tag, app, small_size, slow_duration);
+
+        let histogram_after = UPLOAD_TASK_DURATION
+            .with_label_values(&["1", "1"])
+            .get_sample_count();
+        assert_eq!(histogram_after, histogram_before + 1);
+    }
+
+    #[test]
+    fn test_download_task_with_range() {
+        let range = Range {
+            start: 0,
+            length: 1024,
+        };
+        let duration = Duration::from_millis(50);
+
+        collect_download_task_started_metrics(1, "range-tag", "range-app", "5");
+        collect_download_task_finished_metrics(
+            1,
+            "range-tag",
+            "range-app",
+            "5",
+            10240,
+            Some(range),
+            duration,
+        );
+
+        let histogram = DOWNLOAD_TASK_DURATION
+            .with_label_values(&["1", "1"])
+            .get_sample_count();
+        assert!(histogram > 0);
+    }
+}
