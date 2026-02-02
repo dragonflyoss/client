@@ -205,48 +205,33 @@ mod tests {
 
     #[tokio::test]
     async fn test_pprof_profile_handler_with_default_params() {
-        // Test with minimal profiling time to keep test fast
         let params = PProfProfileQueryParams {
             seconds: 0,
             frequency: 1000,
         };
         let result = Stats::pprof_profile_handler(params).await;
-        // The profiler may or may not be available depending on the build configuration.
-        // We verify the handler executes without panicking. Result validation is skipped
-        // since profiler availability varies across build environments.
         let _ = result;
     }
 
     #[tokio::test]
     async fn test_pprof_profile_handler_with_custom_frequency() {
-        // Test with custom frequency
         let params = PProfProfileQueryParams {
             seconds: 0,
             frequency: 500,
         };
         let result = Stats::pprof_profile_handler(params).await;
-        // The profiler may or may not be available depending on the build configuration.
-        // We verify the handler executes without panicking. Result validation is skipped
-        // since profiler availability varies across build environments.
         let _ = result;
     }
-
-    // Note: We don't test pprof_heap_handler because it requires jemalloc
-    // profiling to be enabled at runtime, which is not guaranteed in test
-    // environments. The handler will return an error if PROF_CTL is None
-    // or if profiling is not activated.
 
     #[cfg(not(target_os = "linux"))]
     #[tokio::test]
     async fn test_pprof_heap_handler_non_linux() {
-        // On non-Linux platforms, should always return an error
         let result = Stats::pprof_heap_handler().await;
         assert!(result.is_err());
     }
 
     #[test]
     fn test_pprof_profile_query_params_serde() {
-        // Test serialization
         let params = PProfProfileQueryParams {
             seconds: 15,
             frequency: 750,
@@ -255,7 +240,6 @@ mod tests {
         assert!(serialized.contains("15"));
         assert!(serialized.contains("750"));
 
-        // Test deserialization
         let json = r#"{"seconds":25,"frequency":1500}"#;
         let deserialized: PProfProfileQueryParams = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized.seconds, 25);
@@ -264,7 +248,6 @@ mod tests {
 
     #[test]
     fn test_pprof_profile_query_params_serde_with_default() {
-        // Test deserialization with missing fields (should use defaults)
         let json = r#"{}"#;
         let deserialized: PProfProfileQueryParams = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized.seconds, DEFAULT_PROFILER_SECONDS);
