@@ -170,3 +170,102 @@ impl Stats {
         Err::<warp::http::Error, Rejection>(warp::reject::reject())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn test_pprof_profile_query_params_default() {
+        let params = PProfProfileQueryParams::default();
+        assert_eq!(params.seconds, DEFAULT_PROFILER_SECONDS);
+        assert_eq!(params.frequency, DEFAULT_PROFILER_FREQUENCY);
+    }
+
+    #[test]
+    fn test_pprof_profile_query_params_custom() {
+        let params = PProfProfileQueryParams {
+            seconds: 20,
+            frequency: 500,
+        };
+        assert_eq!(params.seconds, 20);
+        assert_eq!(params.frequency, 500);
+    }
+
+    #[test]
+    fn test_stats_new() {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        let shutdown = shutdown::Shutdown::new();
+        let (shutdown_complete_tx, _shutdown_complete_rx) = mpsc::unbounded_channel();
+        let stats = Stats::new(addr, shutdown, shutdown_complete_tx);
+
+        assert_eq!(stats.addr, addr);
+    }
+
+    #[tokio::test]
+    async fn test_pprof_profile_handler_with_default_params() {
+        // Test with minimal profiling time to keep test fast
+        let params = PProfProfileQueryParams {
+            seconds: 0,
+            frequency: 1000,
+        };
+        let result = Stats::pprof_profile_handler(params).await;
+        // The profiler may or may not be available depending on the build configuration
+        // We just verify it doesn't panic
+        let _ = result;
+    }
+
+    #[tokio::test]
+    async fn test_pprof_profile_handler_with_custom_frequency() {
+        // Test with custom frequency
+        let params = PProfProfileQueryParams {
+            seconds: 0,
+            frequency: 500,
+        };
+        let result = Stats::pprof_profile_handler(params).await;
+        // The profiler may or may not be available depending on the build configuration
+        // We just verify it doesn't panic
+        let _ = result;
+    }
+
+    // Note: We don't test pprof_heap_handler because it requires jemalloc
+    // profiling to be enabled at runtime, which is not guaranteed in test
+    // environments. The handler will return an error if PROF_CTL is None
+    // or if profiling is not activated.
+
+    #[cfg(not(target_os = "linux"))]
+    #[tokio::test]
+    async fn test_pprof_heap_handler_non_linux() {
+        // On non-Linux platforms, should always return an error
+        let result = Stats::pprof_heap_handler().await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pprof_profile_query_params_serde() {
+        // Test serialization
+        let params = PProfProfileQueryParams {
+            seconds: 15,
+            frequency: 750,
+        };
+        let serialized = serde_json::to_string(&params).unwrap();
+        assert!(serialized.contains("15"));
+        assert!(serialized.contains("750"));
+
+        // Test deserialization
+        let json = r#"{"seconds":25,"frequency":1500}"#;
+        let deserialized: PProfProfileQueryParams = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized.seconds, 25);
+        assert_eq!(deserialized.frequency, 1500);
+    }
+
+    #[test]
+    fn test_pprof_profile_query_params_serde_with_default() {
+        // Test deserialization with missing fields (should use defaults)
+        let json = r#"{}"#;
+        let deserialized: PProfProfileQueryParams = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized.seconds, DEFAULT_PROFILER_SECONDS);
+        assert_eq!(deserialized.frequency, DEFAULT_PROFILER_FREQUENCY);
+    }
+}
