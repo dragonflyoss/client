@@ -56,7 +56,7 @@ pub struct CgroupCPUStats {
     pub quota: i64,
 
     /// Calculated CPU usage percentage within the cgroup (0.0 - 100.0).
-    pub used_percent: Option<f64>,
+    pub used_percent: f64,
 }
 
 /// Implementation of CPU monitoring functionality.
@@ -123,7 +123,7 @@ impl CPU {
         {
             use crate::cgroups::get_cgroup_by_pid;
             use crate::container::is_running_in_container;
-            use cgroups_rs::fs::{cpu::CpuController, cpuacct::CpuAcctController, Cgroup};
+            use cgroups_rs::fs::cpu::CpuController;
             use tracing::error;
 
             if !is_running_in_container() {
@@ -141,23 +141,27 @@ impl CPU {
                     };
 
                     // Get CPU usage percentage.
-                    let used_percent = self
+                    let Some(used_percent) = self
                         .calculate_cgroup_used_percent(&cgroup, period, quota)
-                        .await;
+                        .await
+                    else {
+                        return None;
+                    };
 
-                    Some(CgroupCPUStats {
+                    return Some(CgroupCPUStats {
                         period,
                         quota,
                         used_percent,
-                    })
+                    });
                 }
                 Err(err) => {
                     error!("failed to get cgroup for pid {}: {}", pid, err);
-                    None
+                    return None;
                 }
             }
         }
 
+        #[cfg(not(target_os = "linux"))]
         None
     }
 
@@ -181,23 +185,17 @@ impl CPU {
         period: u64,
         quota: i64,
     ) -> Option<f64> {
-        use cgroups_rs::cpuacct::CpuAcctController;
-        // Get the first CPU usage sample.
-        let usage_start = self.get_cgroup_cpu_usage(cgroup)?;
-
-        // Sleep to measure CPU usage over the interval.
+        // Get initial and final CPU usage samples and calculate the difference.
+        let initial_usage = self.get_cgroup_usage(cgroup)?;
         tokio::time::sleep(Self::DEFAULT_CPU_REFRESH_INTERVAL).await;
-
-        // Get the second CPU usage sample.
-        let usage_end = self.get_cgroup_cpu_usage(cgroup)?;
-
-        let consumed = usage_end.saturating_sub(usage_start);
-        let interval_ns = Self::DEFAULT_CPU_REFRESH_INTERVAL.as_nanos() as u64;
+        let final_usage = self.get_cgroup_usage(cgroup)?;
+        let consumed = final_usage.saturating_sub(initial_usage);
 
         // Calculate available CPU time based on quota.
+        let interval_ns = Self::DEFAULT_CPU_REFRESH_INTERVAL.as_nanos() as u64;
         let capacity = if quota > 0 {
             // If quota is set, calculate based on quota/period ratio
-            // quota and period are in microseconds, convert to nanoseconds
+            // quota and period are in microseconds, convert to nanoseconds.
             let quota_ns = (quota as u64) * 1000;
             let period_ns = period * 1000;
             (interval_ns * quota_ns) / period_ns
@@ -210,8 +208,6 @@ impl CPU {
         // Calculate usage percentage.
         if capacity > 0 {
             let percent = (consumed as f64 / capacity as f64) * 100.0;
-
-            // Clamp to 0-100 range to handle edge cases.
             Some(percent.clamp(0.0, 100.0))
         } else {
             None
@@ -229,7 +225,7 @@ impl CPU {
     /// Some(u64) containing the CPU usage in nanoseconds,
     /// None if unable to read the value.
     #[cfg(target_os = "linux")]
-    fn get_cgroup_cpu_usage(&self, cgroup: &cgroups_rs::fs::Cgroup) -> Option<u64> {
+    fn get_cgroup_usage(&self, cgroup: &cgroups_rs::fs::Cgroup) -> Option<u64> {
         use cgroups_rs::fs::{cpu::CpuController, cpuacct::CpuAcctController};
 
         // Try cgroup v1 first (cpuacct controller).
@@ -249,7 +245,7 @@ impl CPU {
             }
         }
 
-        return None;
+        None
     }
 
     /// Parses the usage_usec value from cpu.stat content.
