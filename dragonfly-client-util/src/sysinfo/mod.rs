@@ -22,7 +22,7 @@ pub mod disk;
 pub mod memory;
 pub mod network;
 
-/// SystemStats resource monitor.
+/// SystemMonitor resource monitor.
 ///
 /// This struct aggregates all system resource monitors including CPU, memory,
 /// disk, and network. It provides a unified interface for tracking and
@@ -61,7 +61,7 @@ impl SystemMonitor {
     ///
     /// let ip = "127.0.0.1".parse::<IpAddr>().unwrap();
     /// let network_bandwidth_limit = ByteSize::gb(1);
-    /// let system = System::new(ip, network_bandwidth_limit);
+    /// let system_monitor = SystemMonitor::new(ip, network_bandwidth_limit);
     /// ```
     pub fn new(ip: IpAddr, network_bandwidth_limit: ByteSize) -> Self {
         Self {

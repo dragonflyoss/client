@@ -109,14 +109,14 @@ impl CPU {
     /// Retrieves CPU statistics from the cgroup (Linux only).
     ///
     /// # Arguments
-    /// * `pid` - Process ID (currently unused, cgroup is determined at construction).
+    /// * `pid` - Process ID used to determine the cgroup for which CPU statistics are collected.
     ///
     /// # Returns
     /// Some(CgroupCPUStats) if cgroup CPU controller is available and accessible,
     /// None otherwise or on non-Linux platforms.
     #[allow(unused_variables)]
     pub async fn get_cgroup_stats(&self, pid: u32) -> Option<CgroupCPUStats> {
-        // Lock the mutex to ensure exclusive access to cpu stats.
+        // Retrieve and compute cgroup CPU statistics while holding the mutex.
         let _guard = self.mutex.lock().await;
 
         #[cfg(target_os = "linux")]
@@ -141,22 +141,19 @@ impl CPU {
                     };
 
                     // Get CPU usage percentage.
-                    let Some(used_percent) = self
+                    let used_percent = self
                         .calculate_cgroup_used_percent(&cgroup, period, quota)
-                        .await
-                    else {
-                        return None;
-                    };
+                        .await?;
 
-                    return Some(CgroupCPUStats {
+                    Some(CgroupCPUStats {
                         period,
                         quota,
                         used_percent,
-                    });
+                    })
                 }
                 Err(err) => {
                     error!("failed to get cgroup for pid {}: {}", pid, err);
-                    return None;
+                    None
                 }
             }
         }
