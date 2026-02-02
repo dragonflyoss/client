@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#[cfg(target_os = "linux")]
+pub mod cgroups;
 pub mod container;
 pub mod digest;
 pub mod fs;

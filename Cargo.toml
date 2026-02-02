@@ -116,6 +116,7 @@ hashring = "0.3.6"
 reqwest-tracing = "0.5"
 mocktail = "0.3.0"
 fastrand = "2.3.0"
+cgroups-rs = "0.5"
 
 [profile.release]
 opt-level = 3
