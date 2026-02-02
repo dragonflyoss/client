@@ -989,18 +989,13 @@ mod tests {
 
     #[test]
     fn test_task_size_calculate_size_level() {
-        // Test Level0 - unknown size
         assert_eq!(TaskSize::calculate_size_level(0), TaskSize::Level0);
-
-        // Test Level1 - 0 to 1M
         assert_eq!(TaskSize::calculate_size_level(1), TaskSize::Level1);
         assert_eq!(TaskSize::calculate_size_level(512 * 1024), TaskSize::Level1);
         assert_eq!(
             TaskSize::calculate_size_level(1024 * 1024 - 1),
             TaskSize::Level1
         );
-
-        // Test Level2 - 1M to 4M
         assert_eq!(
             TaskSize::calculate_size_level(1024 * 1024),
             TaskSize::Level2
@@ -1013,8 +1008,6 @@ mod tests {
             TaskSize::calculate_size_level(4 * 1024 * 1024 - 1),
             TaskSize::Level2
         );
-
-        // Test Level3 - 4M to 8M
         assert_eq!(
             TaskSize::calculate_size_level(4 * 1024 * 1024),
             TaskSize::Level3
@@ -1023,50 +1016,34 @@ mod tests {
             TaskSize::calculate_size_level(6 * 1024 * 1024),
             TaskSize::Level3
         );
-
-        // Test Level4 - 8M to 16M
         assert_eq!(
             TaskSize::calculate_size_level(8 * 1024 * 1024),
             TaskSize::Level4
         );
-
-        // Test Level5 - 16M to 32M
         assert_eq!(
             TaskSize::calculate_size_level(16 * 1024 * 1024),
             TaskSize::Level5
         );
-
-        // Test Level6 - 32M to 64M
         assert_eq!(
             TaskSize::calculate_size_level(32 * 1024 * 1024),
             TaskSize::Level6
         );
-
-        // Test Level7 - 64M to 128M
         assert_eq!(
             TaskSize::calculate_size_level(64 * 1024 * 1024),
             TaskSize::Level7
         );
-
-        // Test Level8 - 128M to 256M
         assert_eq!(
             TaskSize::calculate_size_level(128 * 1024 * 1024),
             TaskSize::Level8
         );
-
-        // Test Level9 - 256M to 512M
         assert_eq!(
             TaskSize::calculate_size_level(256 * 1024 * 1024),
             TaskSize::Level9
         );
-
-        // Test Level10 - 512M to 1G
         assert_eq!(
             TaskSize::calculate_size_level(512 * 1024 * 1024),
             TaskSize::Level10
         );
-
-        // Test Level11 - 1G to 4G
         assert_eq!(
             TaskSize::calculate_size_level(1024 * 1024 * 1024),
             TaskSize::Level11
@@ -1075,56 +1052,38 @@ mod tests {
             TaskSize::calculate_size_level(2 * 1024 * 1024 * 1024),
             TaskSize::Level11
         );
-
-        // Test Level12 - 4G to 8G
         assert_eq!(
             TaskSize::calculate_size_level(4 * 1024 * 1024 * 1024),
             TaskSize::Level12
         );
-
-        // Test Level13 - 8G to 16G
         assert_eq!(
             TaskSize::calculate_size_level(8 * 1024 * 1024 * 1024),
             TaskSize::Level13
         );
-
-        // Test Level14 - 16G to 32G
         assert_eq!(
             TaskSize::calculate_size_level(16 * 1024 * 1024 * 1024),
             TaskSize::Level14
         );
-
-        // Test Level15 - 32G to 64G
         assert_eq!(
             TaskSize::calculate_size_level(32 * 1024 * 1024 * 1024),
             TaskSize::Level15
         );
-
-        // Test Level16 - 64G to 128G
         assert_eq!(
             TaskSize::calculate_size_level(64 * 1024 * 1024 * 1024),
             TaskSize::Level16
         );
-
-        // Test Level17 - 128G to 256G
         assert_eq!(
             TaskSize::calculate_size_level(128 * 1024 * 1024 * 1024),
             TaskSize::Level17
         );
-
-        // Test Level18 - 256G to 512G
         assert_eq!(
             TaskSize::calculate_size_level(256 * 1024 * 1024 * 1024),
             TaskSize::Level18
         );
-
-        // Test Level19 - 512G to 1T
         assert_eq!(
             TaskSize::calculate_size_level(512 * 1024 * 1024 * 1024),
             TaskSize::Level19
         );
-
-        // Test Level20 - greater than 1T
         assert_eq!(
             TaskSize::calculate_size_level(1024 * 1024 * 1024 * 1024),
             TaskSize::Level20
@@ -1162,33 +1121,26 @@ mod tests {
 
     #[test]
     fn test_collect_upload_task_metrics() {
-        // Use unique labels for this test to avoid interference with other tests
         let tag = "test-upload-tag";
         let app = "test-upload-app";
 
-        // Test upload task started metrics
         collect_upload_task_started_metrics(1, tag, app);
 
-        // Get the counter value to verify it was incremented
         let counter = UPLOAD_TASK_COUNT.with_label_values(&["1", tag, app]).get();
         assert!(counter >= 1);
 
-        // Check gauge was incremented
         let gauge_before = CONCURRENT_UPLOAD_TASK_GAUGE
             .with_label_values(&["1", tag, app])
             .get();
 
-        // Test upload task finished metrics
         let duration = Duration::from_millis(100);
         collect_upload_task_finished_metrics(1, tag, app, 1024, duration);
 
-        // Check gauge was decremented after finished
         let gauge_after = CONCURRENT_UPLOAD_TASK_GAUGE
             .with_label_values(&["1", tag, app])
             .get();
         assert_eq!(gauge_after, gauge_before - 1);
 
-        // Test upload task failure metrics
         collect_upload_task_started_metrics(1, tag, app);
         let gauge_before_failure = CONCURRENT_UPLOAD_TASK_GAUGE
             .with_label_values(&["1", tag, app])
@@ -1201,7 +1153,6 @@ mod tests {
             .get();
         assert!(failure_counter >= 1);
 
-        // Check gauge was decremented after failure
         let gauge_after_failure = CONCURRENT_UPLOAD_TASK_GAUGE
             .with_label_values(&["1", tag, app])
             .get();
@@ -1210,12 +1161,10 @@ mod tests {
 
     #[test]
     fn test_collect_download_task_metrics() {
-        // Use unique labels for this test to avoid interference with other tests
         let tag = "test-download-tag";
         let app = "test-download-app";
         let priority = "5";
 
-        // Test download task started metrics
         collect_download_task_started_metrics(2, tag, app, priority);
 
         let counter = DOWNLOAD_TASK_COUNT
@@ -1223,22 +1172,18 @@ mod tests {
             .get();
         assert!(counter >= 1);
 
-        // Check gauge was incremented
         let gauge_before = CONCURRENT_DOWNLOAD_TASK_GAUGE
             .with_label_values(&["2", tag, app, priority])
             .get();
 
-        // Test download task finished metrics
         let duration = Duration::from_millis(200);
         collect_download_task_finished_metrics(2, tag, app, priority, 1024 * 1024, None, duration);
 
-        // Check gauge was decremented after finished
         let gauge_after = CONCURRENT_DOWNLOAD_TASK_GAUGE
             .with_label_values(&["2", tag, app, priority])
             .get();
         assert_eq!(gauge_after, gauge_before - 1);
 
-        // Test download task failure metrics
         collect_download_task_started_metrics(2, tag, app, priority);
         let gauge_before_failure = CONCURRENT_DOWNLOAD_TASK_GAUGE
             .with_label_values(&["2", tag, app, priority])
@@ -1251,7 +1196,6 @@ mod tests {
             .get();
         assert!(failure_counter >= 1);
 
-        // Check gauge was decremented after failure
         let gauge_after_failure = CONCURRENT_DOWNLOAD_TASK_GAUGE
             .with_label_values(&["2", tag, app, priority])
             .get();
@@ -1260,12 +1204,10 @@ mod tests {
 
     #[test]
     fn test_collect_prefetch_task_metrics() {
-        // Use unique labels for this test to avoid interference with other tests
         let tag = "test-prefetch-tag";
         let app = "test-prefetch-app";
         let priority = "5";
 
-        // Test prefetch task started metrics
         let counter_before = PREFETCH_TASK_COUNT
             .with_label_values(&["3", tag, app, priority])
             .get();
@@ -1276,7 +1218,6 @@ mod tests {
             .get();
         assert_eq!(counter_after, counter_before + 1);
 
-        // Test prefetch task failure metrics
         let failure_before = PREFETCH_TASK_FAILURE_COUNT
             .with_label_values(&["3", tag, app, priority])
             .get();
@@ -1290,27 +1231,23 @@ mod tests {
 
     #[test]
     fn test_collect_upload_piece_metrics() {
-        // Test upload piece started metrics
         let gauge_before = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
         collect_upload_piece_started_metrics();
 
         let gauge_after_start = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
         assert_eq!(gauge_after_start, gauge_before + 1);
 
-        // Test upload piece finished metrics
         collect_upload_piece_finished_metrics();
 
         let gauge_after_finish = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
         assert_eq!(gauge_after_finish, gauge_after_start - 1);
 
-        // Test upload piece traffic metrics
         let traffic_before = UPLOAD_TRAFFIC.with_label_values(&[]).get();
         collect_upload_piece_traffic_metrics(1024);
 
         let traffic_after = UPLOAD_TRAFFIC.with_label_values(&[]).get();
         assert_eq!(traffic_after, traffic_before + 1024);
 
-        // Test upload piece failure metrics
         collect_upload_piece_started_metrics();
         let gauge_before_failure = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
         collect_upload_piece_failure_metrics();
@@ -1321,7 +1258,6 @@ mod tests {
 
     #[test]
     fn test_collect_download_piece_traffic_metrics() {
-        // Test download piece traffic metrics
         let traffic_type = TrafficType::RemotePeer;
         collect_download_piece_traffic_metrics(&traffic_type, 2048);
 
@@ -1333,7 +1269,6 @@ mod tests {
 
     #[test]
     fn test_collect_backend_request_metrics() {
-        // Test backend request started metrics
         collect_backend_request_started_metrics("http", "GET");
 
         let counter = BACKEND_REQUEST_COUNT
@@ -1341,7 +1276,6 @@ mod tests {
             .get();
         assert!(counter > 0);
 
-        // Test backend request failure metrics
         collect_backend_request_failure_metrics("http", "GET");
 
         let failure_counter = BACKEND_REQUEST_FAILURE_COUNT
@@ -1349,11 +1283,9 @@ mod tests {
             .get();
         assert!(failure_counter > 0);
 
-        // Test backend request finished metrics
         let duration = Duration::from_millis(150);
         collect_backend_request_finished_metrics("http", "POST", duration);
 
-        // Verify histogram observation
         let histogram = BACKEND_REQUEST_DURATION
             .with_label_values(&["http", "POST"])
             .get_sample_count();
@@ -1362,19 +1294,16 @@ mod tests {
 
     #[test]
     fn test_collect_proxy_request_metrics() {
-        // Test proxy request started metrics
         collect_proxy_request_started_metrics();
 
         let counter = PROXY_REQUEST_COUNT.with_label_values(&[]).get();
         assert!(counter > 0);
 
-        // Test proxy request failure metrics
         collect_proxy_request_failure_metrics();
 
         let failure_counter = PROXY_REQUEST_FAILURE_COUNT.with_label_values(&[]).get();
         assert!(failure_counter > 0);
 
-        // Test proxy request via dfdaemon metrics
         collect_proxy_request_via_dfdaemon_metrics();
 
         let via_dfdaemon_counter = PROXY_REQUEST_VIA_DFDAEMON_COUNT
@@ -1385,13 +1314,11 @@ mod tests {
 
     #[test]
     fn test_collect_update_task_metrics() {
-        // Test update task started metrics
         collect_update_task_started_metrics(1);
 
         let counter = UPDATE_TASK_COUNT.with_label_values(&["1"]).get();
         assert!(counter > 0);
 
-        // Test update task failure metrics
         collect_update_task_failure_metrics(1);
 
         let failure_counter = UPDATE_TASK_FAILURE_COUNT.with_label_values(&["1"]).get();
@@ -1400,13 +1327,11 @@ mod tests {
 
     #[test]
     fn test_collect_stat_task_metrics() {
-        // Test stat task started metrics
         collect_stat_task_started_metrics(2);
 
         let counter = STAT_TASK_COUNT.with_label_values(&["2"]).get();
         assert!(counter > 0);
 
-        // Test stat task failure metrics
         collect_stat_task_failure_metrics(2);
 
         let failure_counter = STAT_TASK_FAILURE_COUNT.with_label_values(&["2"]).get();
@@ -1415,13 +1340,11 @@ mod tests {
 
     #[test]
     fn test_collect_stat_local_task_metrics() {
-        // Test stat local task started metrics
         collect_stat_local_task_started_metrics(3);
 
         let counter = STAT_LOCAL_TASK_COUNT.with_label_values(&["3"]).get();
         assert!(counter > 0);
 
-        // Test stat local task failure metrics
         collect_stat_local_task_failure_metrics(3);
 
         let failure_counter = STAT_LOCAL_TASK_FAILURE_COUNT
@@ -1432,13 +1355,11 @@ mod tests {
 
     #[test]
     fn test_collect_list_task_entries_metrics() {
-        // Test list task entries started metrics
         collect_list_task_entries_started_metrics(4);
 
         let counter = LIST_TASK_ENTRIES_COUNT.with_label_values(&["4"]).get();
         assert!(counter > 0);
 
-        // Test list task entries failure metrics
         collect_list_task_entries_failure_metrics(4);
 
         let failure_counter = LIST_TASK_ENTRIES_FAILURE_COUNT
@@ -1449,13 +1370,11 @@ mod tests {
 
     #[test]
     fn test_collect_delete_task_metrics() {
-        // Test delete task started metrics
         collect_delete_task_started_metrics(5);
 
         let counter = DELETE_TASK_COUNT.with_label_values(&["5"]).get();
         assert!(counter > 0);
 
-        // Test delete task failure metrics
         collect_delete_task_failure_metrics(5);
 
         let failure_counter = DELETE_TASK_FAILURE_COUNT.with_label_values(&["5"]).get();
@@ -1464,13 +1383,11 @@ mod tests {
 
     #[test]
     fn test_collect_delete_host_metrics() {
-        // Test delete host started metrics
         collect_delete_host_started_metrics();
 
         let counter = DELETE_HOST_COUNT.with_label_values(&[]).get();
         assert!(counter > 0);
 
-        // Test delete host failure metrics
         collect_delete_host_failure_metrics();
 
         let failure_counter = DELETE_HOST_FAILURE_COUNT.with_label_values(&[]).get();
@@ -1479,13 +1396,10 @@ mod tests {
 
     #[test]
     fn test_task_size_level1_slow_download() {
-        // This test verifies that Level1 tasks with slow download duration are properly
-        // recorded in metrics (note: the actual warning log is produced by the function
-        // but cannot be directly verified in this unit test)
         let tag = "slow-download-tag";
         let app = "slow-download-app";
-        let small_size = 512 * 1024; // 512 KB - Level1
-        let slow_duration = Duration::from_millis(600); // Above threshold
+        let small_size = 512 * 1024;
+        let slow_duration = Duration::from_millis(600);
 
         collect_download_task_started_metrics(1, tag, app, "5");
 
@@ -1495,7 +1409,6 @@ mod tests {
 
         collect_download_task_finished_metrics(1, tag, app, "5", small_size, None, slow_duration);
 
-        // Verify the histogram recorded the observation
         let histogram_after = DOWNLOAD_TASK_DURATION
             .with_label_values(&["1", "1"])
             .get_sample_count();
@@ -1504,13 +1417,10 @@ mod tests {
 
     #[test]
     fn test_task_size_level1_slow_upload() {
-        // This test verifies that Level1 tasks with slow upload duration are properly
-        // recorded in metrics (note: the actual warning log is produced by the function
-        // but cannot be directly verified in this unit test)
         let tag = "slow-upload-tag";
         let app = "slow-upload-app";
-        let small_size = 512 * 1024; // 512 KB - Level1
-        let slow_duration = Duration::from_millis(600); // Above threshold
+        let small_size = 512 * 1024;
+        let slow_duration = Duration::from_millis(600);
 
         collect_upload_task_started_metrics(1, tag, app);
 
@@ -1520,7 +1430,6 @@ mod tests {
 
         collect_upload_task_finished_metrics(1, tag, app, small_size, slow_duration);
 
-        // Verify the histogram recorded the observation
         let histogram_after = UPLOAD_TASK_DURATION
             .with_label_values(&["1", "1"])
             .get_sample_count();
@@ -1529,7 +1438,6 @@ mod tests {
 
     #[test]
     fn test_download_task_with_range() {
-        // Test download task finished metrics with range
         let range = Range {
             start: 0,
             length: 1024,
@@ -1547,7 +1455,6 @@ mod tests {
             duration,
         );
 
-        // Verify the histogram recorded the observation
         let histogram = DOWNLOAD_TASK_DURATION
             .with_label_values(&["1", "1"])
             .get_sample_count();
