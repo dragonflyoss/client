@@ -23,10 +23,9 @@ use dragonfly_client_config::{
 };
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::Result;
-use dragonfly_client_util::{net::Interface, shutdown};
+use dragonfly_client_util::{shutdown, sysinfo::SystemMonitor};
 use std::env;
 use std::sync::Arc;
-use std::time::Duration;
 use sysinfo::System;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, instrument};
@@ -42,8 +41,8 @@ pub struct SchedulerAnnouncer {
     /// gRPC client for the scheduler.
     scheduler_client: Arc<SchedulerClient>,
 
-    /// Network interface for monitoring.
-    interface: Arc<Interface>,
+    /// System interface for monitoring.
+    system_monitor: Arc<SystemMonitor>,
 
     /// Used to shut down the announcer.
     shutdown: shutdown::Shutdown,
@@ -59,7 +58,7 @@ impl SchedulerAnnouncer {
         config: Arc<Config>,
         host_id: String,
         scheduler_client: Arc<SchedulerClient>,
-        interface: Arc<Interface>,
+        system_monitor: Arc<SystemMonitor>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Result<Self> {
@@ -67,7 +66,7 @@ impl SchedulerAnnouncer {
             config,
             host_id,
             scheduler_client,
-            interface,
+            system_monitor,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         };
@@ -75,7 +74,7 @@ impl SchedulerAnnouncer {
         // Initialize the scheduler announcer.
         announcer
             .scheduler_client
-            .init_announce_host(announcer.make_announce_host_request(Duration::ZERO).await?)
+            .init_announce_host(announcer.make_announce_host_request().await?)
             .await?;
         Ok(announcer)
     }
@@ -90,7 +89,7 @@ impl SchedulerAnnouncer {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    let request = match self.make_announce_host_request(interval.period()).await {
+                    let request = match self.make_announce_host_request().await {
                         Ok(request) => request,
                         Err(err) => {
                             error!("make announce host request failed: {}", err);
@@ -119,85 +118,74 @@ impl SchedulerAnnouncer {
 
     /// Makes the announce host request.
     #[instrument(skip_all)]
-    async fn make_announce_host_request(&self, interval: Duration) -> Result<AnnounceHostRequest> {
+    async fn make_announce_host_request(&self) -> Result<AnnounceHostRequest> {
         // If the seed peer is enabled, we should announce the seed peer to the scheduler.
         let host_type = if self.config.seed_peer.enable {
             self.config.seed_peer.kind
         } else {
             HostType::Normal
         };
-
-        // Refresh the system information.
-        let mut sys = System::new_all();
-        sys.refresh_all();
-
-        // Get the process information.
-        let process = sys.process(sysinfo::get_current_pid().unwrap()).unwrap();
+        let pid = std::process::id();
 
         // Get the cpu information.
+        let cpu_stats = self.system_monitor.cpu.get_stats();
+        let process_cpu_stats = self.system_monitor.cpu.get_process_stats(pid);
         let cpu = Cpu {
-            logical_count: sys.physical_core_count().unwrap_or_default() as u32,
-            physical_count: sys.physical_core_count().unwrap_or_default() as u32,
-            percent: sys.global_cpu_usage() as f64,
-            process_percent: process.cpu_usage() as f64,
+            logical_count: cpu_stats.physical_core_count,
+            physical_count: cpu_stats.physical_core_count,
+            percent: cpu_stats.used_percent,
+            process_percent: process_cpu_stats.used_percent,
 
             // TODO: Get the cpu times.
             times: None,
         };
 
         // Get the memory information.
+        let memory_stats = self.system_monitor.memory.get_stats();
+        let process_memory_stats = self.system_monitor.memory.get_process_stats(pid);
         let memory = Memory {
-            total: sys.total_memory(),
-            available: sys.available_memory(),
-            used: sys.used_memory(),
-            used_percent: (sys.used_memory() / sys.total_memory()) as f64,
-            process_used_percent: (process.memory() / sys.total_memory()) as f64,
-            free: sys.free_memory(),
+            total: memory_stats.total,
+            free: memory_stats.free,
+            available: memory_stats.available,
+            used: memory_stats.usage,
+            used_percent: memory_stats.used_percent,
+            process_used_percent: process_memory_stats.used_percent,
         };
 
         // Wait for getting the network data.
-        let network_data = self.interface.get_network_data().await;
+        let network_stats = self.system_monitor.network.get_stats().await;
         debug!(
             "network data: rx bandwidth {}/{} bps, tx bandwidth {}/{} bps",
-            network_data.rx_bandwidth.unwrap_or(0),
-            network_data.max_rx_bandwidth,
-            network_data.tx_bandwidth.unwrap_or(0),
-            network_data.max_tx_bandwidth
+            network_stats.rx_bandwidth.unwrap_or(0),
+            network_stats.max_rx_bandwidth,
+            network_stats.tx_bandwidth.unwrap_or(0),
+            network_stats.max_tx_bandwidth
         );
 
         // Get the network information.
         let network = Network {
             idc: self.config.host.idc.clone(),
             location: self.config.host.location.clone(),
-            max_rx_bandwidth: network_data.max_rx_bandwidth,
-            rx_bandwidth: network_data.rx_bandwidth,
-            max_tx_bandwidth: network_data.max_tx_bandwidth,
-            tx_bandwidth: network_data.tx_bandwidth,
+            max_rx_bandwidth: network_stats.max_rx_bandwidth,
+            rx_bandwidth: network_stats.rx_bandwidth,
+            max_tx_bandwidth: network_stats.max_tx_bandwidth,
+            tx_bandwidth: network_stats.tx_bandwidth,
             ..Default::default()
         };
 
         // Get the disk information.
-        let stats = fs2::statvfs(self.config.storage.dir.as_path())?;
-        let total_space = stats.total_space();
-        let available_space = stats.available_space();
-        let used_space = total_space - available_space;
-        let used_percent = (used_space as f64 / (total_space) as f64) * 100.0;
-
-        let mut write_bandwidth = 0;
-        let mut read_bandwidth = 0;
-        if interval != Duration::ZERO {
-            let disk_usage = process.disk_usage();
-            write_bandwidth = disk_usage.written_bytes / interval.as_secs();
-            read_bandwidth = disk_usage.read_bytes / interval.as_secs();
-        };
-
+        let disk_stats = self
+            .system_monitor
+            .disk
+            .get_stats(self.config.storage.dir.as_path())?;
+        let process_disk_stats = self.system_monitor.disk.get_process_stats(pid).await;
         let disk = Disk {
-            total: total_space,
-            free: available_space,
-            used: used_space,
-            used_percent,
-            write_bandwidth,
-            read_bandwidth,
+            total: disk_stats.total,
+            free: disk_stats.free,
+            used: disk_stats.usage,
+            used_percent: disk_stats.used_percent,
+            write_bandwidth: process_disk_stats.write_bandwidth,
+            read_bandwidth: process_disk_stats.read_bandwidth,
 
             // TODO: Get the disk inodes information.
             inodes_total: 0,

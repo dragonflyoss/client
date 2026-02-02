@@ -1382,6 +1382,7 @@ dependencies = [
  "dashmap",
  "dragonfly-api",
  "dragonfly-client-core",
+ "fs2",
  "futures",
  "hashring",
  "hex",

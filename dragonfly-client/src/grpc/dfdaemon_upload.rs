@@ -56,8 +56,8 @@ use dragonfly_client_util::{
     digest::{is_blob_url, verify_file_digest, Digest},
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
     id_generator::{PersistentTaskIDParameter, TaskIDParameter},
-    net::Interface,
     shutdown,
+    sysinfo::SystemMonitor,
 };
 use opentelemetry::Context;
 use std::net::SocketAddr;
@@ -102,8 +102,8 @@ pub struct DfdaemonUploadServer {
     /// persistent_cache_task is the persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 
-    /// interface is the network interface.
-    interface: Arc<Interface>,
+    /// System interface for monitoring.
+    system_monitor: Arc<SystemMonitor>,
 
     /// shutdown is used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
@@ -122,7 +122,7 @@ impl DfdaemonUploadServer {
         task: Arc<task::Task>,
         persistent_task: Arc<persistent_task::PersistentTask>,
         persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
-        interface: Arc<Interface>,
+        system_monitor: Arc<SystemMonitor>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -132,7 +132,7 @@ impl DfdaemonUploadServer {
             task,
             persistent_task,
             persistent_cache_task,
-            interface,
+            system_monitor,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -147,7 +147,7 @@ impl DfdaemonUploadServer {
                 task: self.task.clone(),
                 persistent_task: self.persistent_task.clone(),
                 persistent_cache_task: self.persistent_cache_task.clone(),
-                interface: self.interface.clone(),
+                system_monitor: self.system_monitor.clone(),
             },
             ExtractTracingInterceptor,
         );
@@ -246,8 +246,8 @@ pub struct DfdaemonUploadServerHandler {
     /// persistent_cache_task is the persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 
-    /// interface is the network interface.
-    interface: Arc<Interface>,
+    /// System interface for monitoring.
+    system_monitor: Arc<SystemMonitor>,
 }
 
 /// DfdaemonUploadServerHandler implements the dfdaemon upload grpc service.
@@ -1126,8 +1126,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("remote_peer_id", remote_peer_id.as_str());
         info!("sync host in upload server");
 
-        // Get local interface.
-        let interface = self.interface.clone();
+        // Clone the network monitor.
+        let network = self.system_monitor.network.clone();
 
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
@@ -1135,24 +1135,24 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             async move {
                 // Start the host info update loop.
                 loop {
-                    // Wait for getting the network data.
-                    let network_data = interface.get_network_data().await;
+                    // Wait for getting the network stats.
+                    let network_stats = network.get_stats().await;
                     debug!(
                         "network data: rx bandwidth {}/{} bps, tx bandwidth {}/{} bps",
-                        network_data.rx_bandwidth.unwrap_or(0),
-                        network_data.max_rx_bandwidth,
-                        network_data.tx_bandwidth.unwrap_or(0),
-                        network_data.max_tx_bandwidth
+                        network_stats.rx_bandwidth.unwrap_or(0),
+                        network_stats.max_rx_bandwidth,
+                        network_stats.tx_bandwidth.unwrap_or(0),
+                        network_stats.max_tx_bandwidth
                     );
 
                     // Send host info.
                     if let Err(err) = out_stream_tx
                         .send(Ok(Host {
                             network: Some(Network {
-                                max_rx_bandwidth: network_data.max_rx_bandwidth,
-                                rx_bandwidth: network_data.rx_bandwidth,
-                                max_tx_bandwidth: network_data.max_tx_bandwidth,
-                                tx_bandwidth: network_data.tx_bandwidth,
+                                max_rx_bandwidth: network_stats.max_rx_bandwidth,
+                                rx_bandwidth: network_stats.rx_bandwidth,
+                                max_tx_bandwidth: network_stats.max_tx_bandwidth,
+                                tx_bandwidth: network_stats.tx_bandwidth,
                                 ..Default::default()
                             }),
                             ..Default::default()
