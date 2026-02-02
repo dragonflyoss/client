@@ -91,7 +91,7 @@ opendal = { version = "0.55.0", features = [
     "services-cos",
     "services-webhdfs",
 ] }
-clap = { version = "4.5.53", features = ["derive"] }
+clap = { version = "4.5.56", features = ["derive"] }
 anyhow = "1.0.99"
 toml_edit = "0.23.7"
 toml = "0.8.23"
