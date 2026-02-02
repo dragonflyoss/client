@@ -211,8 +211,9 @@ mod tests {
             frequency: 1000,
         };
         let result = Stats::pprof_profile_handler(params).await;
-        // The profiler may or may not be available depending on the build configuration
-        // We just verify it doesn't panic
+        // The profiler may or may not be available depending on the build configuration.
+        // We verify the handler executes without panicking. Result validation is skipped
+        // since profiler availability varies across build environments.
         let _ = result;
     }
 
@@ -224,8 +225,9 @@ mod tests {
             frequency: 500,
         };
         let result = Stats::pprof_profile_handler(params).await;
-        // The profiler may or may not be available depending on the build configuration
-        // We just verify it doesn't panic
+        // The profiler may or may not be available depending on the build configuration.
+        // We verify the handler executes without panicking. Result validation is skipped
+        // since profiler availability varies across build environments.
         let _ = result;
     }
 
