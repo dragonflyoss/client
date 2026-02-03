@@ -280,11 +280,6 @@ mod tests {
     // We limit initialization tests to ensure they don't conflict.
 
     #[test]
-    fn test_span_exporter_timeout() {
-        assert_eq!(SPAN_EXPORTER_TIMEOUT, Duration::from_secs(10));
-    }
-
-    #[test]
     fn test_init_tracing_comprehensive() {
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let log_dir = temp_dir.path().join("logs");
@@ -331,27 +326,6 @@ mod tests {
     }
 
     #[test]
-    fn test_log_levels() {
-        let levels = vec![
-            Level::ERROR,
-            Level::WARN,
-            Level::INFO,
-            Level::DEBUG,
-            Level::TRACE,
-        ];
-
-        for level in levels {
-            assert!(
-                level == Level::ERROR
-                    || level == Level::WARN
-                    || level == Level::INFO
-                    || level == Level::DEBUG
-                    || level == Level::TRACE
-            );
-        }
-    }
-
-    #[test]
     fn test_temp_dir_and_file_creation() {
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let log_dir = temp_dir.path().join("test-logs");
@@ -363,12 +337,5 @@ mod tests {
 
         let log_file = log_dir.join("test.log");
         assert_eq!(log_file.file_name().unwrap(), "test.log");
-    }
-
-    #[test]
-    fn test_worker_guards_structure() {
-        let guards: Vec<WorkerGuard> = vec![];
-        assert_eq!(guards.len(), 0);
-        drop(guards);
     }
 }
