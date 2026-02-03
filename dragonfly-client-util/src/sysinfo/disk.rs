@@ -21,13 +21,6 @@ use std::time::Duration;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 use tokio::sync::Mutex;
 
-/// Disk represents a disk interface for monitoring disk statistics.
-#[derive(Debug, Clone, Default)]
-pub struct Disk {
-    // Mutex to protect concurrent access to disk statistics.
-    mutex: Arc<Mutex<()>>,
-}
-
 /// DiskStats represents the disk statistics for a specific path.
 #[derive(Debug, Clone, Default)]
 pub struct DiskStats {
@@ -54,6 +47,13 @@ pub struct ProcessDiskStats {
     pub read_bandwidth: u64,
 }
 
+/// Disk represents a disk interface for monitoring disk statistics.
+#[derive(Debug, Clone, Default)]
+pub struct Disk {
+    // Mutex to protect concurrent access to disk statistics.
+    mutex: Arc<Mutex<()>>,
+}
+
 /// Implementation of disk monitoring functionality.
 ///
 /// Provides methods to retrieve disk space information and process-specific
@@ -67,7 +67,7 @@ impl Disk {
     /// # Returns
     /// A new Disk instance with an initialized mutex for thread-safe access.
     pub fn new() -> Self {
-        Disk {
+        Self {
             mutex: Arc::new(Mutex::new(())),
         }
     }
@@ -94,7 +94,7 @@ impl Disk {
             total: total_space,
             free: available_space,
             usage: usage_space,
-            used_percent,
+            used_percent: used_percent.clamp(0.0, 100.0),
         })
     }
 
@@ -112,7 +112,6 @@ impl Disk {
     pub async fn get_process_stats(&self, pid: u32) -> ProcessDiskStats {
         // Lock the mutex to ensure exclusive access to disk stats.
         let _guard = self.mutex.lock().await;
-
         let mut sys = System::new_with_specifics(
             RefreshKind::new().with_processes(ProcessRefreshKind::new().with_disk_usage()),
         );
