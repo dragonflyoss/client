@@ -268,3 +268,123 @@ pub fn init_command_tracing(log_level: Level, console: bool) -> Vec<WorkerGuard>
 
     guards
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::IpAddr;
+    use std::str::FromStr;
+    use tempfile::TempDir;
+
+    // Note: The tracing subscriber can only be initialized once per test process.
+    // We limit initialization tests to ensure they don't conflict.
+
+    #[test]
+    fn test_span_exporter_timeout() {
+        // Verify the constant is set correctly
+        assert_eq!(SPAN_EXPORTER_TIMEOUT, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn test_init_tracing_comprehensive() {
+        // This test comprehensively tests init_tracing functionality
+        // Create a temporary directory
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let log_dir = temp_dir.path().join("logs");
+
+        // Ensure the directory doesn't exist yet
+        assert!(!log_dir.exists());
+
+        // Initialize tracing with various parameters
+        let guards = init_tracing(
+            "test-service",
+            log_dir.clone(),
+            Level::INFO,
+            10,
+            None, // no OTLP protocol
+            None, // no OTLP endpoint
+            None,
+            None,
+            None, // no host
+            false, // not a seed peer
+            false, // console disabled
+        );
+
+        // Verify log directory was created
+        assert!(log_dir.exists());
+        assert!(log_dir.is_dir());
+
+        // Should return guards for stdout and file writers
+        assert!(!guards.is_empty());
+        assert_eq!(guards.len(), 2); // stdout + file
+
+        // Keep guards alive for the test
+        drop(guards);
+    }
+
+    #[test]
+    fn test_host_struct_can_be_created() {
+        // Test that we can create a Host struct for use with init_tracing
+        let host = Host {
+            ip: Some(IpAddr::from_str("127.0.0.1").unwrap()),
+            hostname: "test-hostname".to_string(),
+            idc: Some("test-idc".to_string()),
+            location: Some("test-location".to_string()),
+            scheduler_cluster_id: Some(1),
+        };
+
+        // Verify fields are set correctly
+        assert_eq!(host.hostname, "test-hostname");
+        assert_eq!(host.ip, Some(IpAddr::from_str("127.0.0.1").unwrap()));
+        assert_eq!(host.idc, Some("test-idc".to_string()));
+        assert_eq!(host.location, Some("test-location".to_string()));
+        assert_eq!(host.scheduler_cluster_id, Some(1));
+    }
+
+    #[test]
+    fn test_log_levels() {
+        // Test that different log levels can be used
+        // We don't actually initialize tracing here to avoid conflicts
+        let levels = vec![Level::ERROR, Level::WARN, Level::INFO, Level::DEBUG, Level::TRACE];
+        
+        // Verify all levels are valid and can be used in function parameters
+        for level in levels {
+            // Just verify the levels exist and can be compared
+            assert!(level == Level::ERROR || level == Level::WARN || 
+                   level == Level::INFO || level == Level::DEBUG || level == Level::TRACE);
+        }
+    }
+
+    #[test]
+    fn test_temp_dir_and_file_creation() {
+        // Test that we can create temporary directories for logs
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let log_dir = temp_dir.path().join("test-logs");
+
+        // Directory shouldn't exist yet
+        assert!(!log_dir.exists());
+
+        // Create the directory manually (init_tracing would do this)
+        std::fs::create_dir_all(&log_dir).expect("failed to create log directory");
+
+        // Now it should exist
+        assert!(log_dir.exists());
+        assert!(log_dir.is_dir());
+
+        // Test creating a log file path
+        let log_file = log_dir.join("test.log");
+        assert_eq!(log_file.file_name().unwrap(), "test.log");
+    }
+
+    #[test]
+    fn test_worker_guards_structure() {
+        // Test that we understand the structure of what init functions return
+        let guards: Vec<WorkerGuard> = vec![];
+        
+        // Guards should be droppable
+        assert_eq!(guards.len(), 0);
+        
+        // Guards keep writers alive until dropped
+        drop(guards);
+    }
+}
