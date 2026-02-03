@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#[cfg(target_os = "linux")]
-pub mod cgroups;
 pub mod container;
 pub mod digest;
 pub mod fs;
@@ -26,4 +24,8 @@ pub mod net;
 pub mod pool;
 pub mod request;
 pub mod shutdown;
+pub mod sysinfo;
 pub mod tls;
+
+#[cfg(target_os = "linux")]
+pub mod cgroups;

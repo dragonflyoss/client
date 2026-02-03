@@ -33,7 +33,7 @@ use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::{dfdaemon, VersionValueParser};
 use dragonfly_client_metric::Metrics;
 use dragonfly_client_storage::{server::quic::QUICServer, server::tcp::TCPServer, Storage};
-use dragonfly_client_util::{id_generator::IDGenerator, net::Interface, shutdown};
+use dragonfly_client_util::{id_generator::IDGenerator, shutdown, sysinfo::SystemMonitor};
 use leaky_bucket::RateLimiter;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -303,9 +303,6 @@ async fn main() -> Result<(), anyhow::Error> {
     )?;
     let persistent_cache_task = Arc::new(persistent_cache_task);
 
-    let interface = Interface::new(config.host.ip.unwrap(), config.upload.bandwidth_limit);
-    let interface = Arc::new(interface);
-
     // Initialize health server.
     let health = Health::new(
         SocketAddr::new(config.health.server.ip.unwrap(), config.health.server.port),
@@ -362,12 +359,16 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     );
 
+    // Initialize system monitor.
+    let system_monitor = SystemMonitor::new(config.host.ip.unwrap(), config.upload.bandwidth_limit);
+    let system_monitor = Arc::new(system_monitor);
+
     // Initialize scheduler announcer.
     let scheduler_announcer = SchedulerAnnouncer::new(
         config.clone(),
         id_generator.host_id(),
         scheduler_client.clone(),
-        interface.clone(),
+        system_monitor.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     )
@@ -383,7 +384,7 @@ async fn main() -> Result<(), anyhow::Error> {
         task.clone(),
         persistent_task.clone(),
         persistent_cache_task.clone(),
-        interface.clone(),
+        system_monitor.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );

@@ -26,6 +26,7 @@ rcgen.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true
 rustls-pemfile.workspace = true
+fs2.workspace = true
 sha2.workspace = true
 uuid.workspace = true
 sysinfo.workspace = true
@@ -44,12 +45,15 @@ hostname.workspace = true
 dashmap.workspace = true
 reqwest-tracing.workspace = true
 reqwest-middleware.workspace = true
-cgroups-rs.workspace = true
+num_cpus.workspace = true
 rustix = { version = "1.1.3", features = ["fs"] }
 base64 = "0.22.1"
 pnet = "0.35.0"
 protobuf = "3.7.2"
 libc = "0.2.180"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+cgroups-rs.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

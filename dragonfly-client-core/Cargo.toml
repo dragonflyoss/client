@@ -24,4 +24,6 @@ opendal.workspace = true
 url.workspace = true
 headers.workspace = true
 vortex-protocol.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
 cgroups-rs.workspace = true
