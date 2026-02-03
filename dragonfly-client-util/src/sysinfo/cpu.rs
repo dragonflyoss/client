@@ -19,13 +19,6 @@ use std::time::Duration;
 use sysinfo::{CpuRefreshKind, Pid, ProcessRefreshKind, RefreshKind, System};
 use tokio::sync::Mutex;
 
-/// CPU represents a cpu interface with its information.
-#[derive(Debug, Clone, Default)]
-pub struct CPU {
-    /// Mutex to protect concurrent access to cgroup CPU statistics.
-    mutex: Arc<Mutex<()>>,
-}
-
 /// Represents system-wide CPU statistics.
 #[derive(Debug, Clone, Default)]
 pub struct CPUStats {
@@ -59,6 +52,13 @@ pub struct CgroupCPUStats {
     pub used_percent: f64,
 }
 
+/// CPU represents a cpu interface with its information.
+#[derive(Debug, Clone, Default)]
+pub struct CPU {
+    /// Mutex to protect concurrent access to cgroup CPU statistics.
+    mutex: Arc<Mutex<()>>,
+}
+
 /// Implementation of CPU monitoring functionality.
 ///
 /// Provides methods to retrieve CPU statistics at three different levels:
@@ -71,7 +71,7 @@ impl CPU {
 
     /// Creates a new CPU instance.
     pub fn new() -> Self {
-        CPU {
+        Self {
             mutex: Arc::new(Mutex::new(())),
         }
     }

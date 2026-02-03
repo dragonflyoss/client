@@ -24,19 +24,6 @@ use sysinfo::Networks;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-/// Network represents a network interface with its information.
-#[derive(Debug, Clone, Default)]
-pub struct Network {
-    // The name of the network interface.
-    interface_name: String,
-
-    // The bandwidth of the network interface in bits per second (bps).
-    bandwidth: u64,
-
-    // Mutex to protect concurrent access to network statistics.
-    mutex: Arc<Mutex<()>>,
-}
-
 /// NetworkStats represents the network statistics for a specific interface.
 #[derive(Debug, Clone, Default)]
 pub struct NetworkStats {
@@ -51,6 +38,19 @@ pub struct NetworkStats {
 
     /// The current transmit bandwidth of the interface in bps.
     pub tx_bandwidth: Option<u64>,
+}
+
+/// Network represents a network interface with its information.
+#[derive(Debug, Clone, Default)]
+pub struct Network {
+    // The name of the network interface.
+    interface_name: String,
+
+    // The bandwidth of the network interface in bits per second (bps).
+    bandwidth: u64,
+
+    // Mutex to protect concurrent access to network statistics.
+    mutex: Arc<Mutex<()>>,
 }
 
 /// Implementation of network monitoring functionality.
@@ -76,7 +76,7 @@ impl Network {
             "can not find interface for IP address {}, network interface unknown with bandwidth {} bps",
             ip, rate_limit
         );
-            return Network {
+            return Self {
                 interface_name: "unknown".to_string(),
                 bandwidth: rate_limit,
                 mutex: Arc::new(Mutex::new(())),
@@ -91,7 +91,7 @@ impl Network {
                     interface.name, bandwidth
                 );
 
-                Network {
+                Self {
                     interface_name: interface.name,
                     bandwidth,
                     mutex: Arc::new(Mutex::new(())),
@@ -103,7 +103,7 @@ impl Network {
                     interface.name, rate_limit
                 );
 
-                Network {
+                Self {
                     interface_name: interface.name,
                     bandwidth: rate_limit,
                     mutex: Arc::new(Mutex::new(())),
