@@ -263,6 +263,7 @@ pub enum DFError {
     ValidationError(String),
 
     /// CgroupsFSError is the error for cgroups fs.
+    #[cfg(target_os = "linux")]
     #[error(transparent)]
     CgroupsFSError(#[from] cgroups_rs::fs::error::Error),
 }

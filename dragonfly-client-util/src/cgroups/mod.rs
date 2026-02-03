@@ -36,10 +36,10 @@ use std::path::{Path, PathBuf};
 /// # Examples
 ///
 /// ```rust
-/// use cgroups_rs::get_cgroups_by_pid;
+/// use cgroups_rs::get_cgroup_by_pid;
 ///
-/// // Get cgroups for the current process
-/// let cgroup = get_cgroups_by_pid(std::process::id()).unwrap();
+/// // Get cgroup for the current process
+/// let cgroup = get_cgroup_by_pid(std::process::id()).unwrap();
 /// ```
 ///
 /// # Errors
@@ -48,12 +48,12 @@ use std::path::{Path, PathBuf};
 /// - The process with the given PID does not exist
 /// - Permission denied when reading cgroup information
 /// - The cgroup filesystem is not mounted
-pub fn get_cgroups_by_pid(pid: u32) -> Result<Cgroup> {
+pub fn get_cgroup_by_pid(pid: u32) -> Result<Cgroup> {
     // Automatically detect the cgroup hierarchy (v1 or v2)
     // and load the cgroup configuration for the specified PID.
     let hierarchies = hierarchies::auto();
     if hierarchies.v2() {
-        let path = get_cgroups_v2_path_by_pid(pid)?;
+        let path = get_cgroup_v2_path_by_pid(pid)?;
         Ok(Cgroup::load(hierarchies, path))
     } else {
         let relative_paths = get_cgroups_relative_paths_by_pid(pid)?;
@@ -65,7 +65,7 @@ pub fn get_cgroups_by_pid(pid: u32) -> Result<Cgroup> {
     }
 }
 
-/// Retrieves the cgroups v2 filesystem path for a given process ID.
+/// Retrieves the cgroup v2 filesystem path for a given process ID.
 ///
 /// This function reads the cgroup information from `/proc/{pid}/cgroup` and
 /// constructs the absolute path to the cgroup v2 directory in `/sys/fs/cgroup`.
@@ -79,10 +79,10 @@ pub fn get_cgroups_by_pid(pid: u32) -> Result<Cgroup> {
 ///
 /// # Example
 /// ```
-/// let cgroup_path = get_cgroups_v2_path_by_pid(1)?;
+/// let cgroup_path = get_cgroup_v2_path_by_pid(1)?;
 /// // Returns something like: /sys/fs/cgroup/system.slice/service.scope
 /// ```
-pub fn get_cgroups_v2_path_by_pid(pid: u32) -> Result<PathBuf> {
+pub fn get_cgroup_v2_path_by_pid(pid: u32) -> Result<PathBuf> {
     let content = fs::read_to_string(format!("/proc/{}/cgroup", pid))?;
     let first_line = content.lines().next().ok_or_else(|| {
         Error::ValidationError(format!("No cgroup information found for PID {}", pid))
