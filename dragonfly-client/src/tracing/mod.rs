@@ -305,7 +305,7 @@ mod tests {
             None, // no OTLP endpoint
             None,
             None,
-            None, // no host
+            None,  // no host
             false, // not a seed peer
             false, // console disabled
         );
@@ -345,13 +345,24 @@ mod tests {
     fn test_log_levels() {
         // Test that different log levels can be used
         // We don't actually initialize tracing here to avoid conflicts
-        let levels = vec![Level::ERROR, Level::WARN, Level::INFO, Level::DEBUG, Level::TRACE];
-        
+        let levels = vec![
+            Level::ERROR,
+            Level::WARN,
+            Level::INFO,
+            Level::DEBUG,
+            Level::TRACE,
+        ];
+
         // Verify all levels are valid and can be used in function parameters
         for level in levels {
             // Just verify the levels exist and can be compared
-            assert!(level == Level::ERROR || level == Level::WARN || 
-                   level == Level::INFO || level == Level::DEBUG || level == Level::TRACE);
+            assert!(
+                level == Level::ERROR
+                    || level == Level::WARN
+                    || level == Level::INFO
+                    || level == Level::DEBUG
+                    || level == Level::TRACE
+            );
         }
     }
 
@@ -380,10 +391,10 @@ mod tests {
     fn test_worker_guards_structure() {
         // Test that we understand the structure of what init functions return
         let guards: Vec<WorkerGuard> = vec![];
-        
+
         // Guards should be droppable
         assert_eq!(guards.len(), 0);
-        
+
         // Guards keep writers alive until dropped
         drop(guards);
     }
