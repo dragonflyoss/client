@@ -75,6 +75,7 @@ tonic-health.workspace = true
 hashring.workspace = true
 fastrand.workspace = true
 opendal.workspace = true
+regex.workspace = true
 tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
 tracing-panic = "0.1.2"
