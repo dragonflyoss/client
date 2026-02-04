@@ -23,6 +23,7 @@ use dragonfly_client_config::{dfdaemon::Config, CARGO_PKG_VERSION, GIT_COMMIT_SH
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::net::format_url;
 use dragonfly_client_util::shutdown;
+use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -30,6 +31,89 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{debug, error, info, instrument};
 use url::Url;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SchedulerClusterClientConfig {
+    /// The block list of the scheduler cluster client.
+    pub block_list: Option<SchedulerClusterConfigBlockList>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SchedulerClusterSeedClientConfig {
+    /// The block list of the scheduler cluster seed client.
+    pub block_list: Option<SchedulerClusterConfigBlockList>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SchedulerClusterConfigBlockList {
+    /// The block list of the type task.
+    pub task: Option<SchedulerClusterConfigTaskBlockList>,
+
+    /// The block list of the type persistent task.
+    pub persistent_task: Option<SchedulerClusterConfigPersistentTaskBlockList>,
+
+    /// The block list of the type persistent cache task.
+    pub persistent_cache_task: Option<SchedulerClusterConfigPersistentCacheTaskBlockList>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SchedulerClusterConfigTaskBlockList {
+    /// The block list of the download grpc.
+    pub download: Option<SchedulerClusterConfigDownloadBlockList>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SchedulerClusterConfigPersistentTaskBlockList {
+    /// The block list of the download grpc.
+    pub download: Option<SchedulerClusterConfigDownloadBlockList>,
+
+    /// The block list of the upload grpc.
+    pub upload: Option<SchedulerClusterConfigUploadBlockList>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SchedulerClusterConfigPersistentCacheTaskBlockList {
+    /// The block list of the download grpc.
+    pub download: Option<SchedulerClusterConfigDownloadBlockList>,
+
+    /// The block list of the upload grpc.
+    pub upload: Option<SchedulerClusterConfigUploadBlockList>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SchedulerClusterConfigDownloadBlockList {
+    /// The lists of the application name.
+    pub applications: Option<Vec<String>>,
+
+    /// The regex patterns of the url.
+    pub urls: Option<Vec<String>>,
+
+    /// The lists of the tag.
+    pub tags: Option<Vec<String>>,
+
+    /// The lists of the priority.
+    pub priorities: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SchedulerClusterConfigUploadBlockList {
+    /// The lists of the application name.
+    pub applications: Option<Vec<String>>,
+
+    /// The regex patterns of the url.
+    pub urls: Option<Vec<String>>,
+
+    /// The lists of the tag.
+    pub tags: Option<Vec<String>>,
+}
 
 /// Data is the dynamic configuration of the dfdaemon.
 #[derive(Default)]
@@ -42,6 +126,12 @@ pub struct Data {
 
     /// available_scheduler_cluster_id is the id of the available scheduler cluster of the dfdaemon.
     pub available_scheduler_cluster_id: Option<u64>,
+
+    /// client_config is the configuration of the client.
+    pub client_config: Option<SchedulerClusterClientConfig>,
+
+    /// seed_client_config is the configuration of the seed client.
+    pub seed_client_config: Option<SchedulerClusterSeedClientConfig>,
 }
 
 /// Dynconfig supports dynamic configuration of the client.
@@ -135,13 +225,61 @@ impl Dynconfig {
             return Err(Error::AvailableSchedulersNotFound);
         }
 
+        // Deserialize the scheduler client and seed client config from the first available scheduler.
+        let (scheduler_cluster_id, client_config, seed_client_config) =
+            if let Some(available_scheduler) = available_schedulers.first() {
+                let scheduler_cluster_id = Some(available_scheduler.scheduler_cluster_id);
+
+                let (client_config, seed_client_config) = if let Some(scheduler_cluster) =
+                    &available_scheduler.scheduler_cluster
+                {
+                    // Deserialize client_config.
+                    let client_config = if !scheduler_cluster.client_config.is_empty() {
+                        match serde_json::from_slice::<SchedulerClusterClientConfig>(
+                            &scheduler_cluster.client_config,
+                        ) {
+                            Ok(config) => Some(config),
+                            Err(err) => {
+                                error!("failed to deserialize client config: {}", err);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    // Deserialize seed_client_config.
+                    let seed_client_config = if !scheduler_cluster.seed_client_config.is_empty() {
+                        match serde_json::from_slice::<SchedulerClusterSeedClientConfig>(
+                            &scheduler_cluster.seed_client_config,
+                        ) {
+                            Ok(config) => Some(config),
+                            Err(err) => {
+                                error!("failed to deserialize seed client config: {}", err);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    (client_config, seed_client_config)
+                } else {
+                    (None, None)
+                };
+
+                (scheduler_cluster_id, client_config, seed_client_config)
+            } else {
+                (None, None, None)
+            };
+
         // Get the data with write lock.
         let mut data = self.data.write().await;
         data.schedulers = schedulers;
         data.available_schedulers = available_schedulers;
-        if let Some(available_scheduler) = data.available_schedulers.first() {
-            data.available_scheduler_cluster_id = Some(available_scheduler.scheduler_cluster_id);
-        }
+        data.available_scheduler_cluster_id = scheduler_cluster_id;
+        data.client_config = client_config;
+        data.seed_client_config = seed_client_config;
         Ok(())
     }
 

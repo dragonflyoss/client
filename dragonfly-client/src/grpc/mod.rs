@@ -24,6 +24,7 @@ use std::time::Duration;
 use tonic::Request;
 use tracing::{debug, error, info, instrument, Instrument};
 
+pub mod blocklist;
 pub mod dfdaemon_download;
 pub mod dfdaemon_upload;
 pub mod health;

@@ -712,6 +712,13 @@ async fn proxy_via_dfdaemon(
                     None,
                 ));
             }
+            ClientError::TonicStatus(err) if err.code() == tonic::Code::PermissionDenied => {
+                return Ok(make_error_response(
+                    header::ErrorType::Proxy,
+                    http::StatusCode::FORBIDDEN,
+                    None,
+                ));
+            }
             ClientError::TonicStatus(err) => {
                 match serde_json::from_slice::<Backend>(err.details()) {
                     Ok(backend) => {
