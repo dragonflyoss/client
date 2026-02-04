@@ -67,6 +67,7 @@ pub struct CPU {
 /// - Cgroup-level: CPU resource limits and quotas (Linux only).
 impl CPU {
     /// Default interval for refreshing cgroup CPU statistics.
+    #[allow(dead_code)]
     const DEFAULT_CPU_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
     /// Creates a new CPU instance.
