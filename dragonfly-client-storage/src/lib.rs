@@ -1637,3 +1637,373 @@ impl Storage {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// Helper function to create a test storage instance.
+    async fn create_test_storage() -> (Storage, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join("log");
+        let storage = Storage::new(Arc::new(Config::default()), dir.path(), log_dir)
+            .await
+            .unwrap();
+        (storage, dir)
+    }
+
+    #[tokio::test]
+    async fn test_storage_new() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join("log");
+        let storage = Storage::new(Arc::new(Config::default()), dir.path(), log_dir).await;
+        assert!(storage.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_disk_space_management() {
+        let (storage, _dir) = create_test_storage().await;
+
+        // Test total_space returns a non-zero value.
+        let total = storage.total_space().unwrap();
+        assert!(total > 0);
+
+        // Test available_space returns a non-zero value.
+        let available = storage.available_space().unwrap();
+        assert!(available > 0);
+
+        // Test has_enough_space with various sizes.
+        assert!(storage.has_enough_space(1024).unwrap());
+        
+        // Very large size should be larger than available space.
+        // Note: We can't test a size larger than available space since it depends on the actual system.
+        // But we can test that the method works correctly.
+        let result = storage.has_enough_space(100);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_task_lifecycle() {
+        let (storage, _dir) = create_test_storage().await;
+        let task_id = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
+
+        // Test download_task_started.
+        storage
+            .download_task_started(task_id, 1024, 2048, None)
+            .await
+            .unwrap();
+        
+        let task = storage.get_task(task_id).unwrap().unwrap();
+        assert_eq!(task.id, task_id);
+        assert_eq!(task.piece_length, Some(1024));
+        assert_eq!(task.content_length, Some(2048));
+        assert!(!task.is_finished());
+
+        // Test is_task_exists.
+        assert!(storage.is_task_exists(task_id).unwrap());
+
+        // Test download_task_finished.
+        let task = storage.download_task_finished(task_id).unwrap();
+        assert!(task.is_finished());
+
+        // Test get_tasks.
+        let tasks = storage.get_tasks().unwrap();
+        assert_eq!(tasks.len(), 1);
+
+        // Test upload_task_finished.
+        let task = storage.upload_task_finished(task_id).unwrap();
+        assert!(task.is_finished());
+
+        // Test delete_task.
+        storage.delete_task(task_id).await;
+        let task = storage.get_task(task_id).unwrap();
+        assert!(task.is_none());
+        assert!(!storage.is_task_exists(task_id).unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_task_failure() {
+        let (storage, _dir) = create_test_storage().await;
+        let task_id = "a535b115f18d96870f0422ac891f91dd162f2f391e4778fb84279701fcd02dd1";
+
+        // Start a download task.
+        storage
+            .download_task_started(task_id, 1024, 2048, None)
+            .await
+            .unwrap();
+
+        // Test download_task_failed.
+        let task = storage.download_task_failed(task_id).await.unwrap();
+        assert!(task.is_failed());
+        assert!(!task.is_finished());
+
+        // Clean up.
+        storage.delete_task(task_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_task() {
+        let (storage, _dir) = create_test_storage().await;
+        let task_id = "b636c225f29d96870f0422ac891f91dd162f2f391e4778fb84279701fcd02ee2";
+
+        // Prepare and start a task.
+        storage
+            .download_task_started(task_id, 1024, 2048, None)
+            .await
+            .unwrap();
+        storage.download_task_finished(task_id).unwrap();
+
+        // Test prefetch_task_started.
+        let task = storage.prefetch_task_started(task_id).await.unwrap();
+        assert!(task.is_prefetched());
+
+        // Test prefetch_task_failed.
+        let task = storage.prefetch_task_failed(task_id).await.unwrap();
+        assert!(task.is_failed());
+
+        // Clean up.
+        storage.delete_task(task_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_persistent_task_lifecycle() {
+        let (storage, _dir) = create_test_storage().await;
+        let task_id = "c747d336g40e18d96870f0422ac891f91dd162f2f391e4778fb84279701fcd03ff3";
+
+        // Test create_persistent_task_started.
+        storage
+            .create_persistent_task_started(task_id, Duration::from_secs(3600), 1024, 4096)
+            .await
+            .unwrap();
+
+        let task = storage.get_persistent_task(task_id).unwrap();
+        assert!(task.is_some());
+        let task = task.unwrap();
+        assert_eq!(task.id, task_id);
+        assert_eq!(task.piece_length, 1024);
+        assert_eq!(task.content_length, 4096);
+        assert!(task.is_started());
+
+        // Test is_persistent_task_exists.
+        assert!(storage.is_persistent_task_exists(task_id).unwrap());
+
+        // Test download_persistent_task_finished.
+        let task = storage.download_persistent_task_finished(task_id).unwrap();
+        assert!(task.is_finished());
+
+        // Test persist_persistent_task.
+        let task = storage.persist_persistent_task(task_id).unwrap();
+        assert!(task.is_finished());
+
+        // Test get_persistent_tasks.
+        let tasks = storage.get_persistent_tasks().unwrap();
+        assert!(!tasks.is_empty());
+
+        // Test upload_persistent_task_finished.
+        let task = storage.upload_persistent_task_finished(task_id).unwrap();
+        assert!(task.is_finished());
+
+        // Test delete_persistent_task.
+        storage.delete_persistent_task(task_id).await;
+        let task = storage.get_persistent_task(task_id).unwrap();
+        assert!(task.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_persistent_task_failure() {
+        let (storage, _dir) = create_test_storage().await;
+        let task_id = "d858e447h51f29e07981f0533bd002e92273g3g402f5889gc95380812gde04gg4";
+
+        // Create a persistent task.
+        storage
+            .create_persistent_task_started(task_id, Duration::from_secs(3600), 1024, 8192)
+            .await
+            .unwrap();
+
+        // Test create_persistent_task_failed.
+        storage.create_persistent_task_failed(task_id).await;
+
+        // Task should be deleted after failure.
+        let task = storage.get_persistent_task(task_id).unwrap();
+        assert!(task.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_persistent_cache_task_lifecycle() {
+        let (storage, _dir) = create_test_storage().await;
+        let task_id = "e969f558i62g30f18092g1644ce113f03384h4h513g6990hd06491923hef15hh5";
+
+        // Test create_persistent_cache_task_started.
+        storage
+            .create_persistent_cache_task_started(task_id, Duration::from_secs(3600), 1024, 16384)
+            .await
+            .unwrap();
+
+        let task = storage.get_persistent_cache_task(task_id).unwrap();
+        assert!(task.is_some());
+        let task = task.unwrap();
+        assert_eq!(task.id, task_id);
+        assert_eq!(task.piece_length, 1024);
+        assert_eq!(task.content_length, 16384);
+
+        // Test is_persistent_cache_task_exists.
+        assert!(storage.is_persistent_cache_task_exists(task_id).unwrap());
+
+        // Test download_persistent_cache_task_finished.
+        let task = storage.download_persistent_cache_task_finished(task_id).unwrap();
+        assert!(task.is_finished());
+
+        // Test persist_persistent_cache_task.
+        let task = storage.persist_persistent_cache_task(task_id).unwrap();
+        assert!(task.is_finished());
+
+        // Test upload_persistent_cache_task_finished.
+        let task = storage.upload_persistent_cache_task_finished(task_id).unwrap();
+        assert!(task.is_finished());
+
+        // Test delete_persistent_cache_task.
+        storage.delete_persistent_cache_task(task_id).await;
+        let task = storage.get_persistent_cache_task(task_id).unwrap();
+        assert!(task.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_persistent_cache_task_failure() {
+        let (storage, _dir) = create_test_storage().await;
+        let task_id = "f070g669j73h41g29103h2755df224g14495i5i624h7001ie17502034ifg26ii6";
+
+        // Create a persistent cache task.
+        storage
+            .create_persistent_cache_task_started(task_id, Duration::from_secs(3600), 1024, 32768)
+            .await
+            .unwrap();
+
+        // Test create_persistent_cache_task_failed.
+        storage.create_persistent_cache_task_failed(task_id).await;
+
+        // Task should be deleted after failure.
+        let task = storage.get_persistent_cache_task(task_id).unwrap();
+        assert!(task.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_piece_operations() {
+        let (storage, _dir) = create_test_storage().await;
+        let task_id = "g181h770k84i52h30214i3866eg335h25506j6j735i8112jf28613145jgh37jj7";
+
+        // Start a task first.
+        storage
+            .download_task_started(task_id, 1024, 4096, None)
+            .await
+            .unwrap();
+
+        // Test piece_id generation.
+        let piece_id = storage.piece_id(task_id, 1);
+        assert!(!piece_id.is_empty());
+
+        // Test download_piece_started.
+        storage.download_piece_started(&piece_id, 1).await.unwrap();
+
+        // Test is_piece_exists.
+        assert!(storage.is_piece_exists(&piece_id).unwrap());
+
+        // Test get_piece.
+        let piece = storage.get_piece(&piece_id).unwrap();
+        assert!(piece.is_some());
+        let piece = piece.unwrap();
+        assert_eq!(piece.number, 1);
+
+        // Test get_pieces.
+        let pieces = storage.get_pieces(task_id).unwrap();
+        assert_eq!(pieces.len(), 1);
+
+        // Test download_piece_failed.
+        storage.download_piece_failed(&piece_id).unwrap();
+
+        // Piece should be deleted after failure.
+        let piece = storage.get_piece(&piece_id).unwrap();
+        assert!(piece.is_none());
+
+        // Clean up.
+        storage.delete_task(task_id).await;
+    }
+
+    #[tokio::test]
+    async fn test_cache_task_operations() {
+        let (storage, _dir) = create_test_storage().await;
+        let task_id = "h292i881l95j63i41325j4977fh446i36617k7k846j9223kg39724256khi48kk8";
+
+        // Test download_cache_task_started.
+        storage
+            .download_cache_task_started(task_id, 1024, 2048, None)
+            .await
+            .unwrap();
+
+        // Test get_cache_task.
+        let task = storage.get_cache_task(task_id).unwrap();
+        assert!(task.is_some());
+        let task = task.unwrap();
+        assert_eq!(task.id, task_id);
+        assert_eq!(task.piece_length, Some(1024));
+        assert_eq!(task.content_length, Some(2048));
+
+        // Test is_cache_task_exists.
+        assert!(storage.is_cache_task_exists(task_id).unwrap());
+
+        // Test download_cache_task_finished.
+        let task = storage.download_cache_task_finished(task_id).unwrap();
+        assert!(task.is_finished());
+
+        // Test upload_cache_task_finished.
+        let task = storage.upload_cache_task_finished(task_id).unwrap();
+        assert!(task.is_finished());
+
+        // Test get_cache_tasks.
+        let tasks = storage.get_cache_tasks().unwrap();
+        assert!(!tasks.is_empty());
+
+        // Test delete_cache_task.
+        storage.delete_cache_task(task_id).await;
+        let task = storage.get_cache_task(task_id).unwrap();
+        assert!(task.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cache_piece_operations() {
+        let (storage, _dir) = create_test_storage().await;
+        let task_id = "i303j992m06k74j52436k5088gi557j47728l8l957k0334lh40835367lij59ll9";
+
+        // Start a cache task first.
+        storage
+            .download_cache_task_started(task_id, 1024, 4096, None)
+            .await
+            .unwrap();
+
+        // Test cache_piece_id generation.
+        let piece_id = storage.cache_piece_id(task_id, 1);
+        assert!(!piece_id.is_empty());
+
+        // Test download_cache_piece_started.
+        storage.download_cache_piece_started(&piece_id, 1).await.unwrap();
+
+        // Test is_cache_piece_exists.
+        assert!(storage.is_cache_piece_exists(&piece_id).unwrap());
+
+        // Test get_cache_piece.
+        let piece = storage.get_cache_piece(&piece_id).unwrap();
+        assert!(piece.is_some());
+        let piece = piece.unwrap();
+        assert_eq!(piece.number, 1);
+
+        // Test get_cache_pieces.
+        let pieces = storage.get_cache_pieces(task_id).unwrap();
+        assert_eq!(pieces.len(), 1);
+
+        // Test download_cache_piece_failed.
+        storage.download_cache_piece_failed(&piece_id).unwrap();
+
+        // Clean up.
+        storage.delete_cache_task(task_id).await;
+    }
+}

@@ -1770,4 +1770,246 @@ mod tests {
         let pieces = metadata.get_pieces(task_id).unwrap();
         assert!(pieces.is_empty());
     }
+
+    #[test]
+    fn test_persistent_task_lifecycle() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join("log");
+        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
+        let task_id = "e474f051be17c55d9f36ac68912f7f9f47cb511f502819831cd8f976c213173d";
+
+        // Test download_persistent_task_started.
+        metadata
+            .download_persistent_task_started(task_id, Duration::from_secs(3600), false, 1024, 2048, Utc::now().naive_utc())
+            .unwrap();
+        let task = metadata
+            .get_persistent_task(task_id)
+            .unwrap()
+            .expect("persistent task should exist after download_persistent_task_started");
+        assert_eq!(task.id, task_id);
+        assert_eq!(task.piece_length, 1024);
+        assert_eq!(task.content_length, 2048);
+        assert!(task.is_started());
+        assert!(!task.is_finished());
+
+        // Test download_persistent_task_finished.
+        metadata.download_persistent_task_finished(task_id).unwrap();
+        let task = metadata.get_persistent_task(task_id).unwrap().unwrap();
+        assert!(task.is_finished());
+
+        // Test persist_persistent_task.
+        let task = metadata.persist_persistent_task(task_id).unwrap();
+        assert!(task.is_finished());
+        assert!(task.persistent);
+
+        // Test upload_persistent_task_started.
+        metadata.upload_persistent_task_started(task_id).unwrap();
+        let task = metadata.get_persistent_task(task_id).unwrap().unwrap();
+        assert_eq!(task.uploading_count, 1);
+
+        // Test upload_persistent_task_finished.
+        metadata.upload_persistent_task_finished(task_id).unwrap();
+        let task = metadata.get_persistent_task(task_id).unwrap().unwrap();
+        assert_eq!(task.uploading_count, 0);
+        assert_eq!(task.uploaded_count, 1);
+
+        // Test upload_persistent_task_failed.
+        let task = metadata.upload_persistent_task_started(task_id).unwrap();
+        assert_eq!(task.uploading_count, 1);
+        let task = metadata.upload_persistent_task_failed(task_id).unwrap();
+        assert_eq!(task.uploading_count, 0);
+        assert_eq!(task.uploaded_count, 1);
+
+        // Test is_persistent_task_exists.
+        assert!(metadata.is_persistent_task_exists(task_id).unwrap());
+
+        // Test get_persistent_tasks.
+        let task_id2 = "f585g162cf28d66e0g47bd79023g8g0g58dc622g613920942de9g087d324284e";
+        metadata
+            .download_persistent_task_started(task_id2, Duration::from_secs(7200), false, 2048, 4096, Utc::now().naive_utc())
+            .unwrap();
+        let tasks = metadata.get_persistent_tasks().unwrap();
+        assert_eq!(tasks.len(), 2);
+
+        // Test delete_persistent_task.
+        metadata.delete_persistent_task(task_id2).unwrap();
+        let task = metadata.get_persistent_task(task_id2).unwrap();
+        assert!(task.is_none());
+        assert!(!metadata.is_persistent_task_exists(task_id2).unwrap());
+    }
+
+    #[test]
+    fn test_persistent_task_failure() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join("log");
+        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
+        let task_id = "g696h273dg39e77f1h58ce80134h9h1h69ed733h724031053ef0h198e435395f";
+
+        // Test download_persistent_task_started.
+        metadata
+            .download_persistent_task_started(task_id, Duration::from_secs(3600), false, 1024, 2048, Utc::now().naive_utc())
+            .unwrap();
+
+        // Test download_persistent_task_failed.
+        metadata.download_persistent_task_failed(task_id).unwrap();
+        let task = metadata.get_persistent_task(task_id).unwrap().unwrap();
+        assert!(task.is_failed());
+
+        // Clean up.
+        metadata.delete_persistent_task(task_id).unwrap();
+    }
+
+    #[test]
+    fn test_persistent_cache_task_lifecycle() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join("log");
+        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
+        let task_id = "h707i384eh40f88g2i69df91245i0i2i70fe844i835142164fg1i209f546406g";
+
+        // Test download_persistent_cache_task_started.
+        metadata
+            .download_persistent_cache_task_started(task_id, Duration::from_secs(3600), false, 1024, 2048, Utc::now().naive_utc())
+            .unwrap();
+        let task = metadata
+            .get_persistent_cache_task(task_id)
+            .unwrap()
+            .expect("persistent cache task should exist after download_persistent_cache_task_started");
+        assert_eq!(task.id, task_id);
+        assert_eq!(task.piece_length, 1024);
+        assert_eq!(task.content_length, 2048);
+        assert!(task.is_started());
+        assert!(!task.is_finished());
+
+        // Test download_persistent_cache_task_finished.
+        metadata.download_persistent_cache_task_finished(task_id).unwrap();
+        let task = metadata.get_persistent_cache_task(task_id).unwrap().unwrap();
+        assert!(task.is_finished());
+
+        // Test persist_persistent_cache_task.
+        let task = metadata.persist_persistent_cache_task(task_id).unwrap();
+        assert!(task.is_finished());
+        assert!(task.persistent);
+
+        // Test upload_persistent_cache_task_started.
+        metadata.upload_persistent_cache_task_started(task_id).unwrap();
+        let task = metadata.get_persistent_cache_task(task_id).unwrap().unwrap();
+        assert_eq!(task.uploading_count, 1);
+
+        // Test upload_persistent_cache_task_finished.
+        metadata.upload_persistent_cache_task_finished(task_id).unwrap();
+        let task = metadata.get_persistent_cache_task(task_id).unwrap().unwrap();
+        assert_eq!(task.uploading_count, 0);
+        assert_eq!(task.uploaded_count, 1);
+
+        // Test upload_persistent_cache_task_failed.
+        let task = metadata.upload_persistent_cache_task_started(task_id).unwrap();
+        assert_eq!(task.uploading_count, 1);
+        let task = metadata.upload_persistent_cache_task_failed(task_id).unwrap();
+        assert_eq!(task.uploading_count, 0);
+        assert_eq!(task.uploaded_count, 1);
+
+        // Test is_persistent_cache_task_exists.
+        assert!(metadata.is_persistent_cache_task_exists(task_id).unwrap());
+
+        // Test get_persistent_cache_tasks.
+        let task_id2 = "i818j495fi51g99h3j70eg02356j1j3j81gf955j946253275gh2j310g657517h";
+        metadata
+            .download_persistent_cache_task_started(task_id2, Duration::from_secs(7200), false, 2048, 4096, Utc::now().naive_utc())
+            .unwrap();
+        let tasks = metadata.get_persistent_cache_tasks().unwrap();
+        assert_eq!(tasks.len(), 2);
+
+        // Test delete_persistent_cache_task.
+        metadata.delete_persistent_cache_task(task_id2).unwrap();
+        let task = metadata.get_persistent_cache_task(task_id2).unwrap();
+        assert!(task.is_none());
+        assert!(!metadata.is_persistent_cache_task_exists(task_id2).unwrap());
+    }
+
+    #[test]
+    fn test_persistent_cache_task_failure() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join("log");
+        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
+        let task_id = "j929k506gj62h00i4k81fh13467k2k4k92hg066k057364386hi3k421h768628i";
+
+        // Test download_persistent_cache_task_started.
+        metadata
+            .download_persistent_cache_task_started(task_id, Duration::from_secs(3600), false, 1024, 2048, Utc::now().naive_utc())
+            .unwrap();
+
+        // Test download_persistent_cache_task_failed.
+        metadata.download_persistent_cache_task_failed(task_id).unwrap();
+        let task = metadata.get_persistent_cache_task(task_id).unwrap().unwrap();
+        assert!(task.is_failed());
+
+        // Clean up.
+        metadata.delete_persistent_cache_task(task_id).unwrap();
+    }
+
+    #[test]
+    fn test_piece_with_parent_id() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join("log");
+        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
+        let task_id = "k030l617hk73i11j5l92gi24578l3l5l03ih177l168475497ij4l532i879739j";
+        let parent_id = "l141m728il84j22k6m03hj35689m4m6m14ji288m279586508jk5m643j980840k";
+        let piece_id = metadata.piece_id(task_id, 1);
+
+        // Test download_piece_started.
+        metadata.download_piece_started(piece_id.as_str(), 1).unwrap();
+
+        // Test download_piece_finished with parent_id.
+        metadata
+            .download_piece_finished(piece_id.as_str(), 0, 1024, "digest1", Some(parent_id.to_string()))
+            .unwrap();
+        let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
+        assert_eq!(piece.length, 1024);
+        assert_eq!(piece.digest, "digest1");
+        assert_eq!(piece.parent_id, Some(parent_id.to_string()));
+
+        // Clean up.
+        metadata.delete_pieces(task_id).unwrap();
+    }
+
+    #[test]
+    fn test_task_with_response_header() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join("log");
+        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
+        let task_id = "m252n839jm95k33l7n14ik46790n5n7n25kj399n380697619kl6n754k091951l";
+
+        // Create response headers.
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", "application/octet-stream".parse().unwrap());
+
+        // Test download_task_started with response headers.
+        metadata
+            .download_task_started(task_id, 1024, 2048, Some(headers))
+            .unwrap();
+        let task = metadata.get_task(task_id).unwrap().unwrap();
+        assert!(!task.response_header.is_empty());
+
+        // Clean up.
+        metadata.delete_task(task_id).unwrap();
+    }
+
+    #[test]
+    fn test_empty_task() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join("log");
+        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
+        let task_id = "n363o940kn06l44m8o25jl57801o6o8o36lk400o491708720lm7o865l102062m";
+
+        // Test with content_length = 0 (empty task).
+        metadata
+            .download_task_started(task_id, 1024, 0, None)
+            .unwrap();
+        let task = metadata.get_task(task_id).unwrap().unwrap();
+        assert_eq!(task.content_length, Some(0));
+        assert!(task.is_empty());
+
+        // Clean up.
+        metadata.delete_task(task_id).unwrap();
+    }
 }
