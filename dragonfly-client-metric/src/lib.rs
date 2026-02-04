@@ -1123,7 +1123,6 @@ mod tests {
     fn test_collect_upload_task_metrics() {
         let tag = "test-upload-tag";
         let app = "test-upload-app";
-
         collect_upload_task_started_metrics(1, tag, app);
 
         let counter = UPLOAD_TASK_COUNT.with_label_values(&["1", tag, app]).get();
@@ -1132,7 +1131,6 @@ mod tests {
         let gauge_before = CONCURRENT_UPLOAD_TASK_GAUGE
             .with_label_values(&["1", tag, app])
             .get();
-
         let duration = Duration::from_millis(100);
         collect_upload_task_finished_metrics(1, tag, app, 1024, duration);
 
@@ -1145,7 +1143,6 @@ mod tests {
         let gauge_before_failure = CONCURRENT_UPLOAD_TASK_GAUGE
             .with_label_values(&["1", tag, app])
             .get();
-
         collect_upload_task_failure_metrics(1, tag, app);
 
         let failure_counter = UPLOAD_TASK_FAILURE_COUNT
@@ -1164,9 +1161,7 @@ mod tests {
         let tag = "test-download-tag";
         let app = "test-download-app";
         let priority = "5";
-
         collect_download_task_started_metrics(2, tag, app, priority);
-
         let counter = DOWNLOAD_TASK_COUNT
             .with_label_values(&["2", tag, app, priority])
             .get();
@@ -1188,9 +1183,7 @@ mod tests {
         let gauge_before_failure = CONCURRENT_DOWNLOAD_TASK_GAUGE
             .with_label_values(&["2", tag, app, priority])
             .get();
-
         collect_download_task_failure_metrics(2, tag, app, priority);
-
         let failure_counter = DOWNLOAD_TASK_FAILURE_COUNT
             .with_label_values(&["2", tag, app, priority])
             .get();
@@ -1207,12 +1200,11 @@ mod tests {
         let tag = "test-prefetch-tag";
         let app = "test-prefetch-app";
         let priority = "5";
-
         let counter_before = PREFETCH_TASK_COUNT
             .with_label_values(&["3", tag, app, priority])
             .get();
-        collect_prefetch_task_started_metrics(3, tag, app, priority);
 
+        collect_prefetch_task_started_metrics(3, tag, app, priority);
         let counter_after = PREFETCH_TASK_COUNT
             .with_label_values(&["3", tag, app, priority])
             .get();
@@ -1236,7 +1228,6 @@ mod tests {
 
         let gauge_after_start = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
         assert_eq!(gauge_after_start, gauge_before + 1);
-
         collect_upload_piece_finished_metrics();
 
         let gauge_after_finish = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
@@ -1251,7 +1242,6 @@ mod tests {
         collect_upload_piece_started_metrics();
         let gauge_before_failure = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
         collect_upload_piece_failure_metrics();
-
         let gauge_after_failure = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
         assert_eq!(gauge_after_failure, gauge_before_failure - 1);
     }
@@ -1270,14 +1260,12 @@ mod tests {
     #[test]
     fn test_collect_backend_request_metrics() {
         collect_backend_request_started_metrics("http", "GET");
-
         let counter = BACKEND_REQUEST_COUNT
             .with_label_values(&["http", "GET"])
             .get();
         assert!(counter > 0);
 
         collect_backend_request_failure_metrics("http", "GET");
-
         let failure_counter = BACKEND_REQUEST_FAILURE_COUNT
             .with_label_values(&["http", "GET"])
             .get();
@@ -1295,17 +1283,14 @@ mod tests {
     #[test]
     fn test_collect_proxy_request_metrics() {
         collect_proxy_request_started_metrics();
-
         let counter = PROXY_REQUEST_COUNT.with_label_values(&[]).get();
         assert!(counter > 0);
 
         collect_proxy_request_failure_metrics();
-
         let failure_counter = PROXY_REQUEST_FAILURE_COUNT.with_label_values(&[]).get();
         assert!(failure_counter > 0);
 
         collect_proxy_request_via_dfdaemon_metrics();
-
         let via_dfdaemon_counter = PROXY_REQUEST_VIA_DFDAEMON_COUNT
             .with_label_values(&[])
             .get();
@@ -1328,12 +1313,10 @@ mod tests {
     #[test]
     fn test_collect_stat_task_metrics() {
         collect_stat_task_started_metrics(2);
-
         let counter = STAT_TASK_COUNT.with_label_values(&["2"]).get();
         assert!(counter > 0);
 
         collect_stat_task_failure_metrics(2);
-
         let failure_counter = STAT_TASK_FAILURE_COUNT.with_label_values(&["2"]).get();
         assert!(failure_counter > 0);
     }
@@ -1341,12 +1324,10 @@ mod tests {
     #[test]
     fn test_collect_stat_local_task_metrics() {
         collect_stat_local_task_started_metrics(3);
-
         let counter = STAT_LOCAL_TASK_COUNT.with_label_values(&["3"]).get();
         assert!(counter > 0);
 
         collect_stat_local_task_failure_metrics(3);
-
         let failure_counter = STAT_LOCAL_TASK_FAILURE_COUNT
             .with_label_values(&["3"])
             .get();
@@ -1356,12 +1337,10 @@ mod tests {
     #[test]
     fn test_collect_list_task_entries_metrics() {
         collect_list_task_entries_started_metrics(4);
-
         let counter = LIST_TASK_ENTRIES_COUNT.with_label_values(&["4"]).get();
         assert!(counter > 0);
 
         collect_list_task_entries_failure_metrics(4);
-
         let failure_counter = LIST_TASK_ENTRIES_FAILURE_COUNT
             .with_label_values(&["4"])
             .get();
@@ -1371,12 +1350,10 @@ mod tests {
     #[test]
     fn test_collect_delete_task_metrics() {
         collect_delete_task_started_metrics(5);
-
         let counter = DELETE_TASK_COUNT.with_label_values(&["5"]).get();
         assert!(counter > 0);
 
         collect_delete_task_failure_metrics(5);
-
         let failure_counter = DELETE_TASK_FAILURE_COUNT.with_label_values(&["5"]).get();
         assert!(failure_counter > 0);
     }
@@ -1384,12 +1361,10 @@ mod tests {
     #[test]
     fn test_collect_delete_host_metrics() {
         collect_delete_host_started_metrics();
-
         let counter = DELETE_HOST_COUNT.with_label_values(&[]).get();
         assert!(counter > 0);
 
         collect_delete_host_failure_metrics();
-
         let failure_counter = DELETE_HOST_FAILURE_COUNT.with_label_values(&[]).get();
         assert!(failure_counter > 0);
     }
@@ -1402,13 +1377,10 @@ mod tests {
         let slow_duration = Duration::from_millis(600);
 
         collect_download_task_started_metrics(1, tag, app, "5");
-
         let histogram_before = DOWNLOAD_TASK_DURATION
             .with_label_values(&["1", "1"])
             .get_sample_count();
-
         collect_download_task_finished_metrics(1, tag, app, "5", small_size, None, slow_duration);
-
         let histogram_after = DOWNLOAD_TASK_DURATION
             .with_label_values(&["1", "1"])
             .get_sample_count();
@@ -1421,13 +1393,11 @@ mod tests {
         let app = "slow-upload-app";
         let small_size = 512 * 1024;
         let slow_duration = Duration::from_millis(600);
-
         collect_upload_task_started_metrics(1, tag, app);
 
         let histogram_before = UPLOAD_TASK_DURATION
             .with_label_values(&["1", "1"])
             .get_sample_count();
-
         collect_upload_task_finished_metrics(1, tag, app, small_size, slow_duration);
 
         let histogram_after = UPLOAD_TASK_DURATION
@@ -1443,7 +1413,6 @@ mod tests {
             length: 1024,
         };
         let duration = Duration::from_millis(50);
-
         collect_download_task_started_metrics(1, "range-tag", "range-app", "5");
         collect_download_task_finished_metrics(
             1,
