@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 
+use crate::dynconfig::Dynconfig;
+use crate::grpc::blocklist::{
+    is_persistent_cache_task_download_blocked, is_persistent_task_download_blocked,
+    is_task_download_blocked, DownloadBlockListParams,
+};
 use crate::resource::{persistent_cache_task, persistent_task, task};
 use chrono::DateTime;
 use dragonfly_api::common::v2::{
@@ -50,7 +55,7 @@ use dragonfly_client_metric::{
     collect_list_task_entries_started_metrics, collect_stat_local_task_failure_metrics,
     collect_stat_local_task_started_metrics, collect_stat_task_failure_metrics,
     collect_stat_task_started_metrics, collect_update_task_failure_metrics,
-    collect_update_task_started_metrics,
+    collect_update_task_started_metrics, collect_upload_task_blocked_metrics,
 };
 use dragonfly_client_util::{
     digest::{is_blob_url, verify_file_digest, Digest},
@@ -79,7 +84,7 @@ use tower::{
     load_shed::{error::Overloaded, LoadShedLayer},
     ServiceBuilder,
 };
-use tracing::{debug, error, info, instrument, Instrument, Span};
+use tracing::{debug, error, info, instrument, warn, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
@@ -89,6 +94,9 @@ use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 pub struct DfdaemonUploadServer {
     /// Configuration of the dfdaemon.
     config: Arc<Config>,
+
+    /// Dynamic configuration of the dfdaemon.
+    dynconfig: Arc<Dynconfig>,
 
     /// Address of the gRPC server.
     addr: SocketAddr,
@@ -118,6 +126,7 @@ impl DfdaemonUploadServer {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
+        dynconfig: Arc<Dynconfig>,
         addr: SocketAddr,
         task: Arc<task::Task>,
         persistent_task: Arc<persistent_task::PersistentTask>,
@@ -128,6 +137,7 @@ impl DfdaemonUploadServer {
     ) -> Self {
         Self {
             config,
+            dynconfig,
             addr,
             task,
             persistent_task,
@@ -143,6 +153,7 @@ impl DfdaemonUploadServer {
         let service = DfdaemonUploadGRPCServer::with_interceptor(
             DfdaemonUploadServerHandler {
                 config: self.config.clone(),
+                dynconfig: self.dynconfig.clone(),
                 socket_path: self.config.download.server.socket_path.clone(),
                 task: self.task.clone(),
                 persistent_task: self.persistent_task.clone(),
@@ -234,6 +245,9 @@ pub struct DfdaemonUploadServerHandler {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
+    /// dynconfig is the dynamic configuration of the dfdaemon.
+    dynconfig: Arc<Dynconfig>,
+
     /// socket_path is the path of the unix domain socket.
     socket_path: PathBuf,
 
@@ -282,6 +296,24 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             Status::invalid_argument("missing download")
         })?;
         download.concurrent_piece_count = Some(self.config.download.concurrent_piece_count);
+
+        // Check whether blocked by block list.
+        if is_task_download_blocked(
+            &self.config,
+            &self.dynconfig,
+            &DownloadBlockListParams {
+                application: download.application.as_deref(),
+                url: Some(&download.url),
+                tag: download.tag.as_deref(),
+                priority: Some(download.priority),
+            },
+        )
+        .await
+        {
+            warn!("download blocked by block list");
+            collect_upload_task_blocked_metrics(TaskType::Standard as i32);
+            return Err(Status::permission_denied("download blocked by block list"));
+        }
 
         // Generate the task id.
         let task_id = self
@@ -1213,6 +1245,24 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             Status::invalid_argument("missing object storage")
         })?;
 
+        // Check whether blocked by block list.
+        if is_persistent_task_download_blocked(
+            &self.config,
+            &self.dynconfig,
+            &DownloadBlockListParams {
+                application: None,
+                url: Some(&request.url),
+                tag: None,
+                priority: None,
+            },
+        )
+        .await
+        {
+            warn!("download blocked by block list");
+            collect_upload_task_blocked_metrics(TaskType::Persistent as i32);
+            return Err(Status::permission_denied("download blocked by block list"));
+        }
+
         // Generate the task id.
         let task_id = self
             .task
@@ -1893,6 +1943,24 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             "remote_ip",
             request.remote_ip.clone().unwrap_or_default().as_str(),
         );
+
+        // Check whether download blocked by block list.
+        if is_persistent_cache_task_download_blocked(
+            &self.config,
+            &self.dynconfig,
+            &DownloadBlockListParams {
+                application: request.application.as_deref(),
+                url: None,
+                tag: request.tag.as_deref(),
+                priority: None,
+            },
+        )
+        .await
+        {
+            warn!("download blocked by block list");
+            collect_upload_task_blocked_metrics(TaskType::PersistentCache as i32);
+            return Err(Status::permission_denied("download blocked by block list"));
+        }
 
         // Download task started.
         info!("download persistent cache task started: {:?}", request);
