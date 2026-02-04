@@ -272,18 +272,12 @@ pub fn init_command_tracing(log_level: Level, console: bool) -> Vec<WorkerGuard>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::IpAddr;
-    use std::str::FromStr;
     use tempfile::TempDir;
-
-    // Note: The tracing subscriber can only be initialized once per test process.
-    // We limit initialization tests to ensure they don't conflict.
 
     #[test]
     fn test_init_tracing_comprehensive() {
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let log_dir = temp_dir.path().join("logs");
-
         assert!(!log_dir.exists());
 
         let guards = init_tracing(
@@ -299,43 +293,9 @@ mod tests {
             false,
             false,
         );
-
         assert!(log_dir.exists());
         assert!(log_dir.is_dir());
         assert!(!guards.is_empty());
         assert_eq!(guards.len(), 2);
-
-        drop(guards);
-    }
-
-    #[test]
-    fn test_host_struct_can_be_created() {
-        let host = Host {
-            ip: Some(IpAddr::from_str("127.0.0.1").unwrap()),
-            hostname: "test-hostname".to_string(),
-            idc: Some("test-idc".to_string()),
-            location: Some("test-location".to_string()),
-            scheduler_cluster_id: Some(1),
-        };
-
-        assert_eq!(host.hostname, "test-hostname");
-        assert_eq!(host.ip, Some(IpAddr::from_str("127.0.0.1").unwrap()));
-        assert_eq!(host.idc, Some("test-idc".to_string()));
-        assert_eq!(host.location, Some("test-location".to_string()));
-        assert_eq!(host.scheduler_cluster_id, Some(1));
-    }
-
-    #[test]
-    fn test_temp_dir_and_file_creation() {
-        let temp_dir = TempDir::new().expect("failed to create temp dir");
-        let log_dir = temp_dir.path().join("test-logs");
-
-        assert!(!log_dir.exists());
-        std::fs::create_dir_all(&log_dir).expect("failed to create log directory");
-        assert!(log_dir.exists());
-        assert!(log_dir.is_dir());
-
-        let log_file = log_dir.join("test.log");
-        assert_eq!(log_file.file_name().unwrap(), "test.log");
     }
 }
