@@ -58,6 +58,7 @@ impl SystemMonitor {
     /// ```
     /// use std::net::IpAddr;
     /// use bytesize::ByteSize;
+    /// use dragonfly_client_util::sysinfo::SystemMonitor;
     ///
     /// let ip = "127.0.0.1".parse::<IpAddr>().unwrap();
     /// let network_bandwidth_limit = ByteSize::gb(1);

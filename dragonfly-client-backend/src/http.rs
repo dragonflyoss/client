@@ -98,6 +98,7 @@ impl HTTP {
         request_header: Option<HashMap<String, String>>,
         enable_cache_temporary_redirect: bool,
         cache_temporary_redirect_ttl: Duration,
+        hickory_dns: bool,
     ) -> Result<HTTP> {
         // Disable automatic compression to prevent double-decompression issues.
         //
@@ -124,7 +125,7 @@ impl HTTP {
                 .no_zstd()
                 .no_deflate()
                 .http1_only()
-                .hickory_dns(true)
+                .hickory_dns(hickory_dns)
                 .use_preconfigured_tls(client_config_builder)
                 .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
                 .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
@@ -200,7 +201,7 @@ impl HTTP {
                     .no_zstd()
                     .no_deflate()
                     .http1_only()
-                    .hickory_dns(true)
+                    // .hickory_dns(true)
                     .use_preconfigured_tls(client_config_builder)
                     .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
                     .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
@@ -852,7 +853,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600))
+        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true)
             .unwrap()
             .stat(StatRequest {
                 task_id: "test".to_string(),
@@ -881,7 +882,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600))
+        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true)
             .unwrap()
             .stat(StatRequest {
                 task_id: "test".to_string(),
@@ -910,7 +911,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let mut resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600))
+        let mut resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true)
             .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
@@ -933,7 +934,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_stat_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600))
+        let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600), true)
             .unwrap()
             .stat(StatRequest {
                 task_id: "test".to_string(),
@@ -953,7 +954,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_return_error_response_when_stat_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600))
+        let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600), true)
             .unwrap()
             .stat(StatRequest {
                 task_id: "test".to_string(),
@@ -972,7 +973,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_get_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let mut resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600))
+        let mut resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600), true)
             .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
@@ -995,7 +996,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_return_error_response_when_get_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600))
+        let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600), true)
             .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
@@ -1016,7 +1017,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_stat_response_with_no_verifier() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600))
+        let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600), true)
             .unwrap()
             .stat(StatRequest {
                 task_id: "test".to_string(),
@@ -1036,7 +1037,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[tokio::test]
     async fn should_get_response_with_no_verifier() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let http_backend = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600));
+        let http_backend = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600), true);
         let mut resp = http_backend
             .unwrap()
             .get(GetRequest {
@@ -1069,7 +1070,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600))
+        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true)
             .unwrap()
             .exists(ExistsRequest {
                 task_id: "test".to_string(),
@@ -1098,7 +1099,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600))
+        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true)
             .unwrap()
             .exists(ExistsRequest {
                 task_id: "test".to_string(),
@@ -1127,7 +1128,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600))
+        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true)
             .unwrap()
             .exists(ExistsRequest {
                 task_id: "test".to_string(),
@@ -1146,7 +1147,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
     #[test]
     fn should_make_request_headers() {
         // Apply default user-agent when not specified.
-        let http = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600)).unwrap();
+        let http = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true).unwrap();
         let mut headers = HeaderMap::new();
         http.make_request_headers(&mut headers, None).unwrap();
         assert_eq!(
@@ -1188,6 +1189,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             Some(custom_headers),
             true,
             Duration::from_secs(600),
+            true,
         )
         .unwrap();
         let mut headers = HeaderMap::new();
@@ -1230,6 +1232,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             Some(custom_headers),
             true,
             Duration::from_secs(600),
+            true,
         )
         .unwrap();
         let mut headers = HeaderMap::new();
@@ -1246,6 +1249,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             Some(custom_headers),
             true,
             Duration::from_secs(600),
+            true,
         )
         .unwrap();
         let mut headers = HeaderMap::new();
@@ -1276,7 +1280,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .await;
 
         // First request - should store redirect url.
-        let backend = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600)).unwrap();
+        let backend = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true).unwrap();
         let mut response = backend
             .get(GetRequest {
                 task_id: "025a7b4c4615f86617acb34c7ec3404a0a475c2cfaf847ecead944c0bae6277d"
@@ -1339,7 +1343,7 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
             .await;
 
         // Use a very short TTL for this test (1 second).
-        let backend = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(1)).unwrap();
+        let backend = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(1), true).unwrap();
 
         // First request - should store redirect url.
         let mut response = backend

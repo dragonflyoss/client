@@ -198,6 +198,11 @@ fn default_backend_put_timeout() -> Duration {
     Duration::from_secs(900)
 }
 
+// default_backend_hickory_dns is the default options for using hickory_dns in backend
+fn default_backend_hickory_dns() -> bool {
+    true
+}
+
 /// default_download_max_schedule_count is the default max count of schedule.
 #[inline]
 fn default_download_max_schedule_count() -> u32 {
@@ -1535,6 +1540,11 @@ pub struct Backend {
     /// treated as a failure.
     #[serde(default = "default_backend_put_timeout", with = "humantime_serde")]
     pub put_timeout: Duration,
+
+    /// Hickory DNS enables the pure-Rust Hickory DNS resolver instead of the system resolver.
+    /// This can improve performance and consistency across platforms.
+    #[serde(default = "default_backend_hickory_dns")]
+    pub hickory_dns: bool,
 }
 
 /// Backend implements Default.
@@ -1547,6 +1557,7 @@ impl Default for Backend {
             put_concurrent_chunk_count: default_backend_put_concurrent_chunk_count(),
             put_chunk_size: default_backend_put_chunk_size(),
             put_timeout: default_backend_put_timeout(),
+            hickory_dns: default_backend_hickory_dns(),
         }
     }
 }
@@ -2287,5 +2298,6 @@ key: /etc/ssl/private/client.pem
         assert_eq!(backend.put_concurrent_chunk_count, 2);
         assert_eq!(backend.put_chunk_size, ByteSize::mib(2));
         assert_eq!(backend.put_timeout, Duration::from_secs(60));
+        assert!(backend.hickory_dns);
     }
 }
