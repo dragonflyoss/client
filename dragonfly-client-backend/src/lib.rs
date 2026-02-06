@@ -368,6 +368,7 @@ impl BackendFactory {
                 self.config.backend.clone().request_header,
                 enable_cache_temporary_redirect,
                 cache_temporary_redirect_ttl,
+                self.config.backend.enable_hickory_dns,
             )?),
         );
         info!("load [http] builtin backend");
@@ -379,6 +380,7 @@ impl BackendFactory {
                 self.config.backend.clone().request_header,
                 enable_cache_temporary_redirect,
                 cache_temporary_redirect_ttl,
+                self.config.backend.enable_hickory_dns,
             )?),
         );
         info!("load [https] builtin backend");
