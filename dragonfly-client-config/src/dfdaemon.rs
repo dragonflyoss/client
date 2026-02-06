@@ -198,8 +198,8 @@ fn default_backend_put_timeout() -> Duration {
     Duration::from_secs(900)
 }
 
-// default_backend_hickory_dns is the default options for using hickory_dns in backend
-fn default_backend_hickory_dns() -> bool {
+// default_backend_enable_hickory_dnss the default options for using hickory_dns in backend.
+fn default_backend_enable_hickory_dns() -> bool {
     true
 }
 
@@ -1542,9 +1542,13 @@ pub struct Backend {
     pub put_timeout: Duration,
 
     /// Hickory DNS enables the pure-Rust Hickory DNS resolver instead of the system resolver.
-    /// This can improve performance and consistency across platforms.
-    #[serde(default = "default_backend_hickory_dns")]
-    pub hickory_dns: bool,
+    /// This can improve performance and consistency across platforms,
+    /// refer to https://github.com/hickory-dns/hickory-dns.
+    #[serde(
+        default = "default_backend_enable_hickory_dns",
+        rename = "enableHickoryDNS"
+    )]
+    pub enable_hickory_dns: bool,
 }
 
 /// Backend implements Default.
@@ -1557,7 +1561,7 @@ impl Default for Backend {
             put_concurrent_chunk_count: default_backend_put_concurrent_chunk_count(),
             put_chunk_size: default_backend_put_chunk_size(),
             put_timeout: default_backend_put_timeout(),
-            hickory_dns: default_backend_hickory_dns(),
+            enable_hickory_dns: default_backend_enable_hickory_dns(),
         }
     }
 }
@@ -2277,7 +2281,8 @@ key: /etc/ssl/private/client.pem
             "cacheTemporaryRedirectTTL": "15m",
             "putConcurrentChunkCount": 2,
             "putChunkSize": "2mib",
-            "putTimeout": "1m"
+            "putTimeout": "1m",
+            "enableHickoryDNS": false
         }"#;
 
         let backend: Backend = serde_json::from_str(json_data).unwrap();
@@ -2298,6 +2303,6 @@ key: /etc/ssl/private/client.pem
         assert_eq!(backend.put_concurrent_chunk_count, 2);
         assert_eq!(backend.put_chunk_size, ByteSize::mib(2));
         assert_eq!(backend.put_timeout, Duration::from_secs(60));
-        assert!(backend.hickory_dns);
+        assert!(!backend.enable_hickory_dns);
     }
 }

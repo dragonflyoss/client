@@ -55,33 +55,39 @@ pub const DEFAULT_USER_AGENT: &str = concat!("dragonfly", "/", env!("CARGO_PKG_V
 /// TemporaryRedirectEntry stores a temporary redirect entry with its creation time.
 #[derive(Clone, Debug)]
 struct TemporaryRedirectEntry {
-    /// url is the redirect Location URL.
+    /// URL is the redirect Location URL.
     url: String,
 
-    /// created_at is the time when the entry was created.
+    /// Created at is the time when the entry was created.
     created_at: Instant,
 }
 
 /// HTTP is the HTTP backend.
 pub struct HTTP {
-    /// scheme is the scheme of the HTTP backend.
+    /// Scheme is the scheme of the HTTP backend.
     scheme: String,
 
-    /// clients is a pool of reqwest clients (each has its own connection pool).
+    /// Clients is a pool of reqwest clients (each has its own connection pool).
     clients: Arc<DashMap<usize, ClientWithMiddleware>>,
 
-    /// request_header is the custom request headers configurated in the dfdaemon config,
+    /// Request headers is the custom request headers configurated in the dfdaemon config,
     /// which will insert to the each request if original header is not already set.
     request_header: Option<HashMap<String, String>>,
 
-    /// temporary_redirects stores 307 redirect url with TTL (LRU eviction).
+    /// Temporary redirects stores 307 redirect url with TTL (LRU eviction).
     temporary_redirects: Arc<Mutex<LruCache<String, TemporaryRedirectEntry>>>,
 
-    /// enable_cache_temporary_redirect indicates whether to enable caching 307 redirects.
+    /// Caching 307 redirects can avoid extra round trips to the origin server for subsequent
+    /// requests.
     enable_cache_temporary_redirect: bool,
 
-    /// cache_temporary_redirect_ttl is the TTL for cached 307 redirects.
+    /// Cache TTL for temporary redirects. If a cached redirect is older than this duration, it
+    /// will be considered expired and removed from the cache.
     cache_temporary_redirect_ttl: Duration,
+
+    /// Enable hickory DNS resolver for reqwest client. It can be enabled to improve DNS resolution
+    /// performance
+    enable_hickory_dns: bool,
 }
 
 /// HTTP implements the http interface.
@@ -92,13 +98,13 @@ impl HTTP {
     /// DEFAULT_CACHE_TEMPORARY_REDIRECT_CAPACITY is the default capacity for temporary redirect cache.
     const DEFAULT_CACHE_TEMPORARY_REDIRECT_CAPACITY: usize = 1000;
 
-    /// new returns a new HTTP.
+    /// Create a new HTTP backend.
     pub fn new(
         scheme: &str,
         request_header: Option<HashMap<String, String>>,
         enable_cache_temporary_redirect: bool,
         cache_temporary_redirect_ttl: Duration,
-        hickory_dns: bool,
+        enable_hickory_dns: bool,
     ) -> Result<HTTP> {
         // Disable automatic compression to prevent double-decompression issues.
         //
@@ -125,7 +131,7 @@ impl HTTP {
                 .no_zstd()
                 .no_deflate()
                 .http1_only()
-                .hickory_dns(hickory_dns)
+                .hickory_dns(enable_hickory_dns)
                 .use_preconfigured_tls(client_config_builder)
                 .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
                 .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
@@ -166,6 +172,7 @@ impl HTTP {
             ))),
             enable_cache_temporary_redirect,
             cache_temporary_redirect_ttl,
+            enable_hickory_dns,
         })
     }
 
@@ -173,6 +180,7 @@ impl HTTP {
     fn client(
         &self,
         client_cert: Option<Vec<CertificateDer<'static>>>,
+        enable_hickory_dns: bool,
     ) -> Result<ClientWithMiddleware> {
         match client_cert.as_ref() {
             Some(client_cert) => {
@@ -201,7 +209,7 @@ impl HTTP {
                     .no_zstd()
                     .no_deflate()
                     .http1_only()
-                    // .hickory_dns(true)
+                    .hickory_dns(enable_hickory_dns)
                     .use_preconfigured_tls(client_config_builder)
                     .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
                     .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
@@ -348,7 +356,7 @@ impl super::Backend for HTTP {
         // through the HEAD method. Use GET request to replace of HEAD request
         // to get header and status code.
         let response = match self
-            .client(request.client_cert.clone())?
+            .client(request.client_cert.clone(), self.enable_hickory_dns)?
             .get(&target_url)
             .headers(request_header.clone())
             .timeout(request.timeout)
@@ -362,7 +370,7 @@ impl super::Backend for HTTP {
                         .await;
 
                     match self
-                        .client(request.client_cert.clone())?
+                        .client(request.client_cert.clone(), self.enable_hickory_dns)?
                         .get(target_url)
                         .headers(request_header.clone())
                         .timeout(request.timeout)
@@ -414,7 +422,7 @@ impl super::Backend for HTTP {
                 );
 
                 match self
-                    .client(request.client_cert.clone())?
+                    .client(request.client_cert.clone(), self.enable_hickory_dns)?
                     .head(&target_url)
                     .headers(request_header.clone())
                     .timeout(request.timeout)
@@ -503,7 +511,7 @@ impl super::Backend for HTTP {
         // Check if we have a cached temporary redirect for this URL.
         let target_url = self.get_temporary_redirect_url(&request.url).await;
         let mut response = match self
-            .client(request.client_cert.clone())?
+            .client(request.client_cert.clone(), self.enable_hickory_dns)?
             .get(&target_url)
             .headers(request_header.clone())
             .timeout(request.timeout)
@@ -535,7 +543,7 @@ impl super::Backend for HTTP {
                     .await;
 
                 response = match self
-                    .client(request.client_cert.clone())?
+                    .client(request.client_cert.clone(), self.enable_hickory_dns)?
                     .get(target_url)
                     .headers(request_header.clone())
                     .timeout(request.timeout)
@@ -615,7 +623,7 @@ impl super::Backend for HTTP {
         // through the HEAD method. Use GET request to replace of HEAD request
         // to get header and status code.
         let response = match self
-            .client(request.client_cert.clone())?
+            .client(request.client_cert.clone(), self.enable_hickory_dns)?
             .get(&request.url)
             .headers(request_header.clone())
             // Add Range header to ensure Content-Length is returned in response headers.
@@ -637,7 +645,7 @@ impl super::Backend for HTTP {
                     request.task_id, request.url
                 );
 
-                self.client(request.client_cert.clone())?
+                self.client(request.client_cert.clone(), self.enable_hickory_dns)?
                     .get(&request.url)
                     .headers(request_header.clone())
                     .timeout(request.timeout)
