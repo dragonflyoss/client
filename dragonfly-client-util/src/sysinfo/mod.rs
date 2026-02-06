@@ -52,18 +52,6 @@ impl SystemMonitor {
     ///
     /// * `ip` - The IP address to monitor for network traffic
     /// * `network_bandwidth_limit` - The bandwidth limit for network monitoring
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::net::IpAddr;
-    /// use bytesize::ByteSize;
-    /// use dragonfly_client_util::sysinfo::SystemMonitor;
-    ///
-    /// let ip = "127.0.0.1".parse::<IpAddr>().unwrap();
-    /// let network_bandwidth_limit = ByteSize::gb(1);
-    /// let system_monitor = SystemMonitor::new(ip, network_bandwidth_limit);
-    /// ```
     pub fn new(ip: IpAddr, network_bandwidth_limit: ByteSize) -> Self {
         Self {
             cpu: cpu::CPU::new(),
