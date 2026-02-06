@@ -1,5 +1,5 @@
 /*
- *     Copyright 2024 The Dragonfly Authors
+ *     Copyright 2026 The Dragonfly Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,19 +14,4 @@
  * limitations under the License.
  */
 
-pub mod container;
-pub mod digest;
-pub mod fs;
-pub mod hashring;
-pub mod http;
-pub mod id_generator;
-pub mod net;
-pub mod pool;
-pub mod ratelimit;
-pub mod request;
-pub mod shutdown;
-pub mod sysinfo;
-pub mod tls;
-
-#[cfg(target_os = "linux")]
-pub mod cgroups;
+pub mod bbr;
