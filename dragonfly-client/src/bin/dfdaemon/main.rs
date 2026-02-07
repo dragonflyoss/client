@@ -380,6 +380,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize upload grpc server.
     let mut dfdaemon_upload_grpc = DfdaemonUploadServer::new(
         config.clone(),
+        dynconfig.clone(),
         SocketAddr::new(config.upload.server.ip.unwrap(), config.upload.server.port),
         task.clone(),
         persistent_task.clone(),
@@ -392,6 +393,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize download grpc server.
     let mut dfdaemon_download_grpc = DfdaemonDownloadServer::new(
         config.clone(),
+        dynconfig.clone(),
         config.download.server.socket_path.clone(),
         task.clone(),
         persistent_task.clone(),
