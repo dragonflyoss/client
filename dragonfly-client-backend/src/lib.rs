@@ -444,10 +444,8 @@ impl BackendFactory {
             .insert("hdfs".to_string(), Box::new(hdfs::Hdfs::new()));
         info!("load [hdfs] builtin backend");
 
-        self.backends.insert(
-            "hf".to_string(),
-            Box::new(huggingface::HuggingFace::new()?),
-        );
+        self.backends
+            .insert("hf".to_string(), Box::new(huggingface::HuggingFace::new()?));
         info!("load [hf] builtin backend");
 
         Ok(())

@@ -35,8 +35,8 @@
 //! variable or use the `--hf-token` flag.
 
 use crate::{
-    Backend, Body, DirEntry, ExistsRequest, GetRequest, GetResponse, PutRequest,
-    PutResponse, StatRequest, StatResponse, KEEP_ALIVE_INTERVAL, POOL_MAX_IDLE_PER_HOST,
+    Backend, Body, DirEntry, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse,
+    StatRequest, StatResponse, KEEP_ALIVE_INTERVAL, POOL_MAX_IDLE_PER_HOST,
 };
 use dragonfly_client_core::{
     error::{BackendError, ErrorType, OrErr},
@@ -300,10 +300,7 @@ impl HuggingFace {
     /// get_auth_headers returns the authentication headers if a token is available.
     fn get_auth_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            USER_AGENT,
-            HeaderValue::from_static("dragonfly-client/1.0"),
-        );
+        headers.insert(USER_AGENT, HeaderValue::from_static("dragonfly-client/1.0"));
 
         if let Some(ref token) = self.token {
             if let Ok(value) = HeaderValue::from_str(&format!("Bearer {}", token)) {
@@ -524,9 +521,10 @@ impl Backend for HuggingFace {
         }
 
         let stream = response.bytes_stream();
-        let reader = StreamReader::new(
-            stream.map(|result| result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))),
-        );
+        let reader =
+            StreamReader::new(stream.map(|result| {
+                result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            }));
 
         Ok(GetResponse {
             success: true,
