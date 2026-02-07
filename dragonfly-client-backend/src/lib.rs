@@ -34,6 +34,7 @@ use url::Url;
 
 pub mod hdfs;
 pub mod http;
+pub mod huggingface;
 pub mod object_storage;
 
 /// POOL_MAX_IDLE_PER_HOST is the max idle connections per host.
@@ -443,6 +444,12 @@ impl BackendFactory {
             .insert("hdfs".to_string(), Box::new(hdfs::Hdfs::new()));
         info!("load [hdfs] builtin backend");
 
+        self.backends.insert(
+            "hf".to_string(),
+            Box::new(huggingface::HuggingFace::new()?),
+        );
+        info!("load [hf] builtin backend");
+
         Ok(())
     }
 
@@ -502,7 +509,7 @@ mod tests {
     fn should_load_builtin_backends() {
         let factory = BackendFactory::new(Arc::new(Config::default()), None).unwrap();
         let expected_backends = vec![
-            "http", "https", "s3", "gs", "abs", "oss", "obs", "cos", "hdfs",
+            "http", "https", "s3", "gs", "abs", "oss", "obs", "cos", "hdfs", "hf",
         ];
         for backend in expected_backends {
             assert!(factory.backends.contains_key(backend));
@@ -534,7 +541,7 @@ mod tests {
         let plugin_dir = dir.path().join("non_existent_plugin_dir");
 
         let factory = BackendFactory::new(Arc::new(Config::default()), Some(&plugin_dir)).unwrap();
-        assert_eq!(factory.backends.len(), 9);
+        assert_eq!(factory.backends.len(), 10);
     }
 
     #[test]
@@ -578,7 +585,7 @@ mod tests {
 
         let factory = BackendFactory::new(Arc::new(Config::default()), Some(&plugin_dir)).unwrap();
         let schemes = vec![
-            "http", "https", "s3", "gs", "abs", "oss", "obs", "cos", "hdfs",
+            "http", "https", "s3", "gs", "abs", "oss", "obs", "cos", "hdfs", "hf",
         ];
 
         for scheme in schemes {
