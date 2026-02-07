@@ -83,6 +83,15 @@ Examples:
 
   # Download a file from Tencent Cloud Object Storage Service(COS).
   $ dfget cos://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret> --storage-endpoint=<endpoint>
+
+  # Download a model from Hugging Face Hub.
+  $ dfget hf://<owner>/<repo>/<path> -O /tmp/model.safetensors
+
+  # Download an entire repository from Hugging Face Hub.
+  $ dfget hf://<owner>/<repo> -O /tmp/repo/ -r
+
+  # Download from Hugging Face Hub with authentication token.
+  $ dfget hf://<owner>/<repo>/<path> -O /tmp/model.safetensors --hf-token=<token>
 "#;
 
 #[derive(Debug, Parser, Clone)]
@@ -276,6 +285,12 @@ struct Args {
         help = "Specify the delegation token for Hadoop Distributed File System(HDFS)"
     )]
     hdfs_delegation_token: Option<String>,
+
+    #[arg(
+        long,
+        help = "Specify the authentication token for Hugging Face Hub. Can also be set via HF_TOKEN environment variable"
+    )]
+    hf_token: Option<String>,
 
     #[arg(
         long,
