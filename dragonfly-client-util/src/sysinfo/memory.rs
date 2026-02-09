@@ -117,13 +117,8 @@ impl Memory {
         #[cfg(target_os = "linux")]
         {
             use crate::cgroups::get_cgroup_by_pid;
-            use crate::container::is_running_in_container;
             use cgroups_rs::fs::memory::MemController;
             use tracing::error;
-
-            if !is_running_in_container() {
-                return None;
-            }
 
             match get_cgroup_by_pid(pid) {
                 Ok(cgroup) => {

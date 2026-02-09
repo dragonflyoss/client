@@ -68,7 +68,7 @@ pub struct CPU {
 impl CPU {
     /// Default interval for refreshing cgroup CPU statistics.
     #[allow(dead_code)]
-    const DEFAULT_CPU_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+    const DEFAULT_CPU_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
     /// Creates a new CPU instance.
     pub fn new() -> Self {
@@ -123,13 +123,8 @@ impl CPU {
         #[cfg(target_os = "linux")]
         {
             use crate::cgroups::get_cgroup_by_pid;
-            use crate::container::is_running_in_container;
             use cgroups_rs::fs::cpu::CpuController;
             use tracing::error;
-
-            if !is_running_in_container() {
-                return None;
-            }
 
             // Lock the mutex to ensure exclusive access to cgroup stats.
             match get_cgroup_by_pid(pid) {
