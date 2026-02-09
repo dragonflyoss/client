@@ -61,7 +61,7 @@ impl GC {
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
-        GC {
+        Self {
             config,
             host_id,
             storage,
