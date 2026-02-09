@@ -53,6 +53,9 @@ use url::Url;
 /// HUGGINGFACE_SCHEME is the scheme of the Hugging Face backend.
 pub const HUGGINGFACE_SCHEME: &str = "hf";
 
+/// DEFAULT_USER_AGENT is the default user agent for Hugging Face requests.
+const DEFAULT_USER_AGENT: &str = concat!("dragonfly", "/", env!("CARGO_PKG_VERSION"));
+
 /// HUGGINGFACE_API_BASE is the base URL for Hugging Face API.
 const HUGGINGFACE_API_BASE: &str = "https://huggingface.co/api";
 
@@ -185,24 +188,8 @@ impl TryFrom<Url> for ParsedHfUrl {
             _ => (RepoType::Model, 0), // Default to model
         };
 
-        // Need at least owner/repo
+        // Need at least owner/repo (two segments after the optional repo type prefix)
         if parts.len() < repo_id_start + 2 {
-            // Could be just owner/repo without explicit type
-            if parts.len() >= 2 {
-                let repo_id = format!("{}/{}", parts[0], parts[1]);
-                let file_path = if parts.len() > 2 {
-                    Some(parts[2..].join("/"))
-                } else {
-                    None
-                };
-                return Ok(ParsedHfUrl {
-                    url,
-                    repo_id,
-                    repo_type: RepoType::Model,
-                    path: file_path,
-                    revision,
-                });
-            }
             return Err(Error::InvalidParameter);
         }
 
@@ -287,14 +274,31 @@ impl HuggingFace {
         )
     }
 
+    /// build_hf_url builds an hf:// URL for a file so downstream downloads continue to
+    /// use the HF backend (preserving auth and URL semantics).
+    fn build_hf_url(parsed: &ParsedHfUrl, filename: &str) -> String {
+        let type_prefix = match parsed.repo_type {
+            RepoType::Model => "",
+            RepoType::Dataset => "datasets/",
+            RepoType::Space => "spaces/",
+        };
+        format!(
+            "{}://{}{}/{}@{}",
+            HUGGINGFACE_SCHEME, type_prefix, parsed.repo_id, filename, parsed.revision
+        )
+    }
+
     /// build_headers builds request headers by merging base headers with request-provided headers.
     /// Authentication headers (e.g., Authorization: Bearer <token>) are expected to be
     /// provided via the request's http_header, which is populated from the --hf-token CLI flag.
     fn build_headers(request_header: &Option<HeaderMap>) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(USER_AGENT, HeaderValue::from_static("dragonfly-client/1.0"));
+
+        // Set the default user agent, matching the HTTP backend's versioned pattern.
+        headers.insert(USER_AGENT, HeaderValue::from_static(DEFAULT_USER_AGENT));
 
         // Merge request-provided headers (including Authorization from --hf-token).
+        // This may override the default User-Agent if the caller provides one.
         if let Some(ref req_headers) = request_header {
             for (key, value) in req_headers.iter() {
                 headers.insert(key, value.clone());
@@ -386,7 +390,9 @@ impl HuggingFace {
                     }
                 }
 
-                let download_url = Self::build_download_url(parsed, &file.filename);
+                // Return hf:// URLs so downstream downloads continue to use the HF
+                // backend (preserving auth headers and URL semantics).
+                let hf_url = Self::build_hf_url(parsed, &file.filename);
                 let size = file
                     .lfs_info
                     .as_ref()
@@ -395,7 +401,7 @@ impl HuggingFace {
                     .unwrap_or(0);
 
                 Some(DirEntry {
-                    url: download_url,
+                    url: hf_url,
                     content_length: size as usize,
                     is_dir: false,
                 })
@@ -584,6 +590,7 @@ mod tests {
         let parsed =
             ParsedHfUrl::try_from("hf://deepseek-ai/DeepSeek-OCR/model.safetensors").unwrap();
         assert_eq!(parsed.repo_id, "deepseek-ai/DeepSeek-OCR");
+        assert_eq!(parsed.repo_type, RepoType::Model);
         assert_eq!(parsed.path, Some("model.safetensors".to_string()));
         assert_eq!(parsed.revision, "main");
     }
@@ -593,13 +600,7 @@ mod tests {
         let parsed = ParsedHfUrl::try_from("hf://deepseek-ai/DeepSeek-OCR@v1.0").unwrap();
         assert_eq!(parsed.repo_id, "deepseek-ai/DeepSeek-OCR");
         assert_eq!(parsed.revision, "v1.0");
-    }
-
-    #[test]
-    fn test_parse_url_dataset() {
-        let parsed = ParsedHfUrl::try_from("hf://datasets/squad/train.json").unwrap();
-        assert_eq!(parsed.repo_id, "squad/train.json");
-        assert_eq!(parsed.repo_type, RepoType::Dataset);
+        assert!(parsed.path.is_none());
     }
 
     #[test]
@@ -607,14 +608,60 @@ mod tests {
         let parsed =
             ParsedHfUrl::try_from("hf://deepseek-ai/DeepSeek-OCR/models/v1/model.bin").unwrap();
         assert_eq!(parsed.repo_id, "deepseek-ai/DeepSeek-OCR");
+        assert_eq!(parsed.repo_type, RepoType::Model);
         assert_eq!(parsed.path, Some("models/v1/model.bin".to_string()));
     }
 
     #[test]
-    fn test_build_download_url() {
+    fn test_parse_url_dataset() {
+        let parsed = ParsedHfUrl::try_from("hf://datasets/huggingface/squad").unwrap();
+        assert_eq!(parsed.repo_id, "huggingface/squad");
+        assert_eq!(parsed.repo_type, RepoType::Dataset);
+        assert!(parsed.path.is_none());
+    }
+
+    #[test]
+    fn test_parse_url_dataset_with_path() {
+        let parsed = ParsedHfUrl::try_from("hf://datasets/huggingface/squad/train.json").unwrap();
+        assert_eq!(parsed.repo_id, "huggingface/squad");
+        assert_eq!(parsed.repo_type, RepoType::Dataset);
+        assert_eq!(parsed.path, Some("train.json".to_string()));
+    }
+
+    #[test]
+    fn test_parse_url_space() {
+        let parsed = ParsedHfUrl::try_from("hf://spaces/huggingface/transformers-demo").unwrap();
+        assert_eq!(parsed.repo_id, "huggingface/transformers-demo");
+        assert_eq!(parsed.repo_type, RepoType::Space);
+        assert!(parsed.path.is_none());
+    }
+
+    #[test]
+    fn test_parse_url_explicit_model_type() {
+        let parsed =
+            ParsedHfUrl::try_from("hf://models/deepseek-ai/DeepSeek-OCR/model.safetensors")
+                .unwrap();
+        assert_eq!(parsed.repo_id, "deepseek-ai/DeepSeek-OCR");
+        assert_eq!(parsed.repo_type, RepoType::Model);
+        assert_eq!(parsed.path, Some("model.safetensors".to_string()));
+    }
+
+    #[test]
+    fn test_parse_url_invalid_scheme() {
+        let result = ParsedHfUrl::try_from("http://deepseek-ai/DeepSeek-OCR");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_url_missing_repo() {
+        let result = ParsedHfUrl::try_from("hf://deepseek-ai");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_download_url_model() {
         let parsed =
             ParsedHfUrl::try_from("hf://deepseek-ai/DeepSeek-OCR/model.safetensors").unwrap();
-
         let url = HuggingFace::build_download_url(&parsed, "model.safetensors");
         assert_eq!(
             url,
@@ -623,13 +670,81 @@ mod tests {
     }
 
     #[test]
-    fn test_build_api_url() {
-        let parsed = ParsedHfUrl::try_from("hf://deepseek-ai/DeepSeek-OCR").unwrap();
+    fn test_build_download_url_dataset() {
+        let parsed = ParsedHfUrl::try_from("hf://datasets/huggingface/squad/train.json").unwrap();
+        let url = HuggingFace::build_download_url(&parsed, "train.json");
+        assert_eq!(
+            url,
+            "https://huggingface.co/datasets/huggingface/squad/resolve/main/train.json"
+        );
+    }
 
+    #[test]
+    fn test_build_api_url_model() {
+        let parsed = ParsedHfUrl::try_from("hf://deepseek-ai/DeepSeek-OCR").unwrap();
         let url = HuggingFace::build_api_url(&parsed);
         assert_eq!(
             url,
             "https://huggingface.co/api/models/deepseek-ai/DeepSeek-OCR"
+        );
+    }
+
+    #[test]
+    fn test_build_api_url_dataset() {
+        let parsed = ParsedHfUrl::try_from("hf://datasets/huggingface/squad").unwrap();
+        let url = HuggingFace::build_api_url(&parsed);
+        assert_eq!(url, "https://huggingface.co/api/datasets/huggingface/squad");
+    }
+
+    #[test]
+    fn test_build_hf_url_model() {
+        let parsed = ParsedHfUrl::try_from("hf://deepseek-ai/DeepSeek-OCR").unwrap();
+        let url = HuggingFace::build_hf_url(&parsed, "model.safetensors");
+        assert_eq!(url, "hf://deepseek-ai/DeepSeek-OCR/model.safetensors@main");
+    }
+
+    #[test]
+    fn test_build_hf_url_dataset() {
+        let parsed = ParsedHfUrl::try_from("hf://datasets/huggingface/squad").unwrap();
+        let url = HuggingFace::build_hf_url(&parsed, "train.json");
+        assert_eq!(url, "hf://datasets/huggingface/squad/train.json@main");
+    }
+
+    #[test]
+    fn test_build_headers_default_user_agent() {
+        let headers = HuggingFace::build_headers(&None);
+        assert_eq!(
+            headers.get(USER_AGENT).unwrap(),
+            HeaderValue::from_static(DEFAULT_USER_AGENT)
+        );
+    }
+
+    #[test]
+    fn test_build_headers_preserves_request_headers() {
+        let mut req_headers = HeaderMap::new();
+        req_headers.insert(
+            reqwest::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer test-token"),
+        );
+        let headers = HuggingFace::build_headers(&Some(req_headers));
+        assert_eq!(
+            headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Bearer test-token"
+        );
+        assert_eq!(
+            headers.get(USER_AGENT).unwrap(),
+            HeaderValue::from_static(DEFAULT_USER_AGENT)
+        );
+    }
+
+    #[test]
+    fn test_build_headers_user_supplied_ua_overrides() {
+        let mut req_headers = HeaderMap::new();
+        req_headers.insert(USER_AGENT, HeaderValue::from_static("custom-agent/2.0"));
+        let headers = HuggingFace::build_headers(&Some(req_headers));
+        assert_eq!(
+            headers.get(USER_AGENT).unwrap(),
+            HeaderValue::from_static("custom-agent/2.0")
         );
     }
 }
