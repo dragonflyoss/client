@@ -83,6 +83,15 @@ Examples:
 
   # Download a file from Tencent Cloud Object Storage Service(COS).
   $ dfget cos://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret> --storage-endpoint=<endpoint>
+
+  # Download a model repository from ModelScope.
+  $ dfget modelscope://inclusionAI/Ling-1T -O /tmp/ling-1t/ --recursive
+
+  # Download a single file from ModelScope.
+  $ dfget modelscope://inclusionAI/Ling-1T/config.json -O /tmp/config.json
+
+  # Download a file from ModelScope with authentication.
+  $ dfget modelscope://inclusionAI/Ling-1T/config.json -O /tmp/config.json --ms-token=<your_ms_token>
 "#;
 
 #[derive(Debug, Parser, Clone)]
@@ -276,6 +285,12 @@ struct Args {
         help = "Specify the delegation token for Hadoop Distributed File System(HDFS)"
     )]
     hdfs_delegation_token: Option<String>,
+
+    #[arg(
+        long = "ms-token",
+        help = "Specify the access token for ModelScope Hub. Used for private repositories or to increase rate limits"
+    )]
+    ms_token: Option<String>,
 
     #[arg(
         long,
@@ -1205,6 +1220,16 @@ fn convert_args(mut args: Args) -> Args {
         path.push('/');
         args.url.set_path(&path);
     }
+
+    // If the scheme is modelscope and the ms_token is set, inject the token as an
+    // Authorization: Bearer header so it flows through dfdaemon to the backend.
+    if args.url.scheme() == dragonfly_client_backend::modelscope::MODELSCOPE_SCHEME {
+        if let Some(ref token) = args.ms_token {
+            let auth_header = format!("Authorization: Bearer {}", token);
+            args.header.get_or_insert_with(Vec::new).push(auth_header);
+        }
+    }
+
     args
 }
 

@@ -1241,6 +1241,8 @@ dependencies = [
  "rustls",
  "rustls-pemfile 2.2.0",
  "rustls-pki-types",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "tokio-rustls",
