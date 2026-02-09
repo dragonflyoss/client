@@ -1220,6 +1220,19 @@ fn convert_args(mut args: Args) -> Args {
         path.push('/');
         args.url.set_path(&path);
     }
+
+    // If the scheme is hf and the hf_token is set, inject the Authorization header
+    // into the request headers so the token flows through dfdaemon to the HF backend.
+    if args.url.scheme() == "hf" {
+        if let Some(ref token) = args.hf_token {
+            let auth_header = format!("Authorization: Bearer {}", token);
+            match args.header {
+                Some(ref mut headers) => headers.push(auth_header),
+                None => args.header = Some(vec![auth_header]),
+            }
+        }
+    }
+
     args
 }
 

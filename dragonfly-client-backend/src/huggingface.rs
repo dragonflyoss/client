@@ -42,10 +42,9 @@ use dragonfly_client_core::{
     Error, Result,
 };
 use futures::StreamExt;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
 use reqwest::Client;
 use serde::Deserialize;
-use std::convert::TryFrom;
 use std::time::Duration;
 use tokio_util::io::StreamReader;
 use tracing::{debug, error, info};
@@ -238,8 +237,6 @@ impl TryFrom<&str> for ParsedHfUrl {
 pub struct HuggingFace {
     /// HTTP client for making requests.
     client: Client,
-    /// Optional authentication token.
-    token: Option<String>,
 }
 
 impl HuggingFace {
@@ -253,23 +250,7 @@ impl HuggingFace {
             .build()
             .or_err(ErrorType::ConnectError)?;
 
-        Ok(Self {
-            client,
-            token: None,
-        })
-    }
-
-    /// new_with_token creates a new HuggingFace backend with a specific token.
-    pub fn new_with_token(token: Option<String>) -> Result<Self> {
-        let client = Client::builder()
-            .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
-            .tcp_keepalive(KEEP_ALIVE_INTERVAL)
-            .connect_timeout(Duration::from_secs(30))
-            .timeout(Duration::from_secs(3600))
-            .build()
-            .or_err(ErrorType::ConnectError)?;
-
-        Ok(Self { client, token })
+        Ok(Self { client })
     }
 
     /// build_download_url builds the download URL for a file.
@@ -306,14 +287,17 @@ impl HuggingFace {
         )
     }
 
-    /// get_auth_headers returns the authentication headers if a token is available.
-    fn get_auth_headers(&self) -> HeaderMap {
+    /// build_headers builds request headers by merging base headers with request-provided headers.
+    /// Authentication headers (e.g., Authorization: Bearer <token>) are expected to be
+    /// provided via the request's http_header, which is populated from the --hf-token CLI flag.
+    fn build_headers(request_header: &Option<HeaderMap>) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(USER_AGENT, HeaderValue::from_static("dragonfly-client/1.0"));
 
-        if let Some(ref token) = self.token {
-            if let Ok(value) = HeaderValue::from_str(&format!("Bearer {}", token)) {
-                headers.insert(AUTHORIZATION, value);
+        // Merge request-provided headers (including Authorization from --hf-token).
+        if let Some(ref req_headers) = request_header {
+            for (key, value) in req_headers.iter() {
+                headers.insert(key, value.clone());
             }
         }
 
@@ -321,14 +305,18 @@ impl HuggingFace {
     }
 
     /// get_repo_info fetches repository information from the Hugging Face API.
-    async fn get_repo_info(&self, parsed: &ParsedHfUrl) -> Result<RepoInfo> {
+    async fn get_repo_info(
+        &self,
+        parsed: &ParsedHfUrl,
+        request_header: &Option<HeaderMap>,
+    ) -> Result<RepoInfo> {
         let api_url = Self::build_api_url(parsed);
         debug!("fetching repo info from: {}", api_url);
 
         let response = self
             .client
             .get(&api_url)
-            .headers(self.get_auth_headers())
+            .headers(Self::build_headers(request_header))
             .send()
             .await
             .or_err(ErrorType::ConnectError)?;
@@ -352,7 +340,11 @@ impl HuggingFace {
     }
 
     /// list_files lists all files in the repository.
-    async fn list_files(&self, parsed: &ParsedHfUrl) -> Result<Vec<DirEntry>> {
+    async fn list_files(
+        &self,
+        parsed: &ParsedHfUrl,
+        request_header: &Option<HeaderMap>,
+    ) -> Result<Vec<DirEntry>> {
         let api_url = format!(
             "{}/{}/{}?revision={}",
             HUGGINGFACE_API_BASE,
@@ -366,7 +358,7 @@ impl HuggingFace {
         let response = self
             .client
             .get(&api_url)
-            .headers(self.get_auth_headers())
+            .headers(Self::build_headers(request_header))
             .send()
             .await
             .or_err(ErrorType::ConnectError)?;
@@ -443,7 +435,7 @@ impl Backend for HuggingFace {
             let response = self
                 .client
                 .head(&download_url)
-                .headers(self.get_auth_headers())
+                .headers(Self::build_headers(&request.http_header))
                 .timeout(request.timeout)
                 .send()
                 .await
@@ -470,7 +462,7 @@ impl Backend for HuggingFace {
         }
 
         // List all files in the repository
-        let entries = self.list_files(&parsed).await?;
+        let entries = self.list_files(&parsed, &request.http_header).await?;
 
         Ok(StatResponse {
             success: true,
@@ -497,20 +489,13 @@ impl Backend for HuggingFace {
         let mut req = self
             .client
             .get(&download_url)
-            .headers(self.get_auth_headers())
+            .headers(Self::build_headers(&request.http_header))
             .timeout(request.timeout);
 
         // Add range header if specified
         if let Some(ref range) = request.range {
             let range_value = format!("bytes={}-{}", range.start, range.start + range.length - 1);
             req = req.header(reqwest::header::RANGE, range_value);
-        }
-
-        // Add custom headers
-        if let Some(ref headers) = request.http_header {
-            for (key, value) in headers.iter() {
-                req = req.header(key, value);
-            }
         }
 
         let response = req.send().await.or_err(ErrorType::ConnectError)?;
@@ -561,7 +546,7 @@ impl Backend for HuggingFace {
             Some(ref path) => path,
             None => {
                 // Check if repository exists
-                let repo_info = self.get_repo_info(&parsed).await;
+                let repo_info = self.get_repo_info(&parsed, &request.http_header).await;
                 return Ok(repo_info.is_ok());
             }
         };
@@ -571,7 +556,7 @@ impl Backend for HuggingFace {
         let response = self
             .client
             .head(&download_url)
-            .headers(self.get_auth_headers())
+            .headers(Self::build_headers(&request.http_header))
             .timeout(request.timeout)
             .send()
             .await
