@@ -1,5 +1,5 @@
 /*
- *     Copyright 2024 The Dragonfly Authors
+ *     Copyright 2026 The Dragonfly Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,8 +31,7 @@
 //!
 //! # Authentication
 //!
-//! For private repositories or to increase rate limits, set the `HF_TOKEN` environment
-//! variable or use the `--hf-token` flag.
+//! For private repositories or to increase rate limits, use the `--hf-token` flag.
 
 use crate::{
     Backend, Body, DirEntry, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse,
@@ -46,6 +45,7 @@ use futures::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use reqwest::Client;
 use serde::Deserialize;
+use std::convert::TryFrom;
 use std::time::Duration;
 use tokio_util::io::StreamReader;
 use tracing::{debug, error, info};
@@ -62,9 +62,6 @@ const HUGGINGFACE_DOWNLOAD_BASE: &str = "https://huggingface.co";
 
 /// DEFAULT_REVISION is the default revision (branch) to use.
 const DEFAULT_REVISION: &str = "main";
-
-/// HF_TOKEN_ENV is the environment variable for Hugging Face token.
-const HF_TOKEN_ENV: &str = "HF_TOKEN";
 
 /// RepoInfo represents the repository information from Hugging Face API.
 #[derive(Debug, Deserialize)]
@@ -101,29 +98,34 @@ struct LfsInfo {
 }
 
 /// ParsedHfUrl represents a parsed Hugging Face URL.
+///
+/// The Hugging Face URL should be in the format of `hf://[<repo_type>/]<owner>/<repo>[/<path>][@<revision>]`.
 #[derive(Debug, Clone)]
-struct ParsedHfUrl {
+pub struct ParsedHfUrl {
+    /// The original URL.
+    pub url: Url,
     /// The repository ID (e.g., "deepseek-ai/DeepSeek-OCR")
-    repo_id: String,
+    pub repo_id: String,
     /// The repository type (models, datasets, spaces)
-    repo_type: RepoType,
+    pub repo_type: RepoType,
     /// The file path within the repository (optional)
-    path: Option<String>,
+    pub path: Option<String>,
     /// The revision (branch, tag, or commit hash)
-    revision: String,
+    pub revision: String,
 }
 
 /// RepoType represents the type of Hugging Face repository.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum RepoType {
+pub enum RepoType {
     Model,
     Dataset,
     Space,
 }
 
 impl RepoType {
+    /// as_str returns the string representation of the repo type.
     #[allow(dead_code)]
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             RepoType::Model => "models",
             RepoType::Dataset => "datasets",
@@ -131,7 +133,8 @@ impl RepoType {
         }
     }
 
-    fn api_path(&self) -> &'static str {
+    /// api_path returns the API path for the repo type.
+    pub fn api_path(&self) -> &'static str {
         match self {
             RepoType::Model => "models",
             RepoType::Dataset => "datasets",
@@ -140,57 +143,12 @@ impl RepoType {
     }
 }
 
-/// HuggingFace is the Hugging Face backend implementation.
-pub struct HuggingFace {
-    /// HTTP client for making requests.
-    client: Client,
-    /// Optional authentication token.
-    token: Option<String>,
-}
+/// ParsedHfUrl implements the TryFrom trait for the URL.
+impl TryFrom<Url> for ParsedHfUrl {
+    type Error = Error;
 
-impl HuggingFace {
-    /// new creates a new HuggingFace backend.
-    pub fn new() -> Result<Self> {
-        let token = std::env::var(HF_TOKEN_ENV).ok();
-
-        let client = Client::builder()
-            .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
-            .tcp_keepalive(KEEP_ALIVE_INTERVAL)
-            .connect_timeout(Duration::from_secs(30))
-            .timeout(Duration::from_secs(3600))
-            .build()
-            .or_err(ErrorType::ConnectError)?;
-
-        Ok(Self { client, token })
-    }
-
-    /// new_with_token creates a new HuggingFace backend with a specific token.
-    pub fn new_with_token(token: Option<String>) -> Result<Self> {
-        let token = token.or_else(|| std::env::var(HF_TOKEN_ENV).ok());
-
-        let client = Client::builder()
-            .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
-            .tcp_keepalive(KEEP_ALIVE_INTERVAL)
-            .connect_timeout(Duration::from_secs(30))
-            .timeout(Duration::from_secs(3600))
-            .build()
-            .or_err(ErrorType::ConnectError)?;
-
-        Ok(Self { client, token })
-    }
-
-    /// parse_url parses a Hugging Face URL into its components.
-    ///
-    /// URL format: hf://[<repo_type>/]<repo_id>[/<path>][@<revision>]
-    ///
-    /// Examples:
-    /// - hf://deepseek-ai/DeepSeek-OCR
-    /// - hf://deepseek-ai/DeepSeek-OCR/model.safetensors
-    /// - hf://deepseek-ai/DeepSeek-OCR@main
-    /// - hf://datasets/squad/train.json
-    fn parse_url(url: &str) -> Result<ParsedHfUrl> {
-        let url = Url::parse(url).or_err(ErrorType::ParseError)?;
-
+    /// try_from parses the URL and returns a ParsedHfUrl.
+    fn try_from(url: Url) -> std::result::Result<Self, Self::Error> {
         if url.scheme() != HUGGINGFACE_SCHEME {
             return Err(Error::InvalidParameter);
         }
@@ -239,6 +197,7 @@ impl HuggingFace {
                     None
                 };
                 return Ok(ParsedHfUrl {
+                    url,
                     repo_id,
                     repo_type: RepoType::Model,
                     path: file_path,
@@ -256,11 +215,61 @@ impl HuggingFace {
         };
 
         Ok(ParsedHfUrl {
+            url,
             repo_id,
             repo_type,
             path: file_path,
             revision,
         })
+    }
+}
+
+/// ParsedHfUrl implements TryFrom for &str.
+impl TryFrom<&str> for ParsedHfUrl {
+    type Error = Error;
+
+    fn try_from(url: &str) -> std::result::Result<Self, Self::Error> {
+        let parsed_url = Url::parse(url).or_err(ErrorType::ParseError)?;
+        ParsedHfUrl::try_from(parsed_url)
+    }
+}
+
+/// HuggingFace is the Hugging Face backend implementation.
+pub struct HuggingFace {
+    /// HTTP client for making requests.
+    client: Client,
+    /// Optional authentication token.
+    token: Option<String>,
+}
+
+impl HuggingFace {
+    /// new creates a new HuggingFace backend.
+    pub fn new() -> Result<Self> {
+        let client = Client::builder()
+            .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
+            .tcp_keepalive(KEEP_ALIVE_INTERVAL)
+            .connect_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(3600))
+            .build()
+            .or_err(ErrorType::ConnectError)?;
+
+        Ok(Self {
+            client,
+            token: None,
+        })
+    }
+
+    /// new_with_token creates a new HuggingFace backend with a specific token.
+    pub fn new_with_token(token: Option<String>) -> Result<Self> {
+        let client = Client::builder()
+            .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
+            .tcp_keepalive(KEEP_ALIVE_INTERVAL)
+            .connect_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(3600))
+            .build()
+            .or_err(ErrorType::ConnectError)?;
+
+        Ok(Self { client, token })
     }
 
     /// build_download_url builds the download URL for a file.
@@ -420,7 +429,7 @@ impl Backend for HuggingFace {
 
     /// stat gets the metadata from the backend.
     async fn stat(&self, request: StatRequest) -> Result<StatResponse> {
-        let parsed = Self::parse_url(&request.url)?;
+        let parsed = ParsedHfUrl::try_from(request.url.as_str())?;
         info!(
             "stat huggingface repo: {} path: {:?}",
             parsed.repo_id, parsed.path
@@ -475,7 +484,7 @@ impl Backend for HuggingFace {
 
     /// get gets the content from the backend.
     async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>> {
-        let parsed = Self::parse_url(&request.url)?;
+        let parsed = ParsedHfUrl::try_from(request.url.as_str())?;
 
         let filename = parsed.path.as_ref().ok_or_else(|| {
             error!("file path is required for download");
@@ -546,7 +555,7 @@ impl Backend for HuggingFace {
 
     /// exists checks whether the file exists in the backend.
     async fn exists(&self, request: ExistsRequest) -> Result<bool> {
-        let parsed = Self::parse_url(&request.url)?;
+        let parsed = ParsedHfUrl::try_from(request.url.as_str())?;
 
         let filename = match parsed.path {
             Some(ref path) => path,
@@ -578,7 +587,7 @@ mod tests {
 
     #[test]
     fn test_parse_url_simple() {
-        let parsed = HuggingFace::parse_url("hf://deepseek-ai/DeepSeek-OCR").unwrap();
+        let parsed = ParsedHfUrl::try_from("hf://deepseek-ai/DeepSeek-OCR").unwrap();
         assert_eq!(parsed.repo_id, "deepseek-ai/DeepSeek-OCR");
         assert_eq!(parsed.repo_type, RepoType::Model);
         assert!(parsed.path.is_none());
@@ -588,7 +597,7 @@ mod tests {
     #[test]
     fn test_parse_url_with_file() {
         let parsed =
-            HuggingFace::parse_url("hf://deepseek-ai/DeepSeek-OCR/model.safetensors").unwrap();
+            ParsedHfUrl::try_from("hf://deepseek-ai/DeepSeek-OCR/model.safetensors").unwrap();
         assert_eq!(parsed.repo_id, "deepseek-ai/DeepSeek-OCR");
         assert_eq!(parsed.path, Some("model.safetensors".to_string()));
         assert_eq!(parsed.revision, "main");
@@ -596,14 +605,14 @@ mod tests {
 
     #[test]
     fn test_parse_url_with_revision() {
-        let parsed = HuggingFace::parse_url("hf://deepseek-ai/DeepSeek-OCR@v1.0").unwrap();
+        let parsed = ParsedHfUrl::try_from("hf://deepseek-ai/DeepSeek-OCR@v1.0").unwrap();
         assert_eq!(parsed.repo_id, "deepseek-ai/DeepSeek-OCR");
         assert_eq!(parsed.revision, "v1.0");
     }
 
     #[test]
     fn test_parse_url_dataset() {
-        let parsed = HuggingFace::parse_url("hf://datasets/squad/train.json").unwrap();
+        let parsed = ParsedHfUrl::try_from("hf://datasets/squad/train.json").unwrap();
         assert_eq!(parsed.repo_id, "squad/train.json");
         assert_eq!(parsed.repo_type, RepoType::Dataset);
     }
@@ -611,19 +620,15 @@ mod tests {
     #[test]
     fn test_parse_url_with_nested_path() {
         let parsed =
-            HuggingFace::parse_url("hf://deepseek-ai/DeepSeek-OCR/models/v1/model.bin").unwrap();
+            ParsedHfUrl::try_from("hf://deepseek-ai/DeepSeek-OCR/models/v1/model.bin").unwrap();
         assert_eq!(parsed.repo_id, "deepseek-ai/DeepSeek-OCR");
         assert_eq!(parsed.path, Some("models/v1/model.bin".to_string()));
     }
 
     #[test]
     fn test_build_download_url() {
-        let parsed = ParsedHfUrl {
-            repo_id: "deepseek-ai/DeepSeek-OCR".to_string(),
-            repo_type: RepoType::Model,
-            path: Some("model.safetensors".to_string()),
-            revision: "main".to_string(),
-        };
+        let parsed =
+            ParsedHfUrl::try_from("hf://deepseek-ai/DeepSeek-OCR/model.safetensors").unwrap();
 
         let url = HuggingFace::build_download_url(&parsed, "model.safetensors");
         assert_eq!(
@@ -634,12 +639,7 @@ mod tests {
 
     #[test]
     fn test_build_api_url() {
-        let parsed = ParsedHfUrl {
-            repo_id: "deepseek-ai/DeepSeek-OCR".to_string(),
-            repo_type: RepoType::Model,
-            path: None,
-            revision: "main".to_string(),
-        };
+        let parsed = ParsedHfUrl::try_from("hf://deepseek-ai/DeepSeek-OCR").unwrap();
 
         let url = HuggingFace::build_api_url(&parsed);
         assert_eq!(
