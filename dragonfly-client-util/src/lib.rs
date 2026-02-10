@@ -22,7 +22,7 @@ pub mod http;
 pub mod id_generator;
 pub mod net;
 pub mod pool;
-pub mod ratelimit;
+pub mod ratelimiter;
 pub mod request;
 pub mod shutdown;
 pub mod sysinfo;
