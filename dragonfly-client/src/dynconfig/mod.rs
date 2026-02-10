@@ -23,6 +23,7 @@ use dragonfly_client_config::{dfdaemon::Config, CARGO_PKG_VERSION, GIT_COMMIT_SH
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::net::format_url;
 use dragonfly_client_util::shutdown;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -32,132 +33,143 @@ use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{debug, error, info, instrument};
 use url::Url;
 
+/// Block list configuration for scheduler cluster clients.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SchedulerClusterClientConfig {
-    /// The block list of the scheduler cluster client.
+    /// Block list rules applied to client requests.
     pub block_list: Option<SchedulerClusterConfigBlockList>,
 }
 
+/// Block list configuration for scheduler cluster seed clients.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SchedulerClusterSeedClientConfig {
-    /// The block list of the scheduler cluster seed client.
+    /// Block list rules applied to seed client requests.
     pub block_list: Option<SchedulerClusterConfigBlockList>,
 }
 
+/// Categorized block lists by task type.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SchedulerClusterConfigBlockList {
-    /// The block list of the type task.
+    /// Block list for regular tasks.
     pub task: Option<SchedulerClusterConfigTaskBlockList>,
 
-    /// The block list of the type persistent task.
+    /// Block list for persistent tasks.
     pub persistent_task: Option<SchedulerClusterConfigPersistentTaskBlockList>,
 
-    /// The block list of the type persistent cache task.
+    /// Block list for persistent cache tasks.
     pub persistent_cache_task: Option<SchedulerClusterConfigPersistentCacheTaskBlockList>,
 }
 
+/// Block list scoped to regular task operations.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SchedulerClusterConfigTaskBlockList {
-    /// The block list of the download grpc.
+    /// Rules applied to download gRPC requests.
     pub download: Option<SchedulerClusterConfigDownloadBlockList>,
 }
 
+/// Block list scoped to persistent task operations.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SchedulerClusterConfigPersistentTaskBlockList {
-    /// The block list of the download grpc.
+    /// Rules applied to download gRPC requests.
     pub download: Option<SchedulerClusterConfigDownloadBlockList>,
 
-    /// The block list of the upload grpc.
+    /// Rules applied to upload gRPC requests.
     pub upload: Option<SchedulerClusterConfigUploadBlockList>,
 }
 
+/// Block list scoped to persistent cache task operations.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SchedulerClusterConfigPersistentCacheTaskBlockList {
-    /// The block list of the download grpc.
+    /// Rules applied to download gRPC requests.
     pub download: Option<SchedulerClusterConfigDownloadBlockList>,
 
-    /// The block list of the upload grpc.
+    /// Rules applied to upload gRPC requests.
     pub upload: Option<SchedulerClusterConfigUploadBlockList>,
 }
 
+/// Block list criteria for download gRPC requests.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SchedulerClusterConfigDownloadBlockList {
-    /// The lists of the application name.
+    /// Blocked application names.
     pub applications: Option<Vec<String>>,
 
-    /// The regex patterns of the url.
-    pub urls: Option<Vec<String>>,
+    /// Blocked URL regex patterns.
+    #[serde(with = "serde_regex")]
+    pub urls: Vec<Regex>,
 
-    /// The lists of the tag.
+    /// Blocked tags.
     pub tags: Option<Vec<String>>,
 
-    /// The lists of the priority.
-    pub priorities: Option<Vec<String>>,
+    /// Blocked priorities.
+    pub priorities: Option<Vec<i32>>,
 }
 
+/// Block list criteria for upload gRPC requests.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SchedulerClusterConfigUploadBlockList {
-    /// The lists of the application name.
+    /// Blocked application names.
     pub applications: Option<Vec<String>>,
 
-    /// The regex patterns of the url.
-    pub urls: Option<Vec<String>>,
+    /// Blocked URL regex patterns.
+    #[serde(with = "serde_regex")]
+    pub urls: Vec<Regex>,
 
-    /// The lists of the tag.
+    /// Blocked tags.
     pub tags: Option<Vec<String>>,
 }
 
-/// Data is the dynamic configuration of the dfdaemon.
+/// Dynamic configuration state of the dfdaemon.
 #[derive(Default)]
 pub struct Data {
-    /// schedulers is the schedulers of the dfdaemon.
+    /// All known schedulers returned by the manager.
     pub schedulers: ListSchedulersResponse,
 
-    /// available_schedulers is the available schedulers of the dfdaemon.
+    /// Schedulers currently available for use.
     pub available_schedulers: Vec<Scheduler>,
 
-    /// available_scheduler_cluster_id is the id of the available scheduler cluster of the dfdaemon.
+    /// ID of the currently active scheduler cluster, if any.
     pub available_scheduler_cluster_id: Option<u64>,
 
-    /// client_config is the configuration of the client.
+    /// Client-specific block list configuration from the scheduler cluster.
     pub client_config: Option<SchedulerClusterClientConfig>,
 
-    /// seed_client_config is the configuration of the seed client.
+    /// Seed-client-specific block list configuration from the scheduler cluster.
     pub seed_client_config: Option<SchedulerClusterSeedClientConfig>,
 }
 
-/// Dynconfig supports dynamic configuration of the client.
+/// Manages dynamic configuration for the dfdaemon, periodically
+/// refreshing state from the manager service.
 pub struct Dynconfig {
-    /// data is the dynamic configuration of the dfdaemon.
+    /// Current dynamic configuration, protected by a read-write lock.
     pub data: RwLock<Data>,
 
-    /// config is the configuration of the dfdaemon.
+    /// Static dfdaemon configuration.
     config: Arc<Config>,
 
-    /// manager_client is the grpc client of the manager.
+    /// gRPC client used to communicate with the manager.
     manager_client: Arc<ManagerClient>,
 
-    /// mutex is used to protect refresh.
+    /// Mutex guarding concurrent refresh operations.
     mutex: Mutex<()>,
 
-    /// shutdown is used to shutdown the dynconfig.
+    /// Handle to signal graceful shutdown.
     shutdown: shutdown::Shutdown,
 
-    /// _shutdown_complete is used to notify the dynconfig is shutdown.
+    /// Sender held to detect when all shutdown work is complete.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
 /// Dynconfig is the implementation of Dynconfig.
 impl Dynconfig {
-    /// new creates a new Dynconfig.
+    // Create a new Dynconfig instance.
     pub async fn new(
         config: Arc<Config>,
         manager_client: Arc<ManagerClient>,
@@ -179,7 +191,7 @@ impl Dynconfig {
         Ok(dc)
     }
 
-    /// run starts the dynconfig server.
+    /// Run starts the dynconfig server.
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -203,7 +215,7 @@ impl Dynconfig {
         }
     }
 
-    /// refresh refreshes the dynamic configuration of the dfdaemon.
+    /// Refresh refreshes the dynamic configuration of the dfdaemon.
     #[instrument(skip_all)]
     pub async fn refresh(&self) -> Result<()> {
         // Only one refresh can be running at a time.
@@ -212,78 +224,52 @@ impl Dynconfig {
             return Ok(());
         };
 
-        // refresh the schedulers.
         let schedulers = self.list_schedulers().await?;
-
-        // Get the available schedulers.
         let available_schedulers = self
             .get_available_schedulers(&schedulers.schedulers)
             .await?;
 
-        // If no available schedulers, return error.
-        if available_schedulers.is_empty() {
+        let Some(available_scheduler) = available_schedulers.first() else {
             return Err(Error::AvailableSchedulersNotFound);
-        }
+        };
 
-        // Deserialize the scheduler client and seed client config from the first available scheduler.
-        let (scheduler_cluster_id, client_config, seed_client_config) =
-            if let Some(available_scheduler) = available_schedulers.first() {
-                let scheduler_cluster_id = Some(available_scheduler.scheduler_cluster_id);
+        let scheduler_cluster_id = available_scheduler.scheduler_cluster_id;
+        let Some(scheduler_cluster) = &available_scheduler.scheduler_cluster else {
+            return Err(Error::AvailableSchedulersNotFound);
+        };
 
-                let (client_config, seed_client_config) = if let Some(scheduler_cluster) =
-                    &available_scheduler.scheduler_cluster
-                {
-                    // Deserialize client_config.
-                    let client_config = if !scheduler_cluster.client_config.is_empty() {
-                        match serde_json::from_slice::<SchedulerClusterClientConfig>(
-                            &scheduler_cluster.client_config,
-                        ) {
-                            Ok(config) => Some(config),
-                            Err(err) => {
-                                error!("failed to deserialize client config: {}", err);
-                                None
-                            }
-                        }
-                    } else {
-                        None
-                    };
+        // Deserialize the client configs from the scheduler cluster.
+        let client_config = match serde_json::from_slice::<SchedulerClusterClientConfig>(
+            &scheduler_cluster.client_config,
+        ) {
+            Ok(config) => Some(config),
+            Err(err) => {
+                error!("failed to deserialize client config: {}", err);
+                None
+            }
+        };
 
-                    // Deserialize seed_client_config.
-                    let seed_client_config = if !scheduler_cluster.seed_client_config.is_empty() {
-                        match serde_json::from_slice::<SchedulerClusterSeedClientConfig>(
-                            &scheduler_cluster.seed_client_config,
-                        ) {
-                            Ok(config) => Some(config),
-                            Err(err) => {
-                                error!("failed to deserialize seed client config: {}", err);
-                                None
-                            }
-                        }
-                    } else {
-                        None
-                    };
+        // Deserialize the seed client configs from the scheduler cluster.
+        let seed_client_config = match serde_json::from_slice::<SchedulerClusterSeedClientConfig>(
+            &scheduler_cluster.seed_client_config,
+        ) {
+            Ok(config) => Some(config),
+            Err(err) => {
+                error!("failed to deserialize seed client config: {}", err);
+                None
+            }
+        };
 
-                    (client_config, seed_client_config)
-                } else {
-                    (None, None)
-                };
-
-                (scheduler_cluster_id, client_config, seed_client_config)
-            } else {
-                (None, None, None)
-            };
-
-        // Get the data with write lock.
         let mut data = self.data.write().await;
         data.schedulers = schedulers;
         data.available_schedulers = available_schedulers;
-        data.available_scheduler_cluster_id = scheduler_cluster_id;
+        data.available_scheduler_cluster_id = Some(scheduler_cluster_id);
         data.client_config = client_config;
         data.seed_client_config = seed_client_config;
         Ok(())
     }
 
-    /// list_schedulers lists the schedulers from the manager.
+    /// List schedulers from the manager service based on the source type (peer or seed peer).
     #[instrument(skip_all)]
     async fn list_schedulers(&self) -> Result<ListSchedulersResponse> {
         // Get the source type.
@@ -308,7 +294,9 @@ impl Dynconfig {
             .await
     }
 
-    /// get_available_schedulers gets the available schedulers.
+    /// Gets the available schedulers by checking the health of each scheduler and filtering out
+    /// the unhealthy ones. If scheduler_cluster_id is specified, only returns the schedulers of
+    /// the specified scheduler cluster.
     #[instrument(skip_all)]
     async fn get_available_schedulers(&self, schedulers: &[Scheduler]) -> Result<Vec<Scheduler>> {
         let mut available_schedulers: Vec<Scheduler> = Vec::new();

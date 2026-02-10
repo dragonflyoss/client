@@ -1192,6 +1192,7 @@ dependencies = [
  "scopeguard",
  "serde",
  "serde_json",
+ "serde_regex",
  "sysinfo",
  "tabled",
  "tempfile",
