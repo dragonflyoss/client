@@ -89,20 +89,16 @@ pub struct SchedulerClusterConfigPersistentCacheTaskBlockList {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SchedulerClusterConfigDownloadBlockList {
-    #[serde(default)]
     /// The lists of the application name.
     pub applications: Option<Vec<String>>,
 
     /// The regex patterns of the url.
-    #[serde(default)]
     pub urls: Option<Vec<String>>,
 
     /// The lists of the tag.
-    #[serde(default)]
     pub tags: Option<Vec<String>>,
 
     /// The lists of the priority.
-    #[serde(default)]
     pub priorities: Option<Vec<String>>,
 }
 
@@ -110,15 +106,12 @@ pub struct SchedulerClusterConfigDownloadBlockList {
 #[serde(default)]
 pub struct SchedulerClusterConfigUploadBlockList {
     /// The lists of the application name.
-    #[serde(default)]
     pub applications: Option<Vec<String>>,
 
     /// The regex patterns of the url.
-    #[serde(default)]
     pub urls: Option<Vec<String>>,
 
     /// The lists of the tag.
-    #[serde(default)]
     pub tags: Option<Vec<String>>,
 }
 
