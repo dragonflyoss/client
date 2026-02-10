@@ -49,9 +49,6 @@ pub const HTTPS_SCHEME: &str = "https";
 /// USER_AGENT_HEADER is the user agent header.
 pub const USER_AGENT_HEADER: &str = "user-agent";
 
-/// DEFAULT_USER_AGENT is the default user agent.
-pub const DEFAULT_USER_AGENT: &str = concat!("dragonfly", "/", env!("CARGO_PKG_VERSION"));
-
 /// TemporaryRedirectEntry stores a temporary redirect entry with its creation time.
 #[derive(Clone, Debug)]
 struct TemporaryRedirectEntry {
@@ -265,7 +262,7 @@ impl HTTP {
         // Make the user agent if not specified in header.
         request_header
             .entry(USER_AGENT)
-            .or_insert(HeaderValue::from_static(DEFAULT_USER_AGENT));
+            .or_insert(HeaderValue::from_static(super::DEFAULT_USER_AGENT));
 
         // Make custom request headers if provided and not defined in original request header.
         if let Some(custom_headers) = &self.request_header {
@@ -689,7 +686,7 @@ mod tests {
     use super::*;
     use crate::{
         http::{HTTP, HTTPS_SCHEME, HTTP_SCHEME},
-        Backend, ExistsRequest, GetRequest, StatRequest,
+        Backend, ExistsRequest, GetRequest, StatRequest, DEFAULT_USER_AGENT,
     };
     use dragonfly_client_util::tls::{load_certs_from_pem, load_key_from_pem};
     use http::header::{HeaderValue, USER_AGENT};

@@ -16,7 +16,7 @@
 
 use bytesize::ByteSize;
 use clap::Parser;
-use dragonfly_api::common::v2::{Download, Hdfs, ObjectStorage, TaskType};
+use dragonfly_api::common::v2::{Download, Hdfs, HuggingFace, ObjectStorage, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, ListTaskEntriesRequest,
 };
@@ -25,7 +25,7 @@ use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::resource::piece::MIN_PIECE_LENGTH;
 use dragonfly_client::tracing::init_command_tracing;
-use dragonfly_client_backend::{hdfs, object_storage, BackendFactory, DirEntry};
+use dragonfly_client_backend::{BackendFactory, DirEntry};
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{ErrorType, OrErr};
@@ -41,7 +41,6 @@ use path_absolutize::*;
 use percent_encoding::percent_decode_str;
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{cmp::min, fmt::Write};
@@ -286,10 +285,7 @@ struct Args {
     )]
     hdfs_delegation_token: Option<String>,
 
-    #[arg(
-        long,
-        help = "Specify the authentication token for Hugging Face Hub. Can also be set via HF_TOKEN environment variable"
-    )]
+    #[arg(long, help = "Specify the authentication token for Hugging Face Hub")]
     hf_token: Option<String>,
 
     #[arg(
@@ -686,6 +682,10 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         delegation_token: args.hdfs_delegation_token.clone(),
     });
 
+    let hugging_face = Some(HuggingFace {
+        token: args.hf_token.clone(),
+    });
+
     // Get all entries in the directory with include files filter.
     let entries: Vec<DirEntry> = get_all_entries(
         &args.url,
@@ -693,6 +693,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         args.include_files.clone(),
         object_storage,
         hdfs,
+        hugging_face,
         download_client.clone(),
     )
     .await?;
@@ -778,6 +779,7 @@ async fn get_all_entries(
     include_files: Option<Vec<String>>,
     object_storage: Option<ObjectStorage>,
     hdfs: Option<Hdfs>,
+    hugging_face: Option<HuggingFace>,
     download_client: DfdaemonDownloadClient,
 ) -> Result<Vec<DirEntry>> {
     let urls: HashSet<Url> = match include_files {
@@ -828,6 +830,7 @@ async fn get_all_entries(
             header.clone(),
             object_storage.clone(),
             hdfs.clone(),
+            hugging_face.clone(),
             download_client.clone(),
         )
         .await
@@ -882,28 +885,26 @@ async fn download(
     download_client: DfdaemonDownloadClient,
 ) -> Result<()> {
     // Only initialize object storage when the scheme is an object storage protocol.
-    let object_storage = match object_storage::Scheme::from_str(args.url.scheme()) {
-        Ok(_) => Some(ObjectStorage {
-            access_key_id: args.storage_access_key_id.clone(),
-            access_key_secret: args.storage_access_key_secret.clone(),
-            security_token: args.storage_security_token.clone(),
-            session_token: args.storage_session_token.clone(),
-            region: args.storage_region.clone(),
-            endpoint: args.storage_endpoint.clone(),
-            credential_path: args.storage_credential_path.clone(),
-            predefined_acl: args.storage_predefined_acl.clone(),
-            insecure_skip_verify: args.storage_insecure_skip_verify,
-        }),
-        Err(_) => None,
-    };
+    let object_storage = Some(ObjectStorage {
+        access_key_id: args.storage_access_key_id.clone(),
+        access_key_secret: args.storage_access_key_secret.clone(),
+        security_token: args.storage_security_token.clone(),
+        session_token: args.storage_session_token.clone(),
+        region: args.storage_region.clone(),
+        endpoint: args.storage_endpoint.clone(),
+        credential_path: args.storage_credential_path.clone(),
+        predefined_acl: args.storage_predefined_acl.clone(),
+        insecure_skip_verify: args.storage_insecure_skip_verify,
+    });
 
     // Only initialize HDFS when the scheme is HDFS protocol.
-    let hdfs = match args.url.scheme() {
-        hdfs::HDFS_SCHEME => Some(Hdfs {
-            delegation_token: args.hdfs_delegation_token.clone(),
-        }),
-        _ => None,
-    };
+    let hdfs = Some(Hdfs {
+        delegation_token: args.hdfs_delegation_token.clone(),
+    });
+
+    let hugging_face = Some(HuggingFace {
+        token: args.hf_token.clone(),
+    });
 
     // If the `filtered_query_params` is not provided, then use the default value.
     let filtered_query_params = args
@@ -947,6 +948,7 @@ async fn download(
                 need_piece_content,
                 object_storage,
                 hdfs,
+                hugging_face,
                 force_hard_link: args.force_hard_link,
                 content_for_calculating_task_id: args.content_for_calculating_task_id,
                 remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
@@ -1138,6 +1140,7 @@ async fn get_entries(
     header: Option<Vec<String>>,
     object_storage: Option<ObjectStorage>,
     hdfs: Option<Hdfs>,
+    hugging_face: Option<HuggingFace>,
     download_client: DfdaemonDownloadClient,
 ) -> Result<Vec<DirEntry>> {
     info!("list task entries: {:?}", url);
@@ -1150,6 +1153,7 @@ async fn get_entries(
             certificate_chain: Vec::new(),
             object_storage,
             hdfs,
+            hugging_face,
             remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
         })
         .await
@@ -1219,18 +1223,6 @@ fn convert_args(mut args: Args) -> Args {
         let mut path = args.url.path().to_string();
         path.push('/');
         args.url.set_path(&path);
-    }
-
-    // If the scheme is hf and the hf_token is set, inject the Authorization header
-    // into the request headers so the token flows through dfdaemon to the HF backend.
-    if args.url.scheme() == "hf" {
-        if let Some(ref token) = args.hf_token {
-            let auth_header = format!("Authorization: Bearer {}", token);
-            match args.header {
-                Some(ref mut headers) => headers.push(auth_header),
-                None => args.header = Some(vec![auth_header]),
-            }
-        }
     }
 
     args
@@ -1579,6 +1571,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             dfdaemon_download_client,
         )
         .await
@@ -1633,6 +1626,7 @@ mod tests {
 
         let entries = get_all_entries(
             &Url::parse("http://example.com/root/").unwrap(),
+            None,
             None,
             None,
             None,
@@ -1721,6 +1715,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             dfdaemon_download_client,
         )
         .await
@@ -1801,6 +1796,7 @@ mod tests {
 
         let entries = get_all_entries(
             &Url::parse("http://example.com/root/").unwrap(),
+            None,
             None,
             None,
             None,

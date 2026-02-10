@@ -58,6 +58,9 @@ const HTTP2_CONNECTION_WINDOW_SIZE: u32 = 16 * 1024 * 1024;
 /// MAX_RETRY_TIMES is the max retry times for the request.
 const MAX_RETRY_TIMES: u32 = 1;
 
+/// DEFAULT_USER_AGENT is the default user agent.
+const DEFAULT_USER_AGENT: &str = concat!("dragonfly", "/", env!("CARGO_PKG_VERSION"));
+
 /// NAME is the name of the package.
 pub const NAME: &str = "backend";
 
