@@ -94,43 +94,44 @@ struct Lfs {
     pointer_size: Option<u64>,
 }
 
-/// ParsedURL represents a parsed Hugging Face URL.
+/// A parsed representation of a Hugging Face URL.
 ///
-/// The Hugging Face URL should be in the format of `hf://[<repository_type>/]<owner>/<repository>[/<path>][@<revision>]`.
+/// Format: `hf://[<repository_type>/]<owner>/<repository>[/<path>][@<revision>]`
 #[derive(Debug, Clone)]
 pub struct ParsedURL {
-    /// The original URL.
+    /// The original, unparsed URL.
     pub url: Url,
 
-    /// The repository ID (e.g., "deepseek-ai/DeepSeek-OCR")
+    /// The repository identifier in `<owner>/<repository>` format (e.g., `"deepseek-ai/DeepSeek-OCR"`).
     pub repository_id: String,
 
-    /// The repository type (models, datasets, spaces)
+    /// The type of repository: model, dataset, or space.
     pub repository_type: RepositoryType,
 
-    /// The file path within the repository (optional)
-    pub path: Option<String>,
+    /// An optional file path within the repository (e.g., `"path/to/weights.bin"`).
+    pub file_path: Option<String>,
 
-    /// The revision (branch, tag, or commit hash)
+    /// The git revision (branch, tag, or commit hash). Defaults to main.
     pub revision: String,
 }
 
-/// RepositoryType represents the type of Hugging Face repository.
+/// The type of a Hugging Face repository.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RepositoryType {
-    /// Model repository (default with no prefix, or explicitly prefixed with "models/").
+    /// A model repository. This is the default when no type prefix is specified,
+    /// or when explicitly prefixed with `models/`.
     Model,
 
-    // Dataset repository (prefixed with "datasets/").
+    /// A dataset repository, prefixed with `datasets/`.
     Dataset,
 
-    // Space repository (prefixed with "spaces/").
+    /// A space repository, prefixed with `spaces/`.
     Space,
 }
 
 /// RepositoryType implements methods for getting string representations and API paths.
 impl RepositoryType {
-    /// Returns the string representation of the repository type for API paths and URL construction.
+    /// Returns the canonical string identifier (e.g., `"models"`, `"datasets"`, `"spaces"`).
     #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -140,7 +141,7 @@ impl RepositoryType {
         }
     }
 
-    /// Returns the API path segment for the repository type.
+    /// Returns the path segment used when constructing Hugging Face API URLs.
     pub fn api_path(&self) -> &'static str {
         match self {
             RepositoryType::Model => "models",
@@ -150,7 +151,22 @@ impl RepositoryType {
     }
 }
 
-/// ParsedURL implements the TryFrom trait for the URL.
+/// Parses a Hugging Face URL into its constituent components.
+///
+/// URL Format: hf://[<repository_type>/]<owner>/<repository>[/<path>][@<revision>]
+/// - repository_type  Optional. One of "models" (default), "datasets", or "spaces".
+/// - owner/repository Required. For example, "meta-llama/Llama-2-7b".
+/// - path             Optional file path within the repository.
+/// - revision         Optional git ref after "@". Defaults to DEFAULT_HUGGING_FACE_REVISION.
+///
+/// Examples:
+///   - URL: https://huggingface.co/meta-llama/Llama-2-7b => Type: Model, Repository ID: meta-llama/Llama-2-7b, Path: None, Revision: main
+///   - URL: https://huggingface.co/datasets/squad/data/train.json@v1.0 => Type: Dataset, Repository ID: squad/data, Path: train.json, Revision: v1.0
+///   - URL: https://huggingface.co/models/owner/repo/path/to/file@dev => Type: Model, Repository ID: owner/repo, Path: path/to/file, Revision: dev
+///
+/// Errors:
+///   Returns Error::InvalidURI if the URL has no host, or Error::InvalidParameter
+///   if the path does not contain at least an owner and repository name.
 impl TryFrom<Url> for ParsedURL {
     type Error = Error;
 
@@ -158,62 +174,41 @@ impl TryFrom<Url> for ParsedURL {
     fn try_from(url: Url) -> std::result::Result<Self, Self::Error> {
         let host = url
             .host_str()
-            .ok_or_else(|| Error::InvalidURI(url.to_string()))?
-            .to_string();
-        let path = url.path();
-
-        // Combine host and path to get the full path
-        let full_path = if path.is_empty() || path == "/" {
-            host.to_string()
-        } else {
-            format!("{}{}", host, path)
+            .ok_or_else(|| Error::InvalidURI(url.to_string()))?;
+        let raw_path = format!("{}{}", host, url.path().trim_end_matches('/'));
+        let (path, revision) = match raw_path.rfind('@') {
+            Some(pos) => (&raw_path[..pos], &raw_path[pos + 1..]),
+            None => (raw_path.as_str(), DEFAULT_HUGGING_FACE_REVISION),
         };
 
-        // Check for revision in the URL (after @)
-        let (path_part, revision) = if let Some(at_pos) = full_path.rfind('@') {
-            let (p, r) = full_path.split_at(at_pos);
-            (p.to_string(), r[1..].to_string())
-        } else {
-            (full_path, DEFAULT_HUGGING_FACE_REVISION.to_string())
+        let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+        let (repository_type, offset) = match segments.first() {
+            Some(&"datasets") => (RepositoryType::Dataset, 1),
+            Some(&"spaces") => (RepositoryType::Space, 1),
+            Some(&"models") => (RepositoryType::Model, 1),
+            _ => (RepositoryType::Model, 0),
         };
 
-        // Parse the path to extract repository_type, repository_id, and file path
-        let parts: Vec<&str> = path_part.trim_matches('/').split('/').collect();
-
-        if parts.is_empty() {
+        // After stripping the optional type prefix, at least two segments
+        // (owner and repository name) must remain.
+        let remaining = &segments[offset..];
+        if remaining.len() < 2 {
             return Err(Error::InvalidParameter);
         }
 
-        // Check if first part is a repository type
-        let (repository_type, repository_id_start) = match parts[0] {
-            "datasets" => (RepositoryType::Dataset, 1),
-            "spaces" => (RepositoryType::Space, 1),
-            "models" => (RepositoryType::Model, 1),
-            _ => (RepositoryType::Model, 0), // Default to model
-        };
-
-        // Need at least owner/repository (two segments after the optional repository type prefix)
-        if parts.len() < repository_id_start + 2 {
-            return Err(Error::InvalidParameter);
-        }
-
-        let repository_id = format!(
-            "{}/{}",
-            parts[repository_id_start],
-            parts[repository_id_start + 1]
-        );
-        let file_path = if parts.len() > repository_id_start + 2 {
-            Some(parts[repository_id_start + 2..].join("/"))
+        let repository_id = format!("{}/{}", remaining[0], remaining[1]);
+        let file_path = if remaining.len() > 2 {
+            Some(remaining[2..].join("/"))
         } else {
             None
         };
 
         Ok(ParsedURL {
             url,
-            repository_id,
             repository_type,
-            path: file_path,
-            revision,
+            repository_id,
+            file_path,
+            revision: revision.to_string(),
         })
     }
 }
@@ -395,7 +390,7 @@ impl HuggingFace {
             .into_iter()
             .filter_map(|sibling| {
                 // Filter by path prefix if specified
-                if let Some(ref prefix) = parsed.path {
+                if let Some(ref prefix) = parsed.file_path {
                     if !sibling.rfilename.starts_with(prefix) {
                         return None;
                     }
@@ -441,11 +436,11 @@ impl Backend for HuggingFace {
         let parsed = ParsedURL::try_from(request.url.as_str())?;
         info!(
             "stat huggingface repo: {} path: {:?}",
-            parsed.repository_id, parsed.path
+            parsed.repository_id, parsed.file_path
         );
 
         // If a specific file is requested, get its info
-        if let Some(ref path) = parsed.path {
+        if let Some(ref path) = parsed.file_path {
             let download_url = Self::build_download_url(&parsed, path);
             debug!("checking file: {}", download_url);
 
@@ -495,7 +490,7 @@ impl Backend for HuggingFace {
     async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>> {
         let parsed = ParsedURL::try_from(request.url.as_str())?;
 
-        let filename = parsed.path.as_ref().ok_or_else(|| {
+        let filename = parsed.file_path.as_ref().ok_or_else(|| {
             error!("file path is required for download");
             Error::InvalidParameter
         })?;
@@ -558,7 +553,7 @@ impl Backend for HuggingFace {
     /// exists checks whether the file exists in the backend.
     async fn exists(&self, request: ExistsRequest) -> Result<bool> {
         let parsed = ParsedURL::try_from(request.url.as_str())?;
-        let filename = match parsed.path {
+        let filename = match parsed.file_path {
             Some(ref path) => path,
             None => {
                 // Check if repository exists.
@@ -601,7 +596,7 @@ mod tests {
             ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR/model.safetensors").unwrap();
         assert_eq!(parsed.repository_id, "deepseek-ai/DeepSeek-OCR");
         assert_eq!(parsed.repository_type, RepositoryType::Model);
-        assert_eq!(parsed.path, Some("model.safetensors".to_string()));
+        assert_eq!(parsed.file_path, Some("model.safetensors".to_string()));
         assert_eq!(parsed.revision, "main");
     }
 
@@ -610,7 +605,7 @@ mod tests {
         let parsed = ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR@v1.0").unwrap();
         assert_eq!(parsed.repository_id, "deepseek-ai/DeepSeek-OCR");
         assert_eq!(parsed.revision, "v1.0");
-        assert!(parsed.path.is_none());
+        assert!(parsed.file_path.is_none());
     }
 
     #[test]
@@ -619,7 +614,7 @@ mod tests {
             ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR/models/v1/model.bin").unwrap();
         assert_eq!(parsed.repository_id, "deepseek-ai/DeepSeek-OCR");
         assert_eq!(parsed.repository_type, RepositoryType::Model);
-        assert_eq!(parsed.path, Some("models/v1/model.bin".to_string()));
+        assert_eq!(parsed.file_path, Some("models/v1/model.bin".to_string()));
     }
 
     #[test]
@@ -627,7 +622,7 @@ mod tests {
         let parsed = ParsedURL::try_from("hf://datasets/huggingface/squad").unwrap();
         assert_eq!(parsed.repository_id, "huggingface/squad");
         assert_eq!(parsed.repository_type, RepositoryType::Dataset);
-        assert!(parsed.path.is_none());
+        assert!(parsed.file_path.is_none());
     }
 
     #[test]
@@ -635,7 +630,7 @@ mod tests {
         let parsed = ParsedURL::try_from("hf://datasets/huggingface/squad/train.json").unwrap();
         assert_eq!(parsed.repository_id, "huggingface/squad");
         assert_eq!(parsed.repository_type, RepositoryType::Dataset);
-        assert_eq!(parsed.path, Some("train.json".to_string()));
+        assert_eq!(parsed.file_path, Some("train.json".to_string()));
     }
 
     #[test]
@@ -643,7 +638,7 @@ mod tests {
         let parsed = ParsedURL::try_from("hf://spaces/huggingface/transformers-demo").unwrap();
         assert_eq!(parsed.repository_id, "huggingface/transformers-demo");
         assert_eq!(parsed.repository_type, RepositoryType::Space);
-        assert!(parsed.path.is_none());
+        assert!(parsed.file_path.is_none());
     }
 
     #[test]
@@ -652,7 +647,7 @@ mod tests {
             ParsedURL::try_from("hf://models/deepseek-ai/DeepSeek-OCR/model.safetensors").unwrap();
         assert_eq!(parsed.repository_id, "deepseek-ai/DeepSeek-OCR");
         assert_eq!(parsed.repository_type, RepositoryType::Model);
-        assert_eq!(parsed.path, Some("model.safetensors".to_string()));
+        assert_eq!(parsed.file_path, Some("model.safetensors".to_string()));
     }
 
     #[test]
