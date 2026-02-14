@@ -281,6 +281,21 @@ lazy_static! {
             Opts::new("disk_usage_space_total", "Gauge of the disk usage space in bytes").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
             &[]
         ).expect("metric can be created");
+
+    /// DOWNLOAD_TASK_BLOCKED_COUNT is used to count of the download task blocked.
+    pub static ref DOWNLOAD_TASK_BLOCKED_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("download_task_blocked_total", "Counter of the number of download task blocked.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type"]
+        ).expect("metric can be created");
+
+
+    /// UPLOAD_TASK_BLOCKED_COUNT is used to count of the upload task blocked.
+    pub static ref UPLOAD_TASK_BLOCKED_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("upload_task_blocked_total", "Counter of the number of upload task blocked.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type"]
+        ).expect("metric can be created");
 }
 
 /// register_custom_metrics registers all custom metrics.
@@ -395,6 +410,14 @@ fn register_custom_metrics() {
 
     REGISTRY
         .register(Box::new(DISK_USAGE_SPACE.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(DOWNLOAD_TASK_BLOCKED_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(UPLOAD_TASK_BLOCKED_COUNT.clone()))
         .expect("metric can be registered");
 }
 
@@ -849,6 +872,20 @@ pub fn collect_disk_metrics(path: &Path) {
     DISK_USAGE_SPACE
         .with_label_values(&[])
         .set(usage_space as i64);
+}
+
+/// collect_download_task_blocked_metrics collects the download task blocked metrics.
+pub fn collect_download_task_blocked_metrics(typ: i32) {
+    DOWNLOAD_TASK_BLOCKED_COUNT
+        .with_label_values(&[typ.to_string().as_str()])
+        .inc();
+}
+
+/// collect_upload_task_blocked_metrics collects the upload task blocked metrics.
+pub fn collect_upload_task_blocked_metrics(typ: i32) {
+    UPLOAD_TASK_BLOCKED_COUNT
+        .with_label_values(&[typ.to_string().as_str()])
+        .inc();
 }
 
 /// Metrics is the metrics server.
