@@ -1123,9 +1123,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.2.14"
+version = "2.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c6bce47a42445dd556df63bdedde81501c97c19641a479d045b4e7bbde92064"
+checksum = "98046b3f184629046a3088f80576a435cc3dc3ccb26f1ee1e046088a199baff0"
 dependencies = [
  "prost 0.13.5",
  "prost-types 0.14.3",
@@ -1138,7 +1138,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1219,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "dashmap",
  "dragonfly-api",
@@ -1257,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "bytesize",
  "bytesize-serde",
@@ -1288,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "cgroups-rs",
  "headers 0.4.1",
@@ -1309,7 +1309,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "anyhow",
  "clap",
@@ -1327,7 +1327,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-metric"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-config",
@@ -1342,7 +1342,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "bincode",
  "bytes",
@@ -1376,7 +1376,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -1915,7 +1915,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "dragonfly-client-backend",
  "dragonfly-client-core",
@@ -2500,9 +2500,9 @@ dependencies = [
 
 [[package]]
 name = "indicatif"
-version = "0.18.3"
+version = "0.18.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9375e112e4b463ec1b1c6c011953545c65a30164fbab5b581df32b3abf0dcb88"
+checksum = "25470f23803092da7d239834776d653104d551bc4d7eacaf31e6837854b8e9eb"
 dependencies = [
  "console",
  "portable-atomic",
@@ -3827,9 +3827,9 @@ dependencies = [
 
 [[package]]
 name = "portable-atomic"
-version = "1.11.1"
+version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f84267b20a16ea918e43c6a88433c2d54fa145c92a811b5b047ccbe153674483"
+checksum = "c33a9471896f1c69cecef8d20cbe2f7accd12527ce60845ff44c153bb2a21b49"
 
 [[package]]
 name = "portable-atomic-util"
@@ -4412,9 +4412,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.12.2"
+version = "1.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "843bc0191f75f3e22651ae5f1e72939ab2f72a4bc30fa80a066bd66edefc24d4"
+checksum = "e10754a14b9137dd7b1e3e5b0493cc9171fdd105e0ab477f51b72e7f3ac0e276"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -5349,9 +5349,9 @@ checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "tempfile"
-version = "3.23.0"
+version = "3.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d31c77bdf42a745371d260a26ca7163f1e0924b64afa0b688e61b5a9fa02f16"
+checksum = "0136791f7c95b1f6dd99f9cc786b91bb81c3800b639b3478e561ddb7be95e5f1"
 dependencies = [
  "fastrand",
  "getrandom 0.3.1",
