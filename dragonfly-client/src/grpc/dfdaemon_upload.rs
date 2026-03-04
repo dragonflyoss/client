@@ -828,6 +828,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 client_cert: None,
                 object_storage: request.object_storage.clone(),
                 hdfs: request.hdfs.clone(),
+                hugging_face: request.hugging_face.clone(),
             })
             .await
             .map_err(|err| {

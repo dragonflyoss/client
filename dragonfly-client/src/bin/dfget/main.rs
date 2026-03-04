@@ -285,6 +285,12 @@ struct Args {
     )]
     hdfs_delegation_token: Option<String>,
 
+    #[arg(
+        long,
+        help = "Specify whether to skip verify TLS certification for Hugging Face Hub"
+    )]
+    hf_insecure_skip_verify: Option<bool>,
+
     #[arg(long, help = "Specify the authentication token for Hugging Face Hub")]
     hf_token: Option<String>,
 
@@ -684,6 +690,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
 
     let hugging_face = Some(HuggingFace {
         token: args.hf_token.clone(),
+        insecure_skip_verify: args.hf_insecure_skip_verify,
     });
 
     // Get all entries in the directory with include files filter.
@@ -904,6 +911,7 @@ async fn download(
 
     let hugging_face = Some(HuggingFace {
         token: args.hf_token.clone(),
+        insecure_skip_verify: args.hf_insecure_skip_verify,
     });
 
     // If the `filtered_query_params` is not provided, then use the default value.
