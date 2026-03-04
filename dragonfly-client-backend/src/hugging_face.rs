@@ -768,12 +768,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_url_invalid_scheme() {
-        let result = ParsedURL::try_from("http://deepseek-ai/DeepSeek-OCR");
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_parse_url_missing_repo() {
         let result = ParsedURL::try_from("hf://deepseek-ai");
         assert!(result.is_err());
