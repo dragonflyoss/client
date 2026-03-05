@@ -296,7 +296,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value_t = 10,
+        default_value_t = 100,
         help = "Specify the max count of file to download when downloading a directory. If the actual file count is greater than this value, the downloading will be rejected"
     )]
     max_files: usize,
