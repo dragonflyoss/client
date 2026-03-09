@@ -17,7 +17,7 @@
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::resource::parent_selector::ParentSelector;
 use dragonfly_api::common::v2::{
-    Download, Hdfs, ObjectStorage, Peer, Piece, Task as CommonTask, TrafficType,
+    Download, Hdfs, HuggingFace, ObjectStorage, Peer, Piece, Task as CommonTask, TrafficType,
 };
 use dragonfly_api::dfdaemon::{
     self,
@@ -202,6 +202,7 @@ impl Task {
                 client_cert: None,
                 object_storage: request.object_storage,
                 hdfs: request.hdfs,
+                hugging_face: request.hugging_face,
             })
             .await
             .inspect_err(|_err| {
@@ -1339,6 +1340,7 @@ impl Task {
                 in_stream_tx: Sender<AnnouncePeerRequest>,
                 object_storage: Option<ObjectStorage>,
                 hdfs: Option<Hdfs>,
+                hugging_face: Option<HuggingFace>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!("start to download piece {} from source", piece_id);
@@ -1355,6 +1357,7 @@ impl Task {
                         is_prefetch,
                         object_storage,
                         hdfs,
+                        hugging_face,
                     )
                     .await?;
 
@@ -1454,6 +1457,7 @@ impl Task {
             let in_stream_tx = in_stream_tx.clone();
             let object_storage = request.object_storage.clone();
             let hdfs = request.hdfs.clone();
+            let hugging_face = request.hugging_face.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -1474,6 +1478,7 @@ impl Task {
                         in_stream_tx,
                         object_storage,
                         hdfs,
+                        hugging_face,
                     )
                     .await
                 }
@@ -1736,6 +1741,7 @@ impl Task {
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 object_storage: Option<ObjectStorage>,
                 hdfs: Option<Hdfs>,
+                hugging_face: Option<HuggingFace>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!("start to download piece {} from source", piece_id);
@@ -1752,6 +1758,7 @@ impl Task {
                         is_prefetch,
                         object_storage,
                         hdfs,
+                        hugging_face,
                     )
                     .await?;
 
@@ -1828,6 +1835,7 @@ impl Task {
             let download_progress_tx = download_progress_tx.clone();
             let object_storage = request.object_storage.clone();
             let hdfs = request.hdfs.clone();
+            let hugging_face = request.hugging_face.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -1847,6 +1855,7 @@ impl Task {
                         download_progress_tx,
                         object_storage,
                         hdfs,
+                        hugging_face,
                     )
                     .await
                 }

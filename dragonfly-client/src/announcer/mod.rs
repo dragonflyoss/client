@@ -138,6 +138,7 @@ impl SchedulerAnnouncer {
 
             // TODO: Get the cpu times.
             times: None,
+            cgroup: None,
         };
 
         // Get the memory information.
@@ -150,6 +151,7 @@ impl SchedulerAnnouncer {
             used: memory_stats.usage,
             used_percent: memory_stats.used_percent,
             process_used_percent: process_memory_stats.used_percent,
+            cgroup: None,
         };
 
         // Wait for getting the network data.

@@ -434,6 +434,7 @@ impl Proxy {
                     tag: request.tag.clone(),
                     application: request.application.clone(),
                     filtered_query_params,
+                    revision: None,
                 },
             })
             .map_err(|err| Error::Internal(format!("failed to generate task id: {}", err)))?;

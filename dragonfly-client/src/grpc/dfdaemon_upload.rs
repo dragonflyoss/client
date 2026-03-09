@@ -299,6 +299,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         tag: download.tag.clone(),
                         application: download.application.clone(),
                         filtered_query_params: download.filtered_query_params.clone(),
+                        revision: download.hugging_face.as_ref().map(|hf| hf.revision.clone()),
                     }
                 },
             )
@@ -828,6 +829,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 client_cert: None,
                 object_storage: request.object_storage.clone(),
                 hdfs: request.hdfs.clone(),
+                hugging_face: request.hugging_face.clone(),
             })
             .await
             .map_err(|err| {
