@@ -287,6 +287,13 @@ struct Args {
 
     #[arg(
         long,
+        default_value = "main",
+        help = "Specify the revision for Hugging Face Hub, only used when downloading from Hugging Face Hub"
+    )]
+    hf_revision: String,
+
+    #[arg(
+        long,
         help = "Specify whether to skip verify TLS certification for Hugging Face Hub"
     )]
     hf_insecure_skip_verify: Option<bool>,
@@ -689,6 +696,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
     });
 
     let hugging_face = Some(HuggingFace {
+        revision: args.hf_revision.clone(),
         token: args.hf_token.clone(),
         insecure_skip_verify: args.hf_insecure_skip_verify,
     });
@@ -910,6 +918,7 @@ async fn download(
     });
 
     let hugging_face = Some(HuggingFace {
+        revision: args.hf_revision.clone(),
         token: args.hf_token.clone(),
         insecure_skip_verify: args.hf_insecure_skip_verify,
     });

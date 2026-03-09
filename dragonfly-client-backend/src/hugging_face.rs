@@ -63,10 +63,6 @@ const HUGGING_FACE_BASE_URL: &str = "https://huggingface.co";
 /// HUGGING_FACE_API_BASE_URL is the API base URL for Hugging Face API.
 const HUGGING_FACE_API_BASE_URL: &str = "https://huggingface.co/api";
 
-/// DEFAULT_HUGGING_FACE_REVISION is the default revision (branch) to use for Hugging Face
-/// repositories if not specified in the URL.
-const DEFAULT_HUGGING_FACE_REVISION: &str = "main";
-
 /// Repository represents the Hugging Face repository information returned by the API.
 #[derive(Default, Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -114,9 +110,6 @@ pub struct ParsedURL {
 
     /// An optional file path within the repository (e.g., `"path/to/weights.bin"`).
     pub file_path: Option<String>,
-
-    /// The git revision (branch, tag, or commit hash). Defaults to main.
-    pub revision: String,
 }
 
 /// The type of a Hugging Face repository.
@@ -152,7 +145,7 @@ impl RepositoryType {
 /// - repository_type  Optional. One of "models" (default), "datasets", or "spaces".
 /// - owner/repository Required. For example, "meta-llama/Llama-2-7b".
 /// - path             Optional file path within the repository.
-/// - revision         Optional git ref after "@". Defaults to DEFAULT_HUGGING_FACE_REVISION.
+/// - revision         Optional git ref after "@".
 ///
 /// Examples:
 ///   - URL: https://huggingface.co/meta-llama/Llama-2-7b => Type: Model, Repository ID: meta-llama/Llama-2-7b, Path: None, Revision: main
@@ -171,12 +164,7 @@ impl TryFrom<Url> for ParsedURL {
             .host_str()
             .ok_or_else(|| Error::InvalidURI(url.to_string()))?;
         let raw_path = format!("{}{}", host, url.path().trim_end_matches('/'));
-        let (path, revision) = match raw_path.rfind('@') {
-            Some(pos) => (&raw_path[..pos], &raw_path[pos + 1..]),
-            None => (raw_path.as_str(), DEFAULT_HUGGING_FACE_REVISION),
-        };
-
-        let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+        let segments: Vec<&str> = raw_path.trim_matches('/').split('/').collect();
         let (repository_type, offset) = match segments.first() {
             Some(&"datasets") => (RepositoryType::Dataset, 1),
             Some(&"spaces") => (RepositoryType::Space, 1),
@@ -203,7 +191,6 @@ impl TryFrom<Url> for ParsedURL {
             repository_type,
             repository_id,
             file_path,
-            revision: revision.to_string(),
         })
     }
 }
@@ -257,24 +244,24 @@ impl HuggingFace {
     }
 
     /// Builds the download URL for a file based on the repository type and path.
-    fn build_download_url(parsed_url: &ParsedURL, file_path: &str) -> String {
+    fn build_download_url(parsed_url: &ParsedURL, file_path: &str, revision: &str) -> String {
         match parsed_url.repository_type {
             RepositoryType::Model => {
                 format!(
                     "{}/{}/resolve/{}/{}",
-                    HUGGING_FACE_BASE_URL, parsed_url.repository_id, parsed_url.revision, file_path
+                    HUGGING_FACE_BASE_URL, parsed_url.repository_id, revision, file_path
                 )
             }
             RepositoryType::Dataset => {
                 format!(
                     "{}/datasets/{}/resolve/{}/{}",
-                    HUGGING_FACE_BASE_URL, parsed_url.repository_id, parsed_url.revision, file_path
+                    HUGGING_FACE_BASE_URL, parsed_url.repository_id, revision, file_path
                 )
             }
             RepositoryType::Space => {
                 format!(
                     "{}/spaces/{}/resolve/{}/{}",
-                    HUGGING_FACE_BASE_URL, parsed_url.repository_id, parsed_url.revision, file_path
+                    HUGGING_FACE_BASE_URL, parsed_url.repository_id, revision, file_path
                 )
             }
         }
@@ -291,13 +278,13 @@ impl HuggingFace {
     }
 
     /// Builds the API URL for fetching repository information at a specific revision.
-    fn build_repository_revision_url(parsed_url: &ParsedURL) -> String {
+    fn build_repository_revision_url(parsed_url: &ParsedURL, revision: &str) -> String {
         format!(
             "{}/{}/{}?revision={}",
             HUGGING_FACE_API_BASE_URL,
             parsed_url.repository_type.as_str(),
             parsed_url.repository_id,
-            parsed_url.revision
+            revision
         )
     }
 
@@ -306,16 +293,16 @@ impl HuggingFace {
     fn build_hf_url(parsed_url: &ParsedURL, filename: &str) -> String {
         match parsed_url.repository_type {
             RepositoryType::Model => format!(
-                "{}://{}/{}@{}",
-                HUGGING_FACE_SCHEME, parsed_url.repository_id, filename, parsed_url.revision
+                "{}://{}/{}",
+                HUGGING_FACE_SCHEME, parsed_url.repository_id, filename
             ),
             RepositoryType::Dataset => format!(
-                "{}://datasets/{}/{}@{}",
-                HUGGING_FACE_SCHEME, parsed_url.repository_id, filename, parsed_url.revision
+                "{}://datasets/{}/{}",
+                HUGGING_FACE_SCHEME, parsed_url.repository_id, filename
             ),
             RepositoryType::Space => format!(
-                "{}://spaces/{}/{}@{}",
-                HUGGING_FACE_SCHEME, parsed_url.repository_id, filename, parsed_url.revision
+                "{}://spaces/{}/{}",
+                HUGGING_FACE_SCHEME, parsed_url.repository_id, filename
             ),
         }
     }
@@ -367,14 +354,31 @@ impl Backend for HuggingFace {
 
         // Build request headers, including authentication if provided hugging face token.
         let request_header = Self::build_request_headers(
-            request.hugging_face.and_then(|hf| hf.token.clone()),
+            request
+                .hugging_face
+                .as_ref()
+                .and_then(|hf| hf.token.clone()),
             None,
         )?;
+
+        // Get the revision from the request, request must contain revision for stat request,
+        // otherwise return error.
+        let revision = request
+            .hugging_face
+            .ok_or_else(|| {
+                error!(
+                    "stat request {} {}: missing Hugging Face information",
+                    request.task_id, request.url
+                );
+
+                Error::InvalidParameter
+            })?
+            .revision;
 
         let parsed_url = ParsedURL::try_from(request.url.as_str())?;
         match &parsed_url.file_path {
             Some(file_path) => {
-                let download_url = Self::build_download_url(&parsed_url, file_path);
+                let download_url = Self::build_download_url(&parsed_url, file_path, &revision);
                 let response = match self
                     .client
                     .head(&download_url)
@@ -427,7 +431,8 @@ impl Backend for HuggingFace {
                 })
             }
             None => {
-                let repository_revision_url = Self::build_repository_revision_url(&parsed_url);
+                let repository_revision_url =
+                    Self::build_repository_revision_url(&parsed_url, &revision);
                 let response = match self
                     .client
                     .get(&repository_revision_url)
@@ -549,6 +554,29 @@ impl Backend for HuggingFace {
             request.task_id, request.piece_id, request.url, request.http_header
         );
 
+        // Build request headers, including authentication if provided hugging face token.
+        let request_header = Self::build_request_headers(
+            request
+                .hugging_face
+                .as_ref()
+                .and_then(|hf| hf.token.clone()),
+            None,
+        )?;
+
+        // Get the revision from the request, request must contain revision for stat request,
+        // otherwise return error.
+        let revision = request
+            .hugging_face
+            .ok_or_else(|| {
+                error!(
+                    "get request {} {}: missing Hugging Face information",
+                    request.task_id, request.url
+                );
+
+                Error::InvalidParameter
+            })?
+            .revision;
+
         // Parse the URL and build the download URL for the specified file.
         let parsed_url = ParsedURL::try_from(request.url.as_str())?;
         let Some(file_path) = &parsed_url.file_path else {
@@ -559,18 +587,11 @@ impl Backend for HuggingFace {
 
             return Err(Error::InvalidParameter);
         };
-        let download_url = Self::build_download_url(&parsed_url, file_path);
-
-        // Build request headers, including authentication if provided hugging face token.
-        let request_header = Self::build_request_headers(
-            request.hugging_face.and_then(|hf| hf.token.clone()),
-            request.range,
-        )?;
-
+        let download_url = Self::build_download_url(&parsed_url, file_path, &revision);
         let response = match self
             .client
             .get(&download_url)
-            .headers(request_header.clone())
+            .headers(request_header)
             .timeout(request.timeout)
             .send()
             .await
@@ -626,14 +647,33 @@ impl Backend for HuggingFace {
             request.task_id, request.url, request.http_header
         );
 
-        let parsed_url = ParsedURL::try_from(request.url.as_str())?;
+        // Build request headers, including authentication if provided hugging face token.
         let request_header = Self::build_request_headers(
-            request.hugging_face.and_then(|hf| hf.token.clone()),
+            request
+                .hugging_face
+                .as_ref()
+                .and_then(|hf| hf.token.clone()),
             None,
         )?;
+
+        // Get the revision from the request, request must contain revision for stat request,
+        // otherwise return error.
+        let revision = request
+            .hugging_face
+            .ok_or_else(|| {
+                error!(
+                    "stat request {} {}: missing Hugging Face information",
+                    request.task_id, request.url
+                );
+
+                Error::InvalidParameter
+            })?
+            .revision;
+
+        let parsed_url = ParsedURL::try_from(request.url.as_str())?;
         match &parsed_url.file_path {
             Some(file_path) => {
-                let download_url = Self::build_download_url(&parsed_url, file_path);
+                let download_url = Self::build_download_url(&parsed_url, file_path, &revision);
                 let response = self
                     .client
                     .head(&download_url)
@@ -701,7 +741,6 @@ mod tests {
         assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-OCR");
         assert_eq!(parsed_url.repository_type, RepositoryType::Model);
         assert!(parsed_url.file_path.is_none());
-        assert_eq!(parsed_url.revision, "main");
     }
 
     #[test]
@@ -711,14 +750,12 @@ mod tests {
         assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-OCR");
         assert_eq!(parsed_url.repository_type, RepositoryType::Model);
         assert_eq!(parsed_url.file_path, Some("model.safetensors".to_string()));
-        assert_eq!(parsed_url.revision, "main");
     }
 
     #[test]
     fn test_parse_url_with_revision() {
         let parsed_url = ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR@v1.0").unwrap();
         assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-OCR");
-        assert_eq!(parsed_url.revision, "v1.0");
         assert!(parsed_url.file_path.is_none());
     }
 
@@ -777,7 +814,7 @@ mod tests {
     fn test_build_download_url_model() {
         let parsed_url =
             ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR/model.safetensors").unwrap();
-        let url = HuggingFace::build_download_url(&parsed_url, "model.safetensors");
+        let url = HuggingFace::build_download_url(&parsed_url, "model.safetensors", "main");
         assert_eq!(
             url,
             "https://huggingface.co/deepseek-ai/DeepSeek-OCR/resolve/main/model.safetensors"
@@ -787,7 +824,7 @@ mod tests {
     #[test]
     fn test_build_download_url_dataset() {
         let parsed_url = ParsedURL::try_from("hf://datasets/huggingface/squad/train.json").unwrap();
-        let url = HuggingFace::build_download_url(&parsed_url, "train.json");
+        let url = HuggingFace::build_download_url(&parsed_url, "train.json", "main");
         assert_eq!(
             url,
             "https://huggingface.co/datasets/huggingface/squad/resolve/main/train.json"

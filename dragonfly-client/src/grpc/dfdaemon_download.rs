@@ -340,6 +340,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         tag: download.tag.clone(),
                         application: download.application.clone(),
                         filtered_query_params: download.filtered_query_params.clone(),
+                        revision: download.hugging_face.as_ref().map(|hf| hf.revision.clone()),
                     }
                 },
             )
