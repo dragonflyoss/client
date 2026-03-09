@@ -398,6 +398,11 @@ impl Backend for HTTP {
             Ok(response) if response.status() == reqwest::StatusCode::TEMPORARY_REDIRECT => {
                 if let Some(location) = response.headers().get(LOCATION) {
                     let target_url = location.to_str().or_err(ErrorType::ParseError)?;
+                    debug!(
+                        "stat request got 307 Temporary Redirect, following redirect {} -> {}",
+                        request.url, target_url
+                    );
+
                     self.store_temporary_redirect_url(&request.url, target_url)
                         .await;
 
