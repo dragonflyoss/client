@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+use crate::{
+    Backend, Body, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse, StatRequest,
+    StatResponse, DEFAULT_USER_AGENT, KEEP_ALIVE_INTERVAL, MAX_RETRY_TIMES, POOL_MAX_IDLE_PER_HOST,
+};
 use dashmap::{mapref::entry::Entry, DashMap};
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_core::{
@@ -48,9 +52,6 @@ pub const HTTPS_SCHEME: &str = "https";
 
 /// USER_AGENT_HEADER is the user agent header.
 pub const USER_AGENT_HEADER: &str = "user-agent";
-
-/// DEFAULT_USER_AGENT is the default user agent.
-pub const DEFAULT_USER_AGENT: &str = concat!("dragonfly", "/", env!("CARGO_PKG_VERSION"));
 
 /// TemporaryRedirectEntry stores a temporary redirect entry with its creation time.
 #[derive(Clone, Debug)]
@@ -133,8 +134,8 @@ impl HTTP {
                 .http1_only()
                 .hickory_dns(enable_hickory_dns)
                 .use_preconfigured_tls(client_config_builder)
-                .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
-                .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
+                .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
+                .tcp_keepalive(KEEP_ALIVE_INTERVAL)
                 .tcp_nodelay(true)
                 .redirect(reqwest::redirect::Policy::custom(move |attempt| {
                     if enable_cache_temporary_redirect
@@ -148,7 +149,7 @@ impl HTTP {
                 .build()?;
 
             let retry_policy =
-                ExponentialBackoff::builder().build_with_max_retries(super::MAX_RETRY_TIMES);
+                ExponentialBackoff::builder().build_with_max_retries(MAX_RETRY_TIMES);
             let client = ClientBuilder::new(client)
                 .with(TracingMiddleware::default())
                 .with(RetryTransientMiddleware::new_with_policy(retry_policy))
@@ -176,7 +177,7 @@ impl HTTP {
         })
     }
 
-    /// client returns a new reqwest client.
+    /// Client returns a new reqwest client.
     fn client(
         &self,
         client_cert: Option<Vec<CertificateDer<'static>>>,
@@ -211,8 +212,8 @@ impl HTTP {
                     .http1_only()
                     .hickory_dns(enable_hickory_dns)
                     .use_preconfigured_tls(client_config_builder)
-                    .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
-                    .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
+                    .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
+                    .tcp_keepalive(KEEP_ALIVE_INTERVAL)
                     .tcp_nodelay(true)
                     .redirect(reqwest::redirect::Policy::custom({
                         let enable_cache_temporary_redirect = self.enable_cache_temporary_redirect;
@@ -229,7 +230,7 @@ impl HTTP {
                     .build()?;
 
                 let retry_policy =
-                    ExponentialBackoff::builder().build_with_max_retries(super::MAX_RETRY_TIMES);
+                    ExponentialBackoff::builder().build_with_max_retries(MAX_RETRY_TIMES);
                 let client = ClientBuilder::new(client)
                     .with(TracingMiddleware::default())
                     .with(RetryTransientMiddleware::new_with_policy(retry_policy))
@@ -278,8 +279,7 @@ impl HTTP {
         Ok(())
     }
 
-    /// get_temporary_redirect_url gets the cached temporary redirect URL if exists
-    /// and not expired.
+    /// Get the cached temporary redirect URL if exists and not expired.
     async fn get_temporary_redirect_url(&self, url: &str) -> String {
         let mut temporary_redirects = self.temporary_redirects.lock().await;
         if let Some(entry) = temporary_redirects.get(url) {
@@ -299,7 +299,7 @@ impl HTTP {
         url.to_string()
     }
 
-    /// store_temporary_redirect_url stores the temporary redirect URL in the cache.
+    /// Store the temporary redirect URL in the cache.
     async fn store_temporary_redirect_url(&self, original_url: &str, target_url: &str) {
         if !self.enable_cache_temporary_redirect {
             return;
@@ -323,15 +323,15 @@ impl HTTP {
 
 /// Backend implements the Backend trait.
 #[tonic::async_trait]
-impl super::Backend for HTTP {
-    /// scheme returns the scheme of the HTTP backend.
+impl Backend for HTTP {
+    /// Scheme returns the scheme of the HTTP backend.
     fn scheme(&self) -> String {
         self.scheme.clone()
     }
 
-    /// stat gets the metadata from the backend.
+    /// Stat the metadata from the backend.
     #[instrument(skip_all)]
-    async fn stat(&self, request: super::StatRequest) -> Result<super::StatResponse> {
+    async fn stat(&self, request: StatRequest) -> Result<StatResponse> {
         debug!(
             "stat request {} {}: {:?}",
             request.task_id, request.url, request.http_header
@@ -384,7 +384,7 @@ impl super::Backend for HTTP {
                                 request.task_id, target_url, err
                             );
 
-                            return Ok(super::StatResponse {
+                            return Ok(StatResponse {
                                 success: false,
                                 content_length: None,
                                 http_header: None,
@@ -400,7 +400,7 @@ impl super::Backend for HTTP {
                         request.task_id, target_url
                     );
 
-                    return Ok(super::StatResponse {
+                    return Ok(StatResponse {
                         success: false,
                         content_length: None,
                         http_header: None,
@@ -436,7 +436,7 @@ impl super::Backend for HTTP {
                             request.task_id, target_url, err
                         );
 
-                        return Ok(super::StatResponse {
+                        return Ok(StatResponse {
                             success: false,
                             content_length: None,
                             http_header: None,
@@ -454,7 +454,7 @@ impl super::Backend for HTTP {
                     request.task_id, target_url, err
                 );
 
-                return Ok(super::StatResponse {
+                return Ok(StatResponse {
                     success: false,
                     content_length: None,
                     http_header: None,
@@ -479,7 +479,7 @@ impl super::Backend for HTTP {
 
         // Drop the response body to avoid reading it.
         drop(response);
-        Ok(super::StatResponse {
+        Ok(StatResponse {
             success: response_status_code.is_success(),
             content_length,
             http_header: Some(response_header),
@@ -489,9 +489,9 @@ impl super::Backend for HTTP {
         })
     }
 
-    /// get gets the content from the backend.
+    /// Get the content from the backend.
     #[instrument(skip_all)]
-    async fn get(&self, request: super::GetRequest) -> Result<super::GetResponse<super::Body>> {
+    async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>> {
         debug!(
             "get request {} {} {}: {:?}",
             request.task_id, request.piece_id, request.url, request.http_header
@@ -525,7 +525,7 @@ impl super::Backend for HTTP {
                     request.task_id, request.piece_id, target_url, err
                 );
 
-                return Ok(super::GetResponse {
+                return Ok(GetResponse {
                     success: false,
                     http_header: None,
                     http_status_code: None,
@@ -557,7 +557,7 @@ impl super::Backend for HTTP {
                             request.task_id, request.piece_id, target_url, err
                         );
 
-                        return Ok(super::GetResponse {
+                        return Ok(GetResponse {
                             success: false,
                             http_header: None,
                             http_status_code: None,
@@ -584,7 +584,7 @@ impl super::Backend for HTTP {
             request.task_id, request.piece_id, response_status_code, response_header,
         );
 
-        Ok(super::GetResponse {
+        Ok(GetResponse {
             success: response_status_code.is_success(),
             http_header: Some(response_header),
             http_status_code: Some(response_status_code),
@@ -593,15 +593,15 @@ impl super::Backend for HTTP {
         })
     }
 
-    /// put puts the content to the backend.
+    /// Put the content to the backend.
     #[instrument(skip_all)]
-    async fn put(&self, _request: super::PutRequest) -> Result<super::PutResponse> {
+    async fn put(&self, _request: PutRequest) -> Result<PutResponse> {
         unimplemented!()
     }
 
-    /// exists checks whether the file exists in the backend.
+    /// Exists checks whether the file exists in the backend.
     #[instrument(skip_all)]
-    async fn exists(&self, request: super::ExistsRequest) -> Result<bool> {
+    async fn exists(&self, request: ExistsRequest) -> Result<bool> {
         debug!(
             "exists request {} {}: {:?}",
             request.task_id, request.url, request.http_header
@@ -689,7 +689,7 @@ mod tests {
     use super::*;
     use crate::{
         http::{HTTP, HTTPS_SCHEME, HTTP_SCHEME},
-        Backend, ExistsRequest, GetRequest, StatRequest,
+        Backend, ExistsRequest, GetRequest, StatRequest, DEFAULT_USER_AGENT,
     };
     use dragonfly_client_util::tls::{load_certs_from_pem, load_key_from_pem};
     use http::header::{HeaderValue, USER_AGENT};
@@ -871,6 +871,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
             })
             .await
             .unwrap();
@@ -900,6 +901,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
             })
             .await;
 
@@ -931,6 +933,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
             })
             .await
             .unwrap();
@@ -952,6 +955,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
             })
             .await
             .unwrap();
@@ -972,6 +976,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
             })
             .await;
 
@@ -993,6 +998,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
             })
             .await
             .unwrap();
@@ -1016,6 +1022,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
             })
             .await;
 
@@ -1035,6 +1042,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
             })
             .await
             .unwrap();
@@ -1058,6 +1066,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
             })
             .await
             .unwrap();
@@ -1088,6 +1097,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
             })
             .await
             .unwrap();
@@ -1117,6 +1127,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
             })
             .await
             .unwrap();
@@ -1146,6 +1157,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
             })
             .await;
 
@@ -1301,6 +1313,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
             })
             .await
             .unwrap();
@@ -1320,6 +1333,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
             })
             .await
             .unwrap();
@@ -1365,6 +1379,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
             })
             .await
             .unwrap();
@@ -1386,6 +1401,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
             })
             .await
             .unwrap();
