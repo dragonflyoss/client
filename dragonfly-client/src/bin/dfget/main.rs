@@ -101,8 +101,8 @@ Examples:
   # Download an entire repository from ModelScope Hub.
   $ dfget modelscope://<owner>/<repo> -O /tmp/repo/ -r
   
-  # Download an entire repository from ModelScope Hub with specified revision. If the revision is not specified, the default value is `main`.
-  $ dfget modelscope://<owner>/<repo> --ms-revision main -O /tmp/repo/ -r
+  # Download an entire repository from ModelScope Hub with specified revision. If the revision is not specified, the default value is `master`.
+  $ dfget modelscope://<owner>/<repo> --ms-revision master -O /tmp/repo/ -r
 
   # Download from ModelScope Hub with authentication token.
   $ dfget modelscope://<owner>/<repo>/<path> -O /tmp/model.safetensors --ms-token=<token>
@@ -815,6 +815,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
 }
 
 /// Get all entries in the directory with include files filter.
+#[allow(clippy::too_many_arguments)]
 async fn get_all_entries(
     base_url: &Url,
     header: Option<Vec<String>>,
@@ -1625,6 +1626,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             dfdaemon_download_client,
         )
         .await
@@ -1679,6 +1681,7 @@ mod tests {
 
         let entries = get_all_entries(
             &Url::parse("http://example.com/root/").unwrap(),
+            None,
             None,
             None,
             None,
@@ -1769,6 +1772,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             dfdaemon_download_client,
         )
         .await
@@ -1849,6 +1853,7 @@ mod tests {
 
         let entries = get_all_entries(
             &Url::parse("http://example.com/root/").unwrap(),
+            None,
             None,
             None,
             None,

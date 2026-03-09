@@ -587,7 +587,7 @@ mod tests {
         let plugin_dir = dir.path().join("non_existent_plugin_dir");
 
         let factory = BackendFactory::new(Arc::new(Config::default()), Some(&plugin_dir)).unwrap();
-        assert_eq!(factory.backends.len(), 10);
+        assert_eq!(factory.backends.len(), 11);
     }
 
     #[test]

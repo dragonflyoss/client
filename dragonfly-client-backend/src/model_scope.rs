@@ -50,7 +50,7 @@ use serde::Deserialize;
 use std::io::{Error as IOError, ErrorKind};
 use std::sync::Arc;
 use tokio_util::io::StreamReader;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 use url::Url;
 
 /// MODELSCOPE_SCHEME is the URL scheme for ModelScope backend.
@@ -90,10 +90,6 @@ struct FileList {
 /// File represents a file entry returned by the ModelScope API.
 #[derive(Debug, Deserialize)]
 struct File {
-    /// The file name.
-    #[serde(rename = "Name")]
-    name: String,
-
     /// The relative path within the repository.
     #[serde(rename = "Path")]
     path: String,
@@ -495,19 +491,10 @@ impl Backend for ModelScope {
                             return None;
                         }
 
-                        // Skip .gitignore and .gitattributes
-                        // if file.name == ".gitignore" || file.name == ".gitattributes" {
-                        // return None;
-                        // }
-
                         // Return modelscope:// URLs so downstream downloads continue to use the
                         // ModelScope backend (preserving auth headers and URL semantics).
                         let ms_url = Self::build_model_scope_url(&parsed_url, &file.path);
                         let content_length = file.size.unwrap_or(0);
-                        info!(
-                            "stat entry {} {}: {} ({} bytes)",
-                            request.task_id, ms_url, file.path, content_length
-                        );
                         Some(DirEntry {
                             url: ms_url,
                             content_length: content_length as usize,
@@ -792,7 +779,7 @@ mod tests {
         let url = ModelScope::build_download_url(&parsed_url, "config.json", "master");
         assert_eq!(
             url,
-            "https://modelscope.cn/api/v1/models/deepseek-ai/DeepSeek-R1/repo?Revision=master&FilePath=config.json"
+            "https://modelscope.cn/models/deepseek-ai/DeepSeek-R1/resolve/master/config.json"
         );
     }
 
@@ -803,7 +790,7 @@ mod tests {
         let url = ModelScope::build_download_url(&parsed_url, "train.json", "master");
         assert_eq!(
             url,
-            "https://modelscope.cn/api/v1/datasets/owner/my-dataset/repo?Revision=master&FilePath=train.json"
+            "https://modelscope.cn/datasets/owner/my-dataset/resolve/master/train.json"
         );
     }
 
@@ -814,7 +801,7 @@ mod tests {
         let url = ModelScope::build_download_url(&parsed_url, "config.json", "v1.0");
         assert_eq!(
             url,
-            "https://modelscope.cn/api/v1/models/deepseek-ai/DeepSeek-R1/repo?Revision=v1.0&FilePath=config.json"
+            "https://modelscope.cn/models/deepseek-ai/DeepSeek-R1/resolve/v1.0/config.json"
         );
     }
 
