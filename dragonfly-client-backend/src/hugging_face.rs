@@ -22,12 +22,11 @@
 //!
 //! # URL Format
 //!
-//! The URL format is: `hf://<repo_id>[/<path>][@<revision>]`
+//! The URL format is: `hf://<repo_id>[/<path>]`
 //!
 //! Examples:
 //! - `hf://deepseek-ai/DeepSeek-OCR` - Download entire repository
 //! - `hf://deepseek-ai/DeepSeek-OCR/model.safetensors` - Download specific file
-//! - `hf://deepseek-ai/DeepSeek-OCR@main` - Download from specific revision
 //!
 //! # Authentication
 //!

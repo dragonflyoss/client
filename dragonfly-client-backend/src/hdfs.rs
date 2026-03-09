@@ -14,6 +14,26 @@
  * limitations under the License.
  */
 
+//! HDFS backend implementation for downloading and accessing files from Hadoop Distributed File System.
+//!
+//! This module provides support for the `hdfs://` URL scheme to access files from
+//! HDFS clusters. It uses the WebHDFS REST API through the OpenDAL library to handle
+//! file operations including stat, get, exists, and directory listing.
+//!
+//! # URL Format
+//!
+//! The URL format is: `hdfs://<namenode_host>[:<port>]/<path>`
+//!
+//! Examples:
+//! - `hdfs://namenode:9870/data/` - List entire directory
+//! - `hdfs://namenode:9870/data/model.bin` - Access specific file
+//! - `hdfs://namenode/data/model.bin` - Access file using default port (9870)
+//!
+//! # Authentication
+//!
+//! For secured HDFS clusters, use the `--hdfs-delegation-token` flag to provide
+//! a delegation token for authentication.
+
 use crate::{
     Backend, Body, DirEntry, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse,
     StatRequest, StatResponse,
