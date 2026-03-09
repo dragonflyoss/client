@@ -44,7 +44,7 @@
 //!
 //! Authentication is handled through custom HTTP headers configured in the dfdaemon
 //! configuration file or passed directly in the request headers.
-//!
+
 use crate::{
     Backend, Body, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse, StatRequest,
     StatResponse, DEFAULT_USER_AGENT, KEEP_ALIVE_INTERVAL, MAX_RETRY_TIMES, POOL_MAX_IDLE_PER_HOST,
@@ -74,6 +74,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio_util::io::StreamReader;
 use tracing::{debug, error, info, instrument};
+use url::Url;
 
 /// HTTP_SCHEME is the HTTP scheme.
 pub const HTTP_SCHEME: &str = "http";
@@ -400,10 +401,17 @@ impl Backend for HTTP {
                     self.store_temporary_redirect_url(&request.url, target_url)
                         .await;
 
+                    // Strips sensitive headers when following a cross-origin redirect.
+                    let mut redirect_headers = request_header.clone();
+                    remove_sensitive_headers(
+                        &mut redirect_headers,
+                        &target_url.parse()?,
+                        &request.url.parse()?,
+                    );
                     match self
                         .client(request.client_cert.clone(), self.enable_hickory_dns)?
                         .get(target_url)
-                        .headers(request_header.clone())
+                        .headers(redirect_headers)
                         .timeout(request.timeout)
                         .send()
                         .await
@@ -712,6 +720,25 @@ impl Backend for HTTP {
         // Drop the response body to avoid reading it.
         drop(response);
         Ok(response_status_code.is_success())
+    }
+}
+
+/// Strips sensitive headers when following a cross-origin redirect.
+///
+/// This replicates the behavior of reqwest's internal `remove_sensitive_headers`:
+/// https://github.com/seanmonstar/reqwest/blob/v0.12.15/src/redirect.rs#L134
+///
+/// Per RFC 9110 §15.4, user agents SHOULD strip credentials when redirecting
+/// to a different origin.
+fn remove_sensitive_headers(headers: &mut HeaderMap, next: &Url, previous: &Url) {
+    if next.host() != previous.host()
+        || next.port_or_known_default() != previous.port_or_known_default()
+    {
+        headers.remove(reqwest::header::AUTHORIZATION);
+        headers.remove(reqwest::header::COOKIE);
+        headers.remove("cookie2");
+        headers.remove(reqwest::header::PROXY_AUTHORIZATION);
+        headers.remove(reqwest::header::WWW_AUTHENTICATE);
     }
 }
 
