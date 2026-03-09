@@ -88,6 +88,9 @@ Examples:
 
   # Download an entire repository from Hugging Face Hub.
   $ dfget hf://<owner>/<repo> -O /tmp/repo/ -r
+  
+  # Download an entire repository from Hugging Face Hub with specified revision. If the revision is not specified, the default value is `main`.
+  $ dfget hf://<owner>/<repo> --hf-revision main -O /tmp/repo/ -r
 
   # Download from Hugging Face Hub with authentication token.
   $ dfget hf://<owner>/<repo>/<path> -O /tmp/model.safetensors --hf-token=<token>
@@ -291,12 +294,6 @@ struct Args {
         help = "Specify the revision for Hugging Face Hub, only used when downloading from Hugging Face Hub"
     )]
     hf_revision: String,
-
-    #[arg(
-        long,
-        help = "Specify whether to skip verify TLS certification for Hugging Face Hub"
-    )]
-    hf_insecure_skip_verify: Option<bool>,
 
     #[arg(long, help = "Specify the authentication token for Hugging Face Hub")]
     hf_token: Option<String>,
@@ -698,7 +695,6 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
     let hugging_face = Some(HuggingFace {
         revision: args.hf_revision.clone(),
         token: args.hf_token.clone(),
-        insecure_skip_verify: args.hf_insecure_skip_verify,
     });
 
     // Get all entries in the directory with include files filter.
@@ -920,7 +916,6 @@ async fn download(
     let hugging_face = Some(HuggingFace {
         revision: args.hf_revision.clone(),
         token: args.hf_token.clone(),
-        insecure_skip_verify: args.hf_insecure_skip_verify,
     });
 
     // If the `filtered_query_params` is not provided, then use the default value.
@@ -966,6 +961,7 @@ async fn download(
                 object_storage,
                 hdfs,
                 hugging_face,
+                model_scope: None,
                 force_hard_link: args.force_hard_link,
                 content_for_calculating_task_id: args.content_for_calculating_task_id,
                 remote_ip: preferred_local_ip().map(|ip| ip.to_string()),

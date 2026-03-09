@@ -1179,6 +1179,7 @@ fn make_download_task_request(
             object_storage: None,
             hdfs: None,
             hugging_face: None,
+            model_scope: None,
             is_prefetch: false,
             need_piece_content: false,
             force_hard_link: header::get_force_hard_link(&header),

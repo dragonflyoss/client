@@ -14,6 +14,48 @@
  * limitations under the License.
  */
 
+//! Object Storage backend implementation for downloading and uploading files from cloud storage services.
+//!
+//! This module provides support for multiple cloud object storage URL schemes to access files
+//! from various cloud providers. It uses the OpenDAL library to provide a unified interface
+//! across different object storage services, handling authentication, TLS configuration,
+//! and concurrent uploads.
+//!
+//! # Supported Schemes
+//!
+//! - `s3://` - Amazon Simple Storage Service (S3)
+//! - `gs://` - Google Cloud Storage (GCS)
+//! - `abs://` - Azure Blob Storage (ABS)
+//! - `oss://` - Aliyun Object Storage Service (OSS)
+//! - `obs://` - Huawei Cloud Object Storage Service (OBS)
+//! - `cos://` - Tencent Cloud Object Storage Service (COS)
+//!
+//! # URL Format
+//!
+//! The URL format is: `<scheme>://<bucket>/<key>`
+//!
+//! Examples:
+//! - `s3://my-bucket/models/` - List entire directory in S3
+//! - `s3://my-bucket/models/weights.bin` - Access specific file in S3
+//! - `gs://my-bucket/data/train.csv` - Access specific file in GCS
+//! - `oss://my-bucket/path/to/file` - Access specific file in OSS
+//!
+//! # Authentication
+//!
+//! Each object storage provider requires different credentials:
+//! - **S3**: `access_key_id`, `access_key_secret`, and `region` (optionally `endpoint`, `session_token`)
+//! - **GCS**: `credential_path` for service account credentials (optionally `endpoint`, `predefined_acl`)
+//! - **ABS**: `access_key_id` (account name), `access_key_secret` (account key), and `endpoint`
+//! - **OSS**: `access_key_id`, `access_key_secret`, and `endpoint` (optionally `security_token`)
+//! - **OBS**: `access_key_id`, `access_key_secret`, and `endpoint`
+//! - **COS**: `access_key_id` (secret id), `access_key_secret` (secret key), and `endpoint`
+//!
+//! # TLS Configuration
+//!
+//! By default, TLS certificate verification is enabled. To skip certificate verification
+//! (e.g., for self-signed certificates), set `insecure_skip_verify` to `true` in the
+//! object storage configuration.
+
 use crate::{
     Body, DirEntry, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse, StatRequest,
     StatResponse, HTTP2_CONNECTION_WINDOW_SIZE, HTTP2_KEEP_ALIVE_INTERVAL,
