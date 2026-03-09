@@ -293,12 +293,19 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 } else if let Some(content) = download.content_for_calculating_task_id.clone() {
                     TaskIDParameter::Content(content)
                 } else {
+                    let revision = download
+                        .hugging_face
+                        .as_ref()
+                        .map(|hf| hf.revision.clone())
+                        .or_else(|| download.model_scope.as_ref().map(|ms| ms.revision.clone()));
+
                     TaskIDParameter::URLBased {
                         url: download.url.clone(),
                         piece_length: download.piece_length,
                         tag: download.tag.clone(),
                         application: download.application.clone(),
                         filtered_query_params: download.filtered_query_params.clone(),
+                        revision,
                     }
                 },
             )
@@ -828,6 +835,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 client_cert: None,
                 object_storage: request.object_storage.clone(),
                 hdfs: request.hdfs.clone(),
+                hugging_face: request.hugging_face.clone(),
+                model_scope: request.model_scope.clone(),
             })
             .await
             .map_err(|err| {

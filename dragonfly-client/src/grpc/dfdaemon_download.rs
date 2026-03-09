@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+use crate::dynconfig::Dynconfig;
+use crate::grpc::block_list::{
+    BlockList, DownloadBlockListCheckParams, UploadBlockListCheckParams,
+};
 use crate::resource::{persistent_cache_task, persistent_task, task};
 use dragonfly_api::common::v2::{
     CacheTask, PersistentCacheTask, PersistentTask, Priority, Task, TaskType,
@@ -43,11 +47,12 @@ use dragonfly_client_core::{
 use dragonfly_client_metric::{
     collect_delete_host_failure_metrics, collect_delete_host_started_metrics,
     collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
-    collect_download_task_failure_metrics, collect_download_task_finished_metrics,
-    collect_download_task_started_metrics, collect_list_task_entries_failure_metrics,
-    collect_list_task_entries_started_metrics, collect_stat_local_task_failure_metrics,
-    collect_stat_local_task_started_metrics, collect_stat_task_failure_metrics,
-    collect_stat_task_started_metrics, collect_upload_task_failure_metrics,
+    collect_download_task_blocked_metrics, collect_download_task_failure_metrics,
+    collect_download_task_finished_metrics, collect_download_task_started_metrics,
+    collect_list_task_entries_failure_metrics, collect_list_task_entries_started_metrics,
+    collect_stat_local_task_failure_metrics, collect_stat_local_task_started_metrics,
+    collect_stat_task_failure_metrics, collect_stat_task_started_metrics,
+    collect_upload_task_blocked_metrics, collect_upload_task_failure_metrics,
     collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
 };
 use dragonfly_client_util::{
@@ -79,7 +84,7 @@ use tower::{
     load_shed::{error::Overloaded, LoadShedLayer},
     service_fn, ServiceBuilder,
 };
-use tracing::{error, info, instrument, Instrument, Span};
+use tracing::{error, info, instrument, warn, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
@@ -89,6 +94,9 @@ use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 pub struct DfdaemonDownloadServer {
     /// Configuration of the dfdaemon.
     config: Arc<Config>,
+
+    /// Dynamic configuration of the dfdaemon.
+    dynconfig: Arc<Dynconfig>,
 
     /// Path of the Unix domain socket.
     socket_path: PathBuf,
@@ -112,8 +120,10 @@ pub struct DfdaemonDownloadServer {
 /// DfdaemonDownloadServer implements the grpc server of the download.
 impl DfdaemonDownloadServer {
     /// Creates a new download server.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
+        dynconfig: Arc<Dynconfig>,
         socket_path: PathBuf,
         task: Arc<task::Task>,
         persistent_task: Arc<persistent_task::PersistentTask>,
@@ -123,6 +133,7 @@ impl DfdaemonDownloadServer {
     ) -> Self {
         Self {
             config,
+            dynconfig,
             socket_path,
             task,
             persistent_task,
@@ -138,6 +149,7 @@ impl DfdaemonDownloadServer {
         let service = DfdaemonDownloadGRPCServer::with_interceptor(
             DfdaemonDownloadServerHandler {
                 config: self.config.clone(),
+                block_list: BlockList::new(self.config.clone(), self.dynconfig.clone()),
                 socket_path: self.socket_path.clone(),
                 task: self.task.clone(),
                 persistent_task: self.persistent_task.clone(),
@@ -242,6 +254,9 @@ pub struct DfdaemonDownloadServerHandler {
     /// Configuration of the dfdaemon.
     config: Arc<Config>,
 
+    /// Block list for download tasks.
+    block_list: BlockList,
+
     /// Path of the Unix domain socket.
     socket_path: PathBuf,
 
@@ -286,6 +301,27 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             error!("missing download");
             Status::invalid_argument("missing download")
         })?;
+
+        // Check whether rejected by blocklist policy.
+        let check_params = DownloadBlockListCheckParams {
+            application: download.application.clone(),
+            url: Some(download.url.clone()),
+            tag: download.tag.clone(),
+            priority: Some(download.priority),
+        };
+        if self
+            .block_list
+            .is_task_download_blocked(&check_params)
+            .await
+        {
+            warn!("download rejected by blocklist policy: {:?}", check_params);
+            collect_download_task_blocked_metrics(TaskType::Standard as i32);
+            return Err(Status::permission_denied(
+                "download rejected by blocklist policy",
+            ));
+        }
+
+        // If concurrent_piece_count is not set in the request, use the default value in the config.
         download.concurrent_piece_count = Some(self.config.download.concurrent_piece_count);
 
         // Generate the task id.
@@ -298,12 +334,19 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 } else if let Some(content) = download.content_for_calculating_task_id.clone() {
                     TaskIDParameter::Content(content)
                 } else {
+                    let revision = download
+                        .hugging_face
+                        .as_ref()
+                        .map(|hf| hf.revision.clone())
+                        .or_else(|| download.model_scope.as_ref().map(|ms| ms.revision.clone()));
+
                     TaskIDParameter::URLBased {
                         url: download.url.clone(),
                         piece_length: download.piece_length,
                         tag: download.tag.clone(),
                         application: download.application.clone(),
                         filtered_query_params: download.filtered_query_params.clone(),
+                        revision,
                     }
                 },
             )
@@ -861,6 +904,8 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 client_cert: None,
                 object_storage: request.object_storage.clone(),
                 hdfs: request.hdfs.clone(),
+                hugging_face: request.hugging_face.clone(),
+                model_scope: request.model_scope.clone(),
             })
             .await
             .map_err(|err| {
@@ -989,6 +1034,25 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
         // Clone the request.
         let request = request.into_inner();
+
+        // Check whether rejected by blocklist policy.
+        let check_params = &DownloadBlockListCheckParams {
+            application: None,
+            url: Some(request.url.clone()),
+            tag: None,
+            priority: None,
+        };
+        if self
+            .block_list
+            .is_persistent_task_download_blocked(check_params)
+            .await
+        {
+            warn!("download rejected by blocklist policy: {:?}", check_params);
+            collect_download_task_blocked_metrics(TaskType::Persistent as i32);
+            return Err(Status::permission_denied(
+                "download rejected by blocklist policy",
+            ));
+        }
 
         // Generate the host id.
         let host_id = self.task.id_generator.host_id();
@@ -1293,6 +1357,26 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
         // Clone the request.
         let request = request.into_inner();
+
+        // Check whether rejected by blocklist policy.
+        let check_params = &UploadBlockListCheckParams {
+            application: None,
+            url: Some(request.url.clone()),
+            tag: None,
+        };
+        if self
+            .block_list
+            .is_persistent_task_upload_blocked(check_params)
+            .await
+        {
+            warn!("upload rejected by blocklist policy: {:?}", check_params);
+            collect_upload_task_blocked_metrics(TaskType::Persistent as i32);
+            return Err(Status::permission_denied(
+                "upload rejected by blocklist policy",
+            ));
+        }
+
+        // Get the path from the request.
         let path = Path::new(request.path.as_str());
         info!("upload persistent task {:?}", request);
 
@@ -1414,6 +1498,23 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
         // Clone the request.
         let request = request.into_inner();
+
+        // Check whether rejected by blocklist policy.
+        let check_params = &DownloadBlockListCheckParams {
+            application: request.application.clone(),
+            url: None,
+            tag: request.tag.clone(),
+            priority: None,
+        };
+        if self
+            .block_list
+            .is_persistent_cache_task_download_blocked(check_params)
+            .await
+        {
+            warn!("download rejected by blocklist policy: {:?}", check_params);
+            collect_download_task_blocked_metrics(TaskType::PersistentCache as i32);
+            return Err(Status::permission_denied("download blocked by block list"));
+        }
 
         // Generate the host id.
         let host_id = self.task.id_generator.host_id();
@@ -1677,6 +1778,26 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
         // Clone the request.
         let request = request.into_inner();
+
+        // Check whether rejected by blocklist policy.
+        let check_params = &UploadBlockListCheckParams {
+            application: request.application.clone(),
+            url: None,
+            tag: request.tag.clone(),
+        };
+        if self
+            .block_list
+            .is_persistent_cache_task_upload_blocked(check_params)
+            .await
+        {
+            warn!("upload rejected by blocklist policy: {:?}", check_params);
+            collect_upload_task_blocked_metrics(TaskType::PersistentCache as i32);
+            return Err(Status::permission_denied(
+                "upload rejected by blocklist policy",
+            ));
+        }
+
+        // Get the path from the request.
         let path = Path::new(request.path.as_str());
         info!("upload persistent cache task {:?}", request);
 

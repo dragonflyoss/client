@@ -14,6 +14,41 @@
  * limitations under the License.
  */
 
+//! HTTP/HTTPS backend implementation for downloading files from web servers.
+//!
+//! This module provides support for the `http://` and `https://` URL schemes to download
+//! files from any HTTP-compatible server. It handles connection pooling, automatic retries
+//! with exponential backoff, TLS certificate management, and 307 Temporary Redirect caching
+//! to optimize performance for object storage services.
+//!
+//! # URL Format
+//!
+//! The URL format is standard HTTP/HTTPS:
+//! - `http://<host>[:<port>]/<path>`
+//! - `https://<host>[:<port>]/<path>`
+//!
+//! Examples:
+//! - `http://example.com/data/model.bin` - Download via HTTP
+//! - `https://cdn.example.com/releases/v1.0/archive.tar.gz` - Download via HTTPS
+//! - `https://s3.amazonaws.com/bucket/key` - Download from object storage
+//!
+//! # Features
+//!
+//! - **Connection Pooling**: Maintains a pool of HTTP clients for concurrent downloads.
+//! - **Automatic Retries**: Uses exponential backoff for transient failures.
+//! - **307 Redirect Caching**: Caches temporary redirects to reduce round trips to origin servers.
+//! - **Custom Headers**: Supports custom request headers configured in dfdaemon config.
+//! - **TLS Support**: Handles custom CA certificates and TLS verification.
+//!
+//! # Authentication
+//!
+//! Authentication is handled through custom HTTP headers configured in the dfdaemon
+//! configuration file or passed directly in the request headers.
+//!
+use crate::{
+    Backend, Body, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse, StatRequest,
+    StatResponse, DEFAULT_USER_AGENT, KEEP_ALIVE_INTERVAL, MAX_RETRY_TIMES, POOL_MAX_IDLE_PER_HOST,
+};
 use dashmap::{mapref::entry::Entry, DashMap};
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_core::{
@@ -48,9 +83,6 @@ pub const HTTPS_SCHEME: &str = "https";
 
 /// USER_AGENT_HEADER is the user agent header.
 pub const USER_AGENT_HEADER: &str = "user-agent";
-
-/// DEFAULT_USER_AGENT is the default user agent.
-pub const DEFAULT_USER_AGENT: &str = concat!("dragonfly", "/", env!("CARGO_PKG_VERSION"));
 
 /// TemporaryRedirectEntry stores a temporary redirect entry with its creation time.
 #[derive(Clone, Debug)]
@@ -133,8 +165,8 @@ impl HTTP {
                 .http1_only()
                 .hickory_dns(enable_hickory_dns)
                 .use_preconfigured_tls(client_config_builder)
-                .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
-                .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
+                .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
+                .tcp_keepalive(KEEP_ALIVE_INTERVAL)
                 .tcp_nodelay(true)
                 .redirect(reqwest::redirect::Policy::custom(move |attempt| {
                     if enable_cache_temporary_redirect
@@ -148,7 +180,7 @@ impl HTTP {
                 .build()?;
 
             let retry_policy =
-                ExponentialBackoff::builder().build_with_max_retries(super::MAX_RETRY_TIMES);
+                ExponentialBackoff::builder().build_with_max_retries(MAX_RETRY_TIMES);
             let client = ClientBuilder::new(client)
                 .with(TracingMiddleware::default())
                 .with(RetryTransientMiddleware::new_with_policy(retry_policy))
@@ -176,7 +208,7 @@ impl HTTP {
         })
     }
 
-    /// client returns a new reqwest client.
+    /// Client returns a new reqwest client.
     fn client(
         &self,
         client_cert: Option<Vec<CertificateDer<'static>>>,
@@ -211,8 +243,8 @@ impl HTTP {
                     .http1_only()
                     .hickory_dns(enable_hickory_dns)
                     .use_preconfigured_tls(client_config_builder)
-                    .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
-                    .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
+                    .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
+                    .tcp_keepalive(KEEP_ALIVE_INTERVAL)
                     .tcp_nodelay(true)
                     .redirect(reqwest::redirect::Policy::custom({
                         let enable_cache_temporary_redirect = self.enable_cache_temporary_redirect;
@@ -229,7 +261,7 @@ impl HTTP {
                     .build()?;
 
                 let retry_policy =
-                    ExponentialBackoff::builder().build_with_max_retries(super::MAX_RETRY_TIMES);
+                    ExponentialBackoff::builder().build_with_max_retries(MAX_RETRY_TIMES);
                 let client = ClientBuilder::new(client)
                     .with(TracingMiddleware::default())
                     .with(RetryTransientMiddleware::new_with_policy(retry_policy))
@@ -278,8 +310,7 @@ impl HTTP {
         Ok(())
     }
 
-    /// get_temporary_redirect_url gets the cached temporary redirect URL if exists
-    /// and not expired.
+    /// Get the cached temporary redirect URL if exists and not expired.
     async fn get_temporary_redirect_url(&self, url: &str) -> String {
         let mut temporary_redirects = self.temporary_redirects.lock().await;
         if let Some(entry) = temporary_redirects.get(url) {
@@ -299,7 +330,7 @@ impl HTTP {
         url.to_string()
     }
 
-    /// store_temporary_redirect_url stores the temporary redirect URL in the cache.
+    /// Store the temporary redirect URL in the cache.
     async fn store_temporary_redirect_url(&self, original_url: &str, target_url: &str) {
         if !self.enable_cache_temporary_redirect {
             return;
@@ -323,15 +354,15 @@ impl HTTP {
 
 /// Backend implements the Backend trait.
 #[tonic::async_trait]
-impl super::Backend for HTTP {
-    /// scheme returns the scheme of the HTTP backend.
+impl Backend for HTTP {
+    /// Scheme returns the scheme of the HTTP backend.
     fn scheme(&self) -> String {
         self.scheme.clone()
     }
 
-    /// stat gets the metadata from the backend.
+    /// Stat the metadata from the backend.
     #[instrument(skip_all)]
-    async fn stat(&self, request: super::StatRequest) -> Result<super::StatResponse> {
+    async fn stat(&self, request: StatRequest) -> Result<StatResponse> {
         debug!(
             "stat request {} {}: {:?}",
             request.task_id, request.url, request.http_header
@@ -384,7 +415,7 @@ impl super::Backend for HTTP {
                                 request.task_id, target_url, err
                             );
 
-                            return Ok(super::StatResponse {
+                            return Ok(StatResponse {
                                 success: false,
                                 content_length: None,
                                 http_header: None,
@@ -400,7 +431,7 @@ impl super::Backend for HTTP {
                         request.task_id, target_url
                     );
 
-                    return Ok(super::StatResponse {
+                    return Ok(StatResponse {
                         success: false,
                         content_length: None,
                         http_header: None,
@@ -436,7 +467,7 @@ impl super::Backend for HTTP {
                             request.task_id, target_url, err
                         );
 
-                        return Ok(super::StatResponse {
+                        return Ok(StatResponse {
                             success: false,
                             content_length: None,
                             http_header: None,
@@ -454,7 +485,7 @@ impl super::Backend for HTTP {
                     request.task_id, target_url, err
                 );
 
-                return Ok(super::StatResponse {
+                return Ok(StatResponse {
                     success: false,
                     content_length: None,
                     http_header: None,
@@ -479,7 +510,7 @@ impl super::Backend for HTTP {
 
         // Drop the response body to avoid reading it.
         drop(response);
-        Ok(super::StatResponse {
+        Ok(StatResponse {
             success: response_status_code.is_success(),
             content_length,
             http_header: Some(response_header),
@@ -489,9 +520,9 @@ impl super::Backend for HTTP {
         })
     }
 
-    /// get gets the content from the backend.
+    /// Get the content from the backend.
     #[instrument(skip_all)]
-    async fn get(&self, request: super::GetRequest) -> Result<super::GetResponse<super::Body>> {
+    async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>> {
         debug!(
             "get request {} {} {}: {:?}",
             request.task_id, request.piece_id, request.url, request.http_header
@@ -525,7 +556,7 @@ impl super::Backend for HTTP {
                     request.task_id, request.piece_id, target_url, err
                 );
 
-                return Ok(super::GetResponse {
+                return Ok(GetResponse {
                     success: false,
                     http_header: None,
                     http_status_code: None,
@@ -557,7 +588,7 @@ impl super::Backend for HTTP {
                             request.task_id, request.piece_id, target_url, err
                         );
 
-                        return Ok(super::GetResponse {
+                        return Ok(GetResponse {
                             success: false,
                             http_header: None,
                             http_status_code: None,
@@ -584,7 +615,7 @@ impl super::Backend for HTTP {
             request.task_id, request.piece_id, response_status_code, response_header,
         );
 
-        Ok(super::GetResponse {
+        Ok(GetResponse {
             success: response_status_code.is_success(),
             http_header: Some(response_header),
             http_status_code: Some(response_status_code),
@@ -593,15 +624,15 @@ impl super::Backend for HTTP {
         })
     }
 
-    /// put puts the content to the backend.
+    /// Put the content to the backend.
     #[instrument(skip_all)]
-    async fn put(&self, _request: super::PutRequest) -> Result<super::PutResponse> {
+    async fn put(&self, _request: PutRequest) -> Result<PutResponse> {
         unimplemented!()
     }
 
-    /// exists checks whether the file exists in the backend.
+    /// Exists checks whether the file exists in the backend.
     #[instrument(skip_all)]
-    async fn exists(&self, request: super::ExistsRequest) -> Result<bool> {
+    async fn exists(&self, request: ExistsRequest) -> Result<bool> {
         debug!(
             "exists request {} {}: {:?}",
             request.task_id, request.url, request.http_header
@@ -689,7 +720,7 @@ mod tests {
     use super::*;
     use crate::{
         http::{HTTP, HTTPS_SCHEME, HTTP_SCHEME},
-        Backend, ExistsRequest, GetRequest, StatRequest,
+        Backend, ExistsRequest, GetRequest, StatRequest, DEFAULT_USER_AGENT,
     };
     use dragonfly_client_util::tls::{load_certs_from_pem, load_key_from_pem};
     use http::header::{HeaderValue, USER_AGENT};
@@ -708,107 +739,107 @@ mod tests {
     // Generate the certificate and private key by script(`scripts/generate_certs.sh`).
     const SERVER_CERT: &str = r#"""
 -----BEGIN CERTIFICATE-----
-MIIDsDCCApigAwIBAgIUWuckNOpaPERz+QMACyqCqFJwYIYwDQYJKoZIhvcNAQEL
+MIIDsjCCApqgAwIBAgIUCGVh9Btth+ucS6niZsWZb+q6m6UwDQYJKoZIhvcNAQEL
 BQAwYjELMAkGA1UEBhMCQ04xEDAOBgNVBAgMB0JlaWppbmcxEDAOBgNVBAcMB0Jl
 aWppbmcxEDAOBgNVBAoMB1Rlc3QgQ0ExCzAJBgNVBAsMAklUMRAwDgYDVQQDDAdU
-ZXN0IENBMB4XDTI0MTAxMTEyMTEwN1oXDTI2MDIyMzEyMTEwN1owaDELMAkGA1UE
-BhMCQ04xEDAOBgNVBAgMB0JlaWppbmcxEDAOBgNVBAcMB0JlaWppbmcxFDASBgNV
-BAoMC1Rlc3QgU2VydmVyMQswCQYDVQQLDAJJVDESMBAGA1UEAwwJbG9jYWxob3N0
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAiA9wEge3Jq8qw8Ix9z6t
-ss7ttK/49TMddhnQuqoYrFKjYliuvfbRZOU1nBP7+5XSAliPDCRNPS17JSwsXJk2
-bstc69fruDpYmthualSTsUYSwJJqzJjy5mlwSPtBsombcSHrUasMce5C4iXJX8Wx
-1O8ZCwuI5LUKxLujt+ZWnYfp5lzDcDhgD6wIzcMk67jv2edcWhqGkKmQbbmmK3Ve
-DJRa56NCh0F2U1SW0KCXTzoC1YU/bbB4UCfvHouMzCRNTr3VcrfL5aBIn/z/f6Xt
-atQkqFa/T1/lOQ0miMqNyBW58NxkPsTaJm2kVZ21hF2Dvo8MU/8Ras0J0aL8sc4n
-LwIDAQABo1gwVjAUBgNVHREEDTALgglsb2NhbGhvc3QwHQYDVR0OBBYEFJP+jy8a
-tCfnu6nekyZugvq8XT2gMB8GA1UdIwQYMBaAFOwXKq7J6STkwLUWC1xKwq1Psy63
-MA0GCSqGSIb3DQEBCwUAA4IBAQCu8nqnuzNn3E9dNC8ptV7ga1zb7cGdL3ZT5W3d
-10gmPo3YijWoCj4snattX9zxI8ThAY7uX6jrR0/HRXGJIw5JnlBmykdgyrQYEDzU
-FUL0GGabJNxZ+zDV77P+3WdgCx3F7wLQk+x+etMPvYuWC8RMse7W6dB1INyMT/l6
-k1rV73KTupSNJrYhqw0RnmNHIctkwiZLLpzLFj91BHjK5ero7VV4s7vnx+gtO/zQ
-FnIyiyfYYcSpVMhhaNkeCtWOfgVYU/m4XXn5bwEOhMN6q0JcdBPnT6kd2otLhiIo
-/WeyWEUeZ4rQhS7C1i31AYtNtVnnvI7BrsI4czYdcJcj3CM+
+ZXN0IENBMCAXDTI2MDMwMzAyNTU0MloYDzIxMjYwMjA3MDI1NTQyWjBoMQswCQYD
+VQQGEwJDTjEQMA4GA1UECAwHQmVpamluZzEQMA4GA1UEBwwHQmVpamluZzEUMBIG
+A1UECgwLVGVzdCBTZXJ2ZXIxCzAJBgNVBAsMAklUMRIwEAYDVQQDDAlsb2NhbGhv
+c3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC0yUjumwCpg3E1a6s0
+CXCruDZfYnggL4McjOOh9buznUN8S2k9as+/+RWYOUecwzayHPUbvpp3Fluaxo9v
+YzWSG+TQTf8IXugoECaETsw0nArhjXyOBwhXsA3N6GaAXGSQfqXHNG+IuA0AoX/H
+2HiS/QynQXh41BLRZRxlPRYpcUnmWDDk9R82IYpeFx0mGuVzOTh/uiOH2hkL3pEq
+hzauEiiK5R26Nr3zPMfKYbIrxCzNLPnk4IiBxdJhhV2c5Eq5XsgNTKcnCOEiScki
+Wb+h1tYrEqPi0sdf0JSVd/kL1qyJaSKWK/WJK3TPvpjgnNXBzMOo4wIOA0Aa11OR
+ZkSbAgMBAAGjWDBWMBQGA1UdEQQNMAuCCWxvY2FsaG9zdDAdBgNVHQ4EFgQU+qu/
+f2ma5LrwFTe4Q8ja9TCCGJwwHwYDVR0jBBgwFoAUSG2Qa0ZPJS8oNv+TDI3N8YOX
+TaAwDQYJKoZIhvcNAQELBQADggEBAJWrcf4LOrs95N++0C48HnV0D+3FgcakW7zb
+VgJj1ixcCWRbOrnwcjbxVc5OgNY51hq+ixfvLICb0/joYuR/gKWtl8m+ziFzXU3x
+3k6G1iS7gFRj/DS4cYH/qwfFEAMxBNREIqZA8DwVsCuuj0isgPRIwSF9o4ZwfzbC
+k6ISsAPxnU/rVx+dc25uEqGb+ys6OlO56zTosMSA4Nj95UmZcBS6WbTFbU3IRbvT
+N8vGgI5iEEJskRO3Q1JxupHx79J5Zwuz9jmdkVFFgXP9QDOO5JoRnwKb+mvLtxB8
+FpStz4dDsu3BN02H1rHDKporN2SMqYEEu45waQHAEA8zfAll2A0=
 -----END CERTIFICATE-----
 """#;
 
     const SERVER_KEY: &str = r#"""
 -----BEGIN PRIVATE KEY-----
-MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCID3ASB7cmryrD
-wjH3Pq2yzu20r/j1Mx12GdC6qhisUqNiWK699tFk5TWcE/v7ldICWI8MJE09LXsl
-LCxcmTZuy1zr1+u4Olia2G5qVJOxRhLAkmrMmPLmaXBI+0GyiZtxIetRqwxx7kLi
-JclfxbHU7xkLC4jktQrEu6O35ladh+nmXMNwOGAPrAjNwyTruO/Z51xaGoaQqZBt
-uaYrdV4MlFrno0KHQXZTVJbQoJdPOgLVhT9tsHhQJ+8ei4zMJE1OvdVyt8vloEif
-/P9/pe1q1CSoVr9PX+U5DSaIyo3IFbnw3GQ+xNombaRVnbWEXYO+jwxT/xFqzQnR
-ovyxzicvAgMBAAECggEABqHVkTfe1p+PBGx34tG/4nQxwIRxLJG31no+jeAdYOLF
-AEeulqezbmIroyTMA0uQKWscy0V/gXUi3avHOOktp72Vv9fxy98F/fyBPx3YEvLa
-69DMnl0qPl06CvLlTey6km8RKxUrRq9S2NoTydD+m1fC9jCIhvHkrNExIXjtaewU
-PvAHJy4ho+hVLo40udmQ4i1gnEWYUtjkr65ujuOAlWrlScHGvOrATbrfcaufPi/S
-5A/h8UlfahBstmh3a2tBLZlNl82s5ZKsVM1Oq1Vk9hAX5DP2JBAmuZKgX/xSDdpR
-62VUQGqp1WLgble5vR6ZUFo5+Jiw1uxe9jmNUg9mMQKBgQC8giG3DeeU6+rX9LVz
-cklF4jioU5LMdYutwXbtuGIWgXeJo8r0fzrgBtBVGRn7anS7YnYA+67h+A8SC6MO
-SXvktpHIC3Egge2Q9dRrWA4YCpkIxlOQ5ofCqovvCg9kq9sYqGz6lMr3RrzOWkUW
-+0hF1CHCV0+KGFeIvTYVIKSsJwKBgQC4xiTsaShmwJ6HdR59jOmij+ccCPQTt2IO
-eGcniY2cHIoX9I7nn7Yah6JbMT0c8j75KA+pfCrK3FpRNrb71cI1iqBHedZXpRaV
-eshJztmw3AKtxQPNwRYrKYpY/M0ShAduppELeshZz1kubQU3sD4adrhcGCDXkctb
-dP44IpipuQKBgC+W5q4Q65L0ECCe3aQciRUEbGtKVfgaAL5H5h9TeifWXXg5Coa5
-DAL8lWG2aZHIKVoZHFNZNqhDeIKEv5BeytFNqfYHtXKQeoorFYpX+47kNgg6EWS2
-XjWt2o/pSUOQA0rxUjnckHTmvcmWjnSj0XYXfMJUSndBd+/EXL/ussPnAoGAGE5Q
-Wxz2KJYcBHuemCtqLG07nI988/8Ckh66ixPoIeoLLF2KUuPKg7Dl5ZMTk/Q13nar
-oMLpqifUZayJ45TZ6EslDGH1lS/tSZqOME9aiY5Xd95bwrwsm17qiQwwOchOZfrZ
-R6ZOJqpE8/t5XTr84GRPmiW+ZD0UgCJisqWyaVkCgYEAtupQDst0hmZ0KnJSIZ5U
-R6skHABhmwNU5lOPUBIzHVorbAaKDKd4iFbBI5wnBuWxXY0SANl2HYX3gZaPccH4
-wzvR3jZ1B4UlEBXl2V+VRbrXyPTN4uUF42AkSGuOsK4O878wW8noX+ZZTk7gydTN
-Z+yQ5jhu/fmSBNhqO/8Lp+Y=
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC0yUjumwCpg3E1
+a6s0CXCruDZfYnggL4McjOOh9buznUN8S2k9as+/+RWYOUecwzayHPUbvpp3Flua
+xo9vYzWSG+TQTf8IXugoECaETsw0nArhjXyOBwhXsA3N6GaAXGSQfqXHNG+IuA0A
+oX/H2HiS/QynQXh41BLRZRxlPRYpcUnmWDDk9R82IYpeFx0mGuVzOTh/uiOH2hkL
+3pEqhzauEiiK5R26Nr3zPMfKYbIrxCzNLPnk4IiBxdJhhV2c5Eq5XsgNTKcnCOEi
+SckiWb+h1tYrEqPi0sdf0JSVd/kL1qyJaSKWK/WJK3TPvpjgnNXBzMOo4wIOA0Aa
+11ORZkSbAgMBAAECggEAOrjs+zAW8XjUA3WjKSZt1iFia+44tb+pF1N+NyPyIcAR
+5SQ7nWr96031oTnt1HImaIl2Zloto0P8YlRfz98KThjIZI8JKYdmYmkIkc5kjywm
+bqg+DoYjRBRYD4uPC9+2/KZeo8uY9PBPrOZIcroSRDB09TkTcC/2otR0ej/y3Ge3
+LahzIyBIJ4wL5CErEOwjsXzUt7jO+WN7hFXRj0ezuZCJB6prt4viu2D6AmKAoPZY
+naae3pqcVvnmQiTAI+KhOQuG5VzMWwDw8iu/QXCbYmN8k2LdF5TlgRsKFPyMXVHk
+TYpc9DoGFVfq+T+EujBgMDVtVtZY43CTErCmyHQjlQKBgQDr+YrVMwiDdG3buUFM
+q5bYBV29SmtcDbkKtYemhMBr+JL7B4meF1VsgvRPOs0376vQizBowB/39LlOxN4v
+a5Qad1DtshwSZcXJsq5ZqQAumRjpsT7Ux4Kj2qqI+sx2fGqDAvgT1Hna3Aq9Y+8z
+TJlkfigvhMxzlA9qiHRKSY58TwKBgQDEIMtaMmc7hZ5OmPDh1jdkclGSkVppbsJc
+FJotqQzojcvfFY5c/whsPCkdazCN/NPZJvGTOjNVeqDhSuzkC7L90c7WmXaWPIqX
+feKyB11YQp4m4wxUqQgaWzzwtUUA6UnbZm7QnK4ytiWsX5eMkcgK079B5iu8wqe1
+55TJly2j9QKBgFZX3MDeB4NyGrCHPKl9L5ijfgVBMb9hFhAhFB2N/YqETeOkgmpi
+R1OJJzPGZEjPXaLVC0WI5ymnVhbIWjQnvO1iMy6GOVdR/ekrhDgyamqigkcgH8lj
+px2laTjt69p+88o0T+mRmXTHhvZ9lozCvm3S64lXoie4SVvFyidUetppAoGBAJue
+rdwOvEzFU/xnbFK1p9QixUj33nZj9QIdMsziIyTvRgHn18NAdU10WudF4wv2vZ3D
+QdGhT5QWrkq1Kcw04Dx32pf6wtaoiQt1TogWQeHDUjvm0iTmzlAjbvJL0snLUdgt
+qeYLPElur+vbGaPnFIRKyaofWTr4dRxn+W4Pb551AoGBAOGO/1Ah4u6c+x9zPeva
+VmCY9ufTi5Cp5CPEZRN1Dt48cEUMvIV3pOlwl/JUw9B5yJaKJTEffPo9MgEvGUoD
+J7lEIkQHhDJUQaoN8WHlvRv6WBYadialvB5///diQBdNiOukbOSUVoCOR66NyM0k
+ghc1mLbKHOuFh6/EslueNpOh
 -----END PRIVATE KEY-----
 """#;
 
     const CA_CERT: &str = r#"""
 -----BEGIN CERTIFICATE-----
-MIIDpTCCAo2gAwIBAgIULqNbOr0fRj05VwIKlYdDt8HwxsUwDQYJKoZIhvcNAQEL
+MIIDpzCCAo+gAwIBAgIUe7Ya+eWGODaIaLGKFiHBzWR8I0IwDQYJKoZIhvcNAQEL
 BQAwYjELMAkGA1UEBhMCQ04xEDAOBgNVBAgMB0JlaWppbmcxEDAOBgNVBAcMB0Jl
 aWppbmcxEDAOBgNVBAoMB1Rlc3QgQ0ExCzAJBgNVBAsMAklUMRAwDgYDVQQDDAdU
-ZXN0IENBMB4XDTI0MTAxMTEyMTEwNloXDTI3MDgwMTEyMTEwNlowYjELMAkGA1UE
-BhMCQ04xEDAOBgNVBAgMB0JlaWppbmcxEDAOBgNVBAcMB0JlaWppbmcxEDAOBgNV
-BAoMB1Rlc3QgQ0ExCzAJBgNVBAsMAklUMRAwDgYDVQQDDAdUZXN0IENBMIIBIjAN
-BgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvDQCTmptzEmjwAkk6vsnEbch0Gt+
-Xp3bEEE1YhW89Jy6/bmclEINXsoRxpgkx4XnW0bcoDcqWBES82sFsQtEFWkP0Q3S
-8CQtpymDIuSj63xSVJWG8/cobzwztJfVQjBJwfmdnamXcjtqGHaGo3RjaHurSBTT
-Tft+gUvCuzFAblK+liQuQWRMq7JBwONgVzoMYoWSi+JJpEUcy/T+oznn9jNAW8Do
-FnXi1xvbRv6JiGOsYH1t869j5R8BkpjyGlZ6RYfPhiKtTg4K/ufnkkKteHzGZfcV
-HW2tqXyIkUl4j/+041nYtnyUuOZgLs2sJ33PER7GwVgi3sWG8AsNolRHUQIDAQAB
-o1MwUTAdBgNVHQ4EFgQU7BcqrsnpJOTAtRYLXErCrU+zLrcwHwYDVR0jBBgwFoAU
-7BcqrsnpJOTAtRYLXErCrU+zLrcwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0B
-AQsFAAOCAQEADFoewfDAIqf8OAhFFcTYiTTu16sbTzZTzRfxSa0R0oOmSl8338If
-71q8Yx65gFlu7FMiVRaVASzupwDhtLpqr6oVxLlmNW4fM0Bb+2CbmRuwhlm6ymBo
-NXtRh5AkWAxHOp124Rmrr3WB9r+zvZ2kxuWPvN/cOq4H4VAp/F0cBtKPRDw/W0IQ
-hDvG4OanBOKLE9Q7VH2kHXb6fJ4imKIztYcU4hOenKdUhfkCIBiIFgntUcEAaEpU
-FnJ4fV4c4aJ+9D3VyPlrdiBqIPI0Wms9YqqG2b8EDid561Jj7paIR2wLn0/Gq61b
-ePv3eLH0ZmBhSyl4+q/V56Z1TdZU46QZlg==
+ZXN0IENBMCAXDTI2MDMwMzAyNTU0MloYDzIxMjYwMjA3MDI1NTQyWjBiMQswCQYD
+VQQGEwJDTjEQMA4GA1UECAwHQmVpamluZzEQMA4GA1UEBwwHQmVpamluZzEQMA4G
+A1UECgwHVGVzdCBDQTELMAkGA1UECwwCSVQxEDAOBgNVBAMMB1Rlc3QgQ0EwggEi
+MA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCo3eryzhplBRTTRy+u4KLa3oyX
+1cach8hmdPgrGLWDZkJexhMMgd8rky4PRypz2u0DedxKrQqod7e+ea91nblPXk9r
+Yboqo75sTqtfPWIgsuEj6L552lzB/9Gkm56Bd+THIrzUNO6G76BCiUR0PEX+SbJb
+znuiNTwgAmjXVW6P3sjETk6Sf1ePEUHSxjdff54SXq4jlryRZ3EEWErmPHT6twRg
+3bGgTgXiakgYdsuTDE0L+F15TKKeqm90HCfCtzv8GjqT8YlNXl8ZQG+42321kiqP
+z4Vg+K34i5atiysDJ2d1RBu1p2chnNI+pUd7p/hOSJqC00ZBw57sLcgBwgZlAgMB
+AAGjUzBRMB0GA1UdDgQWBBRIbZBrRk8lLyg2/5MMjc3xg5dNoDAfBgNVHSMEGDAW
+gBRIbZBrRk8lLyg2/5MMjc3xg5dNoDAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3
+DQEBCwUAA4IBAQAiTbh2EHoy/MDfK0QBVDMIUaZW10dhrRnUGztiJ2AK1+Y6MOok
+C8ovPXCeHt3mLlptnlnt04FIpOaQzuz8jo+rJu0tEdh1cJy7T7vxWZxhnQ3u0dr3
+MewqYzM3i05/EmWn1PSzKMu4+fAc/cEyzdqULF7sb+nBcRdLuoLJkCkSz26ccROp
+zEr1F+LxuslKmIu62w5PwvjQ9Hq2oH2GnhmjRXcX87lNsBOZrW0RmcLHTTqp/YJT
+1TKCwXgwX6eCN103B1WO3IkPJZ8PgwEoEFXmE1NlPLGqqqd9J4wvfg0CiSRSM1j1
++4LNKz9FP28tWLMNZK1fmkU8Iv6UpASrGwAo
 -----END CERTIFICATE-----
 """#;
 
     const WRONG_CA_CERT: &str = r#"""
 -----BEGIN CERTIFICATE-----
-MIIDqTCCApGgAwIBAgIUW+6n+025VMqvZd4wm+Xdfzu4o38wDQYJKoZIhvcNAQEL
+MIIDqzCCApOgAwIBAgIUA2hjJ1hZToi943msnaCZtUq5rNkwDQYJKoZIhvcNAQEL
 BQAwZDELMAkGA1UEBhMCQ04xEDAOBgNVBAgMB0JlaWppbmcxEDAOBgNVBAcMB0Jl
 aWppbmcxETAPBgNVBAoMCFdyb25nIENBMQswCQYDVQQLDAJJVDERMA8GA1UEAwwI
-V3JvbmcgQ0EwHhcNMjQxMDExMTIxMTA2WhcNMjcwODAxMTIxMTA2WjBkMQswCQYD
-VQQGEwJDTjEQMA4GA1UECAwHQmVpamluZzEQMA4GA1UEBwwHQmVpamluZzERMA8G
-A1UECgwIV3JvbmcgQ0ExCzAJBgNVBAsMAklUMREwDwYDVQQDDAhXcm9uZyBDQTCC
-ASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALThl83CHSlT+xHONWqjOlsG
-z+qeYcdZRxVJZQWJ9DrfTBcE64fqXnRIMesZbZNGi0d4XyfiJDB8AxVRAD/lVHQi
-WR8LHglV/Hd7NjYG3bMQSkRHf5oleKjm1KDLvvnoD25YhqZsVDSCe+V4JkPc6xun
-SGU/WJluyzy0j49KJXjKJTzpkFsvYF91s8oYMCjwVMuYxcZLA7OCUgb9phlfZBND
-S9Dc5HI99O+0Uxfvfa/nRp85n2WpEJWQruGaazHFP/k842iR6zXIFclySE7n+1IG
-SBLJqZ4IYfS0NisTEozD/LcuEJ87/PZ7ag0zFhu7MpnD55JeJP8cq8pISHj8gJcC
-AwEAAaNTMFEwHQYDVR0OBBYEFLmV6Oqgwc1kIrv4JKLzn5qpKbvAMB8GA1UdIwQY
-MBaAFLmV6Oqgwc1kIrv4JKLzn5qpKbvAMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZI
-hvcNAQELBQADggEBAEJ+DbjdAZdJltIkHeIwFx9S4VnhA+Dw5+EBY03XzYo3HB/i
-qSQTvYz4laZppierxuR8Z5O6DPOxNJ4pXhXDcn2e2TzlBq+P0fUE9z2w+QBQyTEl
-6J2W5ce6dh9ke601pSMedLFDiARDGLkRDsIuEh91i62o+O3gNRkD/OWvjHAorQTf
-BOP2lbcTYGg6wMPOUMBHg73E/pyXVXeN9x1qN7dCWN4zDwInII7iUA6BQ0zECJAD
-sYhAYqHktkJsl0K4gJVanpnUhAC+SMD3+LRdjwMBp4mk+q3p2FMJMkACK3ffpn9j
-TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
+V3JvbmcgQ0EwIBcNMjYwMzAzMDI1NTQyWhgPMjEyNjAyMDcwMjU1NDJaMGQxCzAJ
+BgNVBAYTAkNOMRAwDgYDVQQIDAdCZWlqaW5nMRAwDgYDVQQHDAdCZWlqaW5nMREw
+DwYDVQQKDAhXcm9uZyBDQTELMAkGA1UECwwCSVQxETAPBgNVBAMMCFdyb25nIENB
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxYrk93GSr1ix4hVDG0Mq
+WcDEdTH6l58GR+6GVRlYJdou30T3FRj+07t15Vy79haX4+H4vK82Tj/DtV+oSm9+
+sHmt3LsnrPJgIowpXlH3SYMR9eA/YrPOd2Ei/R4hO4TuBmFhecBHseii97Lnv10g
+JeFxLT2LZkrvC3mhrYvdt7s5EQgYh3H9oUci45QO+xKWfPQuuZbsTdCplWrORIr5
+qvfw2xr401tsva9Z/Oy+bbMyyvk1qdBg0KFU/HYQRQqKOS8twya//LuBUFcBPvrU
+Tv4XVdbGnyEPlJSegG+/XRmaOyUkoTTo893/X3oaM8y0quENl/9OXQ2X9c6Q4xIS
+QQIDAQABo1MwUTAdBgNVHQ4EFgQUIhyb66/4ZO7E2xRCBnTtKwmkIjQwHwYDVR0j
+BBgwFoAUIhyb66/4ZO7E2xRCBnTtKwmkIjQwDwYDVR0TAQH/BAUwAwEB/zANBgkq
+hkiG9w0BAQsFAAOCAQEAR/6CYeE6YPupEIELSbAOO6HsFSWU0DC1AhayknAViM2g
+gzICmCITXlPf4Pz+2eXA0vucjAftG0XUhwkfaUHR3/ZC4gy9Ya927+/8LZg71yiP
+Bp8CslMEXUyIn+Buj0IDNgoX2fVug7E5hGSFjSkg5DCz1aExUbnPWEY16dQjFT9f
+ctSOG3MLu/SFbXIDt4pIenLrcnq4x1GntvVwChFZymSCXrOsrv+ujRhL1rzfU0g6
+pOjHJ3diEXrIXhgELj2gWQLptmlxmivtQXKC/4BuFUkeVzxd1f33Stdf56HH3KAk
+LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
 -----END CERTIFICATE-----
 """#;
 
@@ -871,6 +902,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -900,6 +933,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await;
 
@@ -931,6 +966,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -952,6 +989,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -972,6 +1011,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await;
 
@@ -993,6 +1034,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -1016,6 +1059,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await;
 
@@ -1035,6 +1080,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -1058,6 +1105,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -1088,6 +1137,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -1117,6 +1168,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -1146,6 +1199,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await;
 
@@ -1301,6 +1356,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -1320,6 +1377,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -1365,6 +1424,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -1386,6 +1447,8 @@ TrIVG3cErZoBC6zqBs/Ibe9q3gdHGqS3QLAKy/k=
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();

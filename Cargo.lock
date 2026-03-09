@@ -130,9 +130,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.100"
+version = "1.0.101"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
+checksum = "5f0e0fee31ef5ed1ba1316088939cea399010ed7731dba877ed44aeb407a75ea"
 
 [[package]]
 name = "arrayvec"
@@ -651,9 +651,9 @@ dependencies = [
 
 [[package]]
 name = "chrono"
-version = "0.4.42"
+version = "0.4.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "145052bdd345b87320e369255277e3fb5152762ad123a901ef5c262dd38fe8d2"
+checksum = "fac4744fb15ae8337dc853fee7fb3f4e48c0fbaa23d0afe49c447b4fab126118"
 dependencies = [
  "iana-time-zone",
  "js-sys",
@@ -1123,9 +1123,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.2.13"
+version = "2.2.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c03110917748f07f0a70d2b681f36d051e1ae425be86ec25c6a2b77318347fe6"
+checksum = "6490037579b1a1e4c52296988479c790c59af822e434c2023b81163de16da9de"
 dependencies = [
  "prost 0.13.5",
  "prost-types 0.14.3",
@@ -1138,7 +1138,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1184,6 +1184,7 @@ dependencies = [
  "prost-wkt-types",
  "rand 0.9.2",
  "rcgen",
+ "regex",
  "reqwest",
  "rolling-file",
  "rustls",
@@ -1191,6 +1192,7 @@ dependencies = [
  "scopeguard",
  "serde",
  "serde_json",
+ "serde_regex",
  "sysinfo",
  "tabled",
  "tempfile",
@@ -1217,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "dashmap",
  "dragonfly-api",
@@ -1255,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "bytesize",
  "bytesize-serde",
@@ -1286,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "cgroups-rs",
  "headers 0.4.1",
@@ -1307,7 +1309,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "anyhow",
  "clap",
@@ -1325,7 +1327,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-metric"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-config",
@@ -1340,7 +1342,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "bincode",
  "bytes",
@@ -1374,7 +1376,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -1913,7 +1915,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "dragonfly-client-backend",
  "dragonfly-client-core",
@@ -2275,14 +2277,13 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.19"
+version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "727805d60e7938b76b826a6ef209eb70eaa1812794f9424d4a4e2d740662df5f"
+checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-channel",
- "futures-core",
  "futures-util",
  "http 1.4.0",
  "http-body 1.0.0",
@@ -2499,9 +2500,9 @@ dependencies = [
 
 [[package]]
 name = "indicatif"
-version = "0.18.3"
+version = "0.18.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9375e112e4b463ec1b1c6c011953545c65a30164fbab5b581df32b3abf0dcb88"
+checksum = "25470f23803092da7d239834776d653104d551bc4d7eacaf31e6837854b8e9eb"
 dependencies = [
  "console",
  "portable-atomic",
@@ -3826,9 +3827,9 @@ dependencies = [
 
 [[package]]
 name = "portable-atomic"
-version = "1.11.1"
+version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f84267b20a16ea918e43c6a88433c2d54fa145c92a811b5b047ccbe153674483"
+checksum = "c33a9471896f1c69cecef8d20cbe2f7accd12527ce60845ff44c153bb2a21b49"
 
 [[package]]
 name = "portable-atomic-util"
@@ -4411,9 +4412,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.12.2"
+version = "1.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "843bc0191f75f3e22651ae5f1e72939ab2f72a4bc30fa80a066bd66edefc24d4"
+checksum = "e10754a14b9137dd7b1e3e5b0493cc9171fdd105e0ab477f51b72e7f3ac0e276"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -5297,9 +5298,9 @@ dependencies = [
 
 [[package]]
 name = "system-configuration"
-version = "0.6.1"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c879d448e9d986b661742763247d3693ed13609438cf3d006f51f5368a5ba6b"
+checksum = "a13f3d0daba03132c0aa9767f98351b3488edc2c100cda2d2ec2b04f3d8d3c8b"
 dependencies = [
  "bitflags 2.9.4",
  "core-foundation 0.9.4",
@@ -5348,9 +5349,9 @@ checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "tempfile"
-version = "3.23.0"
+version = "3.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d31c77bdf42a745371d260a26ca7163f1e0924b64afa0b688e61b5a9fa02f16"
+checksum = "0136791f7c95b1f6dd99f9cc786b91bb81c3800b639b3478e561ddb7be95e5f1"
 dependencies = [
  "fastrand",
  "getrandom 0.3.1",
@@ -5536,9 +5537,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.49.0"
+version = "1.50.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72a2903cd7736441aac9df9d7688bd0ce48edccaadf181c3b90be801e81d3d86"
+checksum = "27ad5e34374e03cfffefc301becb44e9dc3c17584f414349ebe29ed26661822d"
 dependencies = [
  "bytes",
  "libc",

@@ -16,7 +16,7 @@
 
 use super::*;
 use chrono::Utc;
-use dragonfly_api::common::v2::{Hdfs, ObjectStorage, Range, TrafficType};
+use dragonfly_api::common::v2::{Hdfs, HuggingFace, ModelScope, ObjectStorage, Range, TrafficType};
 use dragonfly_client_backend::{BackendFactory, GetRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{error::BackendError, Error, Result};
@@ -473,6 +473,8 @@ impl Piece {
         is_prefetch: bool,
         object_storage: Option<ObjectStorage>,
         hdfs: Option<Hdfs>,
+        hugging_face: Option<HuggingFace>,
+        model_scope: Option<ModelScope>,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
@@ -544,6 +546,8 @@ impl Piece {
                 client_cert: None,
                 object_storage,
                 hdfs,
+                hugging_face,
+                model_scope,
             })
             .await
             .inspect_err(|err| {
@@ -818,6 +822,8 @@ impl Piece {
         request_header: HeaderMap,
         object_storage: Option<ObjectStorage>,
         hdfs: Option<Hdfs>,
+        hugging_face: Option<HuggingFace>,
+        model_scope: Option<ModelScope>,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
@@ -885,6 +891,8 @@ impl Piece {
                 client_cert: None,
                 object_storage,
                 hdfs,
+                hugging_face,
+                model_scope,
             })
             .await
             .inspect_err(|err| {
