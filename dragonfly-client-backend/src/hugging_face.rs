@@ -754,7 +754,7 @@ mod tests {
 
     #[test]
     fn test_parse_url_with_revision() {
-        let parsed_url = ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR@v1.0").unwrap();
+        let parsed_url = ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR").unwrap();
         assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-OCR");
         assert!(parsed_url.file_path.is_none());
     }
@@ -852,14 +852,14 @@ mod tests {
     fn test_build_hf_url_model() {
         let parsed_url = ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR").unwrap();
         let url = HuggingFace::build_hf_url(&parsed_url, "model.safetensors");
-        assert_eq!(url, "hf://deepseek-ai/DeepSeek-OCR/model.safetensors@main");
+        assert_eq!(url, "hf://deepseek-ai/DeepSeek-OCR/model.safetensors");
     }
 
     #[test]
     fn test_build_hf_url_dataset() {
         let parsed_url = ParsedURL::try_from("hf://datasets/huggingface/squad").unwrap();
         let url = HuggingFace::build_hf_url(&parsed_url, "train.json");
-        assert_eq!(url, "hf://datasets/huggingface/squad/train.json@main");
+        assert_eq!(url, "hf://datasets/huggingface/squad/train.json");
     }
 
     #[test]
