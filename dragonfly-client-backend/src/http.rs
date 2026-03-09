@@ -14,6 +14,37 @@
  * limitations under the License.
  */
 
+//! HTTP/HTTPS backend implementation for downloading files from web servers.
+//!
+//! This module provides support for the `http://` and `https://` URL schemes to download
+//! files from any HTTP-compatible server. It handles connection pooling, automatic retries
+//! with exponential backoff, TLS certificate management, and 307 Temporary Redirect caching
+//! to optimize performance for object storage services.
+//!
+//! # URL Format
+//!
+//! The URL format is standard HTTP/HTTPS:
+//! - `http://<host>[:<port>]/<path>`
+//! - `https://<host>[:<port>]/<path>`
+//!
+//! Examples:
+//! - `http://example.com/data/model.bin` - Download via HTTP
+//! - `https://cdn.example.com/releases/v1.0/archive.tar.gz` - Download via HTTPS
+//! - `https://s3.amazonaws.com/bucket/key` - Download from object storage
+//!
+//! # Features
+//!
+//! - **Connection Pooling**: Maintains a pool of HTTP clients for concurrent downloads.
+//! - **Automatic Retries**: Uses exponential backoff for transient failures.
+//! - **307 Redirect Caching**: Caches temporary redirects to reduce round trips to origin servers.
+//! - **Custom Headers**: Supports custom request headers configured in dfdaemon config.
+//! - **TLS Support**: Handles custom CA certificates and TLS verification.
+//!
+//! # Authentication
+//!
+//! Authentication is handled through custom HTTP headers configured in the dfdaemon
+//! configuration file or passed directly in the request headers.
+//!
 use crate::{
     Backend, Body, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse, StatRequest,
     StatResponse, DEFAULT_USER_AGENT, KEEP_ALIVE_INTERVAL, MAX_RETRY_TIMES, POOL_MAX_IDLE_PER_HOST,
