@@ -360,13 +360,14 @@ impl Backend for ModelScope {
                             "stat request failed {} {}: {}",
                             request.task_id, download_url, err
                         );
+
                         return Ok(StatResponse {
                             success: false,
                             content_length: None,
                             http_header: None,
                             http_status_code: None,
                             entries: Vec::new(),
-                            error_message: None,
+                            error_message: Some(err.to_string()),
                         });
                     }
                 };
@@ -413,13 +414,14 @@ impl Backend for ModelScope {
                             "stat request failed {} {}: {}",
                             request.task_id, file_list_url, err
                         );
+
                         return Ok(StatResponse {
                             success: false,
                             content_length: None,
                             http_header: None,
                             http_status_code: None,
                             entries: Vec::new(),
-                            error_message: None,
+                            error_message: Some(err.to_string()),
                         });
                     }
                 };

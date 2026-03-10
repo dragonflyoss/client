@@ -309,7 +309,7 @@ struct Args {
 
     #[arg(
         long = "ms-token",
-        help = "Specify the authentication token for ModelScops Hub"
+        help = "Specify the authentication token for ModelScope Hub"
     )]
     ms_token: Option<String>,
 

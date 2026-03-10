@@ -389,7 +389,7 @@ impl Backend for HuggingFace {
                             http_header: None,
                             http_status_code: None,
                             entries: Vec::new(),
-                            error_message: None,
+                            error_message: Some(err.to_string()),
                         });
                     }
                 };
@@ -443,7 +443,7 @@ impl Backend for HuggingFace {
                             http_header: None,
                             http_status_code: None,
                             entries: Vec::new(),
-                            error_message: None,
+                            error_message: Some(err.to_string()),
                         });
                     }
                 };
