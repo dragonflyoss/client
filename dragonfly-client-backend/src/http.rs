@@ -413,6 +413,7 @@ impl Backend for HTTP {
                         &target_url.parse()?,
                         &request.url.parse()?,
                     );
+
                     match self
                         .client(request.client_cert.clone(), self.enable_hickory_dns)?
                         .get(target_url)
@@ -583,13 +584,26 @@ impl Backend for HTTP {
         if response.status() == reqwest::StatusCode::TEMPORARY_REDIRECT {
             if let Some(location) = response.headers().get(LOCATION) {
                 let target_url = location.to_str().or_err(ErrorType::ParseError)?;
+                debug!(
+                    "get request got 307 Temporary Redirect, following redirect {} -> {}",
+                    request.url, target_url
+                );
+
                 self.store_temporary_redirect_url(&request.url, target_url)
                     .await;
+
+                // Strips sensitive headers when following a cross-origin redirect.
+                let mut redirect_headers = request_header.clone();
+                remove_sensitive_headers(
+                    &mut redirect_headers,
+                    &target_url.parse()?,
+                    &request.url.parse()?,
+                );
 
                 response = match self
                     .client(request.client_cert.clone(), self.enable_hickory_dns)?
                     .get(target_url)
-                    .headers(request_header.clone())
+                    .headers(redirect_headers)
                     .timeout(request.timeout)
                     .send()
                     .await
