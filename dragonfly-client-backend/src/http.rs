@@ -421,7 +421,7 @@ impl Backend for HTTP {
                                 http_header: None,
                                 http_status_code: None,
                                 entries: Vec::new(),
-                                error_message: None,
+                                error_message: Some(err.to_string()),
                             });
                         }
                     }
@@ -437,7 +437,9 @@ impl Backend for HTTP {
                         http_header: None,
                         http_status_code: None,
                         entries: Vec::new(),
-                        error_message: None,
+                        error_message: Some(
+                            "got 307 Temporary Redirect without Location header".to_string(),
+                        ),
                     });
                 }
             }
@@ -473,7 +475,7 @@ impl Backend for HTTP {
                             http_header: None,
                             http_status_code: None,
                             entries: Vec::new(),
-                            error_message: None,
+                            error_message: Some(err.to_string()),
                         });
                     }
                 }
@@ -903,6 +905,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 object_storage: None,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -933,6 +936,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 object_storage: None,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await;
 
@@ -965,6 +969,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 object_storage: None,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -987,6 +992,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 object_storage: None,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -1008,6 +1014,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 object_storage: None,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await;
 
@@ -1030,6 +1037,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 object_storage: None,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -1054,6 +1062,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 object_storage: None,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await;
 
@@ -1074,6 +1083,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 object_storage: None,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -1098,6 +1108,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 object_storage: None,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -1129,6 +1140,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 object_storage: None,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -1159,6 +1171,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 object_storage: None,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -1189,6 +1202,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 object_storage: None,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await;
 
@@ -1345,6 +1359,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 object_storage: None,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -1365,6 +1380,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 object_storage: None,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -1411,6 +1427,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 object_storage: None,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
@@ -1433,6 +1450,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 object_storage: None,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await
             .unwrap();
