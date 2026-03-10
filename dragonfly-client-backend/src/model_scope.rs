@@ -14,23 +14,23 @@
  * limitations under the License.
  */
 
-//! Hugging Face backend implementation for downloading models and datasets.
+//! ModelScope backend implementation for downloading models and datasets.
 //!
-//! This module provides support for the `hf://` URL scheme to download files from
-//! Hugging Face Hub repositories. It handles both regular files and Git LFS files
-//! (large model files) through the Hugging Face HTTP API.
+//! This module provides support for the `modelscope://` URL scheme to download files from
+//! ModelScope Hub repositories. It handles file downloads through the ModelScope HTTP API.
 //!
 //! # URL Format
 //!
-//! The URL format is: `hf://<repo_id>[/<path>]`
+//! The URL format is: `modelscope://[<repo_type>/]<owner>/<repo>[/<path>]`
 //!
 //! Examples:
-//! - `hf://deepseek-ai/DeepSeek-OCR` - Download entire repository
-//! - `hf://deepseek-ai/DeepSeek-OCR/model.safetensors` - Download specific file
+//! - `modelscope://deepseek-ai/DeepSeek-R1` - Download entire repository
+//! - `modelscope://deepseek-ai/DeepSeek-R1/config.json` - Download specific file
+//! - `modelscope://datasets/owner/dataset-name` - Download from a dataset repository
 //!
 //! # Authentication
 //!
-//! For private repositories or to increase rate limits, use the `--hf-token` flag.
+//! For private repositories or to increase rate limits, use the `--ms-token` flag.
 
 use crate::{
     Backend, Body, DirEntry, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse,
@@ -53,65 +53,57 @@ use tokio_util::io::StreamReader;
 use tracing::{debug, error};
 use url::Url;
 
-/// HUGGING_FACE_SCHEME is the URL scheme for Hugging Face backend.
-pub const HUGGING_FACE_SCHEME: &str = "hf";
+/// MODELSCOPE_SCHEME is the URL scheme for ModelScope backend.
+pub const MODEL_SCOPE_SCHEME: &str = "modelscope";
 
-/// HUGGING_FACE_BASE_URL is the base URL for Hugging Face Hub.
-const HUGGING_FACE_BASE_URL: &str = "https://huggingface.co";
+/// MODEL_SCOPE_BASE_URL is the base URL for ModelScope Hub.
+const MODEL_SCOPE_BASE_URL: &str = "https://modelscope.cn";
 
-/// HUGGING_FACE_API_BASE_URL is the API base URL for Hugging Face API.
-const HUGGING_FACE_API_BASE_URL: &str = "https://huggingface.co/api";
+/// MODELSCOPE_API_BASE_URL is the API base URL for ModelScope API.
+const MODEL_SCOPE_API_BASE_URL: &str = "https://modelscope.cn/api/v1";
 
-/// Repository represents the Hugging Face repository information returned by the API.
-#[derive(Default, Debug, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-#[allow(dead_code)]
-struct Repository {
-    #[serde(rename = "_id")]
-    id: String,
-    model_id: Option<String>,
-    private: bool,
-    siblings: Option<Vec<Sibling>>,
+/// Response represents the top-level response from the ModelScope API.
+#[derive(Debug, Deserialize)]
+struct Response<T> {
+    /// The status code of the API response, where 200 indicates success.
+    #[serde(rename = "Code")]
+    code: i32,
+
+    /// The actual data payload of the response, which varies based on the API endpoint.
+    #[serde(rename = "Data")]
+    data: T,
+
+    /// An optional message providing additional information about the response, such as error
+    /// details.
+    #[serde(rename = "Message", default)]
+    message: Option<String>,
 }
 
-/// Sibling represents a file or directory in the Hugging Face repository.
-#[derive(Default, Debug, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct Sibling {
-    rfilename: String,
+/// File list represents the data field in a file list API response.
+#[derive(Debug, Deserialize)]
+struct FileList {
+    /// A list of file entries returned by the API, which may be empty if no files are found or if
+    #[serde(rename = "Files")]
+    files: Option<Vec<File>>,
+}
+
+/// File represents a file entry returned by the ModelScope API.
+#[derive(Debug, Deserialize)]
+struct File {
+    /// The relative path within the repository.
+    #[serde(rename = "Path")]
+    path: String,
+
+    /// The entry type: "blob" for files, "tree" for directories.
+    #[serde(rename = "Type")]
+    entry_type: String,
+
+    /// The file size in bytes.
+    #[serde(rename = "Size")]
     size: Option<u64>,
-    lfs: Option<Lfs>,
 }
 
-/// Lfs represents Git LFS metadata for large files in the Hugging Face repository.
-#[derive(Default, Debug, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-#[allow(dead_code)]
-struct Lfs {
-    size: u64,
-    sha256: Option<String>,
-    pointer_size: Option<u64>,
-}
-
-/// A parsed representation of a Hugging Face URL.
-///
-/// Format: `hf://[<repository_type>/]<owner>/<repository>[/<path>]`
-#[derive(Debug, Clone)]
-pub struct ParsedURL {
-    /// The original, unparsed URL.
-    pub url: Url,
-
-    /// The repository identifier in `<owner>/<repository>` format (e.g., `"deepseek-ai/DeepSeek-OCR"`).
-    pub repository_id: String,
-
-    /// The type of repository: model, dataset, or space.
-    pub repository_type: RepositoryType,
-
-    /// An optional file path within the repository (e.g., `"path/to/weights.bin"`).
-    pub file_path: Option<String>,
-}
-
-/// The type of a Hugging Face repository.
+/// The type of a ModelScope repository.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RepositoryType {
     /// A model repository. This is the default when no type prefix is specified,
@@ -120,29 +112,42 @@ pub enum RepositoryType {
 
     /// A dataset repository, prefixed with `datasets/`.
     Dataset,
-
-    /// A space repository, prefixed with `spaces/`.
-    Space,
 }
 
 /// RepositoryType implements methods for getting string representations and API paths.
 impl RepositoryType {
-    /// Returns the canonical string identifier (e.g., `"models"`, `"datasets"`, `"spaces"`).
-    #[allow(dead_code)]
+    /// Returns the canonical string identifier (e.g., `"models"`, `"datasets"`).
     pub fn as_str(&self) -> &'static str {
         match self {
             RepositoryType::Model => "models",
             RepositoryType::Dataset => "datasets",
-            RepositoryType::Space => "spaces",
         }
     }
 }
 
-/// Parses a Hugging Face URL into its constituent components.
+/// A parsed representation of a ModelScope URL.
 ///
-/// URL Format: hf://[<repository_type>/]<owner>/<repository>[/<path>]
-/// - repository_type  Optional. One of "models" (default), "datasets", or "spaces".
-/// - owner/repository Required. For example, "meta-llama/Llama-2-7b".
+/// Format: `modelscope://[<repository_type>/]<owner>/<repository>[/<path>]`
+#[derive(Debug, Clone)]
+pub struct ParsedURL {
+    /// The original, unparsed URL.
+    pub url: Url,
+
+    /// The repository identifier in `<owner>/<repository>` format (e.g., `"deepseek-ai/DeepSeek-R1"`).
+    pub repository_id: String,
+
+    /// The type of repository: model or dataset.
+    pub repository_type: RepositoryType,
+
+    /// An optional file path within the repository (e.g., `"path/to/config.json"`).
+    pub file_path: Option<String>,
+}
+
+/// Parses a ModelScope URL into its constituent components.
+///
+/// URL Format: modelscope://[<repository_type>/]<owner>/<repository>[/<path>]
+/// - repository_type  Optional. One of "models" (default) or "datasets".
+/// - owner/repository Required. For example, "deepseek-ai/DeepSeek-R1".
 /// - path             Optional file path within the repository.
 impl TryFrom<Url> for ParsedURL {
     type Error = Error;
@@ -156,7 +161,6 @@ impl TryFrom<Url> for ParsedURL {
         let segments: Vec<&str> = raw_path.trim_matches('/').split('/').collect();
         let (repository_type, offset) = match segments.first() {
             Some(&"datasets") => (RepositoryType::Dataset, 1),
-            Some(&"spaces") => (RepositoryType::Space, 1),
             Some(&"models") => (RepositoryType::Model, 1),
             _ => (RepositoryType::Model, 0),
         };
@@ -195,18 +199,18 @@ impl TryFrom<&str> for ParsedURL {
     }
 }
 
-/// HuggingFace is the Hugging Face backend implementation.
-pub struct HuggingFace {
-    /// Scheme is the scheme of the Hugging Face backend.
+/// ModelScope is the ModelScope backend implementation.
+pub struct ModelScope {
+    /// Scheme is the scheme of the ModelScope backend.
     scheme: String,
 
     /// HTTP client for making requests.
     client: Client,
 }
 
-/// HuggingFace implements the hugging face interface.
-impl HuggingFace {
-    /// Create a new HuggingFace backend.
+/// ModelScope implements the ModelScope interface.
+impl ModelScope {
+    /// Create a new ModelScope backend.
     pub fn new(config: Arc<Config>) -> Result<Self> {
         // Default TLS client config with no validation.
         let client_config_builder = rustls::ClientConfig::builder()
@@ -227,77 +231,55 @@ impl HuggingFace {
             .build()?;
 
         Ok(Self {
-            scheme: HUGGING_FACE_SCHEME.to_string(),
+            scheme: MODEL_SCOPE_SCHEME.to_string(),
             client,
         })
     }
 
     /// Builds the download URL for a file based on the repository type and path.
+    ///
+    /// Format: `{MODELSCOPE_API_BASE_URL}/{repo_type}/{repo_id}/repo?Revision={revision}&FilePath={file_path}`
     fn build_download_url(parsed_url: &ParsedURL, file_path: &str, revision: &str) -> String {
-        match parsed_url.repository_type {
-            RepositoryType::Model => {
-                format!(
-                    "{}/{}/resolve/{}/{}",
-                    HUGGING_FACE_BASE_URL, parsed_url.repository_id, revision, file_path
-                )
-            }
-            RepositoryType::Dataset => {
-                format!(
-                    "{}/datasets/{}/resolve/{}/{}",
-                    HUGGING_FACE_BASE_URL, parsed_url.repository_id, revision, file_path
-                )
-            }
-            RepositoryType::Space => {
-                format!(
-                    "{}/spaces/{}/resolve/{}/{}",
-                    HUGGING_FACE_BASE_URL, parsed_url.repository_id, revision, file_path
-                )
-            }
-        }
-    }
-
-    /// Builds the API URL for fetching repository information based on the repository type and ID.
-    fn build_repository_url(parsed_url: &ParsedURL) -> String {
         format!(
-            "{}/{}/{}",
-            HUGGING_FACE_API_BASE_URL,
+            "{}/{}/{}/resolve/{}/{}",
+            MODEL_SCOPE_BASE_URL,
             parsed_url.repository_type.as_str(),
-            parsed_url.repository_id
+            parsed_url.repository_id,
+            revision,
+            file_path
         )
     }
 
-    /// Builds the API URL for fetching repository information at a specific revision.
-    fn build_repository_revision_url(parsed_url: &ParsedURL, revision: &str) -> String {
+    /// Builds the API URL for listing files in the repository.
+    ///
+    /// Format: `{MODELSCOPE_API_BASE_URL}/{repo_type}/{repo_id}/repo/files?Revision={revision}&Recursive=true`
+    fn build_file_list_url(parsed_url: &ParsedURL, revision: &str) -> String {
         format!(
-            "{}/{}/{}?revision={}",
-            HUGGING_FACE_API_BASE_URL,
+            "{}/{}/{}/repo/files?Revision={}&Recursive=true",
+            MODEL_SCOPE_API_BASE_URL,
             parsed_url.repository_type.as_str(),
             parsed_url.repository_id,
             revision
         )
     }
 
-    /// Builds an `hf://` URL for a file so downstream downloads continue to
-    /// use the HF backend (preserving auth and URL semantics).
-    fn build_hf_url(parsed_url: &ParsedURL, filename: &str) -> String {
+    /// Builds a `modelscope://` URL for a file so downstream downloads continue to
+    /// use the ModelScope backend (preserving auth and URL semantics).
+    fn build_model_scope_url(parsed_url: &ParsedURL, filename: &str) -> String {
         match parsed_url.repository_type {
             RepositoryType::Model => format!(
                 "{}://{}/{}",
-                HUGGING_FACE_SCHEME, parsed_url.repository_id, filename
+                MODEL_SCOPE_SCHEME, parsed_url.repository_id, filename
             ),
             RepositoryType::Dataset => format!(
                 "{}://datasets/{}/{}",
-                HUGGING_FACE_SCHEME, parsed_url.repository_id, filename
-            ),
-            RepositoryType::Space => format!(
-                "{}://spaces/{}/{}",
-                HUGGING_FACE_SCHEME, parsed_url.repository_id, filename
+                MODEL_SCOPE_SCHEME, parsed_url.repository_id, filename
             ),
         }
     }
 
-    /// Build the request headers for Hugging Face API requests, including authentication if a
-    /// token is provided by the `--hf-token` CLI flag.
+    /// Build the request headers for ModelScope API requests, including authentication if a
+    /// token is provided by the `--ms-token` CLI flag.
     fn build_request_headers(token: Option<String>, range: Option<Range>) -> Result<HeaderMap> {
         let mut request_header = HeaderMap::new();
 
@@ -314,7 +296,7 @@ impl HuggingFace {
             .entry(USER_AGENT)
             .or_insert(HeaderValue::from_static(DEFAULT_USER_AGENT));
 
-        // Add the Authorization header for Hugging Face API authentication.
+        // Add the Authorization header for ModelScope API authentication.
         if let Some(token) = token {
             request_header.insert(
                 AUTHORIZATION,
@@ -326,9 +308,9 @@ impl HuggingFace {
     }
 }
 
-/// Backend implementation for Hugging Face.
+/// Backend implementation for ModelScope.
 #[tonic::async_trait]
-impl Backend for HuggingFace {
+impl Backend for ModelScope {
     /// Scheme returns the scheme of the backend.
     fn scheme(&self) -> String {
         self.scheme.clone()
@@ -341,25 +323,21 @@ impl Backend for HuggingFace {
             request.task_id, request.url, request.http_header
         );
 
-        // Build request headers, including authentication if provided hugging face token.
+        // Build request headers, including authentication if provided ModelScope token.
         let request_header = Self::build_request_headers(
-            request
-                .hugging_face
-                .as_ref()
-                .and_then(|hf| hf.token.clone()),
+            request.model_scope.as_ref().and_then(|ms| ms.token.clone()),
             None,
         )?;
 
         // Get the revision from the request, request must contain revision for stat request,
         // otherwise return error.
         let revision = request
-            .hugging_face
+            .model_scope
             .ok_or_else(|| {
                 error!(
-                    "stat request {} {}: missing Hugging Face information",
+                    "stat request {} {}: missing ModelScope information",
                     request.task_id, request.url
                 );
-
                 Error::InvalidParameter
             })?
             .revision;
@@ -370,7 +348,7 @@ impl Backend for HuggingFace {
                 let download_url = Self::build_download_url(&parsed_url, file_path, &revision);
                 let response = match self
                     .client
-                    .head(&download_url)
+                    .get(&download_url)
                     .headers(request_header)
                     .timeout(request.timeout)
                     .send()
@@ -410,6 +388,7 @@ impl Backend for HuggingFace {
                     response_header
                 );
 
+                drop(response);
                 Ok(StatResponse {
                     success: response_status_code.is_success(),
                     content_length,
@@ -420,11 +399,10 @@ impl Backend for HuggingFace {
                 })
             }
             None => {
-                let repository_revision_url =
-                    Self::build_repository_revision_url(&parsed_url, &revision);
+                let file_list_url = Self::build_file_list_url(&parsed_url, &revision);
                 let response = match self
                     .client
-                    .get(&repository_revision_url)
+                    .get(&file_list_url)
                     .headers(request_header)
                     .timeout(request.timeout)
                     .send()
@@ -434,7 +412,7 @@ impl Backend for HuggingFace {
                     Err(err) => {
                         error!(
                             "stat request failed {} {}: {}",
-                            request.task_id, repository_revision_url, err
+                            request.task_id, file_list_url, err
                         );
 
                         return Ok(StatResponse {
@@ -469,7 +447,7 @@ impl Backend for HuggingFace {
                 let text = response.text().await.map_err(|err| {
                     error!(
                         "stat request failed {} {}: {}",
-                        request.task_id, repository_revision_url, err
+                        request.task_id, file_list_url, err
                     );
 
                     Error::BackendError(Box::new(BackendError {
@@ -479,10 +457,10 @@ impl Backend for HuggingFace {
                     }))
                 })?;
 
-                let repository: Repository = serde_json::from_str(&text).map_err(|err| {
+                let response: Response<FileList> = serde_json::from_str(&text).map_err(|err| {
                     error!(
                         "stat request failed {} {}: {}",
-                        request.task_id, repository_revision_url, err
+                        request.task_id, file_list_url, err
                     );
 
                     Error::BackendError(Box::new(BackendError {
@@ -492,33 +470,45 @@ impl Backend for HuggingFace {
                     }))
                 })?;
 
-                let entries = repository
-                    .siblings
+                if response.code != 200 {
+                    return Err(Error::BackendError(Box::new(BackendError {
+                        status_code: None,
+                        header: None,
+                        message: format!(
+                            "ModelScope API error: code={}, message={}",
+                            response.code,
+                            response.message.unwrap_or_default()
+                        ),
+                    })));
+                }
+
+                let entries = response
+                    .data
+                    .files
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|sibling| {
-                        // Return hf:// URLs so downstream downloads continue to use the HF
-                        // backend (preserving auth headers and URL semantics).
-                        let hf_url = Self::build_hf_url(&parsed_url, &sibling.rfilename);
-                        let content_length = sibling
-                            .lfs
-                            .as_ref()
-                            .map(|lfs| lfs.size)
-                            .or(sibling.size)
-                            .unwrap_or(0);
+                    .filter_map(|file| {
+                        // Skip directories.
+                        if file.entry_type == "tree" {
+                            return None;
+                        }
 
-                        DirEntry {
-                            url: hf_url,
+                        // Return modelscope:// URLs so downstream downloads continue to use the
+                        // ModelScope backend (preserving auth headers and URL semantics).
+                        let ms_url = Self::build_model_scope_url(&parsed_url, &file.path);
+                        let content_length = file.size.unwrap_or(0);
+                        Some(DirEntry {
+                            url: ms_url,
                             content_length: content_length as usize,
                             is_dir: false,
-                        }
+                        })
                     })
                     .collect();
 
                 debug!(
                     "stat response {} {}: {:?} {:?} {:?}",
                     request.task_id,
-                    repository_revision_url,
+                    file_list_url,
                     response_status_code,
                     content_length,
                     response_header
@@ -535,7 +525,6 @@ impl Backend for HuggingFace {
             }
         }
     }
-
     /// Get the content from the backend.
     async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>> {
         debug!(
@@ -543,25 +532,21 @@ impl Backend for HuggingFace {
             request.task_id, request.piece_id, request.url, request.http_header
         );
 
-        // Build request headers, including authentication if provided hugging face token.
+        // Build request headers, including authentication if provided ModelScope token.
         let request_header = Self::build_request_headers(
-            request
-                .hugging_face
-                .as_ref()
-                .and_then(|hf| hf.token.clone()),
+            request.model_scope.as_ref().and_then(|ms| ms.token.clone()),
             None,
         )?;
 
-        // Get the revision from the request, request must contain revision for stat request,
+        // Get the revision from the request, request must contain revision for get request,
         // otherwise return error.
         let revision = request
-            .hugging_face
+            .model_scope
             .ok_or_else(|| {
                 error!(
-                    "get request {} {}: missing Hugging Face information",
+                    "get request {} {}: missing ModelScope information",
                     request.task_id, request.url
                 );
-
                 Error::InvalidParameter
             })?
             .revision;
@@ -573,7 +558,6 @@ impl Backend for HuggingFace {
                 "get request {} {}: URL must specify a file path",
                 request.task_id, request.url
             );
-
             return Err(Error::InvalidParameter);
         };
 
@@ -592,7 +576,6 @@ impl Backend for HuggingFace {
                     "get request failed {} {} {}: {}",
                     request.task_id, request.piece_id, download_url, err
                 );
-
                 return Ok(GetResponse {
                     success: false,
                     http_header: None,
@@ -637,25 +620,21 @@ impl Backend for HuggingFace {
             request.task_id, request.url, request.http_header
         );
 
-        // Build request headers, including authentication if provided hugging face token.
+        // Build request headers, including authentication if provided ModelScope token.
         let request_header = Self::build_request_headers(
-            request
-                .hugging_face
-                .as_ref()
-                .and_then(|hf| hf.token.clone()),
+            request.model_scope.as_ref().and_then(|ms| ms.token.clone()),
             None,
         )?;
 
-        // Get the revision from the request, request must contain revision for stat request,
+        // Get the revision from the request, request must contain revision for exists request,
         // otherwise return error.
         let revision = request
-            .hugging_face
+            .model_scope
             .ok_or_else(|| {
                 error!(
-                    "stat request {} {}: missing Hugging Face information",
+                    "exists request {} {}: missing ModelScope information",
                     request.task_id, request.url
                 );
-
                 Error::InvalidParameter
             })?
             .revision;
@@ -690,10 +669,10 @@ impl Backend for HuggingFace {
                 Ok(response_status_code.is_success())
             }
             None => {
-                let repository_url = Self::build_repository_url(&parsed_url);
+                let file_list_url = Self::build_file_list_url(&parsed_url, &revision);
                 let response = self
                     .client
-                    .head(&repository_url)
+                    .get(&file_list_url)
                     .headers(request_header)
                     .timeout(request.timeout)
                     .send()
@@ -727,8 +706,8 @@ mod tests {
 
     #[test]
     fn test_parse_url_simple() {
-        let parsed_url = ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR").unwrap();
-        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-OCR");
+        let parsed_url = ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1").unwrap();
+        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-R1");
         assert_eq!(parsed_url.repository_type, RepositoryType::Model);
         assert!(parsed_url.file_path.is_none());
     }
@@ -736,24 +715,18 @@ mod tests {
     #[test]
     fn test_parse_url_with_file() {
         let parsed_url =
-            ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR/model.safetensors").unwrap();
-        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-OCR");
+            ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1/config.json").unwrap();
+        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-R1");
         assert_eq!(parsed_url.repository_type, RepositoryType::Model);
-        assert_eq!(parsed_url.file_path, Some("model.safetensors".to_string()));
-    }
-
-    #[test]
-    fn test_parse_url_with_revision() {
-        let parsed_url = ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR").unwrap();
-        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-OCR");
-        assert!(parsed_url.file_path.is_none());
+        assert_eq!(parsed_url.file_path, Some("config.json".to_string()));
     }
 
     #[test]
     fn test_parse_url_with_nested_path() {
         let parsed_url =
-            ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR/models/v1/model.bin").unwrap();
-        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-OCR");
+            ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1/models/v1/model.bin")
+                .unwrap();
+        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-R1");
         assert_eq!(parsed_url.repository_type, RepositoryType::Model);
         assert_eq!(
             parsed_url.file_path,
@@ -763,98 +736,124 @@ mod tests {
 
     #[test]
     fn test_parse_url_dataset() {
-        let parsed_url = ParsedURL::try_from("hf://datasets/huggingface/squad").unwrap();
-        assert_eq!(parsed_url.repository_id, "huggingface/squad");
+        let parsed_url = ParsedURL::try_from("modelscope://datasets/owner/my-dataset").unwrap();
+        assert_eq!(parsed_url.repository_id, "owner/my-dataset");
         assert_eq!(parsed_url.repository_type, RepositoryType::Dataset);
         assert!(parsed_url.file_path.is_none());
     }
 
     #[test]
     fn test_parse_url_dataset_with_path() {
-        let parsed_url = ParsedURL::try_from("hf://datasets/huggingface/squad/train.json").unwrap();
-        assert_eq!(parsed_url.repository_id, "huggingface/squad");
+        let parsed_url =
+            ParsedURL::try_from("modelscope://datasets/owner/my-dataset/train.json").unwrap();
+        assert_eq!(parsed_url.repository_id, "owner/my-dataset");
         assert_eq!(parsed_url.repository_type, RepositoryType::Dataset);
         assert_eq!(parsed_url.file_path, Some("train.json".to_string()));
     }
 
     #[test]
-    fn test_parse_url_space() {
-        let parsed_url = ParsedURL::try_from("hf://spaces/huggingface/transformers-demo").unwrap();
-        assert_eq!(parsed_url.repository_id, "huggingface/transformers-demo");
-        assert_eq!(parsed_url.repository_type, RepositoryType::Space);
-        assert!(parsed_url.file_path.is_none());
-    }
-
-    #[test]
     fn test_parse_url_explicit_model_type() {
         let parsed_url =
-            ParsedURL::try_from("hf://models/deepseek-ai/DeepSeek-OCR/model.safetensors").unwrap();
-        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-OCR");
+            ParsedURL::try_from("modelscope://models/deepseek-ai/DeepSeek-R1/config.json").unwrap();
+        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-R1");
         assert_eq!(parsed_url.repository_type, RepositoryType::Model);
-        assert_eq!(parsed_url.file_path, Some("model.safetensors".to_string()));
+        assert_eq!(parsed_url.file_path, Some("config.json".to_string()));
     }
 
     #[test]
     fn test_parse_url_missing_repo() {
-        let result = ParsedURL::try_from("hf://deepseek-ai");
+        let result = ParsedURL::try_from("modelscope://deepseek-ai");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_url_trailing_slash() {
+        let parsed_url = ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1/").unwrap();
+        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-R1");
+        assert_eq!(parsed_url.repository_type, RepositoryType::Model);
+        assert!(parsed_url.file_path.is_none());
     }
 
     #[test]
     fn test_build_download_url_model() {
         let parsed_url =
-            ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR/model.safetensors").unwrap();
-        let url = HuggingFace::build_download_url(&parsed_url, "model.safetensors", "main");
+            ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1/config.json").unwrap();
+        let url = ModelScope::build_download_url(&parsed_url, "config.json", "master");
         assert_eq!(
             url,
-            "https://huggingface.co/deepseek-ai/DeepSeek-OCR/resolve/main/model.safetensors"
+            "https://modelscope.cn/models/deepseek-ai/DeepSeek-R1/resolve/master/config.json"
         );
     }
 
     #[test]
     fn test_build_download_url_dataset() {
-        let parsed_url = ParsedURL::try_from("hf://datasets/huggingface/squad/train.json").unwrap();
-        let url = HuggingFace::build_download_url(&parsed_url, "train.json", "main");
+        let parsed_url =
+            ParsedURL::try_from("modelscope://datasets/owner/my-dataset/train.json").unwrap();
+        let url = ModelScope::build_download_url(&parsed_url, "train.json", "master");
         assert_eq!(
             url,
-            "https://huggingface.co/datasets/huggingface/squad/resolve/main/train.json"
+            "https://modelscope.cn/datasets/owner/my-dataset/resolve/master/train.json"
         );
     }
 
     #[test]
-    fn test_build_api_url_model() {
-        let parsed_url = ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR").unwrap();
-        let url = HuggingFace::build_repository_url(&parsed_url);
+    fn test_build_download_url_with_revision() {
+        let parsed_url =
+            ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1/config.json").unwrap();
+        let url = ModelScope::build_download_url(&parsed_url, "config.json", "v1.0");
         assert_eq!(
             url,
-            "https://huggingface.co/api/models/deepseek-ai/DeepSeek-OCR"
+            "https://modelscope.cn/models/deepseek-ai/DeepSeek-R1/resolve/v1.0/config.json"
         );
     }
 
     #[test]
-    fn test_build_api_url_dataset() {
-        let parsed_url = ParsedURL::try_from("hf://datasets/huggingface/squad").unwrap();
-        let url = HuggingFace::build_repository_url(&parsed_url);
-        assert_eq!(url, "https://huggingface.co/api/datasets/huggingface/squad");
+    fn test_build_file_list_url_model() {
+        let parsed_url = ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1").unwrap();
+        let url = ModelScope::build_file_list_url(&parsed_url, "master");
+        assert_eq!(
+            url,
+            "https://modelscope.cn/api/v1/models/deepseek-ai/DeepSeek-R1/repo/files?Revision=master&Recursive=true"
+        );
     }
 
     #[test]
-    fn test_build_hf_url_model() {
-        let parsed_url = ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR").unwrap();
-        let url = HuggingFace::build_hf_url(&parsed_url, "model.safetensors");
-        assert_eq!(url, "hf://deepseek-ai/DeepSeek-OCR/model.safetensors");
+    fn test_build_file_list_url_dataset() {
+        let parsed_url = ParsedURL::try_from("modelscope://datasets/owner/my-dataset").unwrap();
+        let url = ModelScope::build_file_list_url(&parsed_url, "master");
+        assert_eq!(
+            url,
+            "https://modelscope.cn/api/v1/datasets/owner/my-dataset/repo/files?Revision=master&Recursive=true"
+        );
     }
 
     #[test]
-    fn test_build_hf_url_dataset() {
-        let parsed_url = ParsedURL::try_from("hf://datasets/huggingface/squad").unwrap();
-        let url = HuggingFace::build_hf_url(&parsed_url, "train.json");
-        assert_eq!(url, "hf://datasets/huggingface/squad/train.json");
+    fn test_build_model_scope_url_model() {
+        let parsed_url = ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1").unwrap();
+        let url = ModelScope::build_model_scope_url(&parsed_url, "config.json");
+        assert_eq!(url, "modelscope://deepseek-ai/DeepSeek-R1/config.json");
+    }
+
+    #[test]
+    fn test_build_model_scope_url_dataset() {
+        let parsed_url = ParsedURL::try_from("modelscope://datasets/owner/my-dataset").unwrap();
+        let url = ModelScope::build_model_scope_url(&parsed_url, "train.json");
+        assert_eq!(url, "modelscope://datasets/owner/my-dataset/train.json");
+    }
+
+    #[test]
+    fn test_build_model_scope_url_nested_file() {
+        let parsed_url = ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1").unwrap();
+        let url = ModelScope::build_model_scope_url(&parsed_url, "models/v1/model.bin");
+        assert_eq!(
+            url,
+            "modelscope://deepseek-ai/DeepSeek-R1/models/v1/model.bin"
+        );
     }
 
     #[test]
     fn test_build_headers_default_user_agent() {
-        let request_header = HuggingFace::build_request_headers(None, None).unwrap();
+        let request_header = ModelScope::build_request_headers(None, None).unwrap();
         assert_eq!(
             request_header.get(USER_AGENT).unwrap(),
             HeaderValue::from_static(DEFAULT_USER_AGENT)
@@ -862,9 +861,9 @@ mod tests {
     }
 
     #[test]
-    fn test_build_headers_preserves_request_headers() {
+    fn test_build_headers_with_token() {
         let request_headers =
-            HuggingFace::build_request_headers(Some("test-token".to_string()), None).unwrap();
+            ModelScope::build_request_headers(Some("test-token".to_string()), None).unwrap();
         assert_eq!(
             request_headers.get(reqwest::header::AUTHORIZATION).unwrap(),
             "Bearer test-token"
@@ -873,5 +872,59 @@ mod tests {
             request_headers.get(USER_AGENT).unwrap(),
             HeaderValue::from_static(DEFAULT_USER_AGENT)
         );
+    }
+
+    #[test]
+    fn test_build_headers_without_token() {
+        let request_headers = ModelScope::build_request_headers(None, None).unwrap();
+        assert!(request_headers
+            .get(reqwest::header::AUTHORIZATION)
+            .is_none());
+        assert_eq!(
+            request_headers.get(USER_AGENT).unwrap(),
+            HeaderValue::from_static(DEFAULT_USER_AGENT)
+        );
+    }
+
+    #[test]
+    fn test_build_headers_with_range() {
+        let range = Range {
+            start: 100,
+            length: 200,
+        };
+        let request_headers = ModelScope::build_request_headers(None, Some(range)).unwrap();
+        assert_eq!(
+            request_headers.get(reqwest::header::RANGE).unwrap(),
+            "bytes=100-299"
+        );
+    }
+
+    #[test]
+    fn test_build_headers_with_token_and_range() {
+        let range = Range {
+            start: 0,
+            length: 1024,
+        };
+        let request_headers =
+            ModelScope::build_request_headers(Some("my-secret-token".to_string()), Some(range))
+                .unwrap();
+        assert_eq!(
+            request_headers.get(reqwest::header::AUTHORIZATION).unwrap(),
+            "Bearer my-secret-token"
+        );
+        assert_eq!(
+            request_headers.get(reqwest::header::RANGE).unwrap(),
+            "bytes=0-1023"
+        );
+        assert_eq!(
+            request_headers.get(USER_AGENT).unwrap(),
+            HeaderValue::from_static(DEFAULT_USER_AGENT)
+        );
+    }
+
+    #[test]
+    fn test_repository_type_as_str() {
+        assert_eq!(RepositoryType::Model.as_str(), "models");
+        assert_eq!(RepositoryType::Dataset.as_str(), "datasets");
     }
 }

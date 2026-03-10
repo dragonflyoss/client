@@ -17,7 +17,8 @@
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::resource::parent_selector::ParentSelector;
 use dragonfly_api::common::v2::{
-    Download, Hdfs, HuggingFace, ObjectStorage, Peer, Piece, Task as CommonTask, TrafficType,
+    Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, Peer, Piece, Task as CommonTask,
+    TrafficType,
 };
 use dragonfly_api::dfdaemon::{
     self,
@@ -203,6 +204,7 @@ impl Task {
                 object_storage: request.object_storage,
                 hdfs: request.hdfs,
                 hugging_face: request.hugging_face,
+                model_scope: request.model_scope,
             })
             .await
             .inspect_err(|_err| {
@@ -1341,6 +1343,7 @@ impl Task {
                 object_storage: Option<ObjectStorage>,
                 hdfs: Option<Hdfs>,
                 hugging_face: Option<HuggingFace>,
+                model_scope: Option<ModelScope>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!("start to download piece {} from source", piece_id);
@@ -1358,6 +1361,7 @@ impl Task {
                         object_storage,
                         hdfs,
                         hugging_face,
+                        model_scope,
                     )
                     .await?;
 
@@ -1458,6 +1462,7 @@ impl Task {
             let object_storage = request.object_storage.clone();
             let hdfs = request.hdfs.clone();
             let hugging_face = request.hugging_face.clone();
+            let model_scope = request.model_scope.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -1479,6 +1484,7 @@ impl Task {
                         object_storage,
                         hdfs,
                         hugging_face,
+                        model_scope,
                     )
                     .await
                 }
@@ -1742,6 +1748,7 @@ impl Task {
                 object_storage: Option<ObjectStorage>,
                 hdfs: Option<Hdfs>,
                 hugging_face: Option<HuggingFace>,
+                model_scope: Option<ModelScope>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!("start to download piece {} from source", piece_id);
@@ -1759,6 +1766,7 @@ impl Task {
                         object_storage,
                         hdfs,
                         hugging_face,
+                        model_scope,
                     )
                     .await?;
 
@@ -1836,6 +1844,7 @@ impl Task {
             let object_storage = request.object_storage.clone();
             let hdfs = request.hdfs.clone();
             let hugging_face = request.hugging_face.clone();
+            let model_scope = request.model_scope.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -1856,6 +1865,7 @@ impl Task {
                         object_storage,
                         hdfs,
                         hugging_face,
+                        model_scope,
                     )
                     .await
                 }

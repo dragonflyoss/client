@@ -16,7 +16,7 @@
 
 use bytesize::ByteSize;
 use clap::Parser;
-use dragonfly_api::common::v2::{Download, Hdfs, HuggingFace, ObjectStorage, TaskType};
+use dragonfly_api::common::v2::{Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, ListTaskEntriesRequest,
 };
@@ -83,7 +83,7 @@ Examples:
   # Download a file from Tencent Cloud Object Storage Service(COS).
   $ dfget cos://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret> --storage-endpoint=<endpoint>
 
-  # Download a model from Hugging Face Hub.
+  # Download a single file from Hugging Face Hub.
   $ dfget hf://<owner>/<repo>/<path> -O /tmp/model.safetensors
 
   # Download an entire repository from Hugging Face Hub.
@@ -94,6 +94,18 @@ Examples:
 
   # Download from Hugging Face Hub with authentication token.
   $ dfget hf://<owner>/<repo>/<path> -O /tmp/model.safetensors --hf-token=<token>
+  
+  # Download a single file from ModelScope.
+  $ dfget modelscope://<owner>/<repo>/<path> -O /tmp/model.safetensors
+  
+  # Download an entire repository from ModelScope Hub.
+  $ dfget modelscope://<owner>/<repo> -O /tmp/repo/ -r
+  
+  # Download an entire repository from ModelScope Hub with specified revision. If the revision is not specified, the default value is `master`.
+  $ dfget modelscope://<owner>/<repo> --ms-revision master -O /tmp/repo/ -r
+
+  # Download from ModelScope Hub with authentication token.
+  $ dfget modelscope://<owner>/<repo>/<path> -O /tmp/model.safetensors --ms-token=<token>
 "#;
 
 #[derive(Debug, Parser, Clone)]
@@ -287,6 +299,19 @@ struct Args {
         help = "Specify the delegation token for Hadoop Distributed File System(HDFS)"
     )]
     hdfs_delegation_token: Option<String>,
+
+    #[arg(
+        long,
+        default_value = "master",
+        help = "Specify the revision for ModelScope Hub, only used when downloading from ModelScope Hub"
+    )]
+    ms_revision: String,
+
+    #[arg(
+        long = "ms-token",
+        help = "Specify the authentication token for ModelScope Hub"
+    )]
+    ms_token: Option<String>,
 
     #[arg(
         long,
@@ -697,6 +722,11 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         token: args.hf_token.clone(),
     });
 
+    let model_scope = Some(ModelScope {
+        revision: args.ms_revision.clone(),
+        token: args.ms_token.clone(),
+    });
+
     // Get all entries in the directory with include files filter.
     let entries: Vec<DirEntry> = get_all_entries(
         &args.url,
@@ -705,6 +735,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         object_storage,
         hdfs,
         hugging_face,
+        model_scope,
         download_client.clone(),
     )
     .await?;
@@ -784,6 +815,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
 }
 
 /// Get all entries in the directory with include files filter.
+#[allow(clippy::too_many_arguments)]
 async fn get_all_entries(
     base_url: &Url,
     header: Option<Vec<String>>,
@@ -791,6 +823,7 @@ async fn get_all_entries(
     object_storage: Option<ObjectStorage>,
     hdfs: Option<Hdfs>,
     hugging_face: Option<HuggingFace>,
+    model_scope: Option<ModelScope>,
     download_client: DfdaemonDownloadClient,
 ) -> Result<Vec<DirEntry>> {
     let urls: HashSet<Url> = match include_files {
@@ -842,6 +875,7 @@ async fn get_all_entries(
             object_storage.clone(),
             hdfs.clone(),
             hugging_face.clone(),
+            model_scope.clone(),
             download_client.clone(),
         )
         .await
@@ -918,6 +952,11 @@ async fn download(
         token: args.hf_token.clone(),
     });
 
+    let model_scope = Some(ModelScope {
+        revision: args.ms_revision.clone(),
+        token: args.ms_token.clone(),
+    });
+
     // If the `filtered_query_params` is not provided, then use the default value.
     let filtered_query_params = args
         .filtered_query_params
@@ -961,7 +1000,7 @@ async fn download(
                 object_storage,
                 hdfs,
                 hugging_face,
-                model_scope: None,
+                model_scope,
                 force_hard_link: args.force_hard_link,
                 content_for_calculating_task_id: args.content_for_calculating_task_id,
                 remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
@@ -1154,6 +1193,7 @@ async fn get_entries(
     object_storage: Option<ObjectStorage>,
     hdfs: Option<Hdfs>,
     hugging_face: Option<HuggingFace>,
+    model_scope: Option<ModelScope>,
     download_client: DfdaemonDownloadClient,
 ) -> Result<Vec<DirEntry>> {
     info!("list task entries: {:?}", url);
@@ -1167,6 +1207,7 @@ async fn get_entries(
             object_storage,
             hdfs,
             hugging_face,
+            model_scope,
             remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
         })
         .await
@@ -1585,6 +1626,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             dfdaemon_download_client,
         )
         .await
@@ -1639,6 +1681,7 @@ mod tests {
 
         let entries = get_all_entries(
             &Url::parse("http://example.com/root/").unwrap(),
+            None,
             None,
             None,
             None,
@@ -1729,6 +1772,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             dfdaemon_download_client,
         )
         .await
@@ -1809,6 +1853,7 @@ mod tests {
 
         let entries = get_all_entries(
             &Url::parse("http://example.com/root/").unwrap(),
+            None,
             None,
             None,
             None,

@@ -18,8 +18,8 @@ use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::resource::parent_selector::PersistentParentSelector;
 use chrono::DateTime;
 use dragonfly_api::common::v2::{
-    Hdfs, HuggingFace, ObjectStorage, PersistentPeer, PersistentTask as CommonPersistentTask,
-    Piece, TrafficType,
+    Hdfs, HuggingFace, ModelScope, ObjectStorage, PersistentPeer,
+    PersistentTask as CommonPersistentTask, Piece, TrafficType,
 };
 use dragonfly_api::dfdaemon::{
     self,
@@ -585,6 +585,7 @@ impl PersistentTask {
                 object_storage,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await
             .inspect_err(|err| {
@@ -2315,6 +2316,7 @@ impl PersistentTask {
                 object_storage: Option<ObjectStorage>,
                 hdfs: Option<Hdfs>,
                 hugging_face: Option<HuggingFace>,
+                model_scope: Option<ModelScope>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!("start to download piece {} from source", piece_id);
@@ -2331,6 +2333,7 @@ impl PersistentTask {
                         object_storage,
                         hdfs,
                         hugging_face,
+                        model_scope,
                     )
                     .await?;
 
@@ -2446,6 +2449,7 @@ impl PersistentTask {
                         download_progress_tx,
                         in_stream_tx,
                         object_storage,
+                        None,
                         None,
                         None,
                     )
@@ -2707,6 +2711,7 @@ impl PersistentTask {
                 object_storage: Option<ObjectStorage>,
                 hdfs: Option<Hdfs>,
                 hugging_face: Option<HuggingFace>,
+                model_scope: Option<ModelScope>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!("start to download piece {} from source", piece_id);
@@ -2723,6 +2728,7 @@ impl PersistentTask {
                         object_storage,
                         hdfs,
                         hugging_face,
+                        model_scope,
                     )
                     .await?;
 
@@ -2816,6 +2822,7 @@ impl PersistentTask {
                         object_storage,
                         None,
                         None,
+                        None,
                     )
                     .await
                 }
@@ -2880,6 +2887,7 @@ impl PersistentTask {
                 object_storage,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await
             .inspect_err(|err| {
@@ -2906,6 +2914,7 @@ impl PersistentTask {
                 object_storage,
                 hdfs: None,
                 hugging_face: None,
+                model_scope: None,
             })
             .await
             .inspect_err(|err| {
