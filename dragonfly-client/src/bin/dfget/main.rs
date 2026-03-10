@@ -303,7 +303,7 @@ struct Args {
     #[arg(
         long,
         default_value = "master",
-        help = "Specify the revision for ModelScope Hub, only used when downloading from ModelScope Hub"
+        help = "Specify the revision version for ModelScope Hub"
     )]
     ms_revision: String,
 
@@ -316,7 +316,7 @@ struct Args {
     #[arg(
         long,
         default_value = "main",
-        help = "Specify the revision for Hugging Face Hub, only used when downloading from Hugging Face Hub"
+        help = "Specify the revision version for Hugging Face Hub"
     )]
     hf_revision: String,
 
