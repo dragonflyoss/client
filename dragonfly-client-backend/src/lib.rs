@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use dragonfly_api::common::v2::{Hdfs, HuggingFace, ObjectStorage, Range};
+use dragonfly_api::common::v2::{Hdfs, HuggingFace, ModelScope, ObjectStorage, Range};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -35,6 +35,7 @@ use url::Url;
 pub mod hdfs;
 pub mod http;
 pub mod hugging_face;
+pub mod model_scope;
 pub mod object_storage;
 
 /// POOL_MAX_IDLE_PER_HOST is the max idle connections per host.
@@ -92,6 +93,9 @@ pub struct StatRequest {
 
     /// Hugging Face is the hugging face related information.
     pub hugging_face: Option<HuggingFace>,
+
+    /// Model Scope is the model scope related information.
+    pub model_scope: Option<ModelScope>,
 }
 
 /// StatResponse is the stat response for backend.
@@ -148,6 +152,9 @@ pub struct GetRequest {
 
     /// Hugging Face is the hugging face related information.
     pub hugging_face: Option<HuggingFace>,
+
+    /// Model Scope is the model scope related information.
+    pub model_scope: Option<ModelScope>,
 }
 
 /// GetResponse is the get response for backend.
@@ -223,6 +230,9 @@ pub struct ExistsRequest {
 
     /// Hugging Face is the hugging face related information.
     pub hugging_face: Option<HuggingFace>,
+
+    /// Model Scope is the model scope related information.
+    pub model_scope: Option<ModelScope>,
 }
 
 /// PutRequest is the put request for backend.
@@ -253,6 +263,9 @@ pub struct PutRequest {
 
     /// Hugging Face is the hugging face related information.
     pub hugging_face: Option<HuggingFace>,
+
+    /// Model Scope is the model scope related information.
+    pub model_scope: Option<ModelScope>,
 }
 
 /// PutResponse is the put response for backend.
@@ -462,6 +475,12 @@ impl BackendFactory {
         info!("load [hdfs] builtin backend");
 
         self.backends.insert(
+            model_scope::MODEL_SCOPE_SCHEME.to_string(),
+            Box::new(model_scope::ModelScope::new(self.config.clone())?),
+        );
+        info!("load [modelscope] builtin backend");
+
+        self.backends.insert(
             "hf".to_string(),
             Box::new(hugging_face::HuggingFace::new(self.config.clone())?),
         );
@@ -526,7 +545,17 @@ mod tests {
     fn should_load_builtin_backends() {
         let factory = BackendFactory::new(Arc::new(Config::default()), None).unwrap();
         let expected_backends = vec![
-            "http", "https", "s3", "gs", "abs", "oss", "obs", "cos", "hdfs", "hf",
+            "http",
+            "https",
+            "s3",
+            "gs",
+            "abs",
+            "oss",
+            "obs",
+            "cos",
+            "hdfs",
+            "hf",
+            "modelscope",
         ];
         for backend in expected_backends {
             assert!(factory.backends.contains_key(backend));
@@ -558,7 +587,7 @@ mod tests {
         let plugin_dir = dir.path().join("non_existent_plugin_dir");
 
         let factory = BackendFactory::new(Arc::new(Config::default()), Some(&plugin_dir)).unwrap();
-        assert_eq!(factory.backends.len(), 10);
+        assert_eq!(factory.backends.len(), 11);
     }
 
     #[test]
