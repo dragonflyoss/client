@@ -53,8 +53,8 @@ use tokio_util::io::StreamReader;
 use tracing::{debug, error};
 use url::Url;
 
-/// HUGGING_FACE_SCHEME is the URL scheme for Hugging Face backend.
-pub const HUGGING_FACE_SCHEME: &str = "hf";
+/// SCHEME is the URL scheme for Hugging Face backend.
+pub const SCHEME: &str = "hf";
 
 /// HUGGING_FACE_BASE_URL is the base URL for Hugging Face Hub.
 const HUGGING_FACE_BASE_URL: &str = "https://huggingface.co";
@@ -227,7 +227,7 @@ impl HuggingFace {
             .build()?;
 
         Ok(Self {
-            scheme: HUGGING_FACE_SCHEME.to_string(),
+            scheme: SCHEME.to_string(),
             client,
         })
     }
@@ -281,17 +281,16 @@ impl HuggingFace {
     /// use the HF backend (preserving auth and URL semantics).
     fn build_hf_url(parsed_url: &ParsedURL, filename: &str) -> String {
         match parsed_url.repository_type {
-            RepositoryType::Model => format!(
-                "{}://{}/{}",
-                HUGGING_FACE_SCHEME, parsed_url.repository_id, filename
-            ),
+            RepositoryType::Model => {
+                format!("{}://{}/{}", SCHEME, parsed_url.repository_id, filename)
+            }
             RepositoryType::Dataset => format!(
                 "{}://datasets/{}/{}",
-                HUGGING_FACE_SCHEME, parsed_url.repository_id, filename
+                SCHEME, parsed_url.repository_id, filename
             ),
             RepositoryType::Space => format!(
                 "{}://spaces/{}/{}",
-                HUGGING_FACE_SCHEME, parsed_url.repository_id, filename
+                SCHEME, parsed_url.repository_id, filename
             ),
         }
     }
