@@ -48,8 +48,8 @@ use tokio_util::io::StreamReader;
 use tracing::{debug, error, instrument};
 use url::Url;
 
-/// HDFS_SCHEME is the scheme of the HDFS.
-pub const HDFS_SCHEME: &str = "hdfs";
+/// SCHEME is the scheme of the HDFS.
+pub const SCHEME: &str = "hdfs";
 
 /// DEFAULT_NAMENODE_PORT is the default port of the HDFS namenode.
 const DEFAULT_NAMENODE_PORT: u16 = 9870;
@@ -66,7 +66,7 @@ impl Hdfs {
     /// Create a new Hdfs instance.
     pub fn new() -> Self {
         Self {
-            scheme: HDFS_SCHEME.to_string(),
+            scheme: SCHEME.to_string(),
         }
     }
 

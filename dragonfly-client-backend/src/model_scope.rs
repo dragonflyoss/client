@@ -53,8 +53,8 @@ use tokio_util::io::StreamReader;
 use tracing::{debug, error};
 use url::Url;
 
-/// MODELSCOPE_SCHEME is the URL scheme for ModelScope backend.
-pub const MODEL_SCOPE_SCHEME: &str = "modelscope";
+/// SCHEME is the URL scheme for ModelScope backend.
+pub const SCHEME: &str = "modelscope";
 
 /// MODEL_SCOPE_BASE_URL is the base URL for ModelScope Hub.
 const MODEL_SCOPE_BASE_URL: &str = "https://modelscope.cn";
@@ -231,7 +231,7 @@ impl ModelScope {
             .build()?;
 
         Ok(Self {
-            scheme: MODEL_SCOPE_SCHEME.to_string(),
+            scheme: SCHEME.to_string(),
             client,
         })
     }
@@ -267,13 +267,12 @@ impl ModelScope {
     /// use the ModelScope backend (preserving auth and URL semantics).
     fn build_model_scope_url(parsed_url: &ParsedURL, filename: &str) -> String {
         match parsed_url.repository_type {
-            RepositoryType::Model => format!(
-                "{}://{}/{}",
-                MODEL_SCOPE_SCHEME, parsed_url.repository_id, filename
-            ),
+            RepositoryType::Model => {
+                format!("{}://{}/{}", SCHEME, parsed_url.repository_id, filename)
+            }
             RepositoryType::Dataset => format!(
                 "{}://datasets/{}/{}",
-                MODEL_SCOPE_SCHEME, parsed_url.repository_id, filename
+                SCHEME, parsed_url.repository_id, filename
             ),
         }
     }
