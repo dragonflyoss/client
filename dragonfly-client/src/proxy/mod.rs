@@ -51,7 +51,7 @@ use rcgen::Certificate;
 use rustls::{RootCertStore, ServerConfig};
 use rustls_pki_types::CertificateDer;
 use std::collections::{HashMap, HashSet};
-use std::net::{SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpListener;
