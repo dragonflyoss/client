@@ -475,7 +475,7 @@ impl BackendFactory {
         info!("load [hdfs] builtin backend");
 
         self.backends.insert(
-            model_scope::MODEL_SCOPE_SCHEME.to_string(),
+            model_scope::SCHEME.to_string(),
             Box::new(model_scope::ModelScope::new(self.config.clone())?),
         );
         info!("load [modelscope] builtin backend");

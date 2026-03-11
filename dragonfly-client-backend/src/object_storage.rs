@@ -100,6 +100,14 @@ pub enum Scheme {
     COS,
 }
 
+/// Scheme implements the Scheme trait.
+impl Scheme {
+    /// Returns true if the given string is a supported scheme.
+    pub fn is_supported(scheme: &str) -> bool {
+        scheme.parse::<Scheme>().is_ok()
+    }
+}
+
 /// Scheme implements the Display.
 impl fmt::Display for Scheme {
     /// Fmt formats the value using the given formatter.
@@ -921,6 +929,21 @@ impl crate::Backend for ObjectStorage {
 mod tests {
     use super::*;
     use dragonfly_api::common::v2::ObjectStorage as ObjectStorageInfo;
+
+    #[test]
+    fn should_return_true_for_supported_schemes() {
+        let supported = vec!["s3", "gs", "abs", "oss", "obs", "cos"];
+        for scheme in supported {
+            assert!(Scheme::is_supported(scheme));
+        }
+    }
+    #[test]
+    fn should_return_false_for_unsupported_schemes() {
+        let unsupported = vec!["http", "https", "ftp", "hdfs", "file", "", "S3", "GCS"];
+        for scheme in unsupported {
+            assert!(!Scheme::is_supported(scheme));
+        }
+    }
 
     #[test]
     fn should_get_parsed_url() {

@@ -25,7 +25,9 @@ use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::resource::piece::MIN_PIECE_LENGTH;
 use dragonfly_client::tracing::init_command_tracing;
-use dragonfly_client_backend::{BackendFactory, DirEntry};
+use dragonfly_client_backend::{
+    hdfs, hugging_face, model_scope, object_storage, BackendFactory, DirEntry,
+};
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{ErrorType, OrErr};
@@ -700,32 +702,48 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
 /// concurrency control. The function creates the necessary directory structure
 /// locally and downloads files while preserving the remote directory hierarchy.
 async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Result<()> {
-    // Initialize the object storage config and the hdfs config.
-    let object_storage = Some(ObjectStorage {
-        access_key_id: args.storage_access_key_id.clone(),
-        access_key_secret: args.storage_access_key_secret.clone(),
-        security_token: args.storage_security_token.clone(),
-        session_token: args.storage_session_token.clone(),
-        region: args.storage_region.clone(),
-        endpoint: args.storage_endpoint.clone(),
-        credential_path: args.storage_credential_path.clone(),
-        predefined_acl: args.storage_predefined_acl.clone(),
-        insecure_skip_verify: args.storage_insecure_skip_verify,
-    });
+    let url = Url::parse(args.url.as_str()).or_err(ErrorType::ParseError)?;
+    let object_storage = if object_storage::Scheme::is_supported(url.scheme()) {
+        Some(ObjectStorage {
+            access_key_id: args.storage_access_key_id.clone(),
+            access_key_secret: args.storage_access_key_secret.clone(),
+            security_token: args.storage_security_token.clone(),
+            session_token: args.storage_session_token.clone(),
+            region: args.storage_region.clone(),
+            endpoint: args.storage_endpoint.clone(),
+            credential_path: args.storage_credential_path.clone(),
+            predefined_acl: args.storage_predefined_acl.clone(),
+            insecure_skip_verify: args.storage_insecure_skip_verify,
+        })
+    } else {
+        None
+    };
 
-    let hdfs = Some(Hdfs {
-        delegation_token: args.hdfs_delegation_token.clone(),
-    });
+    let hdfs = if url.scheme() == hdfs::SCHEME {
+        Some(Hdfs {
+            delegation_token: args.hdfs_delegation_token.clone(),
+        })
+    } else {
+        None
+    };
 
-    let hugging_face = Some(HuggingFace {
-        revision: args.hf_revision.clone(),
-        token: args.hf_token.clone(),
-    });
+    let hugging_face = if url.scheme() == hugging_face::SCHEME {
+        Some(HuggingFace {
+            revision: args.hf_revision.clone(),
+            token: args.hf_token.clone(),
+        })
+    } else {
+        None
+    };
 
-    let model_scope = Some(ModelScope {
-        revision: args.ms_revision.clone(),
-        token: args.ms_token.clone(),
-    });
+    let model_scope = if url.scheme() == model_scope::SCHEME {
+        Some(ModelScope {
+            revision: args.ms_revision.clone(),
+            token: args.ms_token.clone(),
+        })
+    } else {
+        None
+    };
 
     // Get all entries in the directory with include files filter.
     let entries: Vec<DirEntry> = get_all_entries(
@@ -929,33 +947,48 @@ async fn download(
     progress_bar: ProgressBar,
     download_client: DfdaemonDownloadClient,
 ) -> Result<()> {
-    // Only initialize object storage when the scheme is an object storage protocol.
-    let object_storage = Some(ObjectStorage {
-        access_key_id: args.storage_access_key_id.clone(),
-        access_key_secret: args.storage_access_key_secret.clone(),
-        security_token: args.storage_security_token.clone(),
-        session_token: args.storage_session_token.clone(),
-        region: args.storage_region.clone(),
-        endpoint: args.storage_endpoint.clone(),
-        credential_path: args.storage_credential_path.clone(),
-        predefined_acl: args.storage_predefined_acl.clone(),
-        insecure_skip_verify: args.storage_insecure_skip_verify,
-    });
+    let url = Url::parse(args.url.as_str()).or_err(ErrorType::ParseError)?;
+    let object_storage = if object_storage::Scheme::is_supported(url.scheme()) {
+        Some(ObjectStorage {
+            access_key_id: args.storage_access_key_id.clone(),
+            access_key_secret: args.storage_access_key_secret.clone(),
+            security_token: args.storage_security_token.clone(),
+            session_token: args.storage_session_token.clone(),
+            region: args.storage_region.clone(),
+            endpoint: args.storage_endpoint.clone(),
+            credential_path: args.storage_credential_path.clone(),
+            predefined_acl: args.storage_predefined_acl.clone(),
+            insecure_skip_verify: args.storage_insecure_skip_verify,
+        })
+    } else {
+        None
+    };
 
-    // Only initialize HDFS when the scheme is HDFS protocol.
-    let hdfs = Some(Hdfs {
-        delegation_token: args.hdfs_delegation_token.clone(),
-    });
+    let hdfs = if url.scheme() == hdfs::SCHEME {
+        Some(Hdfs {
+            delegation_token: args.hdfs_delegation_token.clone(),
+        })
+    } else {
+        None
+    };
 
-    let hugging_face = Some(HuggingFace {
-        revision: args.hf_revision.clone(),
-        token: args.hf_token.clone(),
-    });
+    let hugging_face = if url.scheme() == hugging_face::SCHEME {
+        Some(HuggingFace {
+            revision: args.hf_revision.clone(),
+            token: args.hf_token.clone(),
+        })
+    } else {
+        None
+    };
 
-    let model_scope = Some(ModelScope {
-        revision: args.ms_revision.clone(),
-        token: args.ms_token.clone(),
-    });
+    let model_scope = if url.scheme() == model_scope::SCHEME {
+        Some(ModelScope {
+            revision: args.ms_revision.clone(),
+            token: args.ms_token.clone(),
+        })
+    } else {
+        None
+    };
 
     // If the `filtered_query_params` is not provided, then use the default value.
     let filtered_query_params = args
