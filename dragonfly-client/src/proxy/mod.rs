@@ -441,7 +441,7 @@ pub async fn https_handler(
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
-    log_request(&request,"handle HTTPS request:");
+    log_request(&request, "handle HTTPS request:");
 
     // Proxy the request directly  to the remote server.
     if let Some(host) = request.uri().host() {
@@ -633,7 +633,10 @@ pub async fn upgraded_handler(
     // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
     // dfdaemon.
     if header::get_use_p2p(request.headers()) {
-        log_request(&request, "proxy HTTP request via dfdaemon by X-Dragonfly-Use-P2P header:");
+        log_request(
+            &request,
+            "proxy HTTP request via dfdaemon by X-Dragonfly-Use-P2P header:",
+        );
         return proxy_via_dfdaemon(
             config,
             task,
@@ -1343,9 +1346,8 @@ fn log_request(request: &Request<hyper::body::Incoming>, log_info: &str) {
 
     if !sensitive_headers.is_empty() {
         debug!(
-                "{} | BLACKLISTED_HEADERS (SENSITIVE): {:?}",
-                log_info,
-                sensitive_headers,
-            );
+            "{} | BLACKLISTED_HEADERS (SENSITIVE): {:?}",
+            log_info, sensitive_headers,
+        );
     }
 }
