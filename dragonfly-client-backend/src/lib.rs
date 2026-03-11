@@ -54,9 +54,6 @@ const HTTP2_STREAM_WINDOW_SIZE: u32 = 16 * 1024 * 1024;
 /// HTTP2_CONNECTION_WINDOW_SIZE is the connection window size for HTTP2 connection.
 const HTTP2_CONNECTION_WINDOW_SIZE: u32 = 16 * 1024 * 1024;
 
-/// HTTP2_MAX_FRAME_SIZE is the max frame size for HTTP2 connection.
-const HTTP2_MAX_FRAME_SIZE: u32 = 16 * 1024 * 1024;
-
 /// MAX_RETRY_TIMES is the max retry times for the request.
 const MAX_RETRY_TIMES: u32 = 1;
 

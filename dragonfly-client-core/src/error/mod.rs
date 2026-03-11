@@ -30,6 +30,10 @@ pub enum DFError {
     #[error(transparent)]
     IO(#[from] std::io::Error),
 
+    /// VarError is the error for environment variable.
+    #[error(transparent)]
+    VarError(#[from] std::env::VarError),
+
     /// MpscSend is the error for send.
     #[error("mpsc send: {0}")]
     MpscSend(String),
@@ -134,9 +138,13 @@ pub enum DFError {
     #[error("invalid parameter")]
     InvalidParameter,
 
-    /// Infallible is the error for infallible.
+    /// NetAddrParseError is the error for net address parse.
     #[error(transparent)]
-    Infallible(#[from] std::convert::Infallible),
+    NetAddrParseError(#[from] std::net::AddrParseError),
+
+    /// ConvertInfallible is the error for infallible.
+    #[error(transparent)]
+    ConvertInfallible(#[from] std::convert::Infallible),
 
     /// Utf8 is the error for utf8.
     #[error(transparent)]
@@ -201,6 +209,10 @@ pub enum DFError {
     // InvalidHeaderValue is the error for invalid header value.
     #[error(transparent)]
     HTTTHeaderInvalidHeaderValue(#[from] http::header::InvalidHeaderValue),
+
+    // HTTTHeaderToStrError is the error for header to str.
+    #[error(transparent)]
+    HTTTHeaderToStrError(#[from] http::header::ToStrError),
 
     /// URLParseError is the error for url parse.
     #[error(transparent)]

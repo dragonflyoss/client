@@ -31,6 +31,7 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
+    net::format_socket_addr,
     shutdown,
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
@@ -51,7 +52,8 @@ use rcgen::Certificate;
 use rustls::{RootCertStore, ServerConfig};
 use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpListener;
@@ -385,7 +387,7 @@ pub async fn http_handler(
     let request_uri = request.uri();
     if let Some(rule) = find_matching_rule(
         config.proxy.rules.as_deref(),
-        request_uri.to_string().as_str(),
+        url::Url::parse(&request_uri.to_string()).or_err(ErrorType::ParseError)?,
     ) {
         info!(
             "proxy HTTP request via dfdaemon by rule config: {:?}",
@@ -604,7 +606,7 @@ pub async fn upgraded_handler(
         let builder = http::uri::Builder::new();
         *request.uri_mut() = builder
             .scheme("https")
-            .authority(format!("{}:{}", host, port))
+            .authority(format_socket_addr(IpAddr::from_str(&host)?, port))
             .path_and_query(
                 request
                     .uri()
@@ -617,9 +619,10 @@ pub async fn upgraded_handler(
     }
 
     // If find the matching rule, proxy the request via the dfdaemon.
+    let request_uri = request.uri();
     if let Some(rule) = find_matching_rule(
         config.proxy.rules.as_deref(),
-        request.uri().to_string().as_str(),
+        url::Url::parse(&request_uri.to_string()).or_err(ErrorType::ParseError)?,
     ) {
         info!(
             "proxy HTTPS request via dfdaemon by rule config: {:?}",
@@ -981,7 +984,7 @@ async fn proxy_via_dfdaemon(
 
 /// proxy_via_http proxies the HTTP request directly to the remote server.
 #[instrument(skip_all)]
-async fn proxy_via_http(request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
+async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
     let Some(host) = request.uri().host() else {
         error!("CONNECT host is not socket addr: {:?}", request.uri());
         return Ok(make_error_response(
@@ -1006,6 +1009,18 @@ async fn proxy_via_http(request: Request<hyper::body::Incoming>) -> ClientResult
         }
     });
 
+    // Override Host header with full authority (including port) to handle
+    // containerd's behavior with non-443 HTTPS ports, which otherwise
+    // causes request failures.
+    let authority = request
+        .uri()
+        .authority()
+        .ok_or_else(|| ClientError::Unknown("request uri authority is not set".to_string()))?
+        .as_str()
+        .parse()
+        .or_err(ErrorType::ParseError)?;
+    request.headers_mut().insert(hyper::header::HOST, authority);
+
     let response = client.send_request(request).await?;
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }
@@ -1013,7 +1028,7 @@ async fn proxy_via_http(request: Request<hyper::body::Incoming>) -> ClientResult
 /// proxy_via_https proxies the HTTPS request directly to the remote server.
 #[instrument(skip_all)]
 async fn proxy_via_https(
-    request: Request<hyper::body::Incoming>,
+    mut request: Request<hyper::body::Incoming>,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     let client_config_builder = match registry_cert.as_ref() {
@@ -1038,8 +1053,20 @@ async fn proxy_via_https(
         .https_or_http()
         .enable_http1()
         .build();
-
     let client = Client::builder(TokioExecutor::new()).build(https);
+
+    // Override Host header with full authority (including port) to handle
+    // containerd's behavior with non-443 HTTPS ports, which otherwise
+    // causes request failures.
+    let authority = request
+        .uri()
+        .authority()
+        .ok_or_else(|| ClientError::Unknown("request uri authority is not set".to_string()))?
+        .as_str()
+        .parse()
+        .or_err(ErrorType::ParseError)?;
+    request.headers_mut().insert(hyper::header::HOST, authority);
+
     let response = client.request(request).await.inspect_err(|err| {
         error!("request failed: {:?}", err);
     })?;
@@ -1247,8 +1274,16 @@ fn make_response_headers(
 
 /// find_matching_rule returns whether the dfdaemon should be used to download the task.
 /// If the dfdaemon should be used, return the matched rule.
-fn find_matching_rule(rules: Option<&[Rule]>, url: &str) -> Option<Rule> {
-    rules?.iter().find(|rule| rule.regex.is_match(url)).cloned()
+fn find_matching_rule(rules: Option<&[Rule]>, mut url: url::Url) -> Option<Rule> {
+    // Remove query params and fragment.
+    url.set_query(None);
+    url.set_fragment(None);
+
+    // Find the matching rule by the url.
+    rules?
+        .iter()
+        .find(|rule| rule.regex.is_match(url.as_str()))
+        .cloned()
 }
 
 /// make_error_response makes an error response with the given status and message.

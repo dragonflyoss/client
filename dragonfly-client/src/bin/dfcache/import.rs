@@ -23,8 +23,8 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
+use dragonfly_client_util::net::preferred_local_ip;
 use indicatif::{ProgressBar, ProgressStyle};
-use local_ip_address::local_ip;
 use path_absolutize::*;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -44,7 +44,7 @@ pub struct ImportCommand {
 
     #[arg(
         long = "content-for-calculating-task-id",
-        help = "Specify the content used to calculate the persistent cache task ID. If it is set, use its value to calculate the task ID, Otherwise, calculate the persistent cache task ID based on url, piece-length, tag, application, and filtered-query-params."
+        help = "Specify the content used to calculate the persistent cache task ID. If it is set, use its value to calculate the task ID. Otherwise, calculate the persistent cache task ID by computing SHA256 hash of file content. Note: SHA256 computation takes longer for large files."
     )]
     content_for_calculating_task_id: Option<String>,
 
@@ -216,6 +216,21 @@ impl ImportCommand {
                 }
             };
 
+        // Warn user if content_for_calculating_task_id is not set, which may lead to slow SHA256
+        // computation.
+        if self.content_for_calculating_task_id.is_none() {
+            println!(
+                "{}{}Warning: SHA256 hash computation from file content is slow for large files. Use {}--content-for-calculating-task-id{}{}{} to improve performance.{}",
+                color::Fg(color::Yellow),
+                style::Bold,
+                style::Italic,
+                style::Reset,
+                color::Fg(color::Yellow),
+                style::Bold,
+                style::Reset,
+            );
+        }
+
         // Run import sub command.
         if let Err(err) = self.run(dfdaemon_download_client).await {
             match err {
@@ -353,7 +368,7 @@ impl ImportCommand {
                     prost_wkt_types::Duration::try_from(self.timeout)
                         .or_err(ErrorType::ParseError)?,
                 ),
-                remote_ip: Some(local_ip().unwrap().to_string()),
+                remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
             })
             .await?;
 

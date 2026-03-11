@@ -123,7 +123,6 @@ impl PersistentTask {
             scheduler_client,
             piece: Arc::new(piece::Piece::new(
                 config.clone(),
-                id_generator.clone(),
                 storage.clone(),
                 backend_factory.clone(),
                 download_rate_limiter,
@@ -2595,8 +2594,7 @@ impl PersistentTask {
             }
 
             // Fake the download from the local.
-            self.piece
-                .download_persistent_from_local(task_id, piece.length);
+            self.piece.download_persistent_from_local(piece.length);
             info!("finished piece {} from local", piece_id,);
 
             // Construct the piece.

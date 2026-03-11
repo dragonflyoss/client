@@ -26,10 +26,12 @@ use dragonfly_client_metric::{
     collect_upload_piece_traffic_metrics,
 };
 use dragonfly_client_storage::{metadata, Storage};
-use dragonfly_client_util::id_generator::IDGenerator;
+use dragonfly_client_util::net::format_socket_addr;
 use leaky_bucket::RateLimiter;
 use reqwest::header::HeaderMap;
 use std::collections::HashMap;
+use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -61,14 +63,8 @@ pub struct Piece {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// id_generator is the id generator.
-    id_generator: Arc<IDGenerator>,
-
     /// storage is the local storage.
     storage: Arc<Storage>,
-
-    /// grpc_downloader is the gRPC piece downloader.
-    grpc_downloader: Arc<dyn piece_downloader::Downloader>,
 
     /// tcp_downloader is the TCP piece downloader.
     tcp_downloader: Arc<dyn piece_downloader::Downloader>,
@@ -94,7 +90,6 @@ impl Piece {
     /// new returns a new Piece.
     pub fn new(
         config: Arc<Config>,
-        id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
         backend_factory: Arc<BackendFactory>,
         download_rate_limiter: Arc<RateLimiter>,
@@ -103,10 +98,7 @@ impl Piece {
     ) -> Result<Self> {
         Ok(Self {
             config: config.clone(),
-            id_generator,
             storage,
-            grpc_downloader: piece_downloader::DownloaderFactory::new("grpc", config.clone())?
-                .build(),
             tcp_downloader: piece_downloader::DownloaderFactory::new("tcp", config.clone())?
                 .build(),
             quic_downloader: piece_downloader::DownloaderFactory::new("quic", config)?.build(),
@@ -342,10 +334,7 @@ impl Piece {
             .upload_piece(piece_id, task_id, range)
             .await
             .inspect(|_| {
-                collect_upload_piece_traffic_metrics(
-                    self.id_generator.task_type(task_id) as i32,
-                    length,
-                );
+                collect_upload_piece_traffic_metrics(length);
             })
     }
 
@@ -382,12 +371,8 @@ impl Piece {
     /// download_from_local downloads a single piece from local cache. Fake the download piece
     /// from the local cache, just collect the metrics.
     #[instrument(skip_all)]
-    pub fn download_from_local(&self, task_id: &str, length: u64) {
-        collect_download_piece_traffic_metrics(
-            &TrafficType::LocalPeer,
-            self.id_generator.task_type(task_id) as i32,
-            length,
-        );
+    pub fn download_from_local(&self, length: u64) {
+        collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
     }
 
     /// download_from_parent downloads a single piece from a parent.
@@ -445,7 +430,7 @@ impl Piece {
             ("tcp", Some(ip), Some(port), _) => {
                 self.tcp_downloader
                     .download_piece(
-                        format!("{}:{}", ip, port).as_str(),
+                        &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
                         number,
                         host_id,
                         task_id,
@@ -455,7 +440,7 @@ impl Piece {
             ("quic", Some(ip), _, Some(port)) => {
                 self.quic_downloader
                     .download_piece(
-                        format!("{}:{}", ip, port).as_str(),
+                        &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
                         number,
                         host_id,
                         task_id,
@@ -469,9 +454,9 @@ impl Piece {
                     Error::InvalidPeer(parent.id.clone())
                 })?;
 
-                self.grpc_downloader
+                self.tcp_downloader
                     .download_piece(
-                        format!("{}:{}", host.ip, host.port).as_str(),
+                        &format_socket_addr(IpAddr::from_str(&host.ip)?, host.port as u16),
                         number,
                         host_id,
                         task_id,
@@ -499,11 +484,7 @@ impl Piece {
             .await
         {
             Ok(piece) => {
-                collect_download_piece_traffic_metrics(
-                    &TrafficType::RemotePeer,
-                    self.id_generator.task_type(task_id) as i32,
-                    length,
-                );
+                collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
 
                 scopeguard::ScopeGuard::into_inner(guard);
                 Ok(piece)
@@ -650,11 +631,7 @@ impl Piece {
             .await
         {
             Ok(piece) => {
-                collect_download_piece_traffic_metrics(
-                    &TrafficType::BackToSource,
-                    self.id_generator.task_type(task_id) as i32,
-                    length,
-                );
+                collect_download_piece_traffic_metrics(&TrafficType::BackToSource, length);
 
                 scopeguard::ScopeGuard::into_inner(guard);
                 Ok(piece)
@@ -707,34 +684,6 @@ impl Piece {
             .register_persistent_piece(piece_id, number, offset, length)
     }
 
-    /// upload_persistent_from_local_into_async_read uploads a persistent piece from local cache.
-    #[instrument(skip_all, fields(piece_id))]
-    pub async fn upload_persistent_from_local_into_async_read(
-        &self,
-        piece_id: &str,
-        task_id: &str,
-        length: u64,
-        range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
-        // Span record the piece_id.
-        Span::current().record("piece_id", piece_id);
-        Span::current().record("piece_length", length);
-
-        // Acquire the upload rate limiter.
-        self.upload_rate_limiter.acquire(length as usize).await;
-
-        // Upload the persistent piece content.
-        self.storage
-            .upload_persistent_piece(piece_id, task_id, range)
-            .await
-            .inspect(|_| {
-                collect_upload_piece_traffic_metrics(
-                    self.id_generator.task_type(task_id) as i32,
-                    length,
-                );
-            })
-    }
-
     /// download_persistent_from_local_into_async_read downloads a persistent piece from local cache.
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_persistent_from_local_into_async_read(
@@ -760,12 +709,8 @@ impl Piece {
     /// download_persistent_from_local downloads a persistent piece from local cache. Fake the download
     /// persistent piece from the local cache, just collect the metrics.
     #[instrument(skip_all)]
-    pub fn download_persistent_from_local(&self, task_id: &str, length: u64) {
-        collect_download_piece_traffic_metrics(
-            &TrafficType::LocalPeer,
-            self.id_generator.task_type(task_id) as i32,
-            length,
-        );
+    pub fn download_persistent_from_local(&self, length: u64) {
+        collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
     }
 
     /// download_persistent_from_parent downloads a persistent piece from a parent.
@@ -821,7 +766,7 @@ impl Piece {
             ("tcp", Some(ip), Some(port), _) => {
                 self.tcp_downloader
                     .download_persistent_piece(
-                        format!("{}:{}", ip, port).as_str(),
+                        &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
                         number,
                         host_id,
                         task_id,
@@ -833,7 +778,7 @@ impl Piece {
                     piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
                 quic_downloader
                     .download_persistent_piece(
-                        format!("{}:{}", ip, port).as_str(),
+                        &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
                         number,
                         host_id,
                         task_id,
@@ -847,9 +792,9 @@ impl Piece {
                     Error::InvalidPeer(parent.id.clone())
                 })?;
 
-                self.grpc_downloader
+                self.tcp_downloader
                     .download_persistent_piece(
-                        format!("{}:{}", host.ip, host.port).as_str(),
+                        &format_socket_addr(IpAddr::from_str(&host.ip)?, host.port as u16),
                         number,
                         host_id,
                         task_id,
@@ -876,11 +821,7 @@ impl Piece {
             .await
         {
             Ok(piece) => {
-                collect_download_piece_traffic_metrics(
-                    &TrafficType::RemotePeer,
-                    self.id_generator.task_type(task_id) as i32,
-                    length,
-                );
+                collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
 
                 scopeguard::ScopeGuard::into_inner(guard);
                 Ok(piece)
@@ -1025,11 +966,7 @@ impl Piece {
             .await
         {
             Ok(piece) => {
-                collect_download_piece_traffic_metrics(
-                    &TrafficType::BackToSource,
-                    self.id_generator.task_type(task_id) as i32,
-                    length,
-                );
+                collect_download_piece_traffic_metrics(&TrafficType::BackToSource, length);
 
                 scopeguard::ScopeGuard::into_inner(guard);
                 Ok(piece)
@@ -1082,34 +1019,6 @@ impl Piece {
             .register_persistent_cache_piece(piece_id, number, offset, length)
     }
 
-    /// upload_persistent_cache_from_local_into_async_read uploads a persistent cache piece from local cache.
-    #[instrument(skip_all, fields(piece_id))]
-    pub async fn upload_persistent_cache_from_local_into_async_read(
-        &self,
-        piece_id: &str,
-        task_id: &str,
-        length: u64,
-        range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
-        // Span record the piece_id.
-        Span::current().record("piece_id", piece_id);
-        Span::current().record("piece_length", length);
-
-        // Acquire the upload rate limiter.
-        self.upload_rate_limiter.acquire(length as usize).await;
-
-        // Upload the persistent cache piece content.
-        self.storage
-            .upload_persistent_cache_piece(piece_id, task_id, range)
-            .await
-            .inspect(|_| {
-                collect_upload_piece_traffic_metrics(
-                    self.id_generator.task_type(task_id) as i32,
-                    length,
-                );
-            })
-    }
-
     /// download_persistent_cache_from_local_into_async_read downloads a persistent cache piece from local cache.
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_persistent_cache_from_local_into_async_read(
@@ -1135,12 +1044,8 @@ impl Piece {
     /// download_persistent_cache_from_local downloads a persistent cache piece from local cache. Fake the download
     /// persistent cache piece from the local cache, just collect the metrics.
     #[instrument(skip_all)]
-    pub fn download_persistent_cache_from_local(&self, task_id: &str, length: u64) {
-        collect_download_piece_traffic_metrics(
-            &TrafficType::LocalPeer,
-            self.id_generator.task_type(task_id) as i32,
-            length,
-        );
+    pub fn download_persistent_cache_from_local(&self, length: u64) {
+        collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
     }
 
     /// download_persistent_cache_from_parent downloads a persistent cache piece from a parent.
@@ -1196,7 +1101,7 @@ impl Piece {
             ("tcp", Some(ip), Some(port), _) => {
                 self.tcp_downloader
                     .download_persistent_cache_piece(
-                        format!("{}:{}", ip, port).as_str(),
+                        &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
                         number,
                         host_id,
                         task_id,
@@ -1208,7 +1113,7 @@ impl Piece {
                     piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
                 quic_downloader
                     .download_persistent_cache_piece(
-                        format!("{}:{}", ip, port).as_str(),
+                        &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
                         number,
                         host_id,
                         task_id,
@@ -1222,9 +1127,9 @@ impl Piece {
                     Error::InvalidPeer(parent.id.clone())
                 })?;
 
-                self.grpc_downloader
+                self.tcp_downloader
                     .download_persistent_cache_piece(
-                        format!("{}:{}", host.ip, host.port).as_str(),
+                        &format_socket_addr(IpAddr::from_str(&host.ip)?, host.port as u16),
                         number,
                         host_id,
                         task_id,
@@ -1251,11 +1156,7 @@ impl Piece {
             .await
         {
             Ok(piece) => {
-                collect_download_piece_traffic_metrics(
-                    &TrafficType::RemotePeer,
-                    self.id_generator.task_type(task_id) as i32,
-                    length,
-                );
+                collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
 
                 scopeguard::ScopeGuard::into_inner(guard);
                 Ok(piece)
@@ -1280,10 +1181,6 @@ mod tests {
         let config = Config::default();
         let config = Arc::new(config);
 
-        let id_generator =
-            IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false);
-        let id_generator = Arc::new(id_generator);
-
         let storage = Storage::new(
             config.clone(),
             temp_dir.path(),
@@ -1302,7 +1199,6 @@ mod tests {
 
         let piece = Piece::new(
             config.clone(),
-            id_generator.clone(),
             storage.clone(),
             backend_factory.clone(),
             download_rate_limiter,

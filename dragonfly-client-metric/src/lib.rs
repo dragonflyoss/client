@@ -125,14 +125,14 @@ lazy_static! {
     pub static ref DOWNLOAD_TRAFFIC: IntCounterVec =
         IntCounterVec::new(
             Opts::new("download_traffic", "Counter of the number of the download traffic.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type", "task_type"]
+            &["type"]
         ).expect("metric can be created");
 
     /// UPLOAD_TRAFFIC is used to count the upload traffic.
     pub static ref UPLOAD_TRAFFIC: IntCounterVec =
         IntCounterVec::new(
             Opts::new("upload_traffic", "Counter of the number of the upload traffic.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["task_type"]
+            &[]
         ).expect("metric can be created");
 
     /// DOWNLOAD_TASK_DURATION is used to record the download task duration.
@@ -687,9 +687,9 @@ pub fn collect_prefetch_task_failure_metrics(typ: i32, tag: &str, app: &str, pri
 }
 
 /// collect_download_piece_traffic_metrics collects the download piece traffic metrics.
-pub fn collect_download_piece_traffic_metrics(typ: &TrafficType, task_type: i32, length: u64) {
+pub fn collect_download_piece_traffic_metrics(typ: &TrafficType, length: u64) {
     DOWNLOAD_TRAFFIC
-        .with_label_values(&[typ.as_str_name(), task_type.to_string().as_str()])
+        .with_label_values(&[typ.as_str_name()])
         .inc_by(length);
 }
 
@@ -704,10 +704,8 @@ pub fn collect_upload_piece_finished_metrics() {
 }
 
 /// collect_upload_piece_traffic_metrics collects the upload piece traffic metrics.
-pub fn collect_upload_piece_traffic_metrics(task_type: i32, length: u64) {
-    UPLOAD_TRAFFIC
-        .with_label_values(&[task_type.to_string().as_str()])
-        .inc_by(length);
+pub fn collect_upload_piece_traffic_metrics(length: u64) {
+    UPLOAD_TRAFFIC.with_label_values(&[]).inc_by(length);
 }
 
 /// collect_upload_piece_failure_metrics collects the upload piece failure metrics.
