@@ -159,13 +159,15 @@ impl IDGenerator {
                     hasher.update(application);
                 }
 
+                // Add the revision to generate the task id for the artifact with the same url but
+                // different revisions, such as git repository.
+                if let Some(revision) = revision {
+                    hasher.update(revision);
+                }
+
                 // Add the piece length to generate the task id.
                 if let Some(piece_length) = piece_length {
                     hasher.update(piece_length.to_string());
-                }
-
-                if let Some(revision) = revision {
-                    hasher.update(revision);
                 }
 
                 hasher.update(TaskType::Standard.as_str_name().as_bytes());
@@ -313,7 +315,7 @@ mod tests {
                     filtered_query_params: vec![],
                     revision: Some("v1.0".to_string()),
                 },
-                "91a1996a00d8ba39f7fecada21a7e24d0bde597842e5cb436ea99f77eca88a21",
+                "5844f27a257287e9b734256bb25603d8005422ced8c0377f15063ec11963b25f",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
