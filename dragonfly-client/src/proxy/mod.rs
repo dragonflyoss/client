@@ -31,6 +31,7 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
+    net::format_socket_addr,
     shutdown,
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
@@ -50,8 +51,9 @@ use lazy_static::lazy_static;
 use rcgen::Certificate;
 use rustls::{RootCertStore, ServerConfig};
 use rustls_pki_types::CertificateDer;
-use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::collections::{HashMap, HashSet};
+use std::net::{IpAddr, SocketAddr};
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpListener;
@@ -420,17 +422,11 @@ pub async fn http_handler(
     }
 
     if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
-        info!(
-            "proxy HTTPS request directly to remote server: {:?}",
-            request
-        );
+        log_request(&request, "proxy HTTPS request directly to remote server:");
         return proxy_via_https(request, registry_cert).await;
     }
 
-    info!(
-        "proxy HTTP request directly to remote server: {:?}",
-        request
-    );
+    log_request(&request, "proxy HTTP request directly to remote server:");
     return proxy_via_http(request).await;
 }
 
@@ -445,7 +441,7 @@ pub async fn https_handler(
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
-    info!("handle HTTPS request: {:?}", request);
+    log_request(&request,"handle HTTPS request:");
 
     // Proxy the request directly  to the remote server.
     if let Some(host) = request.uri().host() {
@@ -622,10 +618,7 @@ pub async fn upgraded_handler(
         config.proxy.rules.as_deref(),
         url::Url::parse(&request_uri.to_string()).or_err(ErrorType::ParseError)?,
     ) {
-        info!(
-            "proxy HTTPS request via dfdaemon by rule config: {:?}",
-            request,
-        );
+        log_request(&request, "proxy HTTPS request via dfdaemon by rule config:");
         return proxy_via_dfdaemon(
             config,
             task,
@@ -640,10 +633,7 @@ pub async fn upgraded_handler(
     // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
     // dfdaemon.
     if header::get_use_p2p(request.headers()) {
-        info!(
-            "proxy HTTP request via dfdaemon by X-Dragonfly-Use-P2P header: {:?}",
-            request,
-        );
+        log_request(&request, "proxy HTTP request via dfdaemon by X-Dragonfly-Use-P2P header:");
         return proxy_via_dfdaemon(
             config,
             task,
@@ -656,17 +646,11 @@ pub async fn upgraded_handler(
     }
 
     if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
-        info!(
-            "proxy HTTPS request directly to remote server: {:?}",
-            request,
-        );
+        log_request(&request, "proxy HTTPS request directly to remote server:");
         return proxy_via_https(request, registry_cert).await;
     }
 
-    info!(
-        "proxy HTTP request directly to remote server: {:?}",
-        request,
-    );
+    log_request(&request, "proxy HTTP request directly to remote server:");
     return proxy_via_http(request).await;
 }
 
@@ -1178,8 +1162,6 @@ fn make_download_task_request(
             prefetch: need_prefetch(config.clone(), &header),
             object_storage: None,
             hdfs: None,
-            hugging_face: None,
-            model_scope: None,
             is_prefetch: false,
             need_piece_content: false,
             force_hard_link: header::get_force_hard_link(&header),
@@ -1326,4 +1308,44 @@ fn empty() -> BoxBody<Bytes, ClientError> {
     Empty::<Bytes>::new()
         .map_err(|never| match never {})
         .boxed()
+}
+
+/// log_request safely output information from the request through logs
+fn log_request(request: &Request<hyper::body::Incoming>, log_info: &str) {
+    const HEADER_BLACKLIST: &[&str] = &[
+        "authorization",
+        "cookie",
+        "set-cookie",
+        "proxy-authorization",
+        "x-access-token",
+        "x-auth-token",
+    ];
+
+    let blacklist_set: HashSet<&str> = HEADER_BLACKLIST.iter().cloned().collect();
+
+    let (mut safe_headers, mut sensitive_headers) = (Vec::new(), Vec::new());
+    for (name, value) in request.headers().iter() {
+        if blacklist_set.contains(&name.as_str()) {
+            sensitive_headers.push((name, value));
+        } else {
+            safe_headers.push((name, value));
+        }
+    }
+
+    info!(
+        "{} | method={}, uri={}, version={:?}, safe_headers={:?}",
+        log_info,
+        request.method(),
+        request.uri(),
+        request.version(),
+        safe_headers,
+    );
+
+    if !sensitive_headers.is_empty() {
+        debug!(
+                "{} | BLACKLISTED_HEADERS (SENSITIVE): {:?}",
+                log_info,
+                sensitive_headers,
+            );
+    }
 }
