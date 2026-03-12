@@ -35,6 +35,7 @@ crc32fast.workspace = true
 openssl.workspace = true
 lazy_static.workspace = true
 bytesize.workspace = true
+prost.workspace = true
 lru.workspace = true
 tokio.workspace = true
 bytes.workspace = true

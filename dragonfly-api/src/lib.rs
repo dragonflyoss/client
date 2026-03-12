@@ -1,5 +1,3 @@
-pub mod codec;
-
 #[path = ""]
 pub mod common {
     #[path = "common.v2.rs"]

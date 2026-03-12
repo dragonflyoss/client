@@ -31,7 +31,7 @@ dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.2.1
 dragonfly-client-metric = { path = "dragonfly-client-metric", version = "1.2.15" }
 dragonfly-client-util = { path = "dragonfly-client-util", version = "1.2.15" }
 dragonfly-client-init = { path = "dragonfly-client-init", version = "1.2.15" }
-dragonfly-api = "=2.2.24"
+dragonfly-api = "=2.2.25"
 thiserror = "2.0"
 futures = "0.3.32"
 reqwest = { version = "0.12.28", features = [
@@ -79,7 +79,8 @@ headers = "0.4.1"
 regex = "1.12.3"
 serde_regex = "1.1.0"
 humantime = "2.3.0"
-prost-wkt-types = "0.6"
+prost-wkt-types = "0.7"
+prost = "0.14.3"
 chrono = { version = "0.4.44", features = ["serde", "clock"] }
 openssl = { version = "0.10", features = ["vendored"] }
 opendal = { version = "0.55.0", features = [

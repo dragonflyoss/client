@@ -629,7 +629,7 @@ impl Proxy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dragonfly_api::scheduler::v2::ListHostsResponse;
+    use bytes::Bytes;
     use mocktail::prelude::*;
     use std::time::Duration;
 
@@ -638,7 +638,8 @@ mod tests {
         let mut mocks = MockSet::new();
         mocks.mock(|when, then| {
             when.path("/scheduler.v2.Scheduler/ListHosts");
-            then.pb(ListHostsResponse { hosts: vec![] });
+            // ListHostsResponse { hosts: vec![] } encodes to empty bytes.
+            then.body(mocktail::body::Body::bytes(Bytes::new()));
         });
 
         let server = MockServer::new_grpc("scheduler.v2.Scheduler").with_mocks(mocks);

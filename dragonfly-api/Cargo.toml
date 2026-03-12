@@ -1,6 +1,6 @@
 [package]
 name = "dragonfly-api"
-version = "2.2.24"
+version = "2.2.25"
 authors = ["Gaius <gaius.qi@gmail.com>"]
 edition = "2021"
 license = "Apache-2.0"
@@ -9,13 +9,15 @@ repository = "https://github.com/dragonflyoss/api"
 description = "Canonical location of the Dragonfly API definition"
 readme = "README.md"
 
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-tonic = "0.14"
-prost = "0.13.5"
+tonic = "0.14.3"
+tonic-prost = "0.14.3"
+prost = "0.14.3"
 prost-types = "0.14.3"
 tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros"] }
 serde = { version = "1.0", features = ["derive"] }
-prost-wkt-types = "0.6"
+prost-wkt-types = "0.7"
 
 [build-dependencies]
-tonic-build = "0.12.1"
+tonic-prost-build = "0.14.3"
