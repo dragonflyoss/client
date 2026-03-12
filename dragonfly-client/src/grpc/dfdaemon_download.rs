@@ -27,7 +27,8 @@ use dragonfly_api::dfdaemon::v2::{
     dfdaemon_download_server::{
         DfdaemonDownload, DfdaemonDownloadServer as DfdaemonDownloadGRPCServer,
     },
-    DeleteCacheTaskRequest, DeleteTaskRequest, DownloadCacheTaskRequest, DownloadCacheTaskResponse,
+    DeleteCacheTaskRequest, DeletePersistentCacheTaskRequest, DeletePersistentTaskRequest,
+    DeleteTaskRequest, DownloadCacheTaskRequest, DownloadCacheTaskResponse,
     DownloadPersistentCacheTaskRequest, DownloadPersistentCacheTaskResponse,
     DownloadPersistentTaskRequest, DownloadPersistentTaskResponse, DownloadTaskRequest,
     DownloadTaskResponse, Entry, ListTaskEntriesRequest, ListTaskEntriesResponse,
@@ -2236,6 +2237,57 @@ impl DfdaemonDownloadClient {
             .stat_persistent_cache_task(request)
             .await?;
         Ok(response.into_inner())
+    }
+
+    /// get_tasks returns all tasks managed by the local dfdaemon.
+    ///
+    /// NOTE: This method is not yet implemented and requires the GetTasks RPC to be added
+    /// to the DfdaemonDownload service in dragonfly-api.
+    #[instrument(skip_all)]
+    pub async fn get_tasks(&self) -> ClientResult<Vec<Task>> {
+        Err(ClientError::Unimplemented)
+    }
+
+    /// get_persistent_tasks returns all persistent tasks managed by the local dfdaemon.
+    ///
+    /// NOTE: This method is not yet implemented and requires the GetPersistentTasks RPC to be
+    /// added to the DfdaemonDownload service in dragonfly-api.
+    #[instrument(skip_all)]
+    pub async fn get_persistent_tasks(&self) -> ClientResult<Vec<PersistentTask>> {
+        Err(ClientError::Unimplemented)
+    }
+
+    /// get_persistent_cache_tasks returns all persistent cache tasks managed by the local dfdaemon.
+    ///
+    /// NOTE: This method is not yet implemented and requires the GetPersistentCacheTasks RPC to be
+    /// added to the DfdaemonDownload service in dragonfly-api.
+    #[instrument(skip_all)]
+    pub async fn get_persistent_cache_tasks(&self) -> ClientResult<Vec<PersistentCacheTask>> {
+        Err(ClientError::Unimplemented)
+    }
+
+    /// delete_persistent_task deletes a persistent task by ID.
+    ///
+    /// NOTE: This method is not yet implemented and requires the DeletePersistentTask RPC to be
+    /// added to the DfdaemonDownload service in dragonfly-api.
+    #[instrument(skip_all)]
+    pub async fn delete_persistent_task(
+        &self,
+        _request: DeletePersistentTaskRequest,
+    ) -> ClientResult<()> {
+        Err(ClientError::Unimplemented)
+    }
+
+    /// delete_persistent_cache_task deletes a persistent cache task by ID.
+    ///
+    /// NOTE: This method is not yet implemented and requires the DeletePersistentCacheTask RPC to
+    /// be added to the DfdaemonDownload service in dragonfly-api.
+    #[instrument(skip_all)]
+    pub async fn delete_persistent_cache_task(
+        &self,
+        _request: DeletePersistentCacheTaskRequest,
+    ) -> ClientResult<()> {
+        Err(ClientError::Unimplemented)
     }
 
     /// make_request creates a new request with timeout.
