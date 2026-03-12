@@ -68,8 +68,8 @@ rocksdb = "0.24.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 http = "1"
-tonic = { version = "0.12.2", features = ["tls"] }
-tonic-reflection = "0.12.3"
+tonic = { version = "0.14.3", features = ["tls-ring"] }
+tonic-reflection = "0.14.3"
 tokio = { version = "1.49.0", features = ["full", "tracing"] }
 tokio-util = { version = "0.7.18", features = ["full"] }
 tokio-stream = "0.1.18"
@@ -112,13 +112,16 @@ leaky-bucket = "1.1.2"
 vortex-protocol = "0.1.5"
 dashmap = "6.1.0"
 hostname = "^0.4"
-tonic-health = "0.12.3"
+tonic-health = "0.14.3"
 hashring = "0.3.6"
 reqwest-tracing = "0.5"
 mocktail = "0.3.0"
 fastrand = "2.3.0"
 cgroups-rs = "0.5"
 num_cpus = "1.17"
+
+[patch.crates-io]
+dragonfly-api = { path = "dragonfly-api" }
 
 [profile.release]
 opt-level = 3
