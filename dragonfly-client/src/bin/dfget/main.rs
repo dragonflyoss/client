@@ -1411,6 +1411,7 @@ mod tests {
     use super::*;
     use dragonfly_api::dfdaemon::v2::{Entry, ListTaskEntriesResponse};
     use mocktail::prelude::*;
+    use prost::Message as _;
     use std::collections::HashMap;
     use tempfile::tempdir;
 
@@ -1634,12 +1635,12 @@ mod tests {
         let mut mocks = MockSet::new();
         mocks.mock(|when, then| {
             when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries");
-            then.pb(ListTaskEntriesResponse {
+            then.bytes(ListTaskEntriesResponse {
                 content_length: 0,
                 response_header: HashMap::new(),
                 status_code: None,
                 entries: vec![],
-            });
+            }.encode_to_vec());
         });
 
         let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
@@ -1673,7 +1674,7 @@ mod tests {
         let mut mocks = MockSet::new();
         mocks.mock(|when, then| {
             when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries");
-            then.pb(ListTaskEntriesResponse {
+            then.bytes(ListTaskEntriesResponse {
                 content_length: 0,
                 response_header: HashMap::new(),
                 status_code: None,
@@ -1699,7 +1700,7 @@ mod tests {
                         is_dir: false,
                     },
                 ],
-            });
+            }.encode_to_vec());
         });
 
         let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
@@ -1769,7 +1770,7 @@ mod tests {
         let mut mocks = MockSet::new();
         mocks.mock(|when, then| {
             when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries");
-            then.pb(ListTaskEntriesResponse {
+            then.bytes(ListTaskEntriesResponse {
                 content_length: 0,
                 response_header: HashMap::new(),
                 status_code: None,
@@ -1785,7 +1786,7 @@ mod tests {
                         is_dir: false,
                     },
                 ],
-            });
+            }.encode_to_vec());
         });
 
         let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
@@ -1835,7 +1836,7 @@ mod tests {
         let mut mocks = MockSet::new();
         mocks.mock(|when, then| {
             when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries");
-            then.pb(ListTaskEntriesResponse {
+            then.bytes(ListTaskEntriesResponse {
                 content_length: 0,
                 response_header: HashMap::new(),
                 status_code: None,
@@ -1871,7 +1872,7 @@ mod tests {
                         is_dir: false,
                     },
                 ],
-            });
+            }.encode_to_vec());
         });
 
         let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
