@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
+use async_trait::async_trait;
 use dragonfly_client_backend::{
     Backend, Body, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse, StatRequest,
     StatResponse,
 };
-use async_trait::async_trait;
 use dragonfly_client_core::{Error, Result};
 
 /// Hdfs is a struct that implements the Backend trait

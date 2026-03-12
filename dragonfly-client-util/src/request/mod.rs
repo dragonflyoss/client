@@ -17,12 +17,12 @@
 pub mod errors;
 mod selector;
 
-use async_trait::async_trait;
 use crate::http::{headermap_to_hashmap, query_params::default_proxy_rule_filtered_query_params};
 use crate::id_generator::{IDGenerator, TaskIDParameter};
 use crate::net::format_url;
 use crate::net::preferred_local_ip;
 use crate::pool::{Builder as PoolBuilder, Entry, Factory, Pool};
+use async_trait::async_trait;
 use bytes::BytesMut;
 use dragonfly_api::scheduler::v2::scheduler_client::SchedulerClient;
 use errors::{BackendError, DfdaemonError, Error, ProxyError};

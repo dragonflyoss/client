@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-use dashmap::DashMap;
 use async_trait::async_trait;
+use dashmap::DashMap;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};

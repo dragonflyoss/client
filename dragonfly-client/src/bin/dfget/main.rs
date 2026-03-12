@@ -1635,12 +1635,15 @@ mod tests {
         let mut mocks = MockSet::new();
         mocks.mock(|when, then| {
             when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries");
-            then.bytes(ListTaskEntriesResponse {
-                content_length: 0,
-                response_header: HashMap::new(),
-                status_code: None,
-                entries: vec![],
-            }.encode_to_vec());
+            then.bytes(
+                ListTaskEntriesResponse {
+                    content_length: 0,
+                    response_header: HashMap::new(),
+                    status_code: None,
+                    entries: vec![],
+                }
+                .encode_to_vec(),
+            );
         });
 
         let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
@@ -1674,33 +1677,36 @@ mod tests {
         let mut mocks = MockSet::new();
         mocks.mock(|when, then| {
             when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries");
-            then.bytes(ListTaskEntriesResponse {
-                content_length: 0,
-                response_header: HashMap::new(),
-                status_code: None,
-                entries: vec![
-                    Entry {
-                        url: "http://example.com/root/dir1/file1.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/dir1/file2.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/dir2/file1.txt".to_string(),
-                        content_length: 200,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/dir2/file2.txt".to_string(),
-                        content_length: 200,
-                        is_dir: false,
-                    },
-                ],
-            }.encode_to_vec());
+            then.bytes(
+                ListTaskEntriesResponse {
+                    content_length: 0,
+                    response_header: HashMap::new(),
+                    status_code: None,
+                    entries: vec![
+                        Entry {
+                            url: "http://example.com/root/dir1/file1.txt".to_string(),
+                            content_length: 100,
+                            is_dir: false,
+                        },
+                        Entry {
+                            url: "http://example.com/root/dir1/file2.txt".to_string(),
+                            content_length: 100,
+                            is_dir: false,
+                        },
+                        Entry {
+                            url: "http://example.com/root/dir2/file1.txt".to_string(),
+                            content_length: 200,
+                            is_dir: false,
+                        },
+                        Entry {
+                            url: "http://example.com/root/dir2/file2.txt".to_string(),
+                            content_length: 200,
+                            is_dir: false,
+                        },
+                    ],
+                }
+                .encode_to_vec(),
+            );
         });
 
         let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
@@ -1770,23 +1776,26 @@ mod tests {
         let mut mocks = MockSet::new();
         mocks.mock(|when, then| {
             when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries");
-            then.bytes(ListTaskEntriesResponse {
-                content_length: 0,
-                response_header: HashMap::new(),
-                status_code: None,
-                entries: vec![
-                    Entry {
-                        url: "http://example.com/root/file1.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/file2.txt".to_string(),
-                        content_length: 200,
-                        is_dir: false,
-                    },
-                ],
-            }.encode_to_vec());
+            then.bytes(
+                ListTaskEntriesResponse {
+                    content_length: 0,
+                    response_header: HashMap::new(),
+                    status_code: None,
+                    entries: vec![
+                        Entry {
+                            url: "http://example.com/root/file1.txt".to_string(),
+                            content_length: 100,
+                            is_dir: false,
+                        },
+                        Entry {
+                            url: "http://example.com/root/file2.txt".to_string(),
+                            content_length: 200,
+                            is_dir: false,
+                        },
+                    ],
+                }
+                .encode_to_vec(),
+            );
         });
 
         let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
@@ -1836,43 +1845,46 @@ mod tests {
         let mut mocks = MockSet::new();
         mocks.mock(|when, then| {
             when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries");
-            then.bytes(ListTaskEntriesResponse {
-                content_length: 0,
-                response_header: HashMap::new(),
-                status_code: None,
-                entries: vec![
-                    Entry {
-                        url: "http://example.com/root/file1.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/file2.txt".to_string(),
-                        content_length: 200,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/dir1/file1.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/dir1/file2.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/dir2/file1.txt".to_string(),
-                        content_length: 200,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/dir2/file2.txt".to_string(),
-                        content_length: 200,
-                        is_dir: false,
-                    },
-                ],
-            }.encode_to_vec());
+            then.bytes(
+                ListTaskEntriesResponse {
+                    content_length: 0,
+                    response_header: HashMap::new(),
+                    status_code: None,
+                    entries: vec![
+                        Entry {
+                            url: "http://example.com/root/file1.txt".to_string(),
+                            content_length: 100,
+                            is_dir: false,
+                        },
+                        Entry {
+                            url: "http://example.com/root/file2.txt".to_string(),
+                            content_length: 200,
+                            is_dir: false,
+                        },
+                        Entry {
+                            url: "http://example.com/root/dir1/file1.txt".to_string(),
+                            content_length: 100,
+                            is_dir: false,
+                        },
+                        Entry {
+                            url: "http://example.com/root/dir1/file2.txt".to_string(),
+                            content_length: 100,
+                            is_dir: false,
+                        },
+                        Entry {
+                            url: "http://example.com/root/dir2/file1.txt".to_string(),
+                            content_length: 200,
+                            is_dir: false,
+                        },
+                        Entry {
+                            url: "http://example.com/root/dir2/file2.txt".to_string(),
+                            content_length: 200,
+                            is_dir: false,
+                        },
+                    ],
+                }
+                .encode_to_vec(),
+            );
         });
 
         let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
