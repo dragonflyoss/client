@@ -1,0 +1,171 @@
+================================================================================
+FILE: /home/runner/work/client/client/dragonfly-client/src/grpc/dfdaemon_download.rs
+================================================================================
+
+Total lines: 2248
+
+
+KEY COMPONENTS:
+--------------------------------------------------------------------------------
+
+
+Struct Definition (lines 94-143):
+pub struct DfdaemonDownloadServer {
+    /// Configuration of the dfdaemon.
+    config: Arc<Config>,
+
+    /// Dynamic configuration of the dfdaemon.
+    dynconfig: Arc<Dynconfig>,
+
+    /// Path of the Unix domain socket.
+    socket_path: PathBuf,
+
+    /// Task manager.
+    task: Arc<task::Task>,
+
+    /// Persistent cache task manager.
+    persistent_task: Arc<persistent_task::PersistentTask>,
+
+    /// Persistent cache task manager.
+    persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
+
+    /// Used to shut down the gRPC server.
+    shutdown: shutdown::Shutdown,
+
+    /// Used to notify that the gRPC server shutdown is complete.
+    _shutdown_complete: mpsc::UnboundedSender<()>,
+}
+
+/// DfdaemonDownloadServer implements the grpc server of the download.
+impl DfdaemonDownloadServer {
+    /// Creates a new download server.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        config: Arc<Config>,
+        dynconfig: Arc<Dynconfig>,
+        socket_path: PathBuf,
+        task: Arc<task::Task>,
+        persistent_task: Arc<persistent_task::PersistentTask>,
+        persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
+        shutdown: shutdown::Shutdown,
+        shutdown_complete_tx: mpsc::UnboundedSender<()>,
+    ) -> Self {
+        Self {
+            config,
+            dynconfig,
+            socket_path,
+            task,
+            persistent_task,
+            persistent_cache_task,
+            shutdown,
+            _shutdown_complete: shutdown_complete_tx,
+        }
+
+
+File begins with copyright and imports:
+--------------------------------------------------------------------------------
+/*
+ *     Copyright 2023 The Dragonfly Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+use crate::dynconfig::Dynconfig;
+use crate::grpc::block_list::{
+    BlockList, DownloadBlockListCheckParams, UploadBlockListCheckParams,
+};
+use crate::resource::{persistent_cache_task, persistent_task, task};
+use dragonfly_api::common::v2::{
+    CacheTask, PersistentCacheTask, PersistentTask, Priority, Task, TaskType,
+};
+use dragonfly_api::dfdaemon::v2::{
+    dfdaemon_download_client::DfdaemonDownloadClient as DfdaemonDownloadGRPCClient,
+    dfdaemon_download_server::{
+        DfdaemonDownload, DfdaemonDownloadServer as DfdaemonDownloadGRPCServer,
+    },
+    DeleteCacheTaskRequest, DeleteTaskRequest, DownloadCacheTaskRequest, DownloadCacheTaskResponse,
+    DownloadPersistentCacheTaskRequest, DownloadPersistentCacheTaskResponse,
+    DownloadPersistentTaskRequest, DownloadPersistentTaskResponse, DownloadTaskRequest,
+    DownloadTaskResponse, Entry, ListTaskEntriesRequest, ListTaskEntriesResponse,
+    StatCacheTaskRequest as DfdaemonStatCacheTaskRequest, StatLocalTaskRequest,
+    StatLocalTaskResponse, StatPersistentCacheTaskRequest,
+    StatTaskRequest as DfdaemonStatTaskRequest, UploadPersistentCacheTaskRequest,
+    UploadPersistentTaskRequest,
+};
+use dragonfly_api::errordetails::v2::Backend;
+use dragonfly_api::scheduler::v2::DeleteHostRequest as SchedulerDeleteHostRequest;
+use dragonfly_client_backend::StatRequest;
+use dragonfly_client_config::dfdaemon::Config;
+use dragonfly_client_core::{
+    error::{ErrorType, OrErr},
+    Error as ClientError, Result as ClientResult,
+};
+use dragonfly_client_metric::{
+    collect_delete_host_failure_metrics, collect_delete_host_started_metrics,
+    collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
+    collect_download_task_blocked_metrics, collect_download_task_failure_metrics,
+    collect_download_task_finished_metrics, collect_download_task_started_metrics,
+    collect_list_task_entries_failure_metrics, collect_list_task_entries_started_metrics,
+    collect_stat_local_task_failure_metrics, collect_stat_local_task_started_metrics,
+    collect_stat_task_failure_metrics, collect_stat_task_started_metrics,
+    collect_upload_task_blocked_metrics, collect_upload_task_failure_metrics,
+    collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
+};
+use dragonfly_client_util::{
+    digest::{is_blob_url, verify_file_digest, Digest},
+    http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
+    id_generator::{PersistentCacheTaskIDParameter, PersistentTaskIDParameter, TaskIDParameter},
+    shutdown,
+};
+use hyper_util::rt::TokioIo;
+use opentelemetry::Context;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::fs;
+use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::Sender;
+use tokio::sync::Barrier;
+use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
+use tonic::service::interceptor::InterceptedService;
+use tonic::{
+    transport::{Channel, Endpoint, Server, Uri},
+    Code, Request, Response, Status,
+};
+use tower::{
+    buffer::BufferLayer,
+    limit::rate::RateLimitLayer,
+    load_shed::{error::Overloaded, LoadShedLayer},
+    service_fn, ServiceBuilder,
+};
+use tracing::{error, info, instrument, warn, Instrument, Span};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+use url::Url;
+
+use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
+
+/// gRPC Unix server for download operations.
+pub struct DfdaemonDownloadServer {
+    /// Configuration of the dfdaemon.
+    config: Arc<Config>,
+
+    /// Dynamic configuration of the dfdaemon.
+    dynconfig: Arc<Dynconfig>,
+
+
+
+================================================================================
+Full file content saved separately
+================================================================================
