@@ -30,6 +30,7 @@ path = "src/bin/dfstore/main.rs"
 dragonfly-client-core.workspace = true
 dragonfly-client-config.workspace = true
 dragonfly-client-storage.workspace = true
+async-trait.workspace = true
 dragonfly-client-backend.workspace = true
 dragonfly-client-metric.workspace = true
 dragonfly-client-util.workspace = true
@@ -80,10 +81,10 @@ serde_regex.workspace = true
 tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
 tracing-panic = "0.1.2"
-tracing-opentelemetry = "0.30.0"
-opentelemetry = { version = "0.29.1", default-features = false, features = ["trace"] }
-opentelemetry-otlp = { version = "0.29.0", default-features = false, features = ["trace", "grpc-tonic", "http-proto", "reqwest-blocking-client"] }
-opentelemetry_sdk = { version = "0.29.0", default-features = false, features = ["trace", "rt-tokio"] }
+tracing-opentelemetry = "0.32.0"
+opentelemetry = { version = "0.31.0", default-features = false, features = ["trace"] }
+opentelemetry-otlp = { version = "0.31.0", default-features = false, features = ["trace", "grpc-tonic", "http-proto", "reqwest-blocking-client"] }
+opentelemetry_sdk = { version = "0.31.0", default-features = false, features = ["trace", "rt-tokio"] }
 opentelemetry-semantic-conventions = { version = "0.31.0", features = ["semconv_experimental"] }
 rolling-file = "0.2.0"
 pprof = { version = "0.15", features = ["flamegraph", "protobuf-codec"] }

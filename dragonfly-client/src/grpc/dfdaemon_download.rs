@@ -271,7 +271,7 @@ pub struct DfdaemonDownloadServerHandler {
 }
 
 /// DfdaemonDownloadServerHandler implements the dfdaemon download grpc service.
-#[tonic::async_trait]
+#[async_trait::async_trait]
 impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     /// Stream of download task responses.
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;

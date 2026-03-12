@@ -18,6 +18,7 @@ use dragonfly_client_backend::{
     Backend, Body, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse, StatRequest,
     StatResponse,
 };
+use async_trait::async_trait;
 use dragonfly_client_core::{Error, Result};
 
 /// Hdfs is a struct that implements the Backend trait
@@ -31,7 +32,7 @@ impl Hdfs {
 }
 
 /// Implement the Backend trait for Hdfs.
-#[tonic::async_trait]
+#[async_trait]
 impl Backend for Hdfs {
     /// scheme returns the scheme of the backend.
     fn scheme(&self) -> String {

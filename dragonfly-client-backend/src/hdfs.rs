@@ -38,6 +38,7 @@ use crate::{
     Backend, Body, DirEntry, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse,
     StatRequest, StatResponse,
 };
+use async_trait::async_trait;
 use dragonfly_api::common;
 use dragonfly_client_core::error::BackendError;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
@@ -105,7 +106,7 @@ impl Hdfs {
 }
 
 /// Implement the Backend trait for Hdfs.
-#[tonic::async_trait]
+#[async_trait]
 impl Backend for Hdfs {
     /// Scheme returns the scheme of the HDFS backend.
     fn scheme(&self) -> String {

@@ -15,6 +15,7 @@
  */
 
 use dashmap::DashMap;
+use async_trait::async_trait;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -98,7 +99,7 @@ impl<T> Entry<T> {
 }
 
 /// Factory trait for creating new clients.
-#[tonic::async_trait]
+#[async_trait]
 pub trait Factory<A, T> {
     type Error;
 

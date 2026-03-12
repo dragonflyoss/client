@@ -17,6 +17,7 @@
 pub mod errors;
 mod selector;
 
+use async_trait::async_trait;
 use crate::http::{headermap_to_hashmap, query_params::default_proxy_rule_filtered_query_params};
 use crate::id_generator::{IDGenerator, TaskIDParameter};
 use crate::net::format_url;
@@ -73,7 +74,7 @@ pub type Body = Box<dyn AsyncRead + Send + Unpin>;
 /// response processing. The trait shields the complex request logic between the client and the
 /// Dragonfly seed client's proxy, abstracting the underlying communication details to simplify
 /// client implementation and usage.
-#[tonic::async_trait]
+#[async_trait]
 pub trait Request {
     /// Sends an GET request to a remote server via the Dragonfly and returns a response
     /// with a streaming body.
@@ -155,7 +156,7 @@ where
 struct HTTPClientFactory {}
 
 /// HTTPClientFactory implements Factory for creating reqwest::Client instances with proxy support.
-#[tonic::async_trait]
+#[async_trait]
 impl Factory<String, ClientWithMiddleware> for HTTPClientFactory {
     type Error = Error;
 
@@ -348,7 +349,7 @@ impl Proxy {
 /// response processing. The trait shields the complex request logic between the client and the
 /// Dragonfly seed client's proxy, abstracting the underlying communication details to simplify
 /// client implementation and usage.
-#[tonic::async_trait]
+#[async_trait]
 impl Request for Proxy {
     /// Sends an GET request to a remote server via the Dragonfly and returns a response
     /// with a streaming body.
