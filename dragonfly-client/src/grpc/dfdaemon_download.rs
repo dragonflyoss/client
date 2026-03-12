@@ -33,7 +33,7 @@ use dragonfly_api::dfdaemon::v2::{
     DownloadPersistentTaskRequest, DownloadPersistentTaskResponse, DownloadTaskRequest,
     DownloadTaskResponse, Entry, ListTaskEntriesRequest, ListTaskEntriesResponse,
     StatCacheTaskRequest as DfdaemonStatCacheTaskRequest, StatLocalTaskRequest,
-    StatLocalTaskResponse, StatPersistentCacheTaskRequest, StatPersistentTaskRequest,
+    StatLocalTaskResponse, StatPersistentCacheTaskRequest,
     StatTaskRequest as DfdaemonStatTaskRequest, UploadPersistentCacheTaskRequest,
     UploadPersistentTaskRequest,
 };

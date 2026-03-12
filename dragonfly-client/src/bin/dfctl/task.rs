@@ -16,7 +16,6 @@
 
 use chrono::{DateTime, Local};
 use clap::{Parser, Subcommand};
-use dragonfly_api::common::v2::Task;
 use dragonfly_api::dfdaemon::v2::DeleteTaskRequest;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::net::preferred_local_ip;
@@ -80,57 +79,51 @@ impl LsCommand {
     /// This function lists all tasks managed by the local dfdaemon. It connects to the
     /// dfdaemon gRPC server and retrieves the list of tasks, then displays them in a
     /// tabular format.
-    pub async fn execute(
-        &self,
-        endpoint: PathBuf,
-        log_level: Level,
-        console: bool,
-    ) -> Result<()> {
+    pub async fn execute(&self, endpoint: PathBuf, log_level: Level, console: bool) -> Result<()> {
         // Initialize tracing.
         let _guards = init_command_tracing(log_level, console);
 
         // Get dfdaemon download client.
-        let dfdaemon_download_client =
-            match get_dfdaemon_download_client(endpoint.clone()).await {
-                Ok(client) => client,
-                Err(err) => {
-                    println!(
-                        "{}{}{}Connect Dfdaemon Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+        let dfdaemon_download_client = match get_dfdaemon_download_client(endpoint.clone()).await {
+            Ok(client) => client,
+            Err(err) => {
+                println!(
+                    "{}{}{}Connect Dfdaemon Failed!{}",
+                    color::Fg(color::Red),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
 
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                println!(
+                    "{}{}{}****************************************{}",
+                    color::Fg(color::Black),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
 
-                    println!(
-                        "{}{}{}Message:{} can not connect {}, please check the unix socket {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err,
-                        endpoint.to_string_lossy(),
-                    );
+                println!(
+                    "{}{}{}Message:{} can not connect {}, please check the unix socket {}",
+                    color::Fg(color::Cyan),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset,
+                    err,
+                    endpoint.to_string_lossy(),
+                );
 
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                println!(
+                    "{}{}{}****************************************{}",
+                    color::Fg(color::Black),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
 
-                    std::process::exit(1);
-                }
-            };
+                std::process::exit(1);
+            }
+        };
 
         // Run ls sub command.
         if let Err(err) = self.run(dfdaemon_download_client).await {
@@ -307,57 +300,51 @@ impl RmCommand {
     /// This function serves as the main entry point for the dfctl task rm command execution.
     /// It handles the complete lifecycle including argument parsing, logging initialization,
     /// dfdaemon client setup, and command execution with detailed error reporting.
-    pub async fn execute(
-        &self,
-        endpoint: PathBuf,
-        log_level: Level,
-        console: bool,
-    ) -> Result<()> {
+    pub async fn execute(&self, endpoint: PathBuf, log_level: Level, console: bool) -> Result<()> {
         // Initialize tracing.
         let _guards = init_command_tracing(log_level, console);
 
         // Get dfdaemon download client.
-        let dfdaemon_download_client =
-            match get_dfdaemon_download_client(endpoint.clone()).await {
-                Ok(client) => client,
-                Err(err) => {
-                    println!(
-                        "{}{}{}Connect Dfdaemon Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+        let dfdaemon_download_client = match get_dfdaemon_download_client(endpoint.clone()).await {
+            Ok(client) => client,
+            Err(err) => {
+                println!(
+                    "{}{}{}Connect Dfdaemon Failed!{}",
+                    color::Fg(color::Red),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
 
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                println!(
+                    "{}{}{}****************************************{}",
+                    color::Fg(color::Black),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
 
-                    println!(
-                        "{}{}{}Message:{} can not connect {}, please check the unix socket {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err,
-                        endpoint.to_string_lossy(),
-                    );
+                println!(
+                    "{}{}{}Message:{} can not connect {}, please check the unix socket {}",
+                    color::Fg(color::Cyan),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset,
+                    err,
+                    endpoint.to_string_lossy(),
+                );
 
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                println!(
+                    "{}{}{}****************************************{}",
+                    color::Fg(color::Black),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
 
-                    std::process::exit(1);
-                }
-            };
+                std::process::exit(1);
+            }
+        };
 
         // Run rm sub command.
         if let Err(err) = self.run(dfdaemon_download_client).await {

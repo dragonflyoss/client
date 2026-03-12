@@ -16,7 +16,6 @@
 
 use chrono::{DateTime, Local};
 use clap::{Parser, Subcommand};
-use dragonfly_api::common::v2::PersistentCacheTask;
 use dragonfly_api::dfdaemon::v2::DeletePersistentCacheTaskRequest;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::net::preferred_local_ip;
@@ -80,57 +79,51 @@ pub struct LsCommand {}
 /// Implement the execute for LsCommand.
 impl LsCommand {
     /// Executes the ls command to list all persistent cache tasks.
-    pub async fn execute(
-        &self,
-        endpoint: PathBuf,
-        log_level: Level,
-        console: bool,
-    ) -> Result<()> {
+    pub async fn execute(&self, endpoint: PathBuf, log_level: Level, console: bool) -> Result<()> {
         // Initialize tracing.
         let _guards = init_command_tracing(log_level, console);
 
         // Get dfdaemon download client.
-        let dfdaemon_download_client =
-            match get_dfdaemon_download_client(endpoint.clone()).await {
-                Ok(client) => client,
-                Err(err) => {
-                    println!(
-                        "{}{}{}Connect Dfdaemon Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+        let dfdaemon_download_client = match get_dfdaemon_download_client(endpoint.clone()).await {
+            Ok(client) => client,
+            Err(err) => {
+                println!(
+                    "{}{}{}Connect Dfdaemon Failed!{}",
+                    color::Fg(color::Red),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
 
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                println!(
+                    "{}{}{}****************************************{}",
+                    color::Fg(color::Black),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
 
-                    println!(
-                        "{}{}{}Message:{} can not connect {}, please check the unix socket {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err,
-                        endpoint.to_string_lossy(),
-                    );
+                println!(
+                    "{}{}{}Message:{} can not connect {}, please check the unix socket {}",
+                    color::Fg(color::Cyan),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset,
+                    err,
+                    endpoint.to_string_lossy(),
+                );
 
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                println!(
+                    "{}{}{}****************************************{}",
+                    color::Fg(color::Black),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
 
-                    std::process::exit(1);
-                }
-            };
+                std::process::exit(1);
+            }
+        };
 
         // Run ls sub command.
         if let Err(err) = self.run(dfdaemon_download_client).await {
@@ -305,57 +298,51 @@ pub struct RmCommand {
 /// Implement the execute for RmCommand.
 impl RmCommand {
     /// Executes the rm command to remove a persistent cache task.
-    pub async fn execute(
-        &self,
-        endpoint: PathBuf,
-        log_level: Level,
-        console: bool,
-    ) -> Result<()> {
+    pub async fn execute(&self, endpoint: PathBuf, log_level: Level, console: bool) -> Result<()> {
         // Initialize tracing.
         let _guards = init_command_tracing(log_level, console);
 
         // Get dfdaemon download client.
-        let dfdaemon_download_client =
-            match get_dfdaemon_download_client(endpoint.clone()).await {
-                Ok(client) => client,
-                Err(err) => {
-                    println!(
-                        "{}{}{}Connect Dfdaemon Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+        let dfdaemon_download_client = match get_dfdaemon_download_client(endpoint.clone()).await {
+            Ok(client) => client,
+            Err(err) => {
+                println!(
+                    "{}{}{}Connect Dfdaemon Failed!{}",
+                    color::Fg(color::Red),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
 
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                println!(
+                    "{}{}{}****************************************{}",
+                    color::Fg(color::Black),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
 
-                    println!(
-                        "{}{}{}Message:{} can not connect {}, please check the unix socket {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err,
-                        endpoint.to_string_lossy(),
-                    );
+                println!(
+                    "{}{}{}Message:{} can not connect {}, please check the unix socket {}",
+                    color::Fg(color::Cyan),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset,
+                    err,
+                    endpoint.to_string_lossy(),
+                );
 
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                println!(
+                    "{}{}{}****************************************{}",
+                    color::Fg(color::Black),
+                    style::Italic,
+                    style::Bold,
+                    style::Reset
+                );
 
-                    std::process::exit(1);
-                }
-            };
+                std::process::exit(1);
+            }
+        };
 
         // Run rm sub command.
         if let Err(err) = self.run(dfdaemon_download_client).await {
