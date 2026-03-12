@@ -26,7 +26,6 @@ use dragonfly_client_storage::metadata;
 use dragonfly_client_util::net::format_url;
 use std::net::IpAddr;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
