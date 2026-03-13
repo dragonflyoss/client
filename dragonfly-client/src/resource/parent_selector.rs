@@ -218,7 +218,7 @@ impl ParentSelector {
                 .map(Self::calculate_weight_from_network)
                 .unwrap_or_else(|| {
                     Self::calculate_weight_from_network(&Network {
-                        max_tx_bandwidth: self.config.upload.rate_limit.as_u64(),
+                        max_tx_bandwidth: self.config.upload.bandwidth_limit.as_u64(),
                         tx_bandwidth: Some(0),
                         ..Network::default()
                     })
