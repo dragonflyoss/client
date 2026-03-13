@@ -632,7 +632,6 @@ mod tests {
     use super::*;
     use dragonfly_api::scheduler::v2::ListHostsResponse;
     use mocktail::prelude::*;
-    use prost::Message as _;
     use std::time::Duration;
 
     // Mock scheduler service for testing.
@@ -640,10 +639,7 @@ mod tests {
         let mut mocks = MockSet::new();
         mocks.mock(|when, then| {
             when.path("/scheduler.v2.Scheduler/ListHosts");
-            let response = ListHostsResponse { hosts: vec![] };
-            let mut buf = Vec::new();
-            response.encode(&mut buf).unwrap();
-            then.bytes(buf);
+            then.pb(ListHostsResponse { hosts: vec![] });
         });
 
         let server = MockServer::new_grpc("scheduler.v2.Scheduler").with_mocks(mocks);

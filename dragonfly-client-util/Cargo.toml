@@ -61,4 +61,3 @@ cgroups-rs.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 mocktail.workspace = true
-prost = "0.14"

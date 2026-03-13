@@ -1449,7 +1449,6 @@ dependencies = [
  "openssl",
  "parking_lot",
  "pnet",
- "prost 0.14.3",
  "protobuf 3.7.2",
  "rcgen",
  "regex",
