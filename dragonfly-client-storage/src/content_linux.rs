@@ -201,6 +201,18 @@ impl Content {
         Ok(())
     }
 
+    /// delete_task deletes the task content.
+    pub async fn delete_task(&self, task_id: &str) -> Result<()> {
+        info!("delete task content: {}", task_id);
+        let task_path = self.get_task_path(task_id);
+        fs::remove_file(task_path.as_path())
+            .await
+            .inspect_err(|err| {
+                error!("remove {:?} failed: {}", task_path, err);
+            })?;
+        Ok(())
+    }
+
     /// read_piece reads the piece from the content.
     #[instrument(skip_all)]
     pub async fn read_piece(
