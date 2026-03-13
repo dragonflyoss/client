@@ -20,10 +20,48 @@ use crate::sysinfo::{cpu::CPU, memory::Memory};
 use parking_lot::Mutex;
 use ringbuf::traits::*;
 use ringbuf::HeapRb;
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
+
+/// Default bucket count for the rolling window.
+#[inline]
+pub fn default_bucket_count() -> u32 {
+    50
+}
+
+/// Default bucket interval for the rolling window (e.g., 200ms).
+#[inline]
+pub fn default_bucket_interval() -> Duration {
+    Duration::from_millis(200)
+}
+
+/// Default CPU usage threshold (percentage) for overload detection.
+#[inline]
+pub fn default_cpu_threshold() -> u8 {
+    85
+}
+
+/// Default memory usage threshold (percentage) for overload detection.
+#[inline]
+pub fn default_memory_threshold() -> u8 {
+    85
+}
+
+/// Default cooldown duration after shedding a request, during which subsequent requests will also
+/// be shed.
+#[inline]
+pub fn default_shed_cooldown() -> Duration {
+    Duration::from_secs(5)
+}
+
+/// Default interval for the background collector to sample CPU and memory usage.
+#[inline]
+pub fn default_collect_interval() -> Duration {
+    Duration::from_secs(3)
+}
 
 /// RAII guard that automatically records request metrics and decrements
 /// the in-flight counter when the request completes (guard is dropped).
@@ -55,27 +93,34 @@ impl Drop for RequestGuard<'_> {
 }
 
 /// Configuration for the BBR-based adaptive rate limiter.
-#[derive(Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct BBRConfig {
     /// Number of time buckets in the rolling window for metric aggregation.
+    #[serde(default = "default_bucket_count")]
     pub bucket_count: u32,
 
     /// Duration of each time bucket (e.g., 200ms).
+    #[serde(default = "default_bucket_interval")]
     pub bucket_interval: Duration,
 
     /// CPU usage percentage threshold (0–100) above which the system is
     /// considered overloaded.
+    #[serde(default = "default_cpu_threshold")]
     pub cpu_threshold: u8,
 
     /// Memory usage percentage threshold (0–100) above which the system is
     /// considered overloaded.
+    #[serde(default = "default_memory_threshold")]
     pub memory_threshold: u8,
 
     /// Duration to continue shedding incoming requests after the first drop
     /// event, preventing rapid oscillation between shedding and accepting.
+    #[serde(default = "default_shed_cooldown")]
     pub shed_cooldown: Duration,
 
     /// How often the background task collects CPU/memory usage metrics.
+    #[serde(default = "default_collect_interval")]
     pub collect_interval: Duration,
 }
 
@@ -84,12 +129,12 @@ impl Default for BBRConfig {
     /// Default values are chosen based on common practices for BBR-style rate limiters:
     fn default() -> Self {
         Self {
-            bucket_count: 50,
-            bucket_interval: Duration::from_millis(200),
-            cpu_threshold: 85,
-            memory_threshold: 85,
-            shed_cooldown: Duration::from_secs(5),
-            collect_interval: Duration::from_secs(3),
+            bucket_count: default_bucket_count(),
+            bucket_interval: default_bucket_interval(),
+            cpu_threshold: default_cpu_threshold(),
+            memory_threshold: default_memory_threshold(),
+            shed_cooldown: default_shed_cooldown(),
+            collect_interval: default_collect_interval(),
         }
     }
 }

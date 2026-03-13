@@ -22,6 +22,7 @@ use dragonfly_client_core::{
 use dragonfly_client_util::{
     http::basic_auth,
     http::query_params::default_proxy_rule_filtered_query_params,
+    ratelimiter::bbr::BBRConfig,
     tls::{generate_ca_cert_from_pem, generate_cert_from_pem},
 };
 use local_ip_address::{local_ip, local_ipv6};
@@ -400,6 +401,14 @@ pub struct Server {
     /// Cache directory is the directory to store cache files.
     #[serde(default = "default_dfdaemon_cache_dir")]
     pub cache_dir: PathBuf,
+
+    /// BBR-inspired adaptive rate limiter configuration for gRPC servers (download & upload).
+    ///
+    /// When system CPU or memory usage exceeds the configured thresholds, the limiter
+    /// estimates capacity via `max_pass × min_rt × bucket_count / 1000` and sheds
+    /// incoming requests whose in-flight count exceeds this estimate. A cooldown
+    /// period prevents rapid oscillation between shedding and accepting.
+    pub load_shedding: BBRConfig,
 }
 
 /// Server implements Default.
@@ -408,6 +417,7 @@ impl Default for Server {
         Server {
             plugin_dir: default_dfdaemon_plugin_dir(),
             cache_dir: default_dfdaemon_cache_dir(),
+            load_shedding: BBRConfig::default(),
         }
     }
 }

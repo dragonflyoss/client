@@ -15,12 +15,11 @@
  */
 
 use dragonfly_client_util::ratelimiter::bbr::{BBRConfig, BBR};
-use hyper::body::Body;
 use std::sync::Arc;
+use tonic::body::Body;
 use tonic::codegen::http::{Request, Response};
 use tonic::Status;
 use tonic_middleware::{Middleware, ServiceBound};
-use tracing::warn;
 
 /// gRPC middleware that performs BBR-based adaptive rate limiting.
 ///
@@ -77,6 +76,8 @@ impl BBRMiddleware {
     }
 }
 
+/// Implements the `Middleware` trait for `BBRMiddleware`, allowing it to be
+/// used with `tonic-middleware`.
 #[tonic::async_trait]
 impl<S> Middleware<S> for BBRMiddleware
 where
@@ -96,13 +97,12 @@ where
         let _guard = match self.bbr.acquire().await {
             Some(guard) => guard,
             None => {
-                warn!("BBR rate limiter rejected gRPC request: system overloaded");
-
                 // Build a RESOURCE_EXHAUSTED response and convert it to
                 // the http::Response<Body> expected by tonic-middleware.
-                let status = Status::resource_exhausted("server is overloaded, please retry later");
-                let response = status.into_http();
-                return Ok(response);
+                return Ok(
+                    Status::resource_exhausted("server is overloaded, please retry later")
+                        .into_http(),
+                );
             }
         };
 
