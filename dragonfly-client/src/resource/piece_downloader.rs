@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use async_trait::async_trait;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_storage::{client::quic::QUICClient, client::tcp::TCPClient};
@@ -31,7 +32,7 @@ const DEFAULT_DOWNLOADER_IDLE_TIMEOUT: Duration = Duration::from_secs(420);
 
 /// Downloader is the interface for downloading pieces, which is implemented by different
 /// protocols. The downloader is used to download pieces from the other peers.
-#[tonic::async_trait]
+#[async_trait]
 pub trait Downloader: Send + Sync {
     /// download_piece downloads a piece from the other peer by different protocols.
     async fn download_piece(
@@ -114,7 +115,7 @@ struct QUICClientFactory {
 }
 
 /// QUICClientFactory implements the Factory trait for creating QUICClient instances.
-#[tonic::async_trait]
+#[async_trait]
 impl Factory<String, QUICClient> for QUICClientFactory {
     type Error = Error;
 
@@ -163,7 +164,7 @@ impl QUICDownloader {
 }
 
 /// QUICDownloader implements the Downloader trait.
-#[tonic::async_trait]
+#[async_trait]
 impl Downloader for QUICDownloader {
     /// download_piece downloads a piece from the other peer by the QUIC protocol.
     #[instrument(skip_all)]
@@ -265,7 +266,7 @@ struct TCPClientFactory {
 }
 
 /// TCPClientFactory implements the Factory trait for creating TCPClient instances.
-#[tonic::async_trait]
+#[async_trait]
 impl Factory<String, TCPClient> for TCPClientFactory {
     type Error = Error;
 
@@ -315,7 +316,7 @@ impl TCPDownloader {
 }
 
 /// TCPDownloader implements the Downloader trait.
-#[tonic::async_trait]
+#[async_trait]
 impl Downloader for TCPDownloader {
     /// download_piece downloads a piece from the other peer by the TCP protocol.
     #[instrument(skip_all)]

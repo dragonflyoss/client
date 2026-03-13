@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use async_trait::async_trait;
 use dashmap::DashMap;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -98,7 +99,7 @@ impl<T> Entry<T> {
 }
 
 /// Factory trait for creating new clients.
-#[tonic::async_trait]
+#[async_trait]
 pub trait Factory<A, T> {
     type Error;
 

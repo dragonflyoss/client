@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use async_trait::async_trait;
 use dragonfly_api::common::v2::{Hdfs, HuggingFace, ModelScope, ObjectStorage, Range};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
@@ -288,7 +289,7 @@ pub struct PutResponse {
 }
 
 /// Backend is the interface of the backend.
-#[tonic::async_trait]
+#[async_trait]
 pub trait Backend {
     /// Scheme returns the scheme of the backend.
     fn scheme(&self) -> String;

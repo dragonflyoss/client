@@ -62,6 +62,7 @@ use crate::{
     HTTP2_KEEP_ALIVE_TIMEOUT, HTTP2_STREAM_WINDOW_SIZE, KEEP_ALIVE_INTERVAL,
     POOL_MAX_IDLE_PER_HOST,
 };
+use async_trait::async_trait;
 use dragonfly_api::common;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::error::BackendError;
@@ -624,7 +625,7 @@ impl ObjectStorage {
 }
 
 /// Backend implements the Backend trait.
-#[tonic::async_trait]
+#[async_trait]
 impl crate::Backend for ObjectStorage {
     /// Scheme returns the scheme of the object storage.
     fn scheme(&self) -> String {

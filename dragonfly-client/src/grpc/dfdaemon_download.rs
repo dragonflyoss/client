@@ -167,7 +167,7 @@ impl DfdaemonDownloadServer {
         let mut shutdown = self.shutdown.clone();
 
         // Initialize health reporter.
-        let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+        let (health_reporter, health_service) = tonic_health::server::health_reporter();
 
         // Start download grpc server with unix domain socket.
         fs::create_dir_all(self.socket_path.parent().unwrap()).await?;
@@ -271,7 +271,7 @@ pub struct DfdaemonDownloadServerHandler {
 }
 
 /// DfdaemonDownloadServerHandler implements the dfdaemon download grpc service.
-#[tonic::async_trait]
+#[async_trait::async_trait]
 impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     /// Stream of download task responses.
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
@@ -287,7 +287,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     ) -> Result<Response<Self::DownloadTaskStream>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Record the start time.
@@ -759,7 +759,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     ) -> Result<Response<Task>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.
@@ -810,7 +810,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     ) -> Result<Response<StatLocalTaskResponse>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.
@@ -858,7 +858,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     ) -> Result<Response<ListTaskEntriesResponse>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.
@@ -940,7 +940,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     ) -> Result<Response<()>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.
@@ -984,7 +984,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     async fn delete_host(&self, request: Request<()>) -> Result<Response<()>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Generate the host id.
@@ -1026,7 +1026,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     ) -> Result<Response<Self::DownloadPersistentTaskStream>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Record the start time.
@@ -1349,7 +1349,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     ) -> Result<Response<PersistentTask>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Record the start time.
@@ -1490,7 +1490,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     ) -> Result<Response<Self::DownloadPersistentCacheTaskStream>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Record the start time.
@@ -1770,7 +1770,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     ) -> Result<Response<PersistentCacheTask>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Record the start time.
@@ -1890,7 +1890,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     ) -> Result<Response<PersistentCacheTask>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.

@@ -49,6 +49,7 @@ use crate::{
     Backend, Body, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse, StatRequest,
     StatResponse, DEFAULT_USER_AGENT, KEEP_ALIVE_INTERVAL, MAX_RETRY_TIMES, POOL_MAX_IDLE_PER_HOST,
 };
+use async_trait::async_trait;
 use dashmap::{mapref::entry::Entry, DashMap};
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_core::{
@@ -354,7 +355,7 @@ impl HTTP {
 }
 
 /// Backend implements the Backend trait.
-#[tonic::async_trait]
+#[async_trait]
 impl Backend for HTTP {
     /// Scheme returns the scheme of the HTTP backend.
     fn scheme(&self) -> String {

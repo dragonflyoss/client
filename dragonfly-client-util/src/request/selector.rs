@@ -17,6 +17,7 @@
 use crate::hashring::VNodeHashRing;
 use crate::net::format_url;
 use crate::shutdown;
+use async_trait::async_trait;
 use dragonfly_api::common::v2::Host;
 use dragonfly_api::scheduler::v2::{scheduler_client::SchedulerClient, ListHostsRequest};
 use dragonfly_client_core::{Error, Result};
@@ -33,7 +34,7 @@ use tonic_health::pb::{
 use tracing::{debug, error, info, Instrument};
 
 /// Selector is the interface for selecting item from a list of items by a specific criteria.
-#[tonic::async_trait]
+#[async_trait]
 pub trait Selector: Send + Sync {
     /// select selects items based on the given task_id and number of replicas.
     async fn select(&self, task_id: String, replicas: u32) -> Result<Vec<Host>>;
@@ -187,7 +188,7 @@ impl SeedPeerSelector {
     }
 }
 
-#[tonic::async_trait]
+#[async_trait]
 impl Selector for SeedPeerSelector {
     async fn select(&self, task_id: String, replicas: u32) -> Result<Vec<Host>> {
         // Acquire a read lock and perform all logic within it.

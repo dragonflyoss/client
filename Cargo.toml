@@ -31,7 +31,7 @@ dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.2.1
 dragonfly-client-metric = { path = "dragonfly-client-metric", version = "1.2.15" }
 dragonfly-client-util = { path = "dragonfly-client-util", version = "1.2.15" }
 dragonfly-client-init = { path = "dragonfly-client-init", version = "1.2.15" }
-dragonfly-api = "=2.2.24"
+dragonfly-api = "=2.2.25"
 thiserror = "2.0"
 futures = "0.3.32"
 reqwest = { version = "0.12.28", features = [
@@ -68,8 +68,8 @@ rocksdb = "0.24.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 http = "1"
-tonic = { version = "0.12.2", features = ["tls"] }
-tonic-reflection = "0.12.3"
+tonic = { version = "0.14.3", features = ["tls-ring"] }
+tonic-reflection = "0.14.3"
 tokio = { version = "1.49.0", features = ["full", "tracing"] }
 tokio-util = { version = "0.7.18", features = ["full"] }
 tokio-stream = "0.1.18"
@@ -79,7 +79,7 @@ headers = "0.4.1"
 regex = "1.12.3"
 serde_regex = "1.1.0"
 humantime = "2.3.0"
-prost-wkt-types = "0.6"
+prost-wkt-types = "0.7"
 chrono = { version = "0.4.44", features = ["serde", "clock"] }
 openssl = { version = "0.10", features = ["vendored"] }
 opendal = { version = "0.55.0", features = [
@@ -112,13 +112,14 @@ leaky-bucket = "1.1.2"
 vortex-protocol = "0.1.5"
 dashmap = "6.1.0"
 hostname = "^0.4"
-tonic-health = "0.12.3"
+tonic-health = "0.14.3"
 hashring = "0.3.6"
 reqwest-tracing = "0.5"
-mocktail = "0.3.0"
+mocktail = { git = "https://github.com/IBM/mocktail", rev = "860e75e171a8eb818083813dbeed4401d1a40b3b" }
 fastrand = "2.3.0"
 cgroups-rs = "0.5"
 num_cpus = "1.17"
+async-trait = "0.1"
 
 [profile.release]
 opt-level = 3
