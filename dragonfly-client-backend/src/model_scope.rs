@@ -36,6 +36,7 @@ use crate::{
     Backend, Body, DirEntry, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse,
     StatRequest, StatResponse, DEFAULT_USER_AGENT, KEEP_ALIVE_INTERVAL, POOL_MAX_IDLE_PER_HOST,
 };
+use async_trait::async_trait;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
@@ -308,7 +309,7 @@ impl ModelScope {
 }
 
 /// Backend implementation for ModelScope.
-#[tonic::async_trait]
+#[async_trait]
 impl Backend for ModelScope {
     /// Scheme returns the scheme of the backend.
     fn scheme(&self) -> String {
