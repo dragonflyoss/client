@@ -191,68 +191,14 @@ impl PieceCollector {
         let last_piece_sent_at = Arc::new(Mutex::new(tokio::time::Instant::now()));
         let stop_stall_detector = Arc::new(AtomicBool::new(false));
 
-        let stall_detector_handle = if required_parent_count.load(Ordering::SeqCst) > 1 {
-            let collected_pieces = collected_pieces.clone();
-            let collected_piece_tx = collected_piece_tx.clone();
-            let required_parent_count = required_parent_count.clone();
-            let last_piece_sent_at = last_piece_sent_at.clone();
-            let stop_stall_detector = stop_stall_detector.clone();
-
-            Some(tokio::spawn(
-                async move {
-                    loop {
-                        tokio::time::sleep(collected_piece_timeout).await;
-                        if stop_stall_detector.load(Ordering::SeqCst) {
-                            return;
-                        }
-
-                        if required_parent_count.load(Ordering::SeqCst) == 1 {
-                            return;
-                        }
-
-                        let elapsed = last_piece_sent_at
-                            .lock()
-                            .map(|last_piece_sent_at| last_piece_sent_at.elapsed())
-                            .unwrap_or_default();
-                        if elapsed < collected_piece_timeout {
-                            continue;
-                        }
-
-                        info!(
-                            "piece collection stalled for {:?}, downgrade required parent count to 1",
-                            collected_piece_timeout
-                        );
-                        required_parent_count.store(1, Ordering::SeqCst);
-
-                        for number in collected_pieces
-                            .iter()
-                            .filter(|entry| !entry.value().parents.is_empty())
-                            .map(|entry| *entry.key())
-                            .collect::<Vec<u32>>()
-                        {
-                            if let Some((_, piece)) = collected_pieces.remove(&number) {
-                                match collected_piece_tx.send(piece).await {
-                                    Ok(_) => {
-                                        if let Ok(mut last_piece_sent_at) = last_piece_sent_at.lock()
-                                        {
-                                            *last_piece_sent_at = tokio::time::Instant::now();
-                                        }
-                                    }
-                                    Err(err) => {
-                                        error!("send CollectedPiece failed: {}", err);
-                                    }
-                                }
-                            }
-                        }
-
-                        return;
-                    }
-                }
-                .in_current_span(),
-            ))
-        } else {
-            None
-        };
+        let stall_detector_handle = piece_collection_stall_detector(
+            collected_piece_timeout,
+            collected_pieces.clone(),
+            collected_piece_tx.clone(),
+            required_parent_count.clone(),
+            last_piece_sent_at.clone(),
+            stop_stall_detector.clone(),
+        );
 
         // Create a task to collect pieces from peers.
         let mut join_set = JoinSet::new();
@@ -414,6 +360,71 @@ impl PieceCollector {
 
         Ok(())
     }
+}
+
+fn piece_collection_stall_detector(
+    collected_piece_timeout: Duration,
+    collected_pieces: Arc<DashMap<u32, CollectedPiece>>,
+    collected_piece_tx: Sender<CollectedPiece>,
+    required_parent_count: Arc<AtomicU8>,
+    last_piece_sent_at: Arc<Mutex<tokio::time::Instant>>,
+    stop_stall_detector: Arc<AtomicBool>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    if required_parent_count.load(Ordering::SeqCst) <= 1 {
+        return None;
+    }
+
+    Some(tokio::spawn(
+        async move {
+            loop {
+                tokio::time::sleep(collected_piece_timeout).await;
+                if stop_stall_detector.load(Ordering::SeqCst) {
+                    return;
+                }
+
+                if required_parent_count.load(Ordering::SeqCst) == 1 {
+                    return;
+                }
+
+                let elapsed = last_piece_sent_at
+                    .lock()
+                    .map(|last_piece_sent_at| last_piece_sent_at.elapsed())
+                    .unwrap_or_default();
+                if elapsed < collected_piece_timeout {
+                    continue;
+                }
+
+                info!(
+                    "piece collection stalled for {:?}, downgrade required parent count to 1",
+                    collected_piece_timeout
+                );
+                required_parent_count.store(1, Ordering::SeqCst);
+
+                for number in collected_pieces
+                    .iter()
+                    .filter(|entry| !entry.value().parents.is_empty())
+                    .map(|entry| *entry.key())
+                    .collect::<Vec<u32>>()
+                {
+                    if let Some((_, piece)) = collected_pieces.remove(&number) {
+                        match collected_piece_tx.send(piece).await {
+                            Ok(_) => {
+                                if let Ok(mut last_piece_sent_at) = last_piece_sent_at.lock() {
+                                    *last_piece_sent_at = tokio::time::Instant::now();
+                                }
+                            }
+                            Err(err) => {
+                                error!("send CollectedPiece failed: {}", err);
+                            }
+                        }
+                    }
+                }
+
+                return;
+            }
+        }
+        .in_current_span(),
+    ))
 }
 
 /// PersistentPieceCollector is used to collect persistent pieces from peers.
