@@ -31,7 +31,6 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
-    net::format_socket_addr,
     shutdown,
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
@@ -52,8 +51,7 @@ use rcgen::Certificate;
 use rustls::{RootCertStore, ServerConfig};
 use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
-use std::str::FromStr;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpListener;
@@ -66,35 +64,34 @@ use tracing::{debug, error, info, instrument, Instrument, Span};
 pub mod header;
 
 lazy_static! {
-  /// SUPPORTED_HTTP_PROTOCOLS is the supported HTTP protocols, including http/1.1 and http/1.0.
+  /// Supported HTTP protocols, including HTTP/1.1 and HTTP/1.0.
   static ref SUPPORTED_HTTP_PROTOCOLS: Vec<Vec<u8>> = vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()];
 }
 
-/// Response is the response of the proxy server.
+/// Response type for the proxy server.
 pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
 
-/// Proxy is the proxy server.
+/// Proxy server for intercepting and handling HTTP requests.
 pub struct Proxy {
-    /// config is the configuration of the dfdaemon.
+    /// Configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// task is the task manager.
+    /// Task manager.
     task: Arc<Task>,
 
-    /// addr is the address of the proxy server.
+    /// Address of the proxy server.
     addr: SocketAddr,
 
-    /// registry_cert is the certificate of the client for the registry.
+    /// Certificate of the client for the registry.
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 
-    /// server_ca_cert is the CA certificate of the proxy server to
-    /// sign the self-signed certificate.
+    /// CA certificate of the proxy server to sign the self-signed certificate.
     server_ca_cert: Arc<Option<Certificate>>,
 
-    /// shutdown is used to shutdown the proxy server.
+    /// Used to shut down the proxy server.
     shutdown: shutdown::Shutdown,
 
-    /// _shutdown_complete is used to notify the proxy server is shutdown.
+    /// Used to notify that the proxy server shutdown is complete.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
@@ -606,7 +603,8 @@ pub async fn upgraded_handler(
         let builder = http::uri::Builder::new();
         *request.uri_mut() = builder
             .scheme("https")
-            .authority(format_socket_addr(IpAddr::from_str(&host)?, port))
+            // Host can be an IP address or a hostname, so we need to handle both cases.
+            .authority(format!("{}:{}", host, port))
             .path_and_query(
                 request
                     .uri()
@@ -706,6 +704,20 @@ async fn proxy_via_dfdaemon(
     {
         Ok(response) => response,
         Err(err) => match err {
+            ClientError::TonicStatus(err) if err.code() == tonic::Code::ResourceExhausted => {
+                return Ok(make_error_response(
+                    header::ErrorType::Proxy,
+                    http::StatusCode::TOO_MANY_REQUESTS,
+                    None,
+                ));
+            }
+            ClientError::TonicStatus(err) if err.code() == tonic::Code::PermissionDenied => {
+                return Ok(make_error_response(
+                    header::ErrorType::Proxy,
+                    http::StatusCode::FORBIDDEN,
+                    None,
+                ));
+            }
             ClientError::TonicStatus(err) => {
                 match serde_json::from_slice::<Backend>(err.details()) {
                     Ok(backend) => {
@@ -860,8 +872,6 @@ async fn proxy_via_dfdaemon(
                                     message.task_id.as_str(),
                                     piece.length,
                                     download_task_started_response.range,
-                                    true,
-                                    false,
                                 )
                                 .await
                             {
@@ -1168,6 +1178,8 @@ fn make_download_task_request(
             prefetch: need_prefetch(config.clone(), &header),
             object_storage: None,
             hdfs: None,
+            hugging_face: None,
+            model_scope: None,
             is_prefetch: false,
             need_piece_content: false,
             force_hard_link: header::get_force_hard_link(&header),

@@ -17,7 +17,8 @@
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::resource::parent_selector::ParentSelector;
 use dragonfly_api::common::v2::{
-    Download, Hdfs, ObjectStorage, Peer, Piece, Task as CommonTask, TrafficType,
+    Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, Peer, Piece, Task as CommonTask,
+    TrafficType,
 };
 use dragonfly_api::dfdaemon::{
     self,
@@ -103,9 +104,9 @@ impl Task {
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
-        download_rate_limiter: Arc<RateLimiter>,
-        upload_rate_limiter: Arc<RateLimiter>,
-        prefetch_rate_limiter: Arc<RateLimiter>,
+        download_bandwidth_limiter: Arc<RateLimiter>,
+        prefetch_bandwidth_limiter: Arc<RateLimiter>,
+        back_to_source_bandwidth_limiter: Arc<RateLimiter>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> ClientResult<Self> {
@@ -119,9 +120,9 @@ impl Task {
                 config.clone(),
                 storage.clone(),
                 backend_factory.clone(),
-                download_rate_limiter,
-                upload_rate_limiter,
-                prefetch_rate_limiter,
+                download_bandwidth_limiter,
+                prefetch_bandwidth_limiter,
+                back_to_source_bandwidth_limiter,
             )?),
             parent_selector: Arc::new(ParentSelector::new(
                 config.clone(),
@@ -202,6 +203,8 @@ impl Task {
                 client_cert: None,
                 object_storage: request.object_storage,
                 hdfs: request.hdfs,
+                hugging_face: request.hugging_face,
+                model_scope: request.model_scope,
             })
             .await
             .inspect_err(|_err| {
@@ -1114,8 +1117,6 @@ impl Task {
                             task_id.as_str(),
                             metadata.length,
                             None,
-                            true,
-                            false,
                         )
                         .await
                         .inspect_err(|err| {
@@ -1343,6 +1344,8 @@ impl Task {
                 in_stream_tx: Sender<AnnouncePeerRequest>,
                 object_storage: Option<ObjectStorage>,
                 hdfs: Option<Hdfs>,
+                hugging_face: Option<HuggingFace>,
+                model_scope: Option<ModelScope>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!("start to download piece {} from source", piece_id);
@@ -1359,6 +1362,8 @@ impl Task {
                         is_prefetch,
                         object_storage,
                         hdfs,
+                        hugging_face,
+                        model_scope,
                     )
                     .await?;
 
@@ -1384,8 +1389,6 @@ impl Task {
                             task_id.as_str(),
                             metadata.length,
                             None,
-                            true,
-                            false,
                         )
                         .await
                         .inspect_err(|err| {
@@ -1460,6 +1463,8 @@ impl Task {
             let in_stream_tx = in_stream_tx.clone();
             let object_storage = request.object_storage.clone();
             let hdfs = request.hdfs.clone();
+            let hugging_face = request.hugging_face.clone();
+            let model_scope = request.model_scope.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -1480,6 +1485,8 @@ impl Task {
                         in_stream_tx,
                         object_storage,
                         hdfs,
+                        hugging_face,
+                        model_scope,
                     )
                     .await
                 }
@@ -1654,8 +1661,6 @@ impl Task {
                         task_id,
                         piece.length,
                         None,
-                        true,
-                        false,
                     )
                     .await
                     .inspect_err(|err| {
@@ -1744,6 +1749,8 @@ impl Task {
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
                 object_storage: Option<ObjectStorage>,
                 hdfs: Option<Hdfs>,
+                hugging_face: Option<HuggingFace>,
+                model_scope: Option<ModelScope>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!("start to download piece {} from source", piece_id);
@@ -1760,6 +1767,8 @@ impl Task {
                         is_prefetch,
                         object_storage,
                         hdfs,
+                        hugging_face,
+                        model_scope,
                     )
                     .await?;
 
@@ -1784,8 +1793,6 @@ impl Task {
                             task_id.as_str(),
                             piece.length,
                             None,
-                            true,
-                            false,
                         )
                         .await
                         .inspect_err(|err| {
@@ -1838,6 +1845,8 @@ impl Task {
             let download_progress_tx = download_progress_tx.clone();
             let object_storage = request.object_storage.clone();
             let hdfs = request.hdfs.clone();
+            let hugging_face = request.hugging_face.clone();
+            let model_scope = request.model_scope.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -1857,6 +1866,8 @@ impl Task {
                         download_progress_tx,
                         object_storage,
                         hdfs,
+                        hugging_face,
+                        model_scope,
                     )
                     .await
                 }

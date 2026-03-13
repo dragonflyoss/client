@@ -14,10 +14,59 @@
  * limitations under the License.
  */
 
+//! Object Storage backend implementation for downloading and uploading files from cloud storage services.
+//!
+//! This module provides support for multiple cloud object storage URL schemes to access files
+//! from various cloud providers. It uses the OpenDAL library to provide a unified interface
+//! across different object storage services, handling authentication, TLS configuration,
+//! and concurrent uploads.
+//!
+//! # Supported Schemes
+//!
+//! - `s3://` - Amazon Simple Storage Service (S3)
+//! - `gs://` - Google Cloud Storage (GCS)
+//! - `abs://` - Azure Blob Storage (ABS)
+//! - `oss://` - Aliyun Object Storage Service (OSS)
+//! - `obs://` - Huawei Cloud Object Storage Service (OBS)
+//! - `cos://` - Tencent Cloud Object Storage Service (COS)
+//!
+//! # URL Format
+//!
+//! The URL format is: `<scheme>://<bucket>/<key>`
+//!
+//! Examples:
+//! - `s3://my-bucket/models/` - List entire directory in S3
+//! - `s3://my-bucket/models/weights.bin` - Access specific file in S3
+//! - `gs://my-bucket/data/train.csv` - Access specific file in GCS
+//! - `oss://my-bucket/path/to/file` - Access specific file in OSS
+//!
+//! # Authentication
+//!
+//! Each object storage provider requires different credentials:
+//! - **S3**: `access_key_id`, `access_key_secret`, and `region` (optionally `endpoint`, `session_token`)
+//! - **GCS**: `credential_path` for service account credentials (optionally `endpoint`, `predefined_acl`)
+//! - **ABS**: `access_key_id` (account name), `access_key_secret` (account key), and `endpoint`
+//! - **OSS**: `access_key_id`, `access_key_secret`, and `endpoint` (optionally `security_token`)
+//! - **OBS**: `access_key_id`, `access_key_secret`, and `endpoint`
+//! - **COS**: `access_key_id` (secret id), `access_key_secret` (secret key), and `endpoint`
+//!
+//! # TLS Configuration
+//!
+//! By default, TLS certificate verification is enabled. To skip certificate verification
+//! (e.g., for self-signed certificates), set `insecure_skip_verify` to `true` in the
+//! object storage configuration.
+
+use crate::{
+    Body, DirEntry, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse, StatRequest,
+    StatResponse, HTTP2_CONNECTION_WINDOW_SIZE, HTTP2_KEEP_ALIVE_INTERVAL,
+    HTTP2_KEEP_ALIVE_TIMEOUT, HTTP2_STREAM_WINDOW_SIZE, KEEP_ALIVE_INTERVAL,
+    POOL_MAX_IDLE_PER_HOST,
+};
 use dragonfly_api::common;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::error::BackendError;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
+use dragonfly_client_util::tls::NoVerifier;
 use opendal::{layers::HttpClientLayer, layers::TimeoutLayer, raw::HttpClient, Operator};
 use percent_encoding::percent_decode_str;
 use std::fmt;
@@ -51,9 +100,17 @@ pub enum Scheme {
     COS,
 }
 
+/// Scheme implements the Scheme trait.
+impl Scheme {
+    /// Returns true if the given string is a supported scheme.
+    pub fn is_supported(scheme: &str) -> bool {
+        scheme.parse::<Scheme>().is_ok()
+    }
+}
+
 /// Scheme implements the Display.
 impl fmt::Display for Scheme {
-    /// fmt formats the value using the given formatter.
+    /// Fmt formats the value using the given formatter.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Scheme::S3 => write!(f, "s3"),
@@ -70,7 +127,7 @@ impl fmt::Display for Scheme {
 impl FromStr for Scheme {
     type Err = String;
 
-    /// from_str parses a scheme string.
+    /// FromStr parses a scheme string.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "s3" => Ok(Scheme::S3),
@@ -87,27 +144,28 @@ impl FromStr for Scheme {
 /// ParsedURL is a struct that contains the parsed URL, bucket, and path.
 #[derive(Debug)]
 pub struct ParsedURL {
-    /// url is the requested URL of the object storage.
+    /// URL is the requested URL of the object storage.
     pub url: Url,
 
-    /// scheme is the scheme of the object storage.
+    /// Scheme is the scheme of the object storage.
     pub scheme: Scheme,
 
-    /// bucket is the bucket of the object storage.
+    /// Bucket is the bucket of the object storage.
     pub bucket: String,
 
-    /// key is the key of the object storage.
+    /// Key is the key of the object storage.
     pub key: String,
 }
 
 /// ParsedURL implements the ParsedURL trait.
 impl ParsedURL {
-    /// is_dir returns true if the URL path ends with a slash.
+    /// Returns true if the URL path is a directory, which means it ends with a slash.
     pub fn is_dir(&self) -> bool {
         self.url.path().ends_with('/')
     }
 
-    /// make_url_by_entry_path makes a URL by the entry path when the URL is a directory.
+    /// Make a URL by the entry path when the URL is a directory. The entry path is the path of the
+    /// entry in the directory.
     pub fn make_url_by_entry_path(&self, entry_path: &str) -> Url {
         let mut url = self.url.clone();
         url.set_path(entry_path);
@@ -121,7 +179,7 @@ impl ParsedURL {
 impl TryFrom<Url> for ParsedURL {
     type Error = ClientError;
 
-    /// try_from parses the URL and returns a ParsedURL.
+    /// TryFrom parses the URL and returns a ParsedURL.
     fn try_from(url: Url) -> Result<Self, Self::Error> {
         // Get the bucket from the URL host.
         let bucket = url
@@ -152,7 +210,9 @@ impl TryFrom<Url> for ParsedURL {
     }
 }
 
-/// make_need_fields_message makes a message for the need fields in the object storage.
+/// Make a message for the need fields in the object storage. The fields are the required fields
+/// for the object storage, which are different for different object storages. The macro takes a
+/// variable and a list of fields, and returns a message that indicates which fields are needed.
 macro_rules! make_need_fields_message {
     ($var:ident {$($field:ident),*}) => {{
             let mut need_fields: Vec<&'static str> = vec![];
@@ -169,14 +229,17 @@ macro_rules! make_need_fields_message {
 
 /// ObjectStorage is a struct that implements the backend trait.
 pub struct ObjectStorage {
-    /// scheme is the scheme of the object storage.
+    /// Scheme is the scheme of the object storage.
     scheme: Scheme,
 
-    /// config is the configuration of the dfdaemon.
+    /// Config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// client is the reqwest client.
+    /// Client is the reqwest client.
     client: reqwest::Client,
+
+    // Danger client is the reqwest dangerous client, which skips certificate verification.
+    danger_client: reqwest::Client,
 }
 
 /// ObjectStorage implements the ObjectStorage trait.
@@ -189,15 +252,39 @@ impl ObjectStorage {
             .no_brotli()
             .no_zstd()
             .no_deflate()
-            .hickory_dns(true)
-            .pool_max_idle_per_host(super::POOL_MAX_IDLE_PER_HOST)
-            .tcp_keepalive(super::KEEP_ALIVE_INTERVAL)
+            .hickory_dns(config.backend.enable_hickory_dns)
+            .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
+            .tcp_keepalive(KEEP_ALIVE_INTERVAL)
             .tcp_nodelay(true)
             .http2_adaptive_window(true)
-            .http2_initial_stream_window_size(Some(super::HTTP2_STREAM_WINDOW_SIZE))
-            .http2_initial_connection_window_size(Some(super::HTTP2_CONNECTION_WINDOW_SIZE))
-            .http2_keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
-            .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+            .http2_initial_stream_window_size(Some(HTTP2_STREAM_WINDOW_SIZE))
+            .http2_initial_connection_window_size(Some(HTTP2_CONNECTION_WINDOW_SIZE))
+            .http2_keep_alive_timeout(HTTP2_KEEP_ALIVE_TIMEOUT)
+            .http2_keep_alive_interval(HTTP2_KEEP_ALIVE_INTERVAL)
+            .http2_keep_alive_while_idle(true)
+            .build()?;
+
+        // Initialize the reqwest dangerous client.
+        let client_config_builder = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(NoVerifier::new())
+            .with_no_client_auth();
+
+        let danger_client = reqwest::Client::builder()
+            .no_gzip()
+            .no_brotli()
+            .no_zstd()
+            .no_deflate()
+            .hickory_dns(config.backend.enable_hickory_dns)
+            .use_preconfigured_tls(client_config_builder)
+            .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
+            .tcp_keepalive(KEEP_ALIVE_INTERVAL)
+            .tcp_nodelay(true)
+            .http2_adaptive_window(true)
+            .http2_initial_stream_window_size(Some(HTTP2_STREAM_WINDOW_SIZE))
+            .http2_initial_connection_window_size(Some(HTTP2_CONNECTION_WINDOW_SIZE))
+            .http2_keep_alive_timeout(HTTP2_KEEP_ALIVE_TIMEOUT)
+            .http2_keep_alive_interval(HTTP2_KEEP_ALIVE_INTERVAL)
             .http2_keep_alive_while_idle(true)
             .build()?;
 
@@ -205,13 +292,14 @@ impl ObjectStorage {
             scheme,
             config,
             client,
+            danger_client,
         })
     }
 
-    /// operator initializes the operator with the parsed URL and object storage.
+    /// Operator initializes the operator with the parsed URL and object storage.
     pub fn operator(
         &self,
-        parsed_url: &super::object_storage::ParsedURL,
+        parsed_url: &ParsedURL,
         object_storage: Option<common::v2::ObjectStorage>,
         timeout: Duration,
     ) -> ClientResult<Operator> {
@@ -234,10 +322,10 @@ impl ObjectStorage {
         }
     }
 
-    /// s3_operator initializes the S3 operator with the parsed URL and object storage.
+    /// S3 operator initializes the S3 operator with the parsed URL and object storage.
     pub fn s3_operator(
         &self,
-        parsed_url: &super::object_storage::ParsedURL,
+        parsed_url: &ParsedURL,
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
@@ -280,16 +368,22 @@ impl ObjectStorage {
             builder = builder.session_token(session_token);
         }
 
+        // Choose the http client using dangerous client or not by insecure_skip_verify.
+        let http_client = match object_storage.insecure_skip_verify {
+            Some(true) => self.danger_client.clone(),
+            _ => self.client.clone(),
+        };
+
         Ok(Operator::new(builder)?
             .finish()
             .layer(TimeoutLayer::new().with_timeout(timeout))
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
+            .layer(HttpClientLayer::new(HttpClient::with(http_client))))
     }
 
-    /// gcs_operator initializes the GCS operator with the parsed URL and object storage.
+    /// GCS operator initializes the GCS operator with the parsed URL and object storage.
     pub fn gcs_operator(
         &self,
-        parsed_url: &super::object_storage::ParsedURL,
+        parsed_url: &ParsedURL,
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
@@ -313,16 +407,22 @@ impl ObjectStorage {
             builder = builder.predefined_acl(predefined_acl);
         }
 
+        // Choose the http client using dangerous client or not by insecure_skip_verify.
+        let http_client = match object_storage.insecure_skip_verify {
+            Some(true) => self.danger_client.clone(),
+            _ => self.client.clone(),
+        };
+
         Ok(Operator::new(builder)?
             .finish()
             .layer(TimeoutLayer::new().with_timeout(timeout))
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
+            .layer(HttpClientLayer::new(HttpClient::with(http_client))))
     }
 
-    /// abs_operator initializes the ABS operator with the parsed URL and object storage.
+    /// ABS operator initializes the ABS operator with the parsed URL and object storage.
     pub fn abs_operator(
         &self,
-        parsed_url: &super::object_storage::ParsedURL,
+        parsed_url: &ParsedURL,
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
@@ -355,16 +455,22 @@ impl ObjectStorage {
             .container(&parsed_url.bucket)
             .endpoint(endpoint);
 
+        // Choose the http client using dangerous client or not by insecure_skip_verify.
+        let http_client = match object_storage.insecure_skip_verify {
+            Some(true) => self.danger_client.clone(),
+            _ => self.client.clone(),
+        };
+
         Ok(Operator::new(builder)?
             .finish()
             .layer(TimeoutLayer::new().with_timeout(timeout))
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
+            .layer(HttpClientLayer::new(HttpClient::with(http_client))))
     }
 
-    /// oss_operator initializes the OSS operator with the parsed URL and object storage.
+    /// OSS operator initializes the OSS operator with the parsed URL and object storage.
     pub fn oss_operator(
         &self,
-        parsed_url: &super::object_storage::ParsedURL,
+        parsed_url: &ParsedURL,
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
@@ -408,16 +514,22 @@ impl ObjectStorage {
                 .bucket(&parsed_url.bucket)
         };
 
+        // Choose the http client using dangerous client or not by insecure_skip_verify.
+        let http_client = match object_storage.insecure_skip_verify {
+            Some(true) => self.danger_client.clone(),
+            _ => self.client.clone(),
+        };
+
         Ok(Operator::new(builder)?
             .finish()
             .layer(TimeoutLayer::new().with_timeout(timeout))
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
+            .layer(HttpClientLayer::new(HttpClient::with(http_client))))
     }
 
-    /// obs_operator initializes the OBS operator with the parsed URL and object storage.
+    /// OBS operator initializes the OBS operator with the parsed URL and object storage.
     pub fn obs_operator(
         &self,
-        parsed_url: &super::object_storage::ParsedURL,
+        parsed_url: &ParsedURL,
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
@@ -450,16 +562,22 @@ impl ObjectStorage {
             .endpoint(endpoint)
             .bucket(&parsed_url.bucket);
 
+        // Choose the http client using dangerous client or not by insecure_skip_verify.
+        let http_client = match object_storage.insecure_skip_verify {
+            Some(true) => self.danger_client.clone(),
+            _ => self.client.clone(),
+        };
+
         Ok(Operator::new(builder)?
             .finish()
             .layer(TimeoutLayer::new().with_timeout(timeout))
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
+            .layer(HttpClientLayer::new(HttpClient::with(http_client))))
     }
 
-    /// cos_operator initializes the COS operator with the parsed URL and object storage.
+    /// COS operator initializes the COS operator with the parsed URL and object storage.
     pub fn cos_operator(
         &self,
-        parsed_url: &super::object_storage::ParsedURL,
+        parsed_url: &ParsedURL,
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
@@ -492,24 +610,30 @@ impl ObjectStorage {
             .endpoint(endpoint)
             .bucket(&parsed_url.bucket);
 
+        // Choose the http client using dangerous client or not by insecure_skip_verify.
+        let http_client = match object_storage.insecure_skip_verify {
+            Some(true) => self.danger_client.clone(),
+            _ => self.client.clone(),
+        };
+
         Ok(Operator::new(builder)?
             .finish()
             .layer(TimeoutLayer::new().with_timeout(timeout))
-            .layer(HttpClientLayer::new(HttpClient::with(self.client.clone()))))
+            .layer(HttpClientLayer::new(HttpClient::with(http_client))))
     }
 }
 
 /// Backend implements the Backend trait.
 #[tonic::async_trait]
 impl crate::Backend for ObjectStorage {
-    /// scheme returns the scheme of the object storage.
+    /// Scheme returns the scheme of the object storage.
     fn scheme(&self) -> String {
         self.scheme.to_string()
     }
 
-    /// stat gets the metadata from the backend.
+    /// Stat the metadata from the backend.
     #[instrument(skip_all)]
-    async fn stat(&self, request: super::StatRequest) -> ClientResult<super::StatResponse> {
+    async fn stat(&self, request: StatRequest) -> ClientResult<StatResponse> {
         debug!(
             "stat request {} {}: {:?}",
             request.task_id, request.url, request.http_header
@@ -521,7 +645,7 @@ impl crate::Backend for ObjectStorage {
             .parse()
             .map_err(|_| ClientError::InvalidURI(request.url.clone()))?;
 
-        let parsed_url: super::object_storage::ParsedURL = url.try_into().inspect_err(|err| {
+        let parsed_url: ParsedURL = url.try_into().inspect_err(|err| {
             error!(
                 "parse stat request url failed {} {}: {}",
                 request.task_id, request.url, err
@@ -552,7 +676,7 @@ impl crate::Backend for ObjectStorage {
                 .into_iter()
                 .map(|entry| {
                     let metadata = entry.metadata();
-                    super::DirEntry {
+                    DirEntry {
                         url: parsed_url.make_url_by_entry_path(entry.path()).to_string(),
                         content_length: metadata.content_length() as usize,
                         is_dir: metadata.is_dir(),
@@ -584,7 +708,7 @@ impl crate::Backend for ObjectStorage {
             response.content_length()
         );
 
-        Ok(super::StatResponse {
+        Ok(StatResponse {
             success: true,
             content_length: Some(response.content_length()),
             http_header: None,
@@ -594,12 +718,9 @@ impl crate::Backend for ObjectStorage {
         })
     }
 
-    /// get gets the content from the backend.
+    /// Get the content from the backend.
     #[instrument(skip_all)]
-    async fn get(
-        &self,
-        request: super::GetRequest,
-    ) -> ClientResult<super::GetResponse<super::Body>> {
+    async fn get(&self, request: GetRequest) -> ClientResult<GetResponse<Body>> {
         debug!(
             "get request {} {}: {:?}",
             request.piece_id, request.url, request.http_header
@@ -611,7 +732,7 @@ impl crate::Backend for ObjectStorage {
             .parse()
             .map_err(|_| ClientError::InvalidURI(request.url.clone()))?;
 
-        let parsed_url: super::object_storage::ParsedURL = url.try_into().inspect_err(|err| {
+        let parsed_url: ParsedURL = url.try_into().inspect_err(|err| {
             error!(
                 "parse get request url failed {} {}: {}",
                 request.piece_id, request.url, err
@@ -675,9 +796,9 @@ impl crate::Backend for ObjectStorage {
         })
     }
 
-    /// put puts the content to the backend.
+    /// Put the content to the backend.
     #[instrument(skip_all)]
-    async fn put(&self, request: super::PutRequest) -> ClientResult<super::PutResponse> {
+    async fn put(&self, request: PutRequest) -> ClientResult<PutResponse> {
         debug!("put request {:?} {}", request.path, request.url);
 
         // Parse the URL and convert it to a ParsedURL for create the ObjectStorage operator.
@@ -686,7 +807,7 @@ impl crate::Backend for ObjectStorage {
             .parse()
             .map_err(|_| ClientError::InvalidURI(request.url.clone()))?;
 
-        let parsed_url: super::object_storage::ParsedURL = url.try_into().inspect_err(|err| {
+        let parsed_url: ParsedURL = url.try_into().inspect_err(|err| {
             error!(
                 "parse put request url failed {:?} {}: {}",
                 request.path, request.url, err
@@ -777,9 +898,9 @@ impl crate::Backend for ObjectStorage {
         })
     }
 
-    /// exists checks whether the file exists in the backend.
+    /// Exists checks whether the file exists in the backend.
     #[instrument(skip_all)]
-    async fn exists(&self, request: super::ExistsRequest) -> ClientResult<bool> {
+    async fn exists(&self, request: ExistsRequest) -> ClientResult<bool> {
         debug!(
             "exists request {} {}: {:?}",
             request.task_id, request.url, request.http_header
@@ -791,7 +912,7 @@ impl crate::Backend for ObjectStorage {
             .parse()
             .map_err(|_| ClientError::InvalidURI(request.url.clone()))?;
 
-        let parsed_url: super::object_storage::ParsedURL = url.try_into().inspect_err(|err| {
+        let parsed_url: ParsedURL = url.try_into().inspect_err(|err| {
             error!(
                 "parse exists request url failed {} {}: {}",
                 request.task_id, request.url, err
@@ -808,6 +929,21 @@ impl crate::Backend for ObjectStorage {
 mod tests {
     use super::*;
     use dragonfly_api::common::v2::ObjectStorage as ObjectStorageInfo;
+
+    #[test]
+    fn should_return_true_for_supported_schemes() {
+        let supported = vec!["s3", "gs", "abs", "oss", "obs", "cos"];
+        for scheme in supported {
+            assert!(Scheme::is_supported(scheme));
+        }
+    }
+    #[test]
+    fn should_return_false_for_unsupported_schemes() {
+        let unsupported = vec!["http", "https", "ftp", "hdfs", "file", "", "S3", "GCS"];
+        for scheme in unsupported {
+            assert!(!Scheme::is_supported(scheme));
+        }
+    }
 
     #[test]
     fn should_get_parsed_url() {
@@ -1410,6 +1546,44 @@ mod tests {
 
             assert!(result.is_err());
             assert_eq!(result.unwrap_err().to_string(), error_message);
+        }
+    }
+
+    #[test]
+    fn should_handle_insecure_skip_verify_parameter() {
+        let test_cases = vec![
+            ObjectStorageInfo {
+                endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
+                access_key_id: Some("test-access-key-id".into()),
+                access_key_secret: Some("test-access-key-secret".into()),
+                insecure_skip_verify: Some(true),
+                ..Default::default()
+            },
+            ObjectStorageInfo {
+                endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
+                access_key_id: Some("test-access-key-id".into()),
+                access_key_secret: Some("test-access-key-secret".into()),
+                insecure_skip_verify: Some(false),
+                ..Default::default()
+            },
+            ObjectStorageInfo {
+                endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
+                access_key_id: Some("test-access-key-id".into()),
+                access_key_secret: Some("test-access-key-secret".into()),
+                insecure_skip_verify: None,
+                ..Default::default()
+            },
+        ];
+
+        for object_storage in test_cases {
+            let config = Arc::new(Config::default());
+            let backend = ObjectStorage::new(Scheme::OSS, config).unwrap();
+            let url: Url = "oss://test-bucket/file".parse().unwrap();
+            let parsed_url: ParsedURL = url.try_into().unwrap();
+
+            let result =
+                backend.operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
+            assert!(result.is_ok());
         }
     }
 }

@@ -41,6 +41,9 @@ pub enum TaskIDParameter {
         tag: Option<String>,
         application: Option<String>,
         filtered_query_params: Vec<String>,
+        // Revision is used to generate the task id for the artifact with the same url but
+        // different revisions, such as git repository.
+        revision: Option<String>,
     },
     /// BlobDigestBased will extract the digest in the oci blob url and use the digest's encoded as
     /// the task id.
@@ -118,6 +121,7 @@ impl IDGenerator {
                 tag,
                 application,
                 filtered_query_params,
+                revision,
             } => {
                 // Filter the query parameters.
                 let url = Url::parse(url.as_str()).or_err(ErrorType::ParseError)?;
@@ -153,6 +157,12 @@ impl IDGenerator {
                 // Add the application to generate the task id.
                 if let Some(application) = application {
                     hasher.update(application);
+                }
+
+                // Add the revision to generate the task id for the artifact with the same url but
+                // different revisions, such as git repository.
+                if let Some(revision) = revision {
+                    hasher.update(revision);
                 }
 
                 // Add the piece length to generate the task id.
@@ -303,8 +313,9 @@ mod tests {
                     tag: Some("foo".to_string()),
                     application: Some("bar".to_string()),
                     filtered_query_params: vec![],
+                    revision: Some("v1.0".to_string()),
                 },
-                "27554d06dfc788c2c2c60e01960152ffbd4b145fc103fcb80b432b4dc238a6fe",
+                "5844f27a257287e9b734256bb25603d8005422ced8c0377f15063ec11963b25f",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
@@ -314,6 +325,7 @@ mod tests {
                     tag: Some("foo".to_string()),
                     application: Some("bar".to_string()),
                     filtered_query_params: vec![],
+                    revision: None,
                 },
                 "06408fbf247ddaca478f8cb9565fe5591c28efd0994b8fea80a6a87d3203c5ca",
             ),
@@ -325,6 +337,7 @@ mod tests {
                     tag: Some("foo".to_string()),
                     application: None,
                     filtered_query_params: vec![],
+                    revision: None,
                 },
                 "3c3f230ef9f191dd2821510346a7bc138e4894bee9aee184ba250a3040701d2a",
             ),
@@ -336,6 +349,7 @@ mod tests {
                     tag: None,
                     application: Some("bar".to_string()),
                     filtered_query_params: vec![],
+                    revision: None,
                 },
                 "c9f9261b7305c24371244f9f149f5d4589ed601348fdf22d7f6f4b10658fdba2",
             ),
@@ -347,6 +361,7 @@ mod tests {
                     tag: None,
                     application: None,
                     filtered_query_params: vec![],
+                    revision: None,
                 },
                 "9f7c9aafbc6f30f8f41a96ca77eeae80c5b60964b3034b0ee43ccf7b2f9e52b8",
             ),
@@ -358,8 +373,21 @@ mod tests {
                     tag: None,
                     application: None,
                     filtered_query_params: vec!["foo".to_string(), "bar".to_string()],
+                    revision: None,
                 },
                 "457b4328cde278e422c9e243f7bfd1e97f511fec43a80f535cf6b0ef6b086776",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                TaskIDParameter::URLBased {
+                    url: "https://example.com".to_string(),
+                    piece_length: None,
+                    tag: None,
+                    application: None,
+                    filtered_query_params: vec![],
+                    revision: Some("v1.0".to_string()),
+                },
+                "b171331534b80e0bf91da38ebbfcdbf4d177898f4b9beac44f14733e3f004d4e",
             ),
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),

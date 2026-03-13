@@ -268,3 +268,34 @@ pub fn init_command_tracing(log_level: Level, console: bool) -> Vec<WorkerGuard>
 
     guards
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_init_tracing_comprehensive() {
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let log_dir = temp_dir.path().join("logs");
+        assert!(!log_dir.exists());
+
+        let guards = init_tracing(
+            "test-service",
+            log_dir.clone(),
+            Level::INFO,
+            10,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+        );
+        assert!(log_dir.exists());
+        assert!(log_dir.is_dir());
+        assert!(!guards.is_empty());
+        assert_eq!(guards.len(), 2);
+    }
+}

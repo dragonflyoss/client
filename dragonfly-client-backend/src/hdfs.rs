@@ -14,21 +14,42 @@
  * limitations under the License.
  */
 
+//! HDFS backend implementation for downloading and accessing files from Hadoop Distributed File System.
+//!
+//! This module provides support for the `hdfs://` URL scheme to access files from
+//! HDFS clusters. It uses the WebHDFS REST API through the OpenDAL library to handle
+//! file operations including stat, get, exists, and directory listing.
+//!
+//! # URL Format
+//!
+//! The URL format is: `hdfs://<namenode_host>[:<port>]/<path>`
+//!
+//! Examples:
+//! - `hdfs://namenode:9870/data/` - List entire directory
+//! - `hdfs://namenode:9870/data/model.bin` - Access specific file
+//! - `hdfs://namenode/data/model.bin` - Access file using default port (9870)
+//!
+//! # Authentication
+//!
+//! For secured HDFS clusters, use the `--hdfs-delegation-token` flag to provide
+//! a delegation token for authentication.
+
+use crate::{
+    Backend, Body, DirEntry, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse,
+    StatRequest, StatResponse,
+};
 use dragonfly_api::common;
 use dragonfly_client_core::error::BackendError;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
-use dragonfly_client_util::net::format_url;
 use opendal::{layers::TimeoutLayer, Operator};
 use percent_encoding::percent_decode_str;
-use std::net::IpAddr;
-use std::str::FromStr;
 use std::time::Duration;
 use tokio_util::io::StreamReader;
 use tracing::{debug, error, instrument};
 use url::Url;
 
-/// HDFS_SCHEME is the scheme of the HDFS.
-pub const HDFS_SCHEME: &str = "hdfs";
+/// SCHEME is the scheme of the HDFS.
+pub const SCHEME: &str = "hdfs";
 
 /// DEFAULT_NAMENODE_PORT is the default port of the HDFS namenode.
 const DEFAULT_NAMENODE_PORT: u16 = 9870;
@@ -36,20 +57,20 @@ const DEFAULT_NAMENODE_PORT: u16 = 9870;
 /// Hdfs is a struct that implements the Backend trait.
 #[derive(Default)]
 pub struct Hdfs {
-    /// scheme is the scheme of the HDFS.
+    /// Scheme is the scheme of the HDFS.
     scheme: String,
 }
 
 /// Hdfs implements the Backend trait.
 impl Hdfs {
-    /// new returns a new HDFS backend.
+    /// Create a new Hdfs instance.
     pub fn new() -> Self {
         Self {
-            scheme: HDFS_SCHEME.to_string(),
+            scheme: SCHEME.to_string(),
         }
     }
 
-    /// operator initializes the operator with the parsed URL and HDFS config.
+    /// Operator initializes the operator with the parsed URL and HDFS config.
     pub fn operator(
         &self,
         url: Url,
@@ -67,7 +88,8 @@ impl Hdfs {
         let mut builder = opendal::services::Webhdfs::default();
         builder = builder
             .root("/")
-            .endpoint(&format_url("http", IpAddr::from_str(&host)?, port));
+            // Host can be an IP address or a hostname, so we need to handle both cases.
+            .endpoint(&format!("http://{}:{}", host, port));
 
         // If HDFS config is not None, set the config for builder.
         if let Some(config) = config {
@@ -84,15 +106,15 @@ impl Hdfs {
 
 /// Implement the Backend trait for Hdfs.
 #[tonic::async_trait]
-impl super::Backend for Hdfs {
-    /// scheme returns the scheme of the HDFS backend.
+impl Backend for Hdfs {
+    /// Scheme returns the scheme of the HDFS backend.
     fn scheme(&self) -> String {
         self.scheme.clone()
     }
 
-    /// stat gets the metadata from the backend.
+    /// Stat the metadata from the backend.
     #[instrument(skip_all)]
-    async fn stat(&self, request: super::StatRequest) -> ClientResult<super::StatResponse> {
+    async fn stat(&self, request: StatRequest) -> ClientResult<StatResponse> {
         debug!(
             "stat request {} {}: {:?}",
             request.task_id, request.url, request.http_header
@@ -131,7 +153,7 @@ impl super::Backend for Hdfs {
                     let metadata = entry.metadata();
                     let mut url = url.clone();
                     url.set_path(entry.path());
-                    super::DirEntry {
+                    DirEntry {
                         url: url.to_string(),
                         content_length: metadata.content_length() as usize,
                         is_dir: metadata.is_dir(),
@@ -163,7 +185,7 @@ impl super::Backend for Hdfs {
             response.content_length()
         );
 
-        Ok(super::StatResponse {
+        Ok(StatResponse {
             success: true,
             content_length: Some(response.content_length()),
             http_header: None,
@@ -173,12 +195,9 @@ impl super::Backend for Hdfs {
         })
     }
 
-    /// get gets the content from the backend.
+    /// Get the content from the backend.
     #[instrument(skip_all)]
-    async fn get(
-        &self,
-        request: super::GetRequest,
-    ) -> ClientResult<super::GetResponse<super::Body>> {
+    async fn get(&self, request: GetRequest) -> ClientResult<GetResponse<Body>> {
         debug!(
             "get request {} {}: {:?}",
             request.piece_id, request.url, request.http_header
@@ -248,15 +267,15 @@ impl super::Backend for Hdfs {
         })
     }
 
-    /// put puts the content to the backend.
+    /// Put the content to the backend.
     #[instrument(skip_all)]
-    async fn put(&self, _request: super::PutRequest) -> ClientResult<super::PutResponse> {
+    async fn put(&self, _request: PutRequest) -> ClientResult<PutResponse> {
         unimplemented!()
     }
 
-    /// exists checks whether the file exists in the backend.
+    /// Exists checks whether the file exists in the backend.
     #[instrument(skip_all)]
-    async fn exists(&self, request: super::ExistsRequest) -> ClientResult<bool> {
+    async fn exists(&self, request: ExistsRequest) -> ClientResult<bool> {
         debug!(
             "exist request {} {}: {:?}",
             request.task_id, request.url, request.http_header

@@ -56,8 +56,8 @@ use dragonfly_client_util::{
     digest::{is_blob_url, verify_file_digest, Digest},
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
     id_generator::{PersistentTaskIDParameter, TaskIDParameter},
-    net::Interface,
     shutdown,
+    sysinfo::SystemMonitor,
 };
 use opentelemetry::Context;
 use std::net::SocketAddr;
@@ -73,32 +73,37 @@ use tonic::{
     transport::{Channel, Server},
     Code, Request, Response, Status,
 };
-use tower::ServiceBuilder;
+use tower::{
+    buffer::BufferLayer,
+    limit::rate::RateLimitLayer,
+    load_shed::{error::Overloaded, LoadShedLayer},
+    ServiceBuilder,
+};
 use tracing::{debug, error, info, instrument, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 
-/// DfdaemonUploadServer is the grpc server of the upload.
+/// gRPC server for upload operations.
 pub struct DfdaemonUploadServer {
-    /// config is the configuration of the dfdaemon.
+    /// Configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// addr is the address of the grpc server.
+    /// Address of the gRPC server.
     addr: SocketAddr,
 
-    /// task is the task manager.
+    /// Task manager.
     task: Arc<task::Task>,
 
-    /// persistent_task is the persistent task manager.
+    /// Persistent task manager.
     persistent_task: Arc<persistent_task::PersistentTask>,
 
     /// persistent_cache_task is the persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 
-    /// interface is the network interface.
-    interface: Arc<Interface>,
+    /// System interface for monitoring.
+    system_monitor: Arc<SystemMonitor>,
 
     /// shutdown is used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
@@ -117,7 +122,7 @@ impl DfdaemonUploadServer {
         task: Arc<task::Task>,
         persistent_task: Arc<persistent_task::PersistentTask>,
         persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
-        interface: Arc<Interface>,
+        system_monitor: Arc<SystemMonitor>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -127,7 +132,7 @@ impl DfdaemonUploadServer {
             task,
             persistent_task,
             persistent_cache_task,
-            interface,
+            system_monitor,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -142,7 +147,7 @@ impl DfdaemonUploadServer {
                 task: self.task.clone(),
                 persistent_task: self.persistent_task.clone(),
                 persistent_cache_task: self.persistent_cache_task.clone(),
-                interface: self.interface.clone(),
+                system_monitor: self.system_monitor.clone(),
             },
             ExtractTracingInterceptor,
         );
@@ -158,13 +163,6 @@ impl DfdaemonUploadServer {
         // Initialize health reporter.
         let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
 
-        // TODO(Gaius): RateLimitLayer is not implemented Clone, so we can't use it here.
-        // Only use the LoadShed layer and the ConcurrencyLimit layer.
-        let rate_limit_layer = ServiceBuilder::new()
-            .concurrency_limit(self.config.upload.server.request_rate_limit as usize)
-            .load_shed()
-            .into_inner();
-
         // Start upload grpc server.
         let mut server_builder = Server::builder();
         if let Ok(Some(server_tls_config)) =
@@ -178,7 +176,24 @@ impl DfdaemonUploadServer {
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
-            .layer(rate_limit_layer)
+            .layer(
+                ServiceBuilder::new()
+                    .map_err(|err: Box<dyn std::error::Error + Send + Sync>| {
+                        if err.is::<Overloaded>() {
+                            Status::resource_exhausted("Server is overloaded, please retry later")
+                        } else {
+                            Status::internal(err.to_string())
+                        }
+                    })
+                    .layer(LoadShedLayer::new()),
+            )
+            .layer(BufferLayer::new(
+                self.config.upload.server.request_buffer_size,
+            ))
+            .layer(RateLimitLayer::new(
+                self.config.upload.server.request_rate_limit,
+                Duration::from_secs(1),
+            ))
             .add_service(reflection)
             .add_service(health_service)
             .add_service(service)
@@ -231,8 +246,8 @@ pub struct DfdaemonUploadServerHandler {
     /// persistent_cache_task is the persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 
-    /// interface is the network interface.
-    interface: Arc<Interface>,
+    /// System interface for monitoring.
+    system_monitor: Arc<SystemMonitor>,
 }
 
 /// DfdaemonUploadServerHandler implements the dfdaemon upload grpc service.
@@ -278,12 +293,19 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 } else if let Some(content) = download.content_for_calculating_task_id.clone() {
                     TaskIDParameter::Content(content)
                 } else {
+                    let revision = download
+                        .hugging_face
+                        .as_ref()
+                        .map(|hf| hf.revision.clone())
+                        .or_else(|| download.model_scope.as_ref().map(|ms| ms.revision.clone()));
+
                     TaskIDParameter::URLBased {
                         url: download.url.clone(),
                         piece_length: download.piece_length,
                         tag: download.tag.clone(),
                         application: download.application.clone(),
                         filtered_query_params: download.filtered_query_params.clone(),
+                        revision,
                     }
                 },
             )
@@ -813,6 +835,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 client_cert: None,
                 object_storage: request.object_storage.clone(),
                 hdfs: request.hdfs.clone(),
+                hugging_face: request.hugging_face.clone(),
+                model_scope: request.model_scope.clone(),
             })
             .await
             .map_err(|err| {
@@ -1111,8 +1135,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("remote_peer_id", remote_peer_id.as_str());
         info!("sync host in upload server");
 
-        // Get local interface.
-        let interface = self.interface.clone();
+        // Clone the network monitor.
+        let network = self.system_monitor.network.clone();
 
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
@@ -1120,24 +1144,24 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             async move {
                 // Start the host info update loop.
                 loop {
-                    // Wait for getting the network data.
-                    let network_data = interface.get_network_data().await;
+                    // Wait for getting the network stats.
+                    let network_stats = network.get_stats().await;
                     debug!(
                         "network data: rx bandwidth {}/{} bps, tx bandwidth {}/{} bps",
-                        network_data.rx_bandwidth.unwrap_or(0),
-                        network_data.max_rx_bandwidth,
-                        network_data.tx_bandwidth.unwrap_or(0),
-                        network_data.max_tx_bandwidth
+                        network_stats.rx_bandwidth.unwrap_or(0),
+                        network_stats.max_rx_bandwidth,
+                        network_stats.tx_bandwidth.unwrap_or(0),
+                        network_stats.max_tx_bandwidth
                     );
 
                     // Send host info.
                     if let Err(err) = out_stream_tx
                         .send(Ok(Host {
                             network: Some(Network {
-                                max_rx_bandwidth: network_data.max_rx_bandwidth,
-                                rx_bandwidth: network_data.rx_bandwidth,
-                                max_tx_bandwidth: network_data.max_tx_bandwidth,
-                                tx_bandwidth: network_data.tx_bandwidth,
+                                max_rx_bandwidth: network_stats.max_rx_bandwidth,
+                                rx_bandwidth: network_stats.rx_bandwidth,
+                                max_tx_bandwidth: network_stats.max_tx_bandwidth,
+                                tx_bandwidth: network_stats.tx_bandwidth,
                                 ..Default::default()
                             }),
                             ..Default::default()

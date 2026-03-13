@@ -16,7 +16,7 @@
 
 use bytesize::ByteSize;
 use clap::Parser;
-use dragonfly_api::common::v2::{Download, Hdfs, ObjectStorage, TaskType};
+use dragonfly_api::common::v2::{Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, ListTaskEntriesRequest,
 };
@@ -25,7 +25,9 @@ use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::resource::piece::MIN_PIECE_LENGTH;
 use dragonfly_client::tracing::init_command_tracing;
-use dragonfly_client_backend::{hdfs, object_storage, BackendFactory, DirEntry};
+use dragonfly_client_backend::{
+    hdfs, hugging_face, model_scope, object_storage, BackendFactory, DirEntry,
+};
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
 use dragonfly_client_core::error::{ErrorType, OrErr};
@@ -41,7 +43,6 @@ use path_absolutize::*;
 use percent_encoding::percent_decode_str;
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{cmp::min, fmt::Write};
@@ -83,6 +84,30 @@ Examples:
 
   # Download a file from Tencent Cloud Object Storage Service(COS).
   $ dfget cos://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret> --storage-endpoint=<endpoint>
+
+  # Download a single file from Hugging Face Hub.
+  $ dfget hf://<owner>/<repo>/<path> -O /tmp/model.safetensors
+
+  # Download an entire repository from Hugging Face Hub.
+  $ dfget hf://<owner>/<repo> -O /tmp/repo/ -r
+  
+  # Download an entire repository from Hugging Face Hub with specified revision. If the revision is not specified, the default value is `main`.
+  $ dfget hf://<owner>/<repo> --hf-revision main -O /tmp/repo/ -r
+
+  # Download from Hugging Face Hub with authentication token.
+  $ dfget hf://<owner>/<repo>/<path> -O /tmp/model.safetensors --hf-token=<token>
+  
+  # Download a single file from ModelScope.
+  $ dfget modelscope://<owner>/<repo>/<path> -O /tmp/model.safetensors
+  
+  # Download an entire repository from ModelScope Hub.
+  $ dfget modelscope://<owner>/<repo> -O /tmp/repo/ -r
+  
+  # Download an entire repository from ModelScope Hub with specified revision. If the revision is not specified, the default value is `master`.
+  $ dfget modelscope://<owner>/<repo> --ms-revision master -O /tmp/repo/ -r
+
+  # Download from ModelScope Hub with authentication token.
+  $ dfget modelscope://<owner>/<repo>/<path> -O /tmp/model.safetensors --ms-token=<token>
 "#;
 
 #[derive(Debug, Parser, Clone)]
@@ -248,6 +273,12 @@ struct Args {
 
     #[arg(
         long,
+        help = "Specify whether to skip verify TLS certification for object storage service"
+    )]
+    storage_insecure_skip_verify: Option<bool>,
+
+    #[arg(
+        long,
         help = "Specify the session token for Amazon Simple Storage Service(S3)"
     )]
     storage_session_token: Option<String>,
@@ -273,14 +304,37 @@ struct Args {
 
     #[arg(
         long,
-        default_value_t = 10,
+        default_value = "master",
+        help = "Specify the revision version for ModelScope Hub"
+    )]
+    ms_revision: String,
+
+    #[arg(
+        long = "ms-token",
+        help = "Specify the authentication token for ModelScope Hub"
+    )]
+    ms_token: Option<String>,
+
+    #[arg(
+        long,
+        default_value = "main",
+        help = "Specify the revision version for Hugging Face Hub"
+    )]
+    hf_revision: String,
+
+    #[arg(long, help = "Specify the authentication token for Hugging Face Hub")]
+    hf_token: Option<String>,
+
+    #[arg(
+        long,
+        default_value_t = 100,
         help = "Specify the max count of file to download when downloading a directory. If the actual file count is greater than this value, the downloading will be rejected"
     )]
     max_files: usize,
 
     #[arg(
         long,
-        default_value_t = 1,
+        default_value_t = 5,
         help = "Specify the max count of concurrent download files when downloading a directory"
     )]
     max_concurrent_requests: usize,
@@ -648,21 +702,48 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
 /// concurrency control. The function creates the necessary directory structure
 /// locally and downloads files while preserving the remote directory hierarchy.
 async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Result<()> {
-    // Initialize the object storage config and the hdfs config.
-    let object_storage = Some(ObjectStorage {
-        access_key_id: args.storage_access_key_id.clone(),
-        access_key_secret: args.storage_access_key_secret.clone(),
-        security_token: args.storage_security_token.clone(),
-        session_token: args.storage_session_token.clone(),
-        region: args.storage_region.clone(),
-        endpoint: args.storage_endpoint.clone(),
-        credential_path: args.storage_credential_path.clone(),
-        predefined_acl: args.storage_predefined_acl.clone(),
-    });
+    let url = Url::parse(args.url.as_str()).or_err(ErrorType::ParseError)?;
+    let object_storage = if object_storage::Scheme::is_supported(url.scheme()) {
+        Some(ObjectStorage {
+            access_key_id: args.storage_access_key_id.clone(),
+            access_key_secret: args.storage_access_key_secret.clone(),
+            security_token: args.storage_security_token.clone(),
+            session_token: args.storage_session_token.clone(),
+            region: args.storage_region.clone(),
+            endpoint: args.storage_endpoint.clone(),
+            credential_path: args.storage_credential_path.clone(),
+            predefined_acl: args.storage_predefined_acl.clone(),
+            insecure_skip_verify: args.storage_insecure_skip_verify,
+        })
+    } else {
+        None
+    };
 
-    let hdfs = Some(Hdfs {
-        delegation_token: args.hdfs_delegation_token.clone(),
-    });
+    let hdfs = if url.scheme() == hdfs::SCHEME {
+        Some(Hdfs {
+            delegation_token: args.hdfs_delegation_token.clone(),
+        })
+    } else {
+        None
+    };
+
+    let hugging_face = if url.scheme() == hugging_face::SCHEME {
+        Some(HuggingFace {
+            revision: args.hf_revision.clone(),
+            token: args.hf_token.clone(),
+        })
+    } else {
+        None
+    };
+
+    let model_scope = if url.scheme() == model_scope::SCHEME {
+        Some(ModelScope {
+            revision: args.ms_revision.clone(),
+            token: args.ms_token.clone(),
+        })
+    } else {
+        None
+    };
 
     // Get all entries in the directory with include files filter.
     let entries: Vec<DirEntry> = get_all_entries(
@@ -671,6 +752,8 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         args.include_files.clone(),
         object_storage,
         hdfs,
+        hugging_face,
+        model_scope,
         download_client.clone(),
     )
     .await?;
@@ -750,12 +833,15 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
 }
 
 /// Get all entries in the directory with include files filter.
+#[allow(clippy::too_many_arguments)]
 async fn get_all_entries(
     base_url: &Url,
     header: Option<Vec<String>>,
     include_files: Option<Vec<String>>,
     object_storage: Option<ObjectStorage>,
     hdfs: Option<Hdfs>,
+    hugging_face: Option<HuggingFace>,
+    model_scope: Option<ModelScope>,
     download_client: DfdaemonDownloadClient,
 ) -> Result<Vec<DirEntry>> {
     let urls: HashSet<Url> = match include_files {
@@ -806,6 +892,8 @@ async fn get_all_entries(
             header.clone(),
             object_storage.clone(),
             hdfs.clone(),
+            hugging_face.clone(),
+            model_scope.clone(),
             download_client.clone(),
         )
         .await
@@ -859,9 +947,9 @@ async fn download(
     progress_bar: ProgressBar,
     download_client: DfdaemonDownloadClient,
 ) -> Result<()> {
-    // Only initialize object storage when the scheme is an object storage protocol.
-    let object_storage = match object_storage::Scheme::from_str(args.url.scheme()) {
-        Ok(_) => Some(ObjectStorage {
+    let url = Url::parse(args.url.as_str()).or_err(ErrorType::ParseError)?;
+    let object_storage = if object_storage::Scheme::is_supported(url.scheme()) {
+        Some(ObjectStorage {
             access_key_id: args.storage_access_key_id.clone(),
             access_key_secret: args.storage_access_key_secret.clone(),
             security_token: args.storage_security_token.clone(),
@@ -870,16 +958,36 @@ async fn download(
             endpoint: args.storage_endpoint.clone(),
             credential_path: args.storage_credential_path.clone(),
             predefined_acl: args.storage_predefined_acl.clone(),
-        }),
-        Err(_) => None,
+            insecure_skip_verify: args.storage_insecure_skip_verify,
+        })
+    } else {
+        None
     };
 
-    // Only initialize HDFS when the scheme is HDFS protocol.
-    let hdfs = match args.url.scheme() {
-        hdfs::HDFS_SCHEME => Some(Hdfs {
+    let hdfs = if url.scheme() == hdfs::SCHEME {
+        Some(Hdfs {
             delegation_token: args.hdfs_delegation_token.clone(),
-        }),
-        _ => None,
+        })
+    } else {
+        None
+    };
+
+    let hugging_face = if url.scheme() == hugging_face::SCHEME {
+        Some(HuggingFace {
+            revision: args.hf_revision.clone(),
+            token: args.hf_token.clone(),
+        })
+    } else {
+        None
+    };
+
+    let model_scope = if url.scheme() == model_scope::SCHEME {
+        Some(ModelScope {
+            revision: args.ms_revision.clone(),
+            token: args.ms_token.clone(),
+        })
+    } else {
+        None
     };
 
     // If the `filtered_query_params` is not provided, then use the default value.
@@ -924,6 +1032,8 @@ async fn download(
                 need_piece_content,
                 object_storage,
                 hdfs,
+                hugging_face,
+                model_scope,
                 force_hard_link: args.force_hard_link,
                 content_for_calculating_task_id: args.content_for_calculating_task_id,
                 remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
@@ -1115,6 +1225,8 @@ async fn get_entries(
     header: Option<Vec<String>>,
     object_storage: Option<ObjectStorage>,
     hdfs: Option<Hdfs>,
+    hugging_face: Option<HuggingFace>,
+    model_scope: Option<ModelScope>,
     download_client: DfdaemonDownloadClient,
 ) -> Result<Vec<DirEntry>> {
     info!("list task entries: {:?}", url);
@@ -1127,6 +1239,8 @@ async fn get_entries(
             certificate_chain: Vec::new(),
             object_storage,
             hdfs,
+            hugging_face,
+            model_scope,
             remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
         })
         .await
@@ -1197,6 +1311,7 @@ fn convert_args(mut args: Args) -> Args {
         path.push('/');
         args.url.set_path(&path);
     }
+
     args
 }
 
@@ -1543,6 +1658,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
             dfdaemon_download_client,
         )
         .await
@@ -1597,6 +1714,8 @@ mod tests {
 
         let entries = get_all_entries(
             &Url::parse("http://example.com/root/").unwrap(),
+            None,
+            None,
             None,
             None,
             None,
@@ -1685,6 +1804,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
             dfdaemon_download_client,
         )
         .await
@@ -1765,6 +1886,8 @@ mod tests {
 
         let entries = get_all_entries(
             &Url::parse("http://example.com/root/").unwrap(),
+            None,
+            None,
             None,
             None,
             None,

@@ -247,7 +247,9 @@ pub enum DFError {
     ExternalError(#[from] ExternalError),
 
     /// MaxDownloadFilesExceeded is the error for max download files exceeded.
-    #[error("max number of files to download exceeded: {0}")]
+    #[error(
+        "exceeded the maximum download limit of {0} files. Use --max-files to increase this limit"
+    )]
     MaxDownloadFilesExceeded(usize),
 
     /// Unsupported is the error for unsupported.
@@ -261,6 +263,11 @@ pub enum DFError {
     /// ValidationError is the error for validate.
     #[error("validate failed: {0}")]
     ValidationError(String),
+
+    /// CgroupsFSError is the error for cgroups fs.
+    #[cfg(target_os = "linux")]
+    #[error(transparent)]
+    CgroupsFSError(#[from] cgroups_rs::fs::error::Error),
 }
 
 /// SendError is the error for send.

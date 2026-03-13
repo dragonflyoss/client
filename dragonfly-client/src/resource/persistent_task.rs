@@ -18,7 +18,8 @@ use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::resource::parent_selector::PersistentParentSelector;
 use chrono::DateTime;
 use dragonfly_api::common::v2::{
-    Hdfs, ObjectStorage, PersistentPeer, PersistentTask as CommonPersistentTask, Piece, TrafficType,
+    Hdfs, HuggingFace, ModelScope, ObjectStorage, PersistentPeer,
+    PersistentTask as CommonPersistentTask, Piece, TrafficType,
 };
 use dragonfly_api::dfdaemon::{
     self,
@@ -109,9 +110,9 @@ impl PersistentTask {
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
         backend_factory: Arc<BackendFactory>,
-        download_rate_limiter: Arc<RateLimiter>,
-        upload_rate_limiter: Arc<RateLimiter>,
-        prefetch_rate_limiter: Arc<RateLimiter>,
+        download_bandwidth_limiter: Arc<RateLimiter>,
+        prefetch_bandwidth_limiter: Arc<RateLimiter>,
+        back_to_source_bandwidth_limiter: Arc<RateLimiter>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> ClientResult<Self> {
@@ -125,9 +126,9 @@ impl PersistentTask {
                 config.clone(),
                 storage.clone(),
                 backend_factory.clone(),
-                download_rate_limiter,
-                upload_rate_limiter,
-                prefetch_rate_limiter,
+                download_bandwidth_limiter,
+                prefetch_bandwidth_limiter,
+                back_to_source_bandwidth_limiter,
             )?),
             parent_selector: Arc::new(PersistentParentSelector::new(
                 config.clone(),
@@ -583,6 +584,8 @@ impl PersistentTask {
                 client_cert: None,
                 object_storage,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await
             .inspect_err(|err| {
@@ -2312,6 +2315,8 @@ impl PersistentTask {
                 in_stream_tx: Sender<AnnouncePersistentPeerRequest>,
                 object_storage: Option<ObjectStorage>,
                 hdfs: Option<Hdfs>,
+                hugging_face: Option<HuggingFace>,
+                model_scope: Option<ModelScope>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!("start to download piece {} from source", piece_id);
@@ -2327,6 +2332,8 @@ impl PersistentTask {
                         request_header,
                         object_storage,
                         hdfs,
+                        hugging_face,
+                        model_scope,
                     )
                     .await?;
 
@@ -2352,8 +2359,6 @@ impl PersistentTask {
                             task_id.as_str(),
                             metadata.length,
                             None,
-                            true,
-                            false,
                         )
                         .await
                         .inspect_err(|err| {
@@ -2444,6 +2449,8 @@ impl PersistentTask {
                         download_progress_tx,
                         in_stream_tx,
                         object_storage,
+                        None,
+                        None,
                         None,
                     )
                     .await
@@ -2703,6 +2710,8 @@ impl PersistentTask {
                 download_progress_tx: Sender<Result<DownloadPersistentTaskResponse, Status>>,
                 object_storage: Option<ObjectStorage>,
                 hdfs: Option<Hdfs>,
+                hugging_face: Option<HuggingFace>,
+                model_scope: Option<ModelScope>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 info!("start to download piece {} from source", piece_id);
@@ -2718,6 +2727,8 @@ impl PersistentTask {
                         request_header,
                         object_storage,
                         hdfs,
+                        hugging_face,
+                        model_scope,
                     )
                     .await?;
 
@@ -2810,6 +2821,8 @@ impl PersistentTask {
                         download_progress_tx,
                         object_storage,
                         None,
+                        None,
+                        None,
                     )
                     .await
                 }
@@ -2873,6 +2886,8 @@ impl PersistentTask {
                 client_cert: None,
                 object_storage,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await
             .inspect_err(|err| {
@@ -2898,6 +2913,8 @@ impl PersistentTask {
                 client_cert: None,
                 object_storage,
                 hdfs: None,
+                hugging_face: None,
+                model_scope: None,
             })
             .await
             .inspect_err(|err| {
