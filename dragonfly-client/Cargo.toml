@@ -97,7 +97,7 @@ tabled = "0.20.0"
 path-absolutize = "3.1.1"
 rand = "0.9.2"
 glob = "0.3.3"
-console-subscriber = "0.4.1"
+console-subscriber = "0.5.0"
 scopeguard = "1.2.0"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
