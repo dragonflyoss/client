@@ -26,9 +26,9 @@ use tower::{Layer, Service};
 
 /// gRPC middleware that performs BBR-based adaptive rate limiting.
 ///
-/// Wraps the [`BBR`] rate limiter to integrate with `tonic-middleware`.
-/// When the system is overloaded (CPU/memory thresholds exceeded and
-/// in-flight requests surpass the estimated capacity), incoming gRPC
+/// Wraps the [`BBR`] rate limiter to integrate with tower::Layer and tower::Service, allowing it
+/// to be easily applied to gRPC services. When the system is overloaded (CPU/memory thresholds
+/// exceeded and in-flight requests surpass the estimated capacity), incoming gRPC
 /// requests are rejected with `RESOURCE_EXHAUSTED` status.
 ///
 /// # Usage

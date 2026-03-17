@@ -78,7 +78,6 @@ fastrand.workspace = true
 opendal.workspace = true
 regex.workspace = true
 serde_regex.workspace = true
-tonic-middleware = "=0.4.1"
 tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
 tracing-panic = "0.1.2"
