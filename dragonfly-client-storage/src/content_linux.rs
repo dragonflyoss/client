@@ -201,37 +201,6 @@ impl Content {
         Ok(())
     }
 
-    /// copy_task_by_range copies the task content to the destination by range.
-    #[instrument(skip_all)]
-    async fn copy_task_by_range(&self, task_id: &str, to: &Path, range: Range) -> Result<()> {
-        // Ensure the parent directory of the destination exists.
-        if let Some(parent) = to.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).await.inspect_err(|err| {
-                    error!("failed to create directory {:?}: {}", parent, err);
-                })?;
-            }
-        }
-
-        let mut from_f = File::open(self.get_task_path(task_id)).await?;
-        from_f.seek(SeekFrom::Start(range.start)).await?;
-        let range_reader = from_f.take(range.length);
-
-        // Use a buffer to read the range.
-        let mut range_reader =
-            BufReader::with_capacity(self.config.storage.read_buffer_size, range_reader);
-
-        let mut to_f = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(to.as_os_str())
-            .await?;
-
-        io::copy(&mut range_reader, &mut to_f).await?;
-        Ok(())
-    }
-
     /// delete_task deletes the task content.
     pub async fn delete_task(&self, task_id: &str) -> Result<()> {
         info!("delete task content: {}", task_id);
