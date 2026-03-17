@@ -56,6 +56,7 @@ use dragonfly_client_util::{
     digest::{is_blob_url, verify_file_digest, Digest},
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
     id_generator::{PersistentTaskIDParameter, TaskIDParameter},
+    ratelimiter::bbr::BBR,
     shutdown,
     sysinfo::SystemMonitor,
 };
@@ -84,6 +85,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
+use super::middleware::BBRLayer;
 
 /// gRPC server for upload operations.
 pub struct DfdaemonUploadServer {
@@ -105,6 +107,9 @@ pub struct DfdaemonUploadServer {
     /// System interface for monitoring.
     system_monitor: Arc<SystemMonitor>,
 
+    /// BBR rate limiter middleware for adaptive rate limiting based on system load.
+    bbr: Arc<BBR>,
+
     /// shutdown is used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
 
@@ -123,6 +128,7 @@ impl DfdaemonUploadServer {
         persistent_task: Arc<persistent_task::PersistentTask>,
         persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
         system_monitor: Arc<SystemMonitor>,
+        bbr: Arc<BBR>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -133,6 +139,7 @@ impl DfdaemonUploadServer {
             persistent_task,
             persistent_cache_task,
             system_monitor,
+            bbr,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -176,6 +183,7 @@ impl DfdaemonUploadServer {
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
+            .layer(BBRLayer::new(self.bbr.clone()))
             .layer(
                 ServiceBuilder::new()
                     .map_err(|err: Box<dyn std::error::Error + Send + Sync>| {

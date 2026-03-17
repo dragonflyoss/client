@@ -19,6 +19,7 @@ tracing.workspace = true
 tokio-util.workspace = true
 tonic.workspace = true
 futures.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 url.workspace = true
 regex.workspace = true
