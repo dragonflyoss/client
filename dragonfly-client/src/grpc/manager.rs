@@ -25,7 +25,8 @@ use dragonfly_client_core::{
     Error, Result,
 };
 use std::sync::Arc;
-use tonic::{service::interceptor::InterceptedService, transport::Channel};
+use tonic::service::interceptor::InterceptedService;
+use tonic::transport::Channel;
 use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{error, instrument};
 use url::Url;

@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Default bucket count for the rolling window.
 #[inline]
@@ -120,7 +120,6 @@ pub struct BBRConfig {
     pub shed_cooldown: Duration,
 
     /// How often the background task collects CPU/memory usage metrics.
-    #[serde(default = "default_collect_interval")]
     pub collect_interval: Duration,
 }
 
@@ -237,6 +236,7 @@ impl BBR {
     /// in-flight count exceeds the estimated capacity limit.
     async fn should_shed(&self) -> bool {
         if self.is_in_cooldown() {
+            debug!("in cooldown period after shedding, continuing to shed requests");
             return true;
         }
 

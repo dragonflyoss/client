@@ -408,7 +408,7 @@ pub struct Server {
     /// estimates capacity via `max_pass × min_rt × bucket_count / 1000` and sheds
     /// incoming requests whose in-flight count exceeds this estimate. A cooldown
     /// period prevents rapid oscillation between shedding and accepting.
-    pub load_shedding: BBRConfig,
+    pub adaptive_rate_limit: BBRConfig,
 }
 
 /// Server implements Default.
@@ -417,7 +417,7 @@ impl Default for Server {
         Server {
             plugin_dir: default_dfdaemon_plugin_dir(),
             cache_dir: default_dfdaemon_cache_dir(),
-            load_shedding: BBRConfig::default(),
+            adaptive_rate_limit: BBRConfig::default(),
         }
     }
 }
