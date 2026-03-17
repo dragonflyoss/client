@@ -33,7 +33,9 @@ use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::{dfdaemon, VersionValueParser};
 use dragonfly_client_metric::Metrics;
 use dragonfly_client_storage::{server::quic::QUICServer, server::tcp::TCPServer, Storage};
-use dragonfly_client_util::{id_generator::IDGenerator, shutdown, sysinfo::SystemMonitor};
+use dragonfly_client_util::{
+    id_generator::IDGenerator, ratelimiter::bbr::BBR, shutdown, sysinfo::SystemMonitor,
+};
 use leaky_bucket::RateLimiter;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -377,6 +379,9 @@ async fn main() -> Result<(), anyhow::Error> {
         error!("initialize scheduler announcer failed: {}", err);
     })?;
 
+    // Initialize BBR rate limiter.
+    let bbr = Arc::new(BBR::new(config.server.adaptive_rate_limit.clone()).await);
+
     // Initialize upload grpc server.
     let mut dfdaemon_upload_grpc = DfdaemonUploadServer::new(
         config.clone(),
@@ -385,6 +390,7 @@ async fn main() -> Result<(), anyhow::Error> {
         persistent_task.clone(),
         persistent_cache_task.clone(),
         system_monitor.clone(),
+        bbr.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
@@ -397,6 +403,7 @@ async fn main() -> Result<(), anyhow::Error> {
         task.clone(),
         persistent_task.clone(),
         persistent_cache_task.clone(),
+        bbr.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );

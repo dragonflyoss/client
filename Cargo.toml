@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.2.15"
+version = "1.2.16"
 authors = ["The Dragonfly Developers"]
 homepage = "https://d7y.io/"
 repository = "https://github.com/dragonflyoss/client.git"
@@ -23,15 +23,15 @@ readme = "README.md"
 edition = "2021"
 
 [workspace.dependencies]
-dragonfly-client = { path = "dragonfly-client", version = "1.2.15" }
-dragonfly-client-core = { path = "dragonfly-client-core", version = "1.2.15" }
-dragonfly-client-config = { path = "dragonfly-client-config", version = "1.2.15" }
-dragonfly-client-storage = { path = "dragonfly-client-storage", version = "1.2.15" }
-dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.2.15" }
-dragonfly-client-metric = { path = "dragonfly-client-metric", version = "1.2.15" }
-dragonfly-client-util = { path = "dragonfly-client-util", version = "1.2.15" }
-dragonfly-client-init = { path = "dragonfly-client-init", version = "1.2.15" }
-dragonfly-api = "=2.2.25"
+dragonfly-client = { path = "dragonfly-client", version = "1.2.16" }
+dragonfly-client-core = { path = "dragonfly-client-core", version = "1.2.16" }
+dragonfly-client-config = { path = "dragonfly-client-config", version = "1.2.16" }
+dragonfly-client-storage = { path = "dragonfly-client-storage", version = "1.2.16" }
+dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.2.16" }
+dragonfly-client-metric = { path = "dragonfly-client-metric", version = "1.2.16" }
+dragonfly-client-util = { path = "dragonfly-client-util", version = "1.2.16" }
+dragonfly-client-init = { path = "dragonfly-client-init", version = "1.2.16" }
+dragonfly-api = "=2.2.26"
 thiserror = "2.0"
 futures = "0.3.32"
 reqwest = { version = "0.12.28", features = [
@@ -68,8 +68,8 @@ rocksdb = "0.24.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 http = "1"
-tonic = { version = "0.14.3", features = ["tls-ring"] }
-tonic-reflection = "0.14.3"
+tonic = { version = "=0.14.2", features = ["tls-ring"] }
+tonic-reflection = "=0.14.2"
 tokio = { version = "1.49.0", features = ["full", "tracing"] }
 tokio-util = { version = "0.7.18", features = ["full"] }
 tokio-stream = "0.1.18"
@@ -112,7 +112,7 @@ leaky-bucket = "1.1.2"
 vortex-protocol = "0.1.5"
 dashmap = "6.1.0"
 hostname = "^0.4"
-tonic-health = "0.14.3"
+tonic-health = "=0.14.2"
 hashring = "0.3.6"
 reqwest-tracing = "0.5"
 mocktail = { git = "https://github.com/IBM/mocktail", rev = "860e75e171a8eb818083813dbeed4401d1a40b3b" }

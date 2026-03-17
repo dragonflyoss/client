@@ -30,6 +30,7 @@ pub mod dfdaemon_upload;
 pub mod health;
 pub mod interceptor;
 pub mod manager;
+pub mod middleware;
 pub mod scheduler;
 
 /// CONNECT_TIMEOUT is the timeout for GRPC connection.

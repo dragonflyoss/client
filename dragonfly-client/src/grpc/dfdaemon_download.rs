@@ -59,6 +59,7 @@ use dragonfly_client_util::{
     digest::{is_blob_url, verify_file_digest, Digest},
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
     id_generator::{PersistentCacheTaskIDParameter, PersistentTaskIDParameter, TaskIDParameter},
+    ratelimiter::bbr::BBR,
     shutdown,
 };
 use hyper_util::rt::TokioIo;
@@ -89,6 +90,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
+use super::middleware::BBRLayer;
 
 /// gRPC Unix server for download operations.
 pub struct DfdaemonDownloadServer {
@@ -110,6 +112,9 @@ pub struct DfdaemonDownloadServer {
     /// Persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 
+    /// BBR rate limiter middleware for adaptive rate limiting based on system load.
+    bbr: Arc<BBR>,
+
     /// Used to shut down the gRPC server.
     shutdown: shutdown::Shutdown,
 
@@ -128,6 +133,7 @@ impl DfdaemonDownloadServer {
         task: Arc<task::Task>,
         persistent_task: Arc<persistent_task::PersistentTask>,
         persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
+        bbr: Arc<BBR>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -138,6 +144,7 @@ impl DfdaemonDownloadServer {
             task,
             persistent_task,
             persistent_cache_task,
+            bbr,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -190,6 +197,7 @@ impl DfdaemonDownloadServer {
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
             .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
             .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
+            .layer(BBRLayer::new(self.bbr.clone()))
             .layer(
                 ServiceBuilder::new()
                     .map_err(|err: Box<dyn std::error::Error + Send + Sync>| {
