@@ -26,8 +26,7 @@ use dragonfly_client_storage::metadata;
 use dragonfly_client_util::net::format_url;
 use std::net::IpAddr;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
@@ -127,7 +126,10 @@ impl PieceCollector {
         let config = self.config.clone();
         let host_id = self.host_id.clone();
         let task_id = self.task_id.clone();
-        let parents = self.parents.clone();
+        let parents = Arc::new(DashMap::with_capacity(self.parents.len()));
+        for parent in self.parents.iter().cloned() {
+            parents.insert(parent.id.clone(), parent);
+        }
         let interested_pieces = self.interested_pieces.clone();
         let collected_pieces = self.collected_pieces.clone();
         let collected_piece_timeout = self.config.download.collected_piece_timeout;
@@ -180,29 +182,19 @@ impl PieceCollector {
         config: Arc<Config>,
         host_id: &str,
         task_id: &str,
-        parents: Vec<CollectedParent>,
+        parents: Arc<DashMap<String, CollectedParent>>,
         interested_pieces: Vec<metadata::Piece>,
         collected_pieces: Arc<DashMap<u32, CollectedPiece>>,
         collected_piece_tx: Sender<CollectedPiece>,
         collected_piece_timeout: Duration,
     ) -> Result<()> {
-        // Only require multiple parents to trigger download when peer have at least two parents.
-        let required_parent_count = Arc::new(AtomicU8::new(if parents.len() > 1 { 2 } else { 1 }));
-        let last_piece_sent_at = Arc::new(Mutex::new(tokio::time::Instant::now()));
-        let stop_stall_detector = Arc::new(AtomicBool::new(false));
-
-        let stall_detector_handle = piece_collection_stall_detector(
-            collected_piece_timeout,
-            collected_pieces.clone(),
-            collected_piece_tx.clone(),
-            required_parent_count.clone(),
-            last_piece_sent_at.clone(),
-            stop_stall_detector.clone(),
-        );
-
         // Create a task to collect pieces from peers.
         let mut join_set = JoinSet::new();
-        for parent in parents.iter() {
+        for parent in parents
+            .iter()
+            .map(|parent| parent.value().clone())
+            .collect::<Vec<CollectedParent>>()
+        {
             #[allow(clippy::too_many_arguments)]
             async fn sync_pieces(
                 config: Arc<Config>,
@@ -210,11 +202,10 @@ impl PieceCollector {
                 task_id: String,
                 mut parent: CollectedParent,
                 interested_pieces: Vec<metadata::Piece>,
+                parents: Arc<DashMap<String, CollectedParent>>,
                 collected_pieces: Arc<DashMap<u32, CollectedPiece>>,
                 collected_piece_tx: Sender<CollectedPiece>,
                 collected_piece_timeout: Duration,
-                required_parent_count: Arc<AtomicU8>,
-                last_piece_sent_at: Arc<Mutex<tokio::time::Instant>>,
             ) -> Result<CollectedParent> {
                 info!("sync pieces from parent {}", parent.id);
 
@@ -266,9 +257,7 @@ impl PieceCollector {
                         parent.download_tcp_port = message.tcp_port;
                         parent.download_quic_port = message.quic_port;
                         piece.parents.push(parent.clone());
-                        if piece.parents.len()
-                            < required_parent_count.load(Ordering::SeqCst) as usize
-                        {
+                        if piece.parents.len() < parents.len() {
                             continue;
                         }
                     } else {
@@ -295,28 +284,37 @@ impl PieceCollector {
                     collected_piece_tx.send(piece).await.inspect_err(|err| {
                         error!("send CollectedPiece failed: {}", err);
                     })?;
-
-                    if let Ok(mut last_piece_sent_at) = last_piece_sent_at.lock() {
-                        *last_piece_sent_at = tokio::time::Instant::now();
-                    }
                 }
 
                 Ok(parent)
             }
 
+            let parent_id = parent.id.clone();
+            let config = config.clone();
+            let host_id = host_id.to_string();
+            let task_id = task_id.to_string();
+            let interested_pieces = interested_pieces.clone();
+            let parents_for_sync = parents.clone();
+            let collected_pieces_for_sync = collected_pieces.clone();
+            let collected_piece_tx_for_sync = collected_piece_tx.clone();
             join_set.spawn(
-                sync_pieces(
-                    config.clone(),
-                    host_id.to_string(),
-                    task_id.to_string(),
-                    parent.clone(),
-                    interested_pieces.clone(),
-                    collected_pieces.clone(),
-                    collected_piece_tx.clone(),
-                    collected_piece_timeout,
-                    required_parent_count.clone(),
-                    last_piece_sent_at.clone(),
-                )
+                async move {
+                    (
+                        parent_id,
+                        sync_pieces(
+                            config,
+                            host_id,
+                            task_id,
+                            parent,
+                            interested_pieces,
+                            parents_for_sync,
+                            collected_pieces_for_sync,
+                            collected_piece_tx_for_sync,
+                            collected_piece_timeout,
+                        )
+                        .await,
+                    )
+                }
                 .in_current_span(),
             );
         }
@@ -324,10 +322,9 @@ impl PieceCollector {
         // Wait for all tasks to finish.
         while let Some(message) = join_set.join_next().await {
             match message {
-                Ok(Ok(peer)) => {
-                    debug!("peer {} sync pieces finished", peer.id);
-
-                    if join_set.is_empty() && !collected_pieces.is_empty() {
+                Ok((parent_id, message)) => {
+                    parents.remove(&parent_id);
+                    if parents.is_empty() {
                         for number in collected_pieces
                             .iter()
                             .filter(|entry| !entry.value().parents.is_empty())
@@ -342,89 +339,27 @@ impl PieceCollector {
                         }
                     }
 
+                    match message {
+                        Ok(_) => {
+                            debug!("peer {} sync pieces finished", parent_id);
+                        }
+                        Err(err) => {
+                            error!("sync pieces from parent {} failed: {}", parent_id, err);
+                        }
+                    }
+
                     // If all pieces are collected, abort all tasks.
                     if collected_pieces.is_empty() {
                         info!("all pieces are collected, abort all tasks");
                         join_set.shutdown().await;
                     }
                 }
-                Ok(Err(err)) => error!("sync pieces failed: {}", err),
                 Err(err) => error!("task join error: {}", err),
             }
         }
 
-        stop_stall_detector.store(true, Ordering::SeqCst);
-        if let Some(stall_detector_handle) = stall_detector_handle {
-            stall_detector_handle.abort();
-        }
-
         Ok(())
     }
-}
-
-fn piece_collection_stall_detector(
-    collected_piece_timeout: Duration,
-    collected_pieces: Arc<DashMap<u32, CollectedPiece>>,
-    collected_piece_tx: Sender<CollectedPiece>,
-    required_parent_count: Arc<AtomicU8>,
-    last_piece_sent_at: Arc<Mutex<tokio::time::Instant>>,
-    stop_stall_detector: Arc<AtomicBool>,
-) -> Option<tokio::task::JoinHandle<()>> {
-    if required_parent_count.load(Ordering::SeqCst) <= 1 {
-        return None;
-    }
-
-    Some(tokio::spawn(
-        async move {
-            loop {
-                tokio::time::sleep(collected_piece_timeout).await;
-                if stop_stall_detector.load(Ordering::SeqCst) {
-                    return;
-                }
-
-                if required_parent_count.load(Ordering::SeqCst) == 1 {
-                    return;
-                }
-
-                let elapsed = last_piece_sent_at
-                    .lock()
-                    .map(|last_piece_sent_at| last_piece_sent_at.elapsed())
-                    .unwrap_or_default();
-                if elapsed < collected_piece_timeout {
-                    continue;
-                }
-
-                info!(
-                    "piece collection stalled for {:?}, downgrade required parent count to 1",
-                    collected_piece_timeout
-                );
-                required_parent_count.store(1, Ordering::SeqCst);
-
-                for number in collected_pieces
-                    .iter()
-                    .filter(|entry| !entry.value().parents.is_empty())
-                    .map(|entry| *entry.key())
-                    .collect::<Vec<u32>>()
-                {
-                    if let Some((_, piece)) = collected_pieces.remove(&number) {
-                        match collected_piece_tx.send(piece).await {
-                            Ok(_) => {
-                                if let Ok(mut last_piece_sent_at) = last_piece_sent_at.lock() {
-                                    *last_piece_sent_at = tokio::time::Instant::now();
-                                }
-                            }
-                            Err(err) => {
-                                error!("send CollectedPiece failed: {}", err);
-                            }
-                        }
-                    }
-                }
-
-                return;
-            }
-        }
-        .in_current_span(),
-    ))
 }
 
 /// PersistentPieceCollector is used to collect persistent pieces from peers.
