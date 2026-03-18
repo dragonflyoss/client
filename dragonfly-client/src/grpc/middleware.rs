@@ -23,7 +23,6 @@ use tonic::body::Body;
 use tonic::codegen::http::{Request, Response};
 use tonic::Status;
 use tower::{Layer, Service};
-use tracing::info;
 
 /// gRPC middleware that performs BBR-based adaptive rate limiting.
 ///
