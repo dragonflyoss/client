@@ -79,6 +79,7 @@ use tonic::{
     transport::{Channel, Endpoint, Server, Uri},
     Code, Request, Response, Status,
 };
+use tower::util::option_layer;
 use tower::{
     buffer::BufferLayer,
     limit::rate::RateLimitLayer,
@@ -113,7 +114,7 @@ pub struct DfdaemonDownloadServer {
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 
     /// BBR rate limiter middleware for adaptive rate limiting based on system load.
-    bbr: Arc<BBR>,
+    bbr: Option<Arc<BBR>>,
 
     /// Used to shut down the gRPC server.
     shutdown: shutdown::Shutdown,
@@ -133,7 +134,7 @@ impl DfdaemonDownloadServer {
         task: Arc<task::Task>,
         persistent_task: Arc<persistent_task::PersistentTask>,
         persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
-        bbr: Arc<BBR>,
+        bbr: Option<Arc<BBR>>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -197,7 +198,7 @@ impl DfdaemonDownloadServer {
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
             .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
             .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
-            .layer(BBRLayer::new(self.bbr.clone()))
+            .layer(option_layer(self.bbr.clone().map(BBRLayer::new)))
             .layer(
                 ServiceBuilder::new()
                     .map_err(|err: Box<dyn std::error::Error + Send + Sync>| {

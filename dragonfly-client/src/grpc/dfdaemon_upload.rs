@@ -74,6 +74,7 @@ use tonic::{
     transport::{Channel, Server},
     Code, Request, Response, Status,
 };
+use tower::util::option_layer;
 use tower::{
     buffer::BufferLayer,
     limit::rate::RateLimitLayer,
@@ -108,7 +109,7 @@ pub struct DfdaemonUploadServer {
     system_monitor: Arc<SystemMonitor>,
 
     /// BBR rate limiter middleware for adaptive rate limiting based on system load.
-    bbr: Arc<BBR>,
+    bbr: Option<Arc<BBR>>,
 
     /// shutdown is used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
@@ -128,7 +129,7 @@ impl DfdaemonUploadServer {
         persistent_task: Arc<persistent_task::PersistentTask>,
         persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
         system_monitor: Arc<SystemMonitor>,
-        bbr: Arc<BBR>,
+        bbr: Option<Arc<BBR>>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -183,7 +184,7 @@ impl DfdaemonUploadServer {
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
-            .layer(BBRLayer::new(self.bbr.clone()))
+            .layer(option_layer(self.bbr.clone().map(BBRLayer::new)))
             .layer(
                 ServiceBuilder::new()
                     .map_err(|err: Box<dyn std::error::Error + Send + Sync>| {

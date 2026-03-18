@@ -380,7 +380,11 @@ async fn main() -> Result<(), anyhow::Error> {
     })?;
 
     // Initialize BBR rate limiter.
-    let bbr = Arc::new(BBR::new(config.server.adaptive_rate_limit.clone()).await);
+    let bbr = if let Some(ref adaptive_rate_limit) = config.server.adaptive_rate_limit {
+        Some(Arc::new(BBR::new(adaptive_rate_limit.clone()).await))
+    } else {
+        None
+    };
 
     // Initialize upload grpc server.
     let mut dfdaemon_upload_grpc = DfdaemonUploadServer::new(
