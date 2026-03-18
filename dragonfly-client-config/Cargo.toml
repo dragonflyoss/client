@@ -33,6 +33,6 @@ rcgen.workspace = true
 reqwest.workspace = true
 hostname.workspace = true
 lazy_static.workspace = true
+humantime-serde.workspace = true
 home = "0.5.11"
-humantime-serde = "1.1.1"
 http-serde = "2.1.1"

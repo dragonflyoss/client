@@ -101,7 +101,7 @@ pub struct BBRConfig {
     pub bucket_count: u32,
 
     /// Duration of each time bucket (e.g., 200ms).
-    #[serde(default = "default_bucket_interval")]
+    #[serde(default = "default_bucket_interval", with = "humantime_serde")]
     pub bucket_interval: Duration,
 
     /// CPU usage percentage threshold (0–100) above which the system is
@@ -116,10 +116,11 @@ pub struct BBRConfig {
 
     /// Duration to continue shedding incoming requests after the first drop
     /// event, preventing rapid oscillation between shedding and accepting.
-    #[serde(default = "default_shed_cooldown")]
+    #[serde(default = "default_shed_cooldown", with = "humantime_serde")]
     pub shed_cooldown: Duration,
 
     /// How often the background task collects CPU/memory usage metrics.
+    #[serde(default = "default_collect_interval", with = "humantime_serde")]
     pub collect_interval: Duration,
 }
 

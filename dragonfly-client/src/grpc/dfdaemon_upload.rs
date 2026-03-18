@@ -189,7 +189,7 @@ impl DfdaemonUploadServer {
                 ServiceBuilder::new()
                     .map_err(|err: Box<dyn std::error::Error + Send + Sync>| {
                         if err.is::<Overloaded>() {
-                            Status::resource_exhausted("Server is overloaded, please retry later")
+                            Status::resource_exhausted("server is overloaded, please retry later")
                         } else {
                             Status::internal(err.to_string())
                         }
