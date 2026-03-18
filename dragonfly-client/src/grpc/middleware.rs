@@ -111,8 +111,8 @@ where
     /// tracking and response time measurement.
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         let bbr = self.bbr.clone();
-        let mut inner = self.inner.clone();
-
+        let inner_clone = self.inner.clone();
+        let mut inner = std::mem::replace(&mut self.inner, inner_clone);
         Box::pin(async move {
             // Try to acquire a BBR permit. If the system is overloaded,
             // the permit will be None and we reject the request.
