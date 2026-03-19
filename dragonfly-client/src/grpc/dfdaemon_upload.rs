@@ -1177,8 +1177,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         }))
                         .await
                     {
-                        error!(
-                            "connection broken from remote host {}, err: {}",
+                        debug!(
+                            "connection broken from remote host {}, because {}",
                             remote_host_id, err
                         );
 
