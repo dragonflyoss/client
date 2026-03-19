@@ -129,7 +129,7 @@ impl SchedulerAnnouncer {
 
         // Get the cpu information.
         let cpu_stats = self.system_monitor.cpu.get_stats();
-        let process_cpu_stats = self.system_monitor.cpu.get_process_stats(pid);
+        let process_cpu_stats = self.system_monitor.cpu.get_process_stats(pid).await;
         let cpu = Cpu {
             logical_count: cpu_stats.logical_core_count,
             physical_count: cpu_stats.physical_core_count,
