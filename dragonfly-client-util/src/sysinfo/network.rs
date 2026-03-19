@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use sysinfo::Networks;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// NetworkStats represents the network statistics for a specific interface.
 #[derive(Debug, Clone, Default)]
@@ -153,6 +153,11 @@ impl Network {
         let tx_bandwidth = (Self::bytes_to_bits(network_stats.transmitted()) as f64
             / Self::DEFAULT_NETWORK_REFRESH_INTERVAL.as_secs_f64())
         .round() as u64;
+
+        debug!(
+            "network interface {} max receive bandwidth: {} bps, receive bandwidth: {} bps, max transmit bandwidth: {} bps, transmit bandwidth: {} bps",
+            self.interface_name, self.bandwidth, rx_bandwidth, self.bandwidth, tx_bandwidth
+        );
 
         NetworkStats {
             max_rx_bandwidth: self.bandwidth,

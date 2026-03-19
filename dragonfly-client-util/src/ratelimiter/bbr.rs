@@ -408,11 +408,19 @@ impl OverloadCollector {
                 Some(stats) => stats.used_percent.round() as u8,
                 None => {
                     warn!("container detected but cgroup CPU stats unavailable, falling back to process stats");
-                    self.cpu.get_process_stats(self.pid).used_percent.round() as u8
+                    self.cpu
+                        .get_process_stats(self.pid)
+                        .await
+                        .used_percent
+                        .round() as u8
                 }
             }
         } else {
-            self.cpu.get_process_stats(self.pid).used_percent.round() as u8
+            self.cpu
+                .get_process_stats(self.pid)
+                .await
+                .used_percent
+                .round() as u8
         };
 
         self.cpu_used_percent.store(used_percent, Ordering::Relaxed);

@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 use tokio::sync::Mutex;
+use tracing::debug;
 
 /// DiskStats represents the disk statistics for a specific path.
 #[derive(Debug, Clone, Default)]
@@ -90,6 +91,11 @@ impl Disk {
         let usage_space = total_space - available_space;
         let used_percent = (usage_space as f64 / (total_space) as f64) * 100.0;
 
+        debug!(
+            "disk total space: {} bytes, available space: {} bytes, usage space: {} bytes, used percent: {}%",
+            total_space, available_space, usage_space, used_percent
+        );
+
         Ok(DiskStats {
             total: total_space,
             free: available_space,
@@ -127,10 +133,18 @@ impl Disk {
         );
 
         let disk_usage = sys.process(Pid::from_u32(pid)).unwrap().disk_usage();
+        let write_bandwidth =
+            disk_usage.written_bytes / Self::DEFAULT_DISK_REFRESH_INTERVAL.as_secs();
+        let read_bandwidth = disk_usage.read_bytes / Self::DEFAULT_DISK_REFRESH_INTERVAL.as_secs();
+
+        debug!(
+            "process {} disk write bandwidth: {} bytes/s, read bandwidth: {} bytes/s",
+            pid, write_bandwidth, read_bandwidth
+        );
+
         ProcessDiskStats {
-            write_bandwidth: disk_usage.written_bytes
-                / Self::DEFAULT_DISK_REFRESH_INTERVAL.as_secs(),
-            read_bandwidth: disk_usage.read_bytes / Self::DEFAULT_DISK_REFRESH_INTERVAL.as_secs(),
+            write_bandwidth,
+            read_bandwidth,
         }
     }
 }

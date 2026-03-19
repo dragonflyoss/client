@@ -120,7 +120,7 @@ where
                 Some(guard) => guard,
                 None => {
                     return Ok(Status::resource_exhausted(
-                        "server is overloaded, please retry later",
+                        "server is overloaded: CPU/memory thresholds are exceeded, please retry later",
                     )
                     .into_http());
                 }

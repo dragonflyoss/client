@@ -34,7 +34,8 @@ use dragonfly_client_config::{dfdaemon, VersionValueParser};
 use dragonfly_client_metric::Metrics;
 use dragonfly_client_storage::{server::quic::QUICServer, server::tcp::TCPServer, Storage};
 use dragonfly_client_util::{
-    id_generator::IDGenerator, ratelimiter::bbr::BBR, shutdown, sysinfo::SystemMonitor,
+    container::is_running_in_container, id_generator::IDGenerator, ratelimiter::bbr::BBR, shutdown,
+    sysinfo::SystemMonitor,
 };
 use leaky_bucket::RateLimiter;
 use std::net::SocketAddr;
@@ -422,8 +423,12 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     );
 
-    // Log dfdaemon started pid.
-    info!("dfdaemon started at pid {}", std::process::id());
+    // Log dfdaemon started pid and whether it is running in container.
+    info!(
+        "dfdaemon started at pid {}, containerized: {}",
+        std::process::id(),
+        is_running_in_container()
+    );
 
     // grpc server started barrier.
     let grpc_server_started_barrier = Arc::new(Barrier::new(3));
