@@ -155,7 +155,7 @@ impl Memory {
                         };
 
                         debug!(
-                            "process {} memory limit: {} bytes, memory usage: {} bytes, used percent: {}%",
+                            "process {} cgroup memory limit: {} bytes, memory usage: {} bytes, used percent: {}%",
                             pid,
                             memory_stats.limit_in_bytes,
                             memory_stats.usage_in_bytes,

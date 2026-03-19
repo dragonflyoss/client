@@ -179,7 +179,7 @@ impl CPU {
                         .await?;
 
                     debug!(
-                        "process {} cpu period: {} us, quota: {} us, used percent: {}%",
+                        "process {} cgroup cpu period: {} us, quota: {} us, used percent: {}%",
                         pid, period, quota, used_percent
                     );
 
