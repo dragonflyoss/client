@@ -15,7 +15,7 @@
  */
 
 use crate::grpc::scheduler::SchedulerClient;
-use dragonfly_api::common::v2::{Build, Cpu, Disk, Host, Memory, Network};
+use dragonfly_api::common::v2::{Build, CgroupCpu, CgroupMemory, Cpu, Disk, Host, Memory, Network};
 use dragonfly_api::scheduler::v2::{AnnounceHostRequest, DeleteHostRequest};
 use dragonfly_client_config::{
     dfdaemon::{Config, HostType},
@@ -23,7 +23,7 @@ use dragonfly_client_config::{
 };
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::Result;
-use dragonfly_client_util::{shutdown, sysinfo::SystemMonitor};
+use dragonfly_client_util::{container::is_running_in_container, shutdown, sysinfo::SystemMonitor};
 use std::env;
 use std::sync::Arc;
 use sysinfo::System;
@@ -43,6 +43,9 @@ pub struct SchedulerAnnouncer {
 
     /// System interface for monitoring.
     system_monitor: Arc<SystemMonitor>,
+
+    /// Whether the dfdaemon is running in a container environment.
+    is_running_in_container: bool,
 
     /// Used to shut down the announcer.
     shutdown: shutdown::Shutdown,
@@ -67,6 +70,7 @@ impl SchedulerAnnouncer {
             host_id,
             scheduler_client,
             system_monitor,
+            is_running_in_container: is_running_in_container(),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         };
@@ -128,23 +132,37 @@ impl SchedulerAnnouncer {
         let pid = std::process::id();
 
         // Get the cpu information.
-        let cpu_stats = self.system_monitor.cpu.get_stats();
+        let cpu_stats = self.system_monitor.cpu.get_stats().await;
         let process_cpu_stats = self.system_monitor.cpu.get_process_stats(pid).await;
-        let cpu = Cpu {
+        let mut cpu = Cpu {
             logical_count: cpu_stats.logical_core_count,
             physical_count: cpu_stats.physical_core_count,
             percent: cpu_stats.used_percent,
             process_percent: process_cpu_stats.used_percent,
+            cgroup: None,
 
             // TODO: Get the cpu times.
             times: None,
-            cgroup: None,
         };
+
+        // Get the cgroup cpu information if running in a container environment.
+        if self.is_running_in_container {
+            cpu.cgroup = self
+                .system_monitor
+                .cpu
+                .get_cgroup_stats(pid)
+                .await
+                .map(|stats| CgroupCpu {
+                    quota: stats.quota,
+                    period: stats.period,
+                    used_percent: stats.used_percent,
+                });
+        }
 
         // Get the memory information.
         let memory_stats = self.system_monitor.memory.get_stats();
         let process_memory_stats = self.system_monitor.memory.get_process_stats(pid);
-        let memory = Memory {
+        let mut memory = Memory {
             total: memory_stats.total,
             free: memory_stats.free,
             available: memory_stats.available,
@@ -153,6 +171,19 @@ impl SchedulerAnnouncer {
             process_used_percent: process_memory_stats.used_percent,
             cgroup: None,
         };
+
+        // Get the cgroup memory information if running in a container environment.
+        if self.is_running_in_container {
+            memory.cgroup = self
+                .system_monitor
+                .memory
+                .get_cgroup_stats(pid)
+                .map(|stats| CgroupMemory {
+                    limit: stats.limit,
+                    usage: stats.usage,
+                    used_percent: stats.used_percent,
+                });
+        }
 
         // Wait for getting the network data.
         let network_stats = self.system_monitor.network.get_stats().await;

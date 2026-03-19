@@ -91,13 +91,19 @@ impl CPU {
     ///
     /// # Returns
     /// CPUStats containing physical core count and global CPU usage percentage.
-    pub fn get_stats(&self) -> CPUStats {
-        let sys = System::new_with_specifics(
+    pub async fn get_stats(&self) -> CPUStats {
+        // Lock the mutex to ensure exclusive access to cpu stats.
+        let _guard = self.mutex.lock().await;
+
+        let mut sys = System::new_with_specifics(
             RefreshKind::new().with_cpu(CpuRefreshKind::new().with_cpu_usage()),
         );
+        sys.refresh_cpu_usage();
+        sleep(Self::DEFAULT_CPU_REFRESH_INTERVAL).await;
+        sys.refresh_cpu_usage();
 
         debug!(
-            "physical core count: {}, logical core count: {}, global cpu usage: {}",
+            "physical core count: {}, logical core count: {}, global cpu usage: {}%",
             self.physical_core_count,
             self.logical_core_count,
             sys.global_cpu_usage()
