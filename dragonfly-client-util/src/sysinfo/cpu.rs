@@ -16,8 +16,10 @@
 
 use std::sync::Arc;
 use std::time::Duration;
-use sysinfo::{CpuRefreshKind, Pid, ProcessRefreshKind, RefreshKind, System};
+use sysinfo::{CpuRefreshKind, Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 use tokio::sync::Mutex;
+use tokio::time::sleep;
+use tracing::debug;
 
 /// Represents system-wide CPU statistics.
 #[derive(Debug, Clone, Default)]
@@ -55,6 +57,12 @@ pub struct CgroupCPUStats {
 /// CPU represents a cpu interface with its information.
 #[derive(Debug, Clone, Default)]
 pub struct CPU {
+    /// Number of physical CPU cores available on the system.
+    physical_core_count: u32,
+
+    /// Number of logical CPU cores (including hyperthreads) available on the system.
+    logical_core_count: u32,
+
     /// Mutex to protect concurrent access to cgroup CPU statistics.
     mutex: Arc<Mutex<()>>,
 }
@@ -73,6 +81,8 @@ impl CPU {
     /// Creates a new CPU instance.
     pub fn new() -> Self {
         Self {
+            physical_core_count: num_cpus::get_physical() as u32,
+            logical_core_count: num_cpus::get() as u32,
             mutex: Arc::new(Mutex::new(())),
         }
     }
@@ -81,14 +91,27 @@ impl CPU {
     ///
     /// # Returns
     /// CPUStats containing physical core count and global CPU usage percentage.
-    pub fn get_stats(&self) -> CPUStats {
-        let sys = System::new_with_specifics(
+    pub async fn get_stats(&self) -> CPUStats {
+        // Lock the mutex to ensure exclusive access to cpu stats.
+        let _guard = self.mutex.lock().await;
+
+        let mut sys = System::new_with_specifics(
             RefreshKind::new().with_cpu(CpuRefreshKind::new().with_cpu_usage()),
+        );
+        sys.refresh_cpu_usage();
+        sleep(Self::DEFAULT_CPU_REFRESH_INTERVAL).await;
+        sys.refresh_cpu_usage();
+
+        debug!(
+            "physical core count: {}, logical core count: {}, global cpu usage: {}%",
+            self.physical_core_count,
+            self.logical_core_count,
+            sys.global_cpu_usage()
         );
 
         CPUStats {
-            physical_core_count: num_cpus::get_physical() as u32,
-            logical_core_count: num_cpus::get() as u32,
+            physical_core_count: self.physical_core_count,
+            logical_core_count: self.logical_core_count,
             used_percent: sys.global_cpu_usage() as f64,
         }
     }
@@ -97,13 +120,27 @@ impl CPU {
     ///
     /// # Returns
     /// ProcessCPUStats containing the current process's CPU usage.
-    pub fn get_process_stats(&self, pid: u32) -> ProcessCPUStats {
-        let sys = System::new_with_specifics(
+    pub async fn get_process_stats(&self, pid: u32) -> ProcessCPUStats {
+        // Lock the mutex to ensure exclusive access to cpu stats.
+        let _guard = self.mutex.lock().await;
+
+        let mut sys = System::new_with_specifics(
             RefreshKind::new().with_processes(ProcessRefreshKind::new().with_cpu()),
+        );
+        sys.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), false);
+        sleep(Self::DEFAULT_CPU_REFRESH_INTERVAL).await;
+        sys.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), false);
+
+        let cpu_usage = sys.process(Pid::from_u32(pid)).unwrap().cpu_usage();
+        let used_percent = cpu_usage as f64 / self.logical_core_count as f64;
+
+        debug!(
+            "process {} cpu usage: {}%, logical core count: {}, used percent: {}%",
+            pid, cpu_usage, self.logical_core_count, used_percent
         );
 
         ProcessCPUStats {
-            used_percent: sys.process(Pid::from_u32(pid)).unwrap().cpu_usage() as f64,
+            used_percent: used_percent.clamp(0.0, 100.0),
         }
     }
 
@@ -140,6 +177,11 @@ impl CPU {
                     let used_percent = self
                         .calculate_cgroup_used_percent(&cgroup, period, quota)
                         .await?;
+
+                    debug!(
+                        "process {} cgroup cpu period: {} us, quota: {} us, used percent: {}%",
+                        pid, period, quota, used_percent
+                    );
 
                     Some(CgroupCPUStats {
                         period,
@@ -194,8 +236,7 @@ impl CPU {
             (interval_ns * quota_ns) / period_ns
         } else {
             // If quota is unlimited (-1), use all available CPU cores.
-            let logical_core_count = num_cpus::get() as u64;
-            interval_ns * logical_core_count
+            interval_ns * self.logical_core_count as u64
         };
 
         // Calculate usage percentage.
