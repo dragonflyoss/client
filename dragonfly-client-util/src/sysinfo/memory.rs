@@ -146,25 +146,23 @@ impl Memory {
                     if let Some(memory_controller) = cgroup.controller_of::<MemController>() {
                         let memory_stats = memory_controller.memory_stat();
                         let used_percent = if memory_stats.limit_in_bytes > 0 {
-                            (memory_stats.usage_in_bytes as f64
-                                / memory_stats.limit_in_bytes as f64)
+                            (memory_stats.stat.rss as f64 / memory_stats.limit_in_bytes as f64)
                                 * 100.0
                         } else {
-                            (memory_stats.usage_in_bytes as f64 / self.get_stats().total as f64)
-                                * 100.0
+                            (memory_stats.stat.rss as f64 / self.get_stats().total as f64) * 100.0
                         };
 
                         debug!(
                             "process {} cgroup memory limit: {} bytes, memory usage: {} bytes, used percent: {}%",
                             pid,
                             memory_stats.limit_in_bytes,
-                            memory_stats.usage_in_bytes,
+                            memory_stats.stat.rss,
                             used_percent,
                         );
 
                         return Some(CgroupMemoryStats {
                             limit: memory_stats.limit_in_bytes,
-                            usage: memory_stats.usage_in_bytes,
+                            usage: memory_stats.stat.rss,
                             used_percent: used_percent.clamp(0.0, 100.0),
                         });
                     }
