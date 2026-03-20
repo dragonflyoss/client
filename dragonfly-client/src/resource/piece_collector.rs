@@ -264,7 +264,6 @@ impl PieceCollector {
                         continue;
                     }
 
-                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FROM_DIFFERENT_PARENTS).await;
                     let piece = match collected_pieces.remove(&message.number) {
                         Some((_, piece)) => piece,
                         None => continue,
