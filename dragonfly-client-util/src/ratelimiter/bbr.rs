@@ -384,14 +384,14 @@ impl OverloadCollector {
     fn is_memory_overloaded(&self) -> bool {
         let used_percent = if self.is_running_in_container {
             match self.memory.get_cgroup_stats(self.pid) {
-                Some(stats) => (stats.used_percent * 100.0).round() as u8,
+                Some(stats) => stats.used_percent.round() as u8,
                 None => {
                     warn!("container detected but cgroup memory stats unavailable, falling back to process stats");
-                    (self.memory.get_process_stats(self.pid).used_percent * 100.0).round() as u8
+                    self.memory.get_process_stats(self.pid).used_percent.round() as u8
                 }
             }
         } else {
-            (self.memory.get_process_stats(self.pid).used_percent * 100.0).round() as u8
+            self.memory.get_process_stats(self.pid).used_percent.round() as u8
         };
 
         self.memory_used_percent
