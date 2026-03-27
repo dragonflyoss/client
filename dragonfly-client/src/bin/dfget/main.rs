@@ -67,8 +67,11 @@ Examples:
   # Download a file from HDFS.
   $ dfget hdfs://<host>:<port>/<path> -O /tmp/file.txt --hdfs-delegation-token=<delegation_token>
 
-  # Download a file from Amazon Simple Storage Service(S3).
-  $ dfget s3://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret>
+  # Download a file from Amazon Simple Storage Service(S3) with explicit credentials.
+  $ dfget s3://<bucket>/<path> -O /tmp/file.txt --storage-region=<region> --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret>
+
+  # Download a file from Amazon Simple Storage Service(S3) using S3 settings loaded from the environment.
+  $ OPENDAL_S3_ENDPOINT=<endpoint> OPENDAL_S3_REGION=<region> dfget s3://<bucket>/<path> -O /tmp/file.txt
 
   # Download a file from Google Cloud Storage Service(GCS).
   $ dfget gs://<bucket>/<path> -O /tmp/file.txt --storage-credential-path=<credential_path>
@@ -247,21 +250,27 @@ struct Args {
     )]
     disable_back_to_source: bool,
 
-    #[arg(long, help = "Specify the region for the Object Storage Service")]
+    #[arg(
+        long,
+        help = "Specify the region for the Object Storage Service. Defaults to us-east-1 for S3 when omitted"
+    )]
     storage_region: Option<String>,
 
-    #[arg(long, help = "Specify the endpoint for the Object Storage Service")]
+    #[arg(
+        long,
+        help = "Specify the endpoint for the Object Storage Service. If omitted for S3, OpenDAL will use its default S3 endpoint handling"
+    )]
     storage_endpoint: Option<String>,
 
     #[arg(
         long,
-        help = "Specify the access key ID for the Object Storage Service"
+        help = "Specify the access key ID for the Object Storage Service. If omitted for S3, OpenDAL will use its configured credential loaders"
     )]
     storage_access_key_id: Option<String>,
 
     #[arg(
         long,
-        help = "Specify the access key secret for the Object Storage Service"
+        help = "Specify the access key secret for the Object Storage Service. If omitted for S3, OpenDAL will use its configured credential loaders"
     )]
     storage_access_key_secret: Option<String>,
 
@@ -279,7 +288,7 @@ struct Args {
 
     #[arg(
         long,
-        help = "Specify the session token for Amazon Simple Storage Service(S3)"
+        help = "Specify the session token for Amazon Simple Storage Service(S3) when using explicit temporary credentials. Requires both access key fields"
     )]
     storage_session_token: Option<String>,
 

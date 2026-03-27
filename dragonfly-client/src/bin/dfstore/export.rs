@@ -98,21 +98,27 @@ pub struct ExportCommand {
     )]
     endpoint: PathBuf,
 
-    #[arg(long, help = "Specify the region for the Object Storage Service")]
+    #[arg(
+        long,
+        help = "Specify the region for the Object Storage Service. Defaults to us-east-1 for S3 when omitted"
+    )]
     storage_region: Option<String>,
 
-    #[arg(long, help = "Specify the endpoint for the Object Storage Service")]
+    #[arg(
+        long,
+        help = "Specify the endpoint for the Object Storage Service. If omitted for S3, OpenDAL will use its default S3 endpoint handling"
+    )]
     storage_endpoint: Option<String>,
 
     #[arg(
         long,
-        help = "Specify the access key ID for the Object Storage Service"
+        help = "Specify the access key ID for the Object Storage Service. If omitted for S3, OpenDAL will use its configured credential loaders"
     )]
     storage_access_key_id: Option<String>,
 
     #[arg(
         long,
-        help = "Specify the access key secret for the Object Storage Service"
+        help = "Specify the access key secret for the Object Storage Service. If omitted for S3, OpenDAL will use its configured credential loaders"
     )]
     storage_access_key_secret: Option<String>,
 
@@ -130,7 +136,7 @@ pub struct ExportCommand {
 
     #[arg(
         long,
-        help = "Specify the session token for Amazon Simple Storage Service(S3)"
+        help = "Specify the session token for Amazon Simple Storage Service(S3) when using explicit temporary credentials. Requires both access key fields"
     )]
     storage_session_token: Option<String>,
 
