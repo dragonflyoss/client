@@ -27,6 +27,9 @@ pub type Content = super::content_linux::Content;
 #[cfg(target_os = "macos")]
 pub type Content = super::content_macos::Content;
 
+#[cfg(target_os = "freebsd")]
+pub type Content = super::content_freebsd::Content;
+
 /// DEFAULT_CONTENT_DIR is the default directory for store content.
 pub const DEFAULT_CONTENT_DIR: &str = "content";
 

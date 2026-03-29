@@ -81,7 +81,7 @@ pub fn default_root_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/var/run/dragonfly/");
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     return home::home_dir().unwrap().join(".dragonfly");
 }
 
@@ -90,7 +90,7 @@ pub fn default_config_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/etc/dragonfly/");
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     return home::home_dir().unwrap().join(".dragonfly").join("config");
 }
 
@@ -99,7 +99,7 @@ pub fn default_log_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/var/log/dragonfly/");
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     return home::home_dir().unwrap().join(".dragonfly").join("logs");
 }
 
@@ -108,7 +108,7 @@ pub fn default_storage_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/var/lib/dragonfly/");
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     return home::home_dir().unwrap().join(".dragonfly").join("storage");
 }
 
@@ -117,7 +117,7 @@ pub fn default_lock_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/var/lock/dragonfly/");
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     return home::home_dir().unwrap().join(".dragonfly");
 }
 
@@ -126,7 +126,7 @@ pub fn default_plugin_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/usr/local/lib/dragonfly/plugins/");
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     return home::home_dir().unwrap().join(".dragonfly").join("plugins");
 }
 
@@ -135,7 +135,7 @@ pub fn default_cache_dir() -> PathBuf {
     #[cfg(target_os = "linux")]
     return PathBuf::from("/var/cache/dragonfly/");
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     return home::home_dir().unwrap().join(".dragonfly").join("cache");
 }
 
