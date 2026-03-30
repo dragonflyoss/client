@@ -79,6 +79,9 @@ use tokio_util::io::StreamReader;
 use tracing::{debug, error, instrument};
 use url::Url;
 
+/// Default region for S3 if not specified.
+const DEFAULT_REGION: &str = "us-east-1";
+
 /// Scheme is the scheme of the object storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scheme {
@@ -330,34 +333,21 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // S3 requires the access key id and the secret access key.
-        let (Some(access_key_id), Some(access_key_secret), Some(region)) = (
-            &object_storage.access_key_id,
-            &object_storage.access_key_secret,
-            &object_storage.region,
-        ) else {
-            return Err(ClientError::BackendError(Box::new(BackendError {
-                message: format!(
-                    "{} {}",
-                    self.scheme,
-                    make_need_fields_message!(object_storage {
-                        access_key_id,
-                        access_key_secret,
-                        region
-                    })
-                ),
-                status_code: None,
-                header: None,
-            })));
-        };
-
         // Initialize the S3 operator with the object storage.
         let mut builder = opendal::services::S3::default();
-        builder = builder
-            .access_key_id(access_key_id)
-            .secret_access_key(access_key_secret)
-            .bucket(&parsed_url.bucket)
-            .region(region);
+        builder = builder.bucket(&parsed_url.bucket);
+
+        // Configure the credentials using the access key id and access key secret if provided.
+        if let Some(access_key_id) = object_storage.access_key_id.as_deref() {
+            builder = builder.access_key_id(access_key_id);
+        }
+
+        if let Some(access_key_secret) = object_storage.access_key_secret.as_deref() {
+            builder = builder.secret_access_key(access_key_secret);
+        }
+
+        // Configure the region if it is provided. If not provided, use the default region.
+        builder = builder.region(object_storage.region.as_deref().unwrap_or(DEFAULT_REGION));
 
         // Configure the endpoint if it is provided.
         if let Some(endpoint) = object_storage.endpoint.as_deref() {
@@ -1213,73 +1203,6 @@ mod tests {
             result.unwrap_err().to_string(),
             "backend error: s3 need object_storage parameter"
         )
-    }
-
-    #[test]
-    fn should_return_error_when_s3_lacks_of_info() {
-        let test_cases = vec![
-            (
-                ObjectStorageInfo::default(),
-                "backend error: s3 need access_key_id, access_key_secret, region",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_id: Some("access_key_id".into()),
-                    ..Default::default()
-                },
-                "backend error: s3 need access_key_secret, region",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_secret: Some("access_key_secret".into()),
-                    ..Default::default()
-                },
-                "backend error: s3 need access_key_id, region",
-            ),
-            (
-                ObjectStorageInfo {
-                    region: Some("test-region".into()),
-                    ..Default::default()
-                },
-                "backend error: s3 need access_key_id, access_key_secret",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_id: Some("access_key_id".into()),
-                    access_key_secret: Some("access_key_secret".into()),
-                    ..Default::default()
-                },
-                "backend error: s3 need region",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_id: Some("access_key_id".into()),
-                    region: Some("test-region".into()),
-                    ..Default::default()
-                },
-                "backend error: s3 need access_key_secret",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_secret: Some("access_key_secret".into()),
-                    region: Some("test-region".into()),
-                    ..Default::default()
-                },
-                "backend error: s3 need access_key_id",
-            ),
-        ];
-
-        for (object_storage, error_message) in test_cases {
-            let url: Url = "s3://test-bucket/file".parse().unwrap();
-            let parsed_url: ParsedURL = url.try_into().unwrap();
-
-            let result = ObjectStorage::new(Scheme::S3, Arc::new(Config::default()))
-                .unwrap()
-                .operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
-
-            assert!(result.is_err());
-            assert_eq!(result.unwrap_err().to_string(), error_message);
-        }
     }
 
     #[test]

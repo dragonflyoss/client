@@ -71,6 +71,7 @@ struct Args {
         short = 'c',
         long = "config",
         default_value_os_t = dfdaemon::default_dfdaemon_config_path(),
+        env = "DFDAEMON_CONFIG",
         help = "Specify config file to use")
     ]
     config: PathBuf,
@@ -79,6 +80,7 @@ struct Args {
         short = 'l',
         long,
         default_value = "info",
+        env = "DFDAEMON_LOG_LEVEL",
         help = "Specify the logging level [trace, debug, info, warn, error]"
     )]
     log_level: Level,
@@ -86,6 +88,7 @@ struct Args {
     #[arg(
         long,
         default_value_os_t = dfdaemon::default_dfdaemon_log_dir(),
+        env = "DFDAEMON_LOG_DIR",
         help = "Specify the log directory"
     )]
     log_dir: PathBuf,
@@ -93,11 +96,17 @@ struct Args {
     #[arg(
         long,
         default_value_t = 6,
+        env = "DFDAEMON_LOG_MAX_FILES",
         help = "Specify the max number of log files"
     )]
     log_max_files: usize,
 
-    #[arg(long, default_value_t = true, help = "Specify whether to print log")]
+    #[arg(
+        long,
+        default_value_t = true,
+        env = "DFDAEMON_CONSOLE",
+        help = "Specify whether to print log"
+    )]
     console: bool,
 
     #[arg(

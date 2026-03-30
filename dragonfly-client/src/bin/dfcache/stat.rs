@@ -43,6 +43,7 @@ pub struct StatCommand {
         short = 'e',
         long = "endpoint",
         default_value_os_t = dfdaemon::default_download_unix_socket_path(),
+        env = "DFCACHE_STAT_DFDAEMON_ENDPOINT",
         help = "Endpoint of dfdaemon's GRPC server"
     )]
     endpoint: PathBuf,
@@ -51,11 +52,17 @@ pub struct StatCommand {
         short = 'l',
         long,
         default_value = "info",
+        env = "DFCACHE_STAT_LOG_LEVEL",
         help = "Specify the logging level [trace, debug, info, warn, error]"
     )]
     log_level: Level,
 
-    #[arg(long, default_value_t = false, help = "Specify whether to print log")]
+    #[arg(
+        long,
+        default_value_t = false,
+        env = "DFCACHE_STAT_CONSOLE",
+        help = "Specify whether to print log"
+    )]
     console: bool,
 }
 
