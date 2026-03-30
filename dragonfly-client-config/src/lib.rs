@@ -184,4 +184,12 @@ mod tests {
         assert!(result.is_ok());
         assert!(!result.unwrap());
     }
+
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
+    fn test_unix_home_directories() {
+        let home = home::home_dir().unwrap();
+        assert!(default_root_dir().starts_with(&home));
+        assert!(default_config_dir().ends_with("config"));
+    }
 }
