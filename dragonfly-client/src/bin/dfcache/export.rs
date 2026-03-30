@@ -45,6 +45,7 @@ pub struct ExportCommand {
     #[arg(
         long = "transfer-from-dfdaemon",
         default_value_t = false,
+        env = "DFCACHE_EXPORT_TRANSFER_FROM_DFDAEMON",
         help = "Specify whether to transfer the content of downloading file from dfdaemon's unix domain socket. If it is true, dfcache will call dfdaemon to download the file, and dfdaemon will return the content of downloading file to dfcache via unix domain socket, and dfcache will copy the content to the output path. If it is false, dfdaemon will download the file and hardlink or copy the file to the output path."
     )]
     transfer_from_dfdaemon: bool,
@@ -52,6 +53,7 @@ pub struct ExportCommand {
     #[arg(
         long = "overwrite",
         default_value_t = false,
+        env = "DFCACHE_EXPORT_OVERWRITE",
         help = "Specify whether to overwrite the output file if it already exists. If it is true, dfget will overwrite the output file. If it is false, dfget will return an error if the output file already exists. Cannot be used with `--force-hard-link=true`"
     )]
     overwrite: bool,
@@ -59,6 +61,7 @@ pub struct ExportCommand {
     #[arg(
         long = "force-hard-link",
         default_value_t = false,
+        env = "DFCACHE_EXPORT_FORCE_HARD_LINK",
         help = "Specify whether the download file must be hard linked to the output path. If hard link is failed, download will be failed. If it is false, dfdaemon will copy the file to the output path if hard link is failed."
     )]
     force_hard_link: bool,
@@ -66,6 +69,7 @@ pub struct ExportCommand {
     #[arg(
         long = "application",
         default_value = "",
+        env = "DFCACHE_EXPORT_APPLICATION",
         help = "Caller application which is used for statistics and access control"
     )]
     application: String,
@@ -73,6 +77,7 @@ pub struct ExportCommand {
     #[arg(
         long = "tag",
         default_value = "",
+        env = "DFCACHE_EXPORT_TAG",
         help = "Different tags for the same file will be divided into different persistent cache tasks"
     )]
     tag: String,
@@ -88,6 +93,7 @@ pub struct ExportCommand {
         long = "timeout",
         value_parser= humantime::parse_duration,
         default_value = "2h",
+        env = "DFCACHE_EXPORT_TIMEOUT",
         help = "Specify the timeout for exporting a file"
     )]
     timeout: Duration,
@@ -103,6 +109,7 @@ pub struct ExportCommand {
         short = 'e',
         long = "endpoint",
         default_value_os_t = dfdaemon::default_download_unix_socket_path(),
+        env = "DFCACHE_EXPORT_DFDAEMON_ENDPOINT",
         help = "Endpoint of dfdaemon's GRPC server"
     )]
     endpoint: PathBuf,
@@ -110,6 +117,7 @@ pub struct ExportCommand {
     #[arg(
         long,
         default_value_t = false,
+        env = "DFCACHE_EXPORT_NO_PROGRESS",
         help = "Specify whether to disable the progress bar display"
     )]
     no_progress: bool,
@@ -118,11 +126,17 @@ pub struct ExportCommand {
         short = 'l',
         long,
         default_value = "info",
+        env = "DFCACHE_EXPORT_LOG_LEVEL",
         help = "Specify the logging level [trace, debug, info, warn, error]"
     )]
     log_level: Level,
 
-    #[arg(long, default_value_t = false, help = "Specify whether to print log")]
+    #[arg(
+        long,
+        default_value_t = false,
+        env = "DFCACHE_EXPORT_CONSOLE",
+        help = "Specify whether to print log"
+    )]
     console: bool,
 }
 

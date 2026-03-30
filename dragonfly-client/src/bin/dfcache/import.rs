@@ -44,6 +44,7 @@ pub struct ImportCommand {
 
     #[arg(
         long = "content-for-calculating-task-id",
+        env = "DFCACHE_IMPORT_CONTENT_FOR_CALCULATING_TASK_ID",
         help = "Specify the content used to calculate the persistent cache task ID. If it is set, use its value to calculate the task ID. Otherwise, calculate the persistent cache task ID by computing SHA256 hash of file content. Note: SHA256 computation takes longer for large files."
     )]
     content_for_calculating_task_id: Option<String>,
@@ -51,6 +52,7 @@ pub struct ImportCommand {
     #[arg(
         long = "persistent-replica-count",
         default_value_t = default_dfcache_persistent_replica_count(),
+        env = "DFCACHE_IMPORT_PERSISTENT_REPLICA_COUNT",
         help = "Specify the replica count of the persistent cache task"
     )]
     persistent_replica_count: u64,
@@ -58,6 +60,7 @@ pub struct ImportCommand {
     #[arg(
         long = "piece-length",
         required = false,
+        env = "DFCACHE_IMPORT_PIECE_LENGTH",
         help = "Specify the piece length for downloading file. If the piece length is not specified, the piece length will be calculated according to the file size. Different piece lengths will be divided into different persistent cache tasks. The value needs to be set with human readable format and needs to be greater than or equal to 4mib, for example: 4mib, 1gib"
     )]
     piece_length: Option<ByteSize>,
@@ -65,6 +68,7 @@ pub struct ImportCommand {
     #[arg(
         long = "application",
         required = false,
+        env = "DFCACHE_IMPORT_APPLICATION",
         help = "Different applications for the same url will be divided into different persistent cache tasks"
     )]
     application: Option<String>,
@@ -72,6 +76,7 @@ pub struct ImportCommand {
     #[arg(
         long = "tag",
         required = false,
+        env = "DFCACHE_IMPORT_TAG",
         help = "Different tags for the same file will be divided into different persistent cache tasks"
     )]
     tag: Option<String>,
@@ -80,6 +85,7 @@ pub struct ImportCommand {
         long = "ttl",
         value_parser= humantime::parse_duration,
         default_value = "1h",
+        env = "DFCACHE_IMPORT_TTL",
         help = "Specify the ttl of the persistent cache task, maximum is 7d and minimum is 1m"
     )]
     ttl: Duration,
@@ -88,6 +94,7 @@ pub struct ImportCommand {
         long = "timeout",
         value_parser= humantime::parse_duration,
         default_value = "30m",
+        env = "DFCACHE_IMPORT_TIMEOUT",
         help = "Specify the timeout for importing a file"
     )]
     timeout: Duration,
@@ -96,6 +103,7 @@ pub struct ImportCommand {
         short = 'e',
         long = "endpoint",
         default_value_os_t = dfdaemon::default_download_unix_socket_path(),
+        env = "DFCACHE_IMPORT_DFDAEMON_ENDPOINT",
         help = "Endpoint of dfdaemon's GRPC server"
     )]
     endpoint: PathBuf,
@@ -103,6 +111,7 @@ pub struct ImportCommand {
     #[arg(
         long,
         default_value_t = false,
+        env = "DFCACHE_IMPORT_NO_PROGRESS",
         help = "Specify whether to disable the progress bar display"
     )]
     no_progress: bool,
@@ -111,11 +120,17 @@ pub struct ImportCommand {
         short = 'l',
         long,
         default_value = "info",
+        env = "DFCACHE_IMPORT_LOG_LEVEL",
         help = "Specify the logging level [trace, debug, info, warn, error]"
     )]
     log_level: Level,
 
-    #[arg(long, default_value_t = false, help = "Specify whether to print log")]
+    #[arg(
+        long,
+        default_value_t = false,
+        env = "DFCACHE_IMPORT_CONSOLE",
+        help = "Specify whether to print log"
+    )]
     console: bool,
 }
 

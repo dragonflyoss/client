@@ -43,11 +43,7 @@
 //! # Authentication
 //!
 //! Each object storage provider requires different credentials:
-//! - **S3**: optional `access_key_id`, `access_key_secret`, `endpoint`, and `session_token`.
-//!   `region` defaults to `us-east-1` when omitted (OpenDAL follows S3 301 redirects for
-//!   buckets in other regions). When credentials are omitted, OpenDAL falls back to its
-//!   configured credential loaders. `session_token` is only valid with an explicit access key
-//!   pair
+//! - **S3**: `access_key_id`, `access_key_secret`, and `region` (optionally `endpoint`, `session_token`)
 //! - **GCS**: `credential_path` for service account credentials (optionally `endpoint`, `predefined_acl`)
 //! - **ABS**: `access_key_id` (account name), `access_key_secret` (account key), and `endpoint`
 //! - **OSS**: `access_key_id`, `access_key_secret`, and `endpoint` (optionally `security_token`)
@@ -82,6 +78,9 @@ use std::time::Duration;
 use tokio_util::io::StreamReader;
 use tracing::{debug, error, instrument};
 use url::Url;
+
+/// Default region for S3 if not specified.
+const DEFAULT_REGION: &str = "us-east-1";
 
 /// Scheme is the scheme of the object storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -334,62 +333,21 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // Explicit static credentials are optional, but if one is provided the other must also be
-        // provided to avoid mixing a partial static credential with OpenDAL's configured
-        // credential loaders. Session tokens are only valid together with an explicit access key
-        // pair.
-        let has_explicit_access_key_id = object_storage.access_key_id.is_some();
-        let has_explicit_access_key_secret = object_storage.access_key_secret.is_some();
-        let needs_explicit_access_key_pair =
-            has_explicit_access_key_id != has_explicit_access_key_secret;
-        let needs_explicit_session_token = object_storage.session_token.is_some()
-            && !(has_explicit_access_key_id && has_explicit_access_key_secret);
-        if needs_explicit_access_key_pair || needs_explicit_session_token {
-            let mut need_fields: Vec<&'static str> = vec![];
-            if needs_explicit_access_key_pair {
-                if object_storage.access_key_id.is_none() {
-                    need_fields.push("access_key_id");
-                }
-                if object_storage.access_key_secret.is_none() {
-                    need_fields.push("access_key_secret");
-                }
-            }
-            if needs_explicit_session_token {
-                if object_storage.access_key_id.is_none() && !need_fields.contains(&"access_key_id")
-                {
-                    need_fields.push("access_key_id");
-                }
-                if object_storage.access_key_secret.is_none()
-                    && !need_fields.contains(&"access_key_secret")
-                {
-                    need_fields.push("access_key_secret");
-                }
-            }
-
-            return Err(ClientError::BackendError(Box::new(BackendError {
-                message: format!("{} need {}", self.scheme, need_fields.join(", ")),
-                status_code: None,
-                header: None,
-            })));
-        }
-
         // Initialize the S3 operator with the object storage.
         let mut builder = opendal::services::S3::default();
         builder = builder.bucket(&parsed_url.bucket);
 
-        // When static credentials are omitted, OpenDAL falls back to its configured credential
-        // loaders, which preserves task identity while letting nodes use their own role.
+        // Configure the credentials using the access key id and access key secret if provided.
         if let Some(access_key_id) = object_storage.access_key_id.as_deref() {
             builder = builder.access_key_id(access_key_id);
         }
+
         if let Some(access_key_secret) = object_storage.access_key_secret.as_deref() {
             builder = builder.secret_access_key(access_key_secret);
         }
 
-        // OpenDAL requires a signing region at build time. Use the caller's value when provided,
-        // otherwise fall back to us-east-1 (the same default the AWS SDK uses). For buckets in
-        // other regions OpenDAL will follow the 301 redirect returned by S3.
-        builder = builder.region(object_storage.region.as_deref().unwrap_or("us-east-1"));
+        // Configure the region if it is provided. If not provided, use the default region.
+        builder = builder.region(object_storage.region.as_deref().unwrap_or(DEFAULT_REGION));
 
         // Configure the endpoint if it is provided.
         if let Some(endpoint) = object_storage.endpoint.as_deref() {
@@ -961,9 +919,7 @@ impl crate::Backend for ObjectStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Backend, StatRequest};
     use dragonfly_api::common::v2::ObjectStorage as ObjectStorageInfo;
-    use wiremock::{matchers::method, Mock, ResponseTemplate};
 
     #[test]
     fn should_return_true_for_supported_schemes() {
@@ -1140,22 +1096,8 @@ mod tests {
     }
 
     #[test]
-    fn should_get_s3_operator_with_supported_configuration() {
+    fn should_get_s3_operator_with_extra_info() {
         let test_cases = vec![
-            ObjectStorageInfo::default(),
-            ObjectStorageInfo {
-                endpoint: Some("test-endpoint.local".into()),
-                ..Default::default()
-            },
-            ObjectStorageInfo {
-                region: Some("test-region".into()),
-                ..Default::default()
-            },
-            ObjectStorageInfo {
-                access_key_id: Some("access_key_id".into()),
-                access_key_secret: Some("access_key_secret".into()),
-                ..Default::default()
-            },
             ObjectStorageInfo {
                 access_key_id: Some("access_key_id".into()),
                 access_key_secret: Some("access_key_secret".into()),
@@ -1194,53 +1136,6 @@ mod tests {
             assert!(result.is_ok());
             assert_eq!(result.unwrap().info().scheme().to_string(), "s3");
         }
-    }
-
-    #[tokio::test]
-    async fn should_stat_s3_with_custom_endpoint_without_explicit_region() {
-        let server = wiremock::MockServer::start().await;
-        Mock::given(method("HEAD"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("Content-Length", "123")
-                    .insert_header("ETag", "\"test-etag\"")
-                    .insert_header("x-amz-bucket-region", "us-east-1"),
-            )
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("Content-Length", "123")
-                    .insert_header("ETag", "\"test-etag\"")
-                    .insert_header("x-amz-bucket-region", "us-east-1"),
-            )
-            .mount(&server)
-            .await;
-
-        let response = ObjectStorage::new(Scheme::S3, Arc::new(Config::default()))
-            .unwrap()
-            .stat(StatRequest {
-                task_id: "test".into(),
-                url: "s3://test-bucket/file".into(),
-                http_header: None,
-                timeout: Duration::from_secs(3),
-                client_cert: None,
-                object_storage: Some(ObjectStorageInfo {
-                    endpoint: Some(server.uri()),
-                    access_key_id: Some("access_key_id".into()),
-                    access_key_secret: Some("access_key_secret".into()),
-                    ..Default::default()
-                }),
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await
-            .unwrap();
-
-        assert!(response.success);
-        assert_eq!(response.content_length, Some(123));
     }
 
     #[test]
@@ -1308,61 +1203,6 @@ mod tests {
             result.unwrap_err().to_string(),
             "backend error: s3 need object_storage parameter"
         )
-    }
-
-    #[test]
-    fn should_return_error_when_s3_lacks_of_info() {
-        let test_cases = vec![
-            (
-                ObjectStorageInfo {
-                    access_key_id: Some("access_key_id".into()),
-                    ..Default::default()
-                },
-                "backend error: s3 need access_key_secret",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_secret: Some("access_key_secret".into()),
-                    ..Default::default()
-                },
-                "backend error: s3 need access_key_id",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_id: Some("access_key_id".into()),
-                    session_token: Some("session_token".into()),
-                    ..Default::default()
-                },
-                "backend error: s3 need access_key_secret",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_secret: Some("access_key_secret".into()),
-                    session_token: Some("session_token".into()),
-                    ..Default::default()
-                },
-                "backend error: s3 need access_key_id",
-            ),
-            (
-                ObjectStorageInfo {
-                    session_token: Some("session_token".into()),
-                    ..Default::default()
-                },
-                "backend error: s3 need access_key_id, access_key_secret",
-            ),
-        ];
-
-        for (object_storage, error_message) in test_cases {
-            let url: Url = "s3://test-bucket/file".parse().unwrap();
-            let parsed_url: ParsedURL = url.try_into().unwrap();
-
-            let result = ObjectStorage::new(Scheme::S3, Arc::new(Config::default()))
-                .unwrap()
-                .operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
-
-            assert!(result.is_err());
-            assert_eq!(result.unwrap_err().to_string(), error_message);
-        }
     }
 
     #[test]

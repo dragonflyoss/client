@@ -51,6 +51,7 @@ pub struct ImportCommand {
     #[arg(
         long = "persistent-replica-count",
         default_value_t = default_dfstore_persistent_replica_count(),
+        env = "DFSTORE_IMPORT_PERSISTENT_REPLICA_COUNT",
         help = "Specify the replica count of the persistent cache task"
     )]
     persistent_replica_count: u64,
@@ -59,6 +60,7 @@ pub struct ImportCommand {
         long = "ttl",
         value_parser= humantime::parse_duration,
         default_value = "1h",
+        env = "DFSTORE_IMPORT_TTL",
         help = "Specify the ttl of the persistent cache task, maximum is 7d and minimum is 1m"
     )]
     ttl: Duration,
@@ -67,6 +69,7 @@ pub struct ImportCommand {
         long = "timeout",
         value_parser= humantime::parse_duration,
         default_value = "30m",
+        env = "DFSTORE_IMPORT_TIMEOUT",
         help = "Specify the timeout for importing a file"
     )]
     timeout: Duration,
@@ -75,54 +78,63 @@ pub struct ImportCommand {
         short = 'e',
         long = "endpoint",
         default_value_os_t = dfdaemon::default_download_unix_socket_path(),
+        env = "DFSTORE_IMPORT_DFDAEMON_ENDPOINT",
         help = "Endpoint of dfdaemon's GRPC server"
     )]
     endpoint: PathBuf,
 
     #[arg(
         long,
-        help = "Specify the region for the Object Storage Service. Defaults to us-east-1 for S3 when omitted"
+        env = "DFSTORE_IMPORT_STORAGE_REGION",
+        help = "Specify the region for the Object Storage Service (e.g., us-east-1)"
     )]
     storage_region: Option<String>,
 
     #[arg(
         long,
-        help = "Specify the endpoint for the Object Storage Service. If omitted for S3, OpenDAL will use its default S3 endpoint handling"
+        env = "DFSTORE_IMPORT_STORAGE_ENDPOINT",
+        help = "Specify the endpoint URL for the Object Storage Service (e.g., https://s3.amazonaws.com)"
     )]
     storage_endpoint: Option<String>,
 
     #[arg(
         long,
-        help = "Specify the access key ID for the Object Storage Service. If omitted for S3, OpenDAL will use its configured credential loaders"
+        env = "DFSTORE_IMPORT_STORAGE_ACCESS_KEY_ID",
+        help = "Specify the access key ID for authenticating with the Object Storage Service"
     )]
     storage_access_key_id: Option<String>,
 
     #[arg(
         long,
-        help = "Specify the access key secret for the Object Storage Service. If omitted for S3, OpenDAL will use its configured credential loaders"
+        env = "DFSTORE_IMPORT_STORAGE_ACCESS_KEY_SECRET",
+        help = "Specify the secret access key for authenticating with the Object Storage Service"
     )]
     storage_access_key_secret: Option<String>,
 
     #[arg(
         long,
+        env = "DFSTORE_IMPORT_STORAGE_SECURITY_TOKEN",
         help = "Specify the security token for the Object Storage Service"
     )]
     storage_security_token: Option<String>,
 
     #[arg(
         long,
+        env = "DFSTORE_IMPORT_STORAGE_INSECURE_SKIP_VERIFY",
         help = "Specify whether to skip verify TLS certification for object storage service"
     )]
     storage_insecure_skip_verify: Option<bool>,
 
     #[arg(
         long,
-        help = "Specify the session token for Amazon Simple Storage Service(S3) when using explicit temporary credentials. Requires both access key fields"
+        env = "DFSTORE_IMPORT_STORAGE_SESSION_TOKEN",
+        help = "Specify the session token for Amazon Simple Storage Service(S3)"
     )]
     storage_session_token: Option<String>,
 
     #[arg(
         long,
+        env = "DFSTORE_IMPORT_STORAGE_CREDENTIAL_PATH",
         help = "Specify the local path to the credential file which is used for OAuth2 authentication for Google Cloud Storage Service(GCS)"
     )]
     storage_credential_path: Option<String>,
@@ -130,6 +142,7 @@ pub struct ImportCommand {
     #[arg(
         long,
         default_value = "publicRead",
+        env = "DFSTORE_IMPORT_STORAGE_PREDEFINED_ACL",
         help = "Specify the predefined ACL for Google Cloud Storage Service(GCS)"
     )]
     storage_predefined_acl: Option<String>,
@@ -137,6 +150,7 @@ pub struct ImportCommand {
     #[arg(
         long,
         default_value_t = false,
+        env = "DFSTORE_IMPORT_NO_PROGRESS",
         help = "Specify whether to disable the progress bar display"
     )]
     no_progress: bool,
@@ -145,11 +159,17 @@ pub struct ImportCommand {
         short = 'l',
         long,
         default_value = "info",
+        env = "DFSTORE_IMPORT_LOG_LEVEL",
         help = "Specify the logging level [trace, debug, info, warn, error]"
     )]
     log_level: Level,
 
-    #[arg(long, default_value_t = false, help = "Specify whether to print log")]
+    #[arg(
+        long,
+        default_value_t = false,
+        env = "DFSTORE_IMPORT_CONSOLE",
+        help = "Specify whether to print log"
+    )]
     console: bool,
 }
 

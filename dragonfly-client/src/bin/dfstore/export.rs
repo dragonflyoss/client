@@ -50,6 +50,7 @@ pub struct ExportCommand {
     #[arg(
         long = "transfer-from-dfdaemon",
         default_value_t = false,
+        env = "DFSTORE_EXPORT_TRANSFER_FROM_DFDAEMON",
         help = "Specify whether to transfer the content of downloading file from dfdaemon's unix domain socket. If it is true, dfstore will call dfdaemon to download the file, and dfdaemon will return the content of downloading file to dfstore via unix domain socket, and dfstore will copy the content to the output path. If it is false, dfdaemon will download the file and hardlink or copy the file to the output path."
     )]
     transfer_from_dfdaemon: bool,
@@ -57,6 +58,7 @@ pub struct ExportCommand {
     #[arg(
         long = "overwrite",
         default_value_t = false,
+        env = "DFSTORE_EXPORT_OVERWRITE",
         help = "Specify whether to overwrite the output file if it already exists. If it is true, dfget will overwrite the output file. If it is false, dfget will return an error if the output file already exists. Cannot be used with `--force-hard-link=true`"
     )]
     overwrite: bool,
@@ -64,6 +66,7 @@ pub struct ExportCommand {
     #[arg(
         long = "force-hard-link",
         default_value_t = false,
+        env = "DFSTORE_EXPORT_FORCE_HARD_LINK",
         help = "Specify whether the download file must be hard linked to the output path. If hard link is failed, download will be failed. If it is false, dfdaemon will copy the file to the output path if hard link is failed."
     )]
     force_hard_link: bool,
@@ -79,6 +82,7 @@ pub struct ExportCommand {
         long = "timeout",
         value_parser= humantime::parse_duration,
         default_value = "2h",
+        env = "DFSTORE_EXPORT_TIMEOUT",
         help = "Specify the timeout for exporting a file"
     )]
     timeout: Duration,
@@ -94,54 +98,63 @@ pub struct ExportCommand {
         short = 'e',
         long = "endpoint",
         default_value_os_t = dfdaemon::default_download_unix_socket_path(),
+        env = "DFSTORE_EXPORT_DFDAEMON_ENDPOINT",
         help = "Endpoint of dfdaemon's GRPC server"
     )]
     endpoint: PathBuf,
 
     #[arg(
         long,
-        help = "Specify the region for the Object Storage Service. Defaults to us-east-1 for S3 when omitted"
+        env = "DFSTORE_EXPORT_STORAGE_REGION",
+        help = "Specify the region for the Object Storage Service (e.g., us-east-1)"
     )]
     storage_region: Option<String>,
 
     #[arg(
         long,
-        help = "Specify the endpoint for the Object Storage Service. If omitted for S3, OpenDAL will use its default S3 endpoint handling"
+        env = "DFSTORE_EXPORT_STORAGE_ENDPOINT",
+        help = "Specify the endpoint URL for the Object Storage Service (e.g., https://s3.amazonaws.com)"
     )]
     storage_endpoint: Option<String>,
 
     #[arg(
         long,
-        help = "Specify the access key ID for the Object Storage Service. If omitted for S3, OpenDAL will use its configured credential loaders"
+        env = "DFSTORE_EXPORT_STORAGE_ACCESS_KEY_ID",
+        help = "Specify the access key ID for authenticating with the Object Storage Service"
     )]
     storage_access_key_id: Option<String>,
 
     #[arg(
         long,
-        help = "Specify the access key secret for the Object Storage Service. If omitted for S3, OpenDAL will use its configured credential loaders"
+        env = "DFSTORE_EXPORT_STORAGE_ACCESS_KEY_SECRET",
+        help = "Specify the secret access key for authenticating with the Object Storage Service"
     )]
     storage_access_key_secret: Option<String>,
 
     #[arg(
         long,
+        env = "DFSTORE_EXPORT_STORAGE_SECURITY_TOKEN",
         help = "Specify the security token for the Object Storage Service"
     )]
     storage_security_token: Option<String>,
 
     #[arg(
         long,
+        env = "DFSTORE_EXPORT_STORAGE_INSECURE_SKIP_VERIFY",
         help = "Specify whether to skip verify TLS certification for object storage service"
     )]
     storage_insecure_skip_verify: Option<bool>,
 
     #[arg(
         long,
-        help = "Specify the session token for Amazon Simple Storage Service(S3) when using explicit temporary credentials. Requires both access key fields"
+        env = "DFSTORE_EXPORT_STORAGE_SESSION_TOKEN",
+        help = "Specify the session token for Amazon Simple Storage Service(S3)"
     )]
     storage_session_token: Option<String>,
 
     #[arg(
         long,
+        env = "DFSTORE_EXPORT_STORAGE_CREDENTIAL_PATH",
         help = "Specify the local path to the credential file which is used for OAuth2 authentication for Google Cloud Storage Service(GCS)"
     )]
     storage_credential_path: Option<String>,
@@ -149,6 +162,7 @@ pub struct ExportCommand {
     #[arg(
         long,
         default_value = "publicRead",
+        env = "DFSTORE_EXPORT_STORAGE_PREDEFINED_ACL",
         help = "Specify the predefined ACL for Google Cloud Storage Service(GCS)"
     )]
     storage_predefined_acl: Option<String>,
@@ -156,6 +170,7 @@ pub struct ExportCommand {
     #[arg(
         long,
         default_value_t = false,
+        env = "DFSTORE_EXPORT_NO_PROGRESS",
         help = "Specify whether to disable the progress bar display"
     )]
     no_progress: bool,
@@ -164,11 +179,17 @@ pub struct ExportCommand {
         short = 'l',
         long,
         default_value = "info",
+        env = "DFSTORE_EXPORT_LOG_LEVEL",
         help = "Specify the logging level [trace, debug, info, warn, error]"
     )]
     log_level: Level,
 
-    #[arg(long, default_value_t = false, help = "Specify whether to print log")]
+    #[arg(
+        long,
+        default_value_t = false,
+        env = "DFSTORE_EXPORT_CONSOLE",
+        help = "Specify whether to print log"
+    )]
     console: bool,
 }
 
