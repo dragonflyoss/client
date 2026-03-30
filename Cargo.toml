@@ -60,7 +60,7 @@ url = "2.5.4"
 rustls = { version = "0.23.37", default-features = false, features = ["tls12", "ring"] }
 rustls-pki-types = "1.13.2"
 rustls-pemfile = "2.2.0"
-sha2 = "0.10"
+sha2 = "0.11"
 crc32fast = "1.5.0"
 uuid = { version = "1.20", features = ["v4"] }
 hex = "0.4"
