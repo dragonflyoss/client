@@ -352,7 +352,7 @@ impl ObjectStorage {
         // Configure the endpoint if it is provided.
         if let Some(endpoint) = object_storage.endpoint.as_deref() {
             builder = builder.endpoint(endpoint);
-        }
+        };
 
         // Configure the session token if it is provided.
         if let Some(session_token) = object_storage.session_token.as_deref() {
@@ -388,7 +388,8 @@ impl ObjectStorage {
             builder = builder.credential_path(credential_path);
         }
 
-        // Configure the endpoint if it is provided.
+        // Configure the endpoint if it is provided. If the endpoint is not provided, the operator
+        // will use the default endpoint of GCS.
         if let Some(endpoint) = object_storage.endpoint.as_deref() {
             builder = builder.endpoint(endpoint);
         }
@@ -417,21 +418,12 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // ABS requires the account name and the account key.
-        let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
-            &object_storage.access_key_id,
-            &object_storage.access_key_secret,
-            &object_storage.endpoint,
-        ) else {
+        let Some(endpoint) = &object_storage.endpoint else {
             return Err(ClientError::BackendError(Box::new(BackendError {
                 message: format!(
                     "{} {}",
                     self.scheme,
-                    make_need_fields_message!(object_storage {
-                        access_key_id,
-                        access_key_secret,
-                        endpoint
-                    })
+                    make_need_fields_message!(object_storage { endpoint })
                 ),
                 status_code: None,
                 header: None,
@@ -440,11 +432,16 @@ impl ObjectStorage {
 
         // Initialize the ABS operator with the object storage.
         let mut builder = opendal::services::Azblob::default();
-        builder = builder
-            .account_name(access_key_id)
-            .account_key(access_key_secret)
-            .container(&parsed_url.bucket)
-            .endpoint(endpoint);
+        builder = builder.container(&parsed_url.bucket).endpoint(endpoint);
+
+        // Configure the credentials using the access key id and access key secret if provided.
+        if let Some(access_key_id) = object_storage.access_key_id.as_deref() {
+            builder = builder.account_name(access_key_id);
+        }
+
+        if let Some(access_key_secret) = object_storage.access_key_secret.as_deref() {
+            builder = builder.account_key(access_key_secret);
+        }
 
         // Choose the http client using dangerous client or not by insecure_skip_verify.
         let http_client = match object_storage.insecure_skip_verify {
@@ -465,21 +462,12 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // OSS requires the access key id, access key secret, and endpoint.
-        let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
-            &object_storage.access_key_id,
-            &object_storage.access_key_secret,
-            &object_storage.endpoint,
-        ) else {
+        let Some(endpoint) = &object_storage.endpoint else {
             return Err(ClientError::BackendError(Box::new(BackendError {
                 message: format!(
                     "{} {}",
                     self.scheme,
-                    make_need_fields_message!(object_storage {
-                        access_key_id,
-                        access_key_secret,
-                        endpoint
-                    })
+                    make_need_fields_message!(object_storage { endpoint })
                 ),
                 status_code: None,
                 header: None,
@@ -490,20 +478,25 @@ impl ObjectStorage {
         let mut builder = opendal::services::Oss::default();
         builder = if let Some(security_token) = &object_storage.security_token {
             builder
-                .access_key_id(access_key_id)
-                .access_key_secret(access_key_secret)
                 .endpoint(endpoint)
                 .root("/")
                 .bucket(&parsed_url.bucket)
                 .security_token(security_token)
         } else {
             builder
-                .access_key_id(access_key_id)
-                .access_key_secret(access_key_secret)
                 .endpoint(endpoint)
                 .root("/")
                 .bucket(&parsed_url.bucket)
         };
+
+        // Configure the credentials using the access key id and access key secret if provided.
+        if let Some(access_key_id) = object_storage.access_key_id.as_deref() {
+            builder = builder.access_key_id(access_key_id);
+        }
+
+        if let Some(access_key_secret) = object_storage.access_key_secret.as_deref() {
+            builder = builder.access_key_secret(access_key_secret);
+        }
 
         // Choose the http client using dangerous client or not by insecure_skip_verify.
         let http_client = match object_storage.insecure_skip_verify {
@@ -524,21 +517,12 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // OBS requires the endpoint, access key id, and access key secret.
-        let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
-            &object_storage.access_key_id,
-            &object_storage.access_key_secret,
-            &object_storage.endpoint,
-        ) else {
+        let Some(endpoint) = &object_storage.endpoint else {
             return Err(ClientError::BackendError(Box::new(BackendError {
                 message: format!(
                     "{} {}",
                     self.scheme,
-                    make_need_fields_message!(object_storage {
-                        access_key_id,
-                        access_key_secret,
-                        endpoint
-                    })
+                    make_need_fields_message!(object_storage { endpoint })
                 ),
                 status_code: None,
                 header: None,
@@ -547,11 +531,16 @@ impl ObjectStorage {
 
         // Initialize the OBS operator with the object storage.
         let mut builder = opendal::services::Obs::default();
-        builder = builder
-            .access_key_id(access_key_id)
-            .secret_access_key(access_key_secret)
-            .endpoint(endpoint)
-            .bucket(&parsed_url.bucket);
+        builder = builder.endpoint(endpoint).bucket(&parsed_url.bucket);
+
+        // Configure the credentials using the access key id and access key secret if provided.
+        if let Some(access_key_id) = object_storage.access_key_id.as_deref() {
+            builder = builder.access_key_id(access_key_id);
+        }
+
+        if let Some(access_key_secret) = object_storage.access_key_secret.as_deref() {
+            builder = builder.secret_access_key(access_key_secret);
+        }
 
         // Choose the http client using dangerous client or not by insecure_skip_verify.
         let http_client = match object_storage.insecure_skip_verify {
@@ -572,21 +561,12 @@ impl ObjectStorage {
         object_storage: common::v2::ObjectStorage,
         timeout: Duration,
     ) -> ClientResult<Operator> {
-        // COS requires the access key id, the access key secret, and the endpoint.
-        let (Some(access_key_id), Some(access_key_secret), Some(endpoint)) = (
-            &object_storage.access_key_id,
-            &object_storage.access_key_secret,
-            &object_storage.endpoint,
-        ) else {
+        let Some(endpoint) = &object_storage.endpoint else {
             return Err(ClientError::BackendError(Box::new(BackendError {
                 message: format!(
                     "{} {}",
                     self.scheme,
-                    make_need_fields_message!(object_storage {
-                        access_key_id,
-                        access_key_secret,
-                        endpoint
-                    })
+                    make_need_fields_message!(object_storage { endpoint })
                 ),
                 status_code: None,
                 header: None,
@@ -595,11 +575,16 @@ impl ObjectStorage {
 
         // Initialize the COS operator with the object storage.
         let mut builder = opendal::services::Cos::default();
-        builder = builder
-            .secret_id(access_key_id)
-            .secret_key(access_key_secret)
-            .endpoint(endpoint)
-            .bucket(&parsed_url.bucket);
+        builder = builder.endpoint(endpoint).bucket(&parsed_url.bucket);
+
+        // Configure the credentials using the access key id and access key secret if provided.
+        if let Some(access_key_id) = object_storage.access_key_id.as_deref() {
+            builder = builder.secret_id(access_key_id);
+        }
+
+        if let Some(access_key_secret) = object_storage.access_key_secret.as_deref() {
+            builder = builder.secret_key(access_key_secret);
+        }
 
         // Choose the http client using dangerous client or not by insecure_skip_verify.
         let http_client = match object_storage.insecure_skip_verify {
@@ -1102,7 +1087,6 @@ mod tests {
                 access_key_id: Some("access_key_id".into()),
                 access_key_secret: Some("access_key_secret".into()),
                 region: Some("test-region".into()),
-
                 endpoint: Some("test-endpoint.local".into()),
                 ..Default::default()
             },
@@ -1110,7 +1094,6 @@ mod tests {
                 access_key_id: Some("access_key_id".into()),
                 access_key_secret: Some("access_key_secret".into()),
                 region: Some("test-region".into()),
-
                 session_token: Some("session_token".into()),
                 ..Default::default()
             },
@@ -1118,7 +1101,6 @@ mod tests {
                 access_key_id: Some("access_key_id".into()),
                 access_key_secret: Some("access_key_secret".into()),
                 region: Some("test-region".into()),
-
                 endpoint: Some("test-endpoint.local".into()),
                 session_token: Some("session_token".into()),
                 ..Default::default()
@@ -1210,32 +1192,17 @@ mod tests {
         let test_cases = vec![
             (
                 ObjectStorageInfo::default(),
-                "backend error: abs need access_key_id, access_key_secret, endpoint",
+                "backend error: abs need endpoint",
             ),
             (
                 ObjectStorageInfo {
                     access_key_id: Some("access_key_id".into()),
                     ..Default::default()
                 },
-                "backend error: abs need access_key_secret, endpoint",
+                "backend error: abs need endpoint",
             ),
             (
                 ObjectStorageInfo {
-                    access_key_secret: Some("access_key_secret".into()),
-                    ..Default::default()
-                },
-                "backend error: abs need access_key_id, endpoint",
-            ),
-            (
-                ObjectStorageInfo {
-                    endpoint: Some("test-endpoint.local".into()),
-                    ..Default::default()
-                },
-                "backend error: abs need access_key_id, access_key_secret",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_id: Some("access_key_id".into()),
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
@@ -1244,18 +1211,10 @@ mod tests {
             (
                 ObjectStorageInfo {
                     access_key_id: Some("access_key_id".into()),
-                    endpoint: Some("test-endpoint.local".into()),
-                    ..Default::default()
-                },
-                "backend error: abs need access_key_secret",
-            ),
-            (
-                ObjectStorageInfo {
                     access_key_secret: Some("access_key_secret".into()),
-                    endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error: abs need access_key_id",
+                "backend error: abs need endpoint",
             ),
         ];
 
@@ -1277,32 +1236,17 @@ mod tests {
         let test_cases = vec![
             (
                 ObjectStorageInfo::default(),
-                "backend error: oss need access_key_id, access_key_secret, endpoint",
+                "backend error: oss need endpoint",
             ),
             (
                 ObjectStorageInfo {
                     access_key_id: Some("access_key_id".into()),
                     ..Default::default()
                 },
-                "backend error: oss need access_key_secret, endpoint",
+                "backend error: oss need endpoint",
             ),
             (
                 ObjectStorageInfo {
-                    access_key_secret: Some("access_key_secret".into()),
-                    ..Default::default()
-                },
-                "backend error: oss need access_key_id, endpoint",
-            ),
-            (
-                ObjectStorageInfo {
-                    endpoint: Some("test-endpoint.local".into()),
-                    ..Default::default()
-                },
-                "backend error: oss need access_key_id, access_key_secret",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_id: Some("access_key_id".into()),
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
@@ -1311,18 +1255,10 @@ mod tests {
             (
                 ObjectStorageInfo {
                     access_key_id: Some("access_key_id".into()),
-                    endpoint: Some("test-endpoint.local".into()),
-                    ..Default::default()
-                },
-                "backend error: oss need access_key_secret",
-            ),
-            (
-                ObjectStorageInfo {
                     access_key_secret: Some("access_key_secret".into()),
-                    endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error: oss need access_key_id",
+                "backend error: oss need endpoint",
             ),
         ];
 
@@ -1344,32 +1280,17 @@ mod tests {
         let test_cases = vec![
             (
                 ObjectStorageInfo::default(),
-                "backend error: obs need access_key_id, access_key_secret, endpoint",
+                "backend error: obs need endpoint",
             ),
             (
                 ObjectStorageInfo {
                     access_key_id: Some("access_key_id".into()),
                     ..Default::default()
                 },
-                "backend error: obs need access_key_secret, endpoint",
+                "backend error: obs need endpoint",
             ),
             (
                 ObjectStorageInfo {
-                    access_key_secret: Some("access_key_secret".into()),
-                    ..Default::default()
-                },
-                "backend error: obs need access_key_id, endpoint",
-            ),
-            (
-                ObjectStorageInfo {
-                    endpoint: Some("test-endpoint.local".into()),
-                    ..Default::default()
-                },
-                "backend error: obs need access_key_id, access_key_secret",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_id: Some("access_key_id".into()),
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
@@ -1378,18 +1299,10 @@ mod tests {
             (
                 ObjectStorageInfo {
                     access_key_id: Some("access_key_id".into()),
-                    endpoint: Some("test-endpoint.local".into()),
-                    ..Default::default()
-                },
-                "backend error: obs need access_key_secret",
-            ),
-            (
-                ObjectStorageInfo {
                     access_key_secret: Some("access_key_secret".into()),
-                    endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error: obs need access_key_id",
+                "backend error: obs need endpoint",
             ),
         ];
 
@@ -1411,32 +1324,17 @@ mod tests {
         let test_cases = vec![
             (
                 ObjectStorageInfo::default(),
-                "backend error: cos need access_key_id, access_key_secret, endpoint",
+                "backend error: cos need endpoint",
             ),
             (
                 ObjectStorageInfo {
                     access_key_id: Some("access_key_id".into()),
                     ..Default::default()
                 },
-                "backend error: cos need access_key_secret, endpoint",
+                "backend error: cos need endpoint",
             ),
             (
                 ObjectStorageInfo {
-                    access_key_secret: Some("access_key_secret".into()),
-                    ..Default::default()
-                },
-                "backend error: cos need access_key_id, endpoint",
-            ),
-            (
-                ObjectStorageInfo {
-                    endpoint: Some("test-endpoint.local".into()),
-                    ..Default::default()
-                },
-                "backend error: cos need access_key_id, access_key_secret",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_id: Some("access_key_id".into()),
                     access_key_secret: Some("access_key_secret".into()),
                     ..Default::default()
                 },
@@ -1445,18 +1343,10 @@ mod tests {
             (
                 ObjectStorageInfo {
                     access_key_id: Some("access_key_id".into()),
-                    endpoint: Some("test-endpoint.local".into()),
-                    ..Default::default()
-                },
-                "backend error: cos need access_key_secret",
-            ),
-            (
-                ObjectStorageInfo {
                     access_key_secret: Some("access_key_secret".into()),
-                    endpoint: Some("test-endpoint.local".into()),
                     ..Default::default()
                 },
-                "backend error: cos need access_key_id",
+                "backend error: cos need endpoint",
             ),
         ];
 
