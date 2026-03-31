@@ -36,7 +36,7 @@ use tokio_stream::StreamExt;
 use tracing::{debug, error, instrument, warn, Instrument};
 
 // Default max bandwidth weight for parents without network info, set to 10 Gbps.
-const DEFAULT_NETWORK_WEIGHT: u64 = 8 * 10_000_000_000;
+const DEFAULT_NETWORK_WEIGHT: u64 = 10_000_000_000;
 
 /// Manages a single connection to a parent peer.
 ///
