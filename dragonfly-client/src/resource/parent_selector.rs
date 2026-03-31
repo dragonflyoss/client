@@ -17,7 +17,7 @@
 use crate::grpc::dfdaemon_upload::DfdaemonUploadClient;
 use crate::resource::piece_collector::CollectedParent;
 use dashmap::DashMap;
-use dragonfly_api::common::v2::{Host, Peer, PersistentCachePeer, PersistentPeer};
+use dragonfly_api::common::v2::{Network, Peer, PersistentCachePeer, PersistentPeer};
 use dragonfly_api::dfdaemon::v2::SyncHostRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
@@ -34,6 +34,9 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 use tracing::{debug, error, instrument, warn, Instrument};
+
+// Default max bandwidth weight for parents without network info, set to 10 Gbps.
+const DEFAULT_NETWORK_WEIGHT: u64 = 10_000_000_000;
 
 /// Manages a single connection to a parent peer.
 ///
@@ -84,7 +87,7 @@ impl Connection {
 ///
 /// The workflow diagram is as follows:
 ///
-///```text
+/// ```text
 ///                              +----------+
 ///              ----------------|  Parent  |---------------
 ///              |               +----------+              |
@@ -185,7 +188,6 @@ impl ParentSelector {
                 let mut rng = rand::rng();
                 let index = dist.sample(&mut rng);
                 let selected_parent = &parents[index];
-                debug!("selected parent {}", selected_parent.id);
 
                 selected_parent.clone()
             }
@@ -211,6 +213,13 @@ impl ParentSelector {
                 continue;
             };
             let parent_host_id = parent_host.id.clone();
+
+            // Calculate initial weight based on parent's network info if available, otherwise use default weight.
+            let weight = match parent_host.network.as_ref() {
+                Some(network) => Self::calculate_weight_by_network(network),
+                None => DEFAULT_NETWORK_WEIGHT,
+            };
+            self.weights.entry(parent_host_id.clone()).or_insert(weight);
 
             match self.connections.entry(parent_host_id.clone()) {
                 dashmap::mapref::entry::Entry::Occupied(entry) => {
@@ -339,10 +348,13 @@ impl ParentSelector {
                         error!("sync host info from parent {} failed: {}", parent_host_id, err);
                     })? {
                         Some(message) => {
-                            let idle_tx_bandwidth = Self::get_idle_tx_bandwidth(&message);
+                            let weight = match message.network.as_ref() {
+                                Some(network) => Self::calculate_weight_by_network(network),
+                                None => DEFAULT_NETWORK_WEIGHT,
+                            };
 
-                            debug!("update host {} idle TX bandwidth to {}", parent_host_id, idle_tx_bandwidth);
-                            weights.insert(parent_host_id.clone(), idle_tx_bandwidth);
+                            debug!("update host {} weight to {}", parent_host_id, weight);
+                            weights.insert(parent_host_id.clone(), weight);
                         }
                         None => break,
                     }
@@ -361,24 +373,21 @@ impl ParentSelector {
         Ok(())
     }
 
-    /// Calculates the idle transmission bandwidth of a host.
-    #[instrument(skip_all)]
-    fn get_idle_tx_bandwidth(host: &Host) -> u64 {
-        let network = match &host.network {
-            Some(network) => network,
-            None => return 0,
-        };
-
-        debug!("host {} network info: {:?}", host.id, network);
-        let Some(tx_bandwidth) = network.tx_bandwidth else {
-            return 0;
-        };
-
-        if tx_bandwidth < network.max_tx_bandwidth {
-            network.max_tx_bandwidth - tx_bandwidth
-        } else {
-            0
+    /// Calculates the weight of a host based on idle bandwidth ratio.
+    ///
+    /// Weight = max(idle_bandwidth, min_guaranteed_weight)
+    /// - Idle bandwidth = max_bw - tx_bw
+    /// - Minimum guaranteed weight = 10% of max_bw (prevents starvation under full load)
+    ///
+    /// Returns `DEFAULT_NETWORK_WEIGHT` if max bandwidth is unconfigured (zero).
+    fn calculate_weight_by_network(network: &Network) -> u64 {
+        let tx_bw = network.tx_bandwidth();
+        let max_bw = network.max_tx_bandwidth;
+        if max_bw == 0 {
+            return DEFAULT_NETWORK_WEIGHT;
         }
+
+        max_bw.saturating_sub(tx_bw).max(max_bw / 10)
     }
 }
 
@@ -515,6 +524,13 @@ impl PersistentParentSelector {
             };
             let parent_host_id = parent_host.id.clone();
 
+            // Calculate initial weight based on parent's network info if available, otherwise use default weight.
+            let weight = match parent_host.network.as_ref() {
+                Some(network) => Self::calculate_weight_by_network(network),
+                None => DEFAULT_NETWORK_WEIGHT,
+            };
+            self.weights.entry(parent_host_id.clone()).or_insert(weight);
+
             match self.connections.entry(parent_host_id.clone()) {
                 dashmap::mapref::entry::Entry::Occupied(entry) => {
                     entry.get().increment_request();
@@ -642,10 +658,13 @@ impl PersistentParentSelector {
                         error!("sync host info from persistent parent {} failed: {}", parent_host_id, err);
                     })? {
                         Some(message) => {
-                            let idle_tx_bandwidth = Self::get_idle_tx_bandwidth(&message);
+                            let weight = match message.network.as_ref() {
+                                Some(network) => Self::calculate_weight_by_network(network),
+                                None => DEFAULT_NETWORK_WEIGHT,
+                            };
 
-                            debug!("update host {} idle TX bandwidth to {}", parent_host_id, idle_tx_bandwidth);
-                            weights.insert(parent_host_id.clone(), idle_tx_bandwidth);
+                            debug!("update host {} weight to {}", parent_host_id, weight);
+                            weights.insert(parent_host_id.clone(), weight);
                         }
                         None => break,
                     }
@@ -664,24 +683,21 @@ impl PersistentParentSelector {
         Ok(())
     }
 
-    /// Calculates the idle transmission bandwidth of a host.
-    #[instrument(skip_all)]
-    fn get_idle_tx_bandwidth(host: &Host) -> u64 {
-        let network = match &host.network {
-            Some(network) => network,
-            None => return 0,
-        };
-
-        debug!("host {} network info: {:?}", host.id, network);
-        let Some(tx_bandwidth) = network.tx_bandwidth else {
-            return 0;
-        };
-
-        if tx_bandwidth < network.max_tx_bandwidth {
-            network.max_tx_bandwidth - tx_bandwidth
-        } else {
-            0
+    /// Calculates the weight of a host based on idle bandwidth ratio.
+    ///
+    /// Weight = max(idle_bandwidth, min_guaranteed_weight)
+    /// - Idle bandwidth = max_bw - tx_bw
+    /// - Minimum guaranteed weight = 10% of max_bw (prevents starvation under full load)
+    ///
+    /// Returns `DEFAULT_NETWORK_WEIGHT` if max bandwidth is unconfigured (zero).
+    fn calculate_weight_by_network(network: &Network) -> u64 {
+        let tx_bw = network.tx_bandwidth();
+        let max_bw = network.max_tx_bandwidth;
+        if max_bw == 0 {
+            return DEFAULT_NETWORK_WEIGHT;
         }
+
+        max_bw.saturating_sub(tx_bw).max(max_bw / 10)
     }
 }
 
@@ -821,6 +837,13 @@ impl PersistentCacheParentSelector {
             };
             let parent_host_id = parent_host.id.clone();
 
+            // Calculate initial weight based on parent's network info if available, otherwise use default weight.
+            let weight = match parent_host.network.as_ref() {
+                Some(network) => Self::calculate_weight_by_network(network),
+                None => DEFAULT_NETWORK_WEIGHT,
+            };
+            self.weights.entry(parent_host_id.clone()).or_insert(weight);
+
             match self.connections.entry(parent_host_id.clone()) {
                 dashmap::mapref::entry::Entry::Occupied(entry) => {
                     entry.get().increment_request();
@@ -954,10 +977,13 @@ impl PersistentCacheParentSelector {
                         error!("sync host info from persistent cache parent {} failed: {}", parent_host_id, err);
                     })? {
                         Some(message) => {
-                            let idle_tx_bandwidth = Self::get_idle_tx_bandwidth(&message);
+                            let weight = match message.network.as_ref() {
+                                Some(network) => Self::calculate_weight_by_network(network),
+                                None => DEFAULT_NETWORK_WEIGHT,
+                            };
 
-                            debug!("update host {} idle TX bandwidth to {}", parent_host_id, idle_tx_bandwidth);
-                            weights.insert(parent_host_id.clone(), idle_tx_bandwidth);
+                            debug!("update host {} weight to {}", parent_host_id, weight);
+                            weights.insert(parent_host_id.clone(), weight);
                         }
                         None => break,
                     }
@@ -976,23 +1002,20 @@ impl PersistentCacheParentSelector {
         Ok(())
     }
 
-    /// Calculates the idle transmission bandwidth of a host.
-    #[instrument(skip_all)]
-    fn get_idle_tx_bandwidth(host: &Host) -> u64 {
-        let network = match &host.network {
-            Some(network) => network,
-            None => return 0,
-        };
-
-        debug!("host {} network info: {:?}", host.id, network);
-        let Some(tx_bandwidth) = network.tx_bandwidth else {
-            return 0;
-        };
-
-        if tx_bandwidth < network.max_tx_bandwidth {
-            network.max_tx_bandwidth - tx_bandwidth
-        } else {
-            0
+    /// Calculates the weight of a host based on idle bandwidth ratio.
+    ///
+    /// Weight = max(idle_bandwidth, min_guaranteed_weight)
+    /// - Idle bandwidth = max_bw - tx_bw
+    /// - Minimum guaranteed weight = 10% of max_bw (prevents starvation under full load)
+    ///
+    /// Returns `DEFAULT_NETWORK_WEIGHT` if max bandwidth is unconfigured (zero).
+    fn calculate_weight_by_network(network: &Network) -> u64 {
+        let tx_bw = network.tx_bandwidth();
+        let max_bw = network.max_tx_bandwidth;
+        if max_bw == 0 {
+            return DEFAULT_NETWORK_WEIGHT;
         }
+
+        max_bw.saturating_sub(tx_bw).max(max_bw / 10)
     }
 }

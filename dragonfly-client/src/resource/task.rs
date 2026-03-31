@@ -1021,6 +1021,7 @@ impl Task {
                 .collect(),
         )
         .await;
+
         let mut piece_collector_rx = piece_collector.run().await;
 
         // Initialize the interrupt. If download from parent failed with scheduler or download
@@ -1035,6 +1036,7 @@ impl Task {
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.concurrent_piece_count as usize,
         ));
+
         while let Some(collect_piece) = piece_collector_rx.recv().await {
             if interrupt.load(Ordering::SeqCst) {
                 // If the interrupt is true, break the collector loop.
