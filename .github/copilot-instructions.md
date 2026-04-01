@@ -10,17 +10,17 @@ Dragonfly Client (`dragonflyoss/client`) is a high-performance P2P download clie
 
 The repository is a Cargo workspace (resolver `"2"`) containing nine crates:
 
-| Crate | Purpose |
-|---|---|
-| `dragonfly-client` | Main binaries: `dfdaemon`, `dfget`, `dfcache`, `dfstore` |
-| `dragonfly-client-core` | Shared `DFError` enum, `Result<T>` alias, `OrErr` trait |
-| `dragonfly-client-config` | Configuration structs and validation for all binaries |
-| `dragonfly-client-storage` | RocksDB metadata, content files, LRU cache, TCP/QUIC servers |
-| `dragonfly-client-backend` | Download backends: HTTP, S3/object-storage, HDFS, HuggingFace, plugins |
-| `dragonfly-client-util` | Utilities: crypto, TLS, networking, ID generation, rate limiting, shutdown |
-| `dragonfly-client-metric` | Prometheus metrics |
-| `dragonfly-client-init` | `dfinit` binary — bootstraps the runtime environment |
-| `dragonfly-client-backend/examples/plugin` | Example backend plugin |
+| Crate                                      | Purpose                                                                    |
+| ------------------------------------------ | -------------------------------------------------------------------------- |
+| `dragonfly-client`                         | Main binaries: `dfdaemon`, `dfget`, `dfcache`, `dfstore`, `dfctl`          |
+| `dragonfly-client-core`                    | Shared `DFError` enum, `Result<T>` alias, `OrErr` trait                    |
+| `dragonfly-client-config`                  | Configuration structs and validation for all binaries                      |
+| `dragonfly-client-storage`                 | RocksDB metadata, content files, LRU cache, TCP/QUIC servers               |
+| `dragonfly-client-backend`                 | Download backends: HTTP, S3/object-storage, HDFS, HuggingFace, plugins     |
+| `dragonfly-client-util`                    | Utilities: crypto, TLS, networking, ID generation, rate limiting, shutdown |
+| `dragonfly-client-metric`                  | Prometheus metrics                                                         |
+| `dragonfly-client-init`                    | `dfinit` binary — bootstraps the runtime environment                       |
+| `dragonfly-client-backend/examples/plugin` | Example backend plugin                                                     |
 
 All crates share `[workspace.package]` metadata (version `1.2.11`, Apache-2.0 license, edition `2021`) and `[workspace.dependencies]` for consistent dependency versions.
 
@@ -121,13 +121,13 @@ use tracing::{debug, error, info, instrument, warn, Instrument, Span};
 
 ### Log Levels
 
-| Level | When to use |
-|---|---|
+| Level    | When to use                                         |
+| -------- | --------------------------------------------------- |
 | `error!` | Unrecoverable failures that need operator attention |
-| `warn!` | Recoverable anomalies or degraded behaviour |
-| `info!` | Normal operational lifecycle events |
-| `debug!` | Detailed state useful during development |
-| `trace!` | Very verbose per-iteration details |
+| `warn!`  | Recoverable anomalies or degraded behaviour         |
+| `info!`  | Normal operational lifecycle events                 |
+| `debug!` | Detailed state useful during development            |
+| `trace!` | Very verbose per-iteration details                  |
 
 ### Instrumentation
 
@@ -155,6 +155,7 @@ tokio::spawn(
 ### Tracing Setup
 
 The `tracing` module in `dragonfly-client` initializes:
+
 - A rolling file appender (hourly rotation) with RFC 3339 timestamps.
 - An optional stdout layer (enabled when `console = true`).
 - An optional OpenTelemetry OTLP exporter.
@@ -193,12 +194,12 @@ mod tests {
 
 ### Test Dependencies
 
-| Library | Purpose |
-|---|---|
-| `tempfile` | Temporary files and directories |
-| `mocktail` | General-purpose mocking |
-| `wiremock` | HTTP endpoint mocking (backend crate) |
-| `criterion` | Micro-benchmarks (storage crate) |
+| Library     | Purpose                               |
+| ----------- | ------------------------------------- |
+| `tempfile`  | Temporary files and directories       |
+| `mocktail`  | General-purpose mocking               |
+| `wiremock`  | HTTP endpoint mocking (backend crate) |
+| `criterion` | Micro-benchmarks (storage crate)      |
 
 ### Running Tests
 
@@ -225,25 +226,25 @@ cargo bench -p dragonfly-client-storage
 
 ## Key Dependencies
 
-| Crate | Role |
-|---|---|
-| `tonic` 0.12 | gRPC client/server |
-| `hyper` 1.x + `hyper-util` | HTTP server and MITM proxy |
-| `reqwest` 0.12 | HTTP client for backend downloads |
-| `rustls` 0.23 | TLS (ring backend, TLS 1.2+) |
-| `tokio` 1.x | Async runtime |
-| `rocksdb` 0.24 | Embedded metadata storage |
-| `serde` + `bincode` + `serde_json` + `serde_yaml` | Serialization |
-| `tracing` + `tracing-subscriber` + `opentelemetry-otlp` | Observability |
-| `prometheus` 0.13 | Metrics |
-| `opendal` 0.55 | Multi-backend object storage |
-| `quinn` 0.11 | QUIC transport |
-| `thiserror` 2.0 | Error derive macros |
-| `clap` 4.x | CLI argument parsing |
-| `validator` 0.16 | Config validation |
-| `dashmap` 6.x | Concurrent hashmap |
-| `tikv-jemallocator` | JeMalloc global allocator (non-MSVC) |
-| `dragonfly-api` =2.2.22 | Protobuf/gRPC API definitions |
+| Crate                                                   | Role                                 |
+| ------------------------------------------------------- | ------------------------------------ |
+| `tonic` 0.12                                            | gRPC client/server                   |
+| `hyper` 1.x + `hyper-util`                              | HTTP server and MITM proxy           |
+| `reqwest` 0.12                                          | HTTP client for backend downloads    |
+| `rustls` 0.23                                           | TLS (ring backend, TLS 1.2+)         |
+| `tokio` 1.x                                             | Async runtime                        |
+| `rocksdb` 0.24                                          | Embedded metadata storage            |
+| `serde` + `bincode` + `serde_json` + `serde_yaml`       | Serialization                        |
+| `tracing` + `tracing-subscriber` + `opentelemetry-otlp` | Observability                        |
+| `prometheus` 0.13                                       | Metrics                              |
+| `opendal` 0.55                                          | Multi-backend object storage         |
+| `quinn` 0.11                                            | QUIC transport                       |
+| `thiserror` 2.0                                         | Error derive macros                  |
+| `clap` 4.x                                              | CLI argument parsing                 |
+| `validator` 0.16                                        | Config validation                    |
+| `dashmap` 6.x                                           | Concurrent hashmap                   |
+| `tikv-jemallocator`                                     | JeMalloc global allocator (non-MSVC) |
+| `dragonfly-api` =2.2.22                                 | Protobuf/gRPC API definitions        |
 
 Centralise all dependency versions in `[workspace.dependencies]` in the root `Cargo.toml`. Do not specify a version in a crate's own `Cargo.toml` unless it differs from the workspace version.
 

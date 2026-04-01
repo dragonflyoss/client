@@ -16,7 +16,7 @@
 
 use chrono::{DateTime, Local};
 use clap::{Parser, Subcommand};
-use dragonfly_api::dfdaemon::v2::DeletePersistentTaskRequest;
+use dragonfly_api::dfdaemon::v2::ListLocalPersistentTasksRequest;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::net::preferred_local_ip;
 use std::path::PathBuf;
@@ -47,15 +47,6 @@ pub enum PersistentTaskSubCommand {
         long_about = "List all persistent tasks managed by the local dfdaemon."
     )]
     Ls(LsCommand),
-
-    #[command(
-        name = "rm",
-        author,
-        version,
-        about = "Remove a persistent task",
-        long_about = "Remove a specific persistent task by ID from the local dfdaemon."
-    )]
-    Rm(RmCommand),
 }
 
 /// Implement the execute for PersistentTaskCommand.
@@ -63,7 +54,6 @@ impl PersistentTaskCommand {
     pub async fn execute(self) -> Result<()> {
         match self.subcommand {
             PersistentTaskSubCommand::Ls(cmd) => cmd.execute().await,
-            PersistentTaskSubCommand::Rm(cmd) => cmd.execute().await,
         }
     }
 }
@@ -247,35 +237,76 @@ impl LsCommand {
         &self,
         dfdaemon_download_client: dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient,
     ) -> Result<()> {
-        let tasks = dfdaemon_download_client.get_persistent_tasks().await?;
+        let response = dfdaemon_download_client
+            .list_local_persistent_tasks(ListLocalPersistentTasksRequest {
+                remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
+            })
+            .await?;
 
         // Define the table structure for printing.
         #[derive(Debug, Default, Tabled)]
         #[tabled(rename_all = "UPPERCASE")]
         struct PersistentTaskRow {
             id: String,
-            state: String,
+            persistent: bool,
+            ttl: String,
+            #[tabled(rename = "PIECE LENGTH")]
+            piece_length: String,
             #[tabled(rename = "CONTENT LENGTH")]
             content_length: String,
-            #[tabled(rename = "CREATED AT")]
+            #[tabled(rename = "CREATED")]
             created_at: String,
-            #[tabled(rename = "UPDATED AT")]
+            #[tabled(rename = "FINISHED")]
+            finished_at: String,
+            #[tabled(rename = "FAILED")]
+            failed_at: String,
+            #[tabled(rename = "UPDATED")]
             updated_at: String,
         }
 
         let mut rows: Vec<PersistentTaskRow> = Vec::new();
-        for task in tasks {
+        for task in response.tasks {
             let mut row = PersistentTaskRow {
-                id: task.id.clone(),
-                state: task.state.clone(),
-                content_length: bytesize::to_string(task.content_length, true),
-                ..Default::default()
+                id: task.task_id.clone(),
+                persistent: task.persistent,
+                ttl: humantime::format_duration(
+                    task.ttl
+                        .and_then(|d| std::time::Duration::try_from(d).ok())
+                        .unwrap_or_default(),
+                )
+                .to_string(),
+                piece_length: bytesize::to_string(task.piece_length.unwrap_or_default(), true),
+                content_length: bytesize::to_string(task.content_length.unwrap_or_default(), true),
+                created_at: "-".to_string(),
+                finished_at: "-".to_string(),
+                failed_at: "-".to_string(),
+                updated_at: "-".to_string(),
             };
 
             // Convert created_at to human readable format.
             if let Some(ts) = task.created_at {
                 if let Some(dt) = DateTime::from_timestamp(ts.seconds, ts.nanos as u32) {
                     row.created_at = dt
+                        .with_timezone(&Local)
+                        .format("%Y-%m-%d %H:%M:%S")
+                        .to_string();
+                }
+            }
+
+            // Convert finished_at to human readable format.
+            if let Some(ts) = task.finished_at {
+                if let Some(dt) = DateTime::from_timestamp(ts.seconds, ts.nanos as u32) {
+                    row.finished_at = dt
+                        .with_timezone(&Local)
+                        .format("%Y-%m-%d %H:%M:%S")
+                        .to_string();
+                }
+            }
+
+            // Convert failed_at to human readable format.
+            if let Some(ts) = task.failed_at {
+                if let Some(dt) = DateTime::from_timestamp(ts.seconds, ts.nanos as u32) {
+                    row.failed_at = dt
                         .with_timezone(&Local)
                         .format("%Y-%m-%d %H:%M:%S")
                         .to_string();
@@ -299,209 +330,8 @@ impl LsCommand {
         let mut table = Table::new(rows);
         table
             .with(Style::blank())
-            .with(Modify::new(Rows::first()).with(Alignment::center()));
+            .with(Modify::new(Rows::first()).with(Alignment::left()));
         println!("{table}");
-
-        Ok(())
-    }
-}
-
-/// RmCommand is the subcommand of persistent-task rm.
-#[derive(Debug, Clone, Parser)]
-pub struct RmCommand {
-    #[arg(help = "Specify the persistent task ID to remove")]
-    id: String,
-
-    #[arg(
-        short = 'e',
-        long = "endpoint",
-        default_value_os_t = dfdaemon::default_download_unix_socket_path(),
-        help = "Endpoint of dfdaemon's GRPC server"
-    )]
-    endpoint: PathBuf,
-
-    #[arg(
-        short = 'l',
-        long,
-        default_value = "info",
-        help = "Specify the logging level [trace, debug, info, warn, error]"
-    )]
-    log_level: Level,
-
-    #[arg(long, default_value_t = false, help = "Specify whether to print log")]
-    console: bool,
-}
-
-/// Implement the execute for RmCommand.
-impl RmCommand {
-    /// Executes the rm command to remove a persistent task.
-    ///
-    /// This function serves as the main entry point for the dfctl persistent-task rm command
-    /// execution. It handles the complete lifecycle including argument parsing, logging
-    /// initialization, dfdaemon client setup, and command execution with detailed error reporting.
-    pub async fn execute(&self) -> Result<()> {
-        // Initialize tracing.
-        let _guards = init_command_tracing(self.log_level, self.console);
-
-        // Get dfdaemon download client.
-        let dfdaemon_download_client =
-            match get_dfdaemon_download_client(self.endpoint.clone()).await {
-                Ok(client) => client,
-                Err(err) => {
-                    println!(
-                        "{}{}{}Connect Dfdaemon Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} can not connect {}, please check the unix socket {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err,
-                        self.endpoint.to_string_lossy(),
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    std::process::exit(1);
-                }
-            };
-
-        // Run rm sub command.
-        if let Err(err) = self.run(dfdaemon_download_client).await {
-            match err {
-                Error::TonicStatus(status) => {
-                    println!(
-                        "{}{}{}Removing Persistent Task Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                    );
-
-                    println!(
-                        "{}{}{}*********************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Bad Code:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        status.code()
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        status.message()
-                    );
-
-                    println!(
-                        "{}{}{}Details:{} {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        std::str::from_utf8(status.details()).unwrap()
-                    );
-
-                    println!(
-                        "{}{}{}*********************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-                }
-                err => {
-                    println!(
-                        "{}{}{}Removing Persistent Task Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-                }
-            }
-
-            std::process::exit(1);
-        }
-
-        Ok(())
-    }
-
-    /// Runs the rm command to delete a persistent task by ID.
-    async fn run(
-        &self,
-        dfdaemon_download_client: dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient,
-    ) -> Result<()> {
-        dfdaemon_download_client
-            .delete_persistent_task(DeletePersistentTaskRequest {
-                task_id: self.id.clone(),
-                remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
-            })
-            .await?;
-
-        println!(
-            "{}{}{}Persistent Task Removed!{}",
-            color::Fg(color::Green),
-            style::Italic,
-            style::Bold,
-            style::Reset
-        );
 
         Ok(())
     }

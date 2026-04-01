@@ -24,7 +24,8 @@ use dragonfly_api::dfdaemon::{
     self,
     v2::{
         download_persistent_cache_task_response, DownloadPersistentCacheTaskRequest,
-        DownloadPersistentCacheTaskResponse, UploadPersistentCacheTaskRequest,
+        DownloadPersistentCacheTaskResponse, ListLocalPersistentCacheTasksResponse,
+        StatLocalPersistentCacheTaskResponse, UploadPersistentCacheTaskRequest,
     },
 };
 use dragonfly_api::scheduler::v2::{
@@ -1556,6 +1557,72 @@ impl PersistentCacheTask {
                 task_id: task_id.to_string(),
             })
             .await
+    }
+
+    /// stat_local stats the local persistent cache task from the scheduler.
+    #[instrument(skip_all)]
+    pub async fn stat_local(
+        &self,
+        task_id: &str,
+    ) -> ClientResult<StatLocalPersistentCacheTaskResponse> {
+        let Some(task) = self.get(task_id).inspect_err(|err| {
+            error!(
+                "get cache persistent task {} from local storage error: {:?}",
+                task_id, err
+            );
+        })?
+        else {
+            return Err(Error::TaskNotFound(task_id.to_owned()));
+        };
+
+        Ok(StatLocalPersistentCacheTaskResponse {
+            task_id: task.id,
+            persistent: task.persistent,
+            ttl: Some(prost_wkt_types::Duration::try_from(task.ttl).or_err(ErrorType::ParseError)?),
+            piece_length: Some(task.piece_length),
+            content_length: Some(task.content_length),
+            uploading_count: task.uploading_count as u64,
+            uploaded_count: task.uploaded_count,
+            created_at: Some(task.created_at.into()),
+            updated_at: Some(task.updated_at.into()),
+            failed_at: task.failed_at.map(Into::into),
+            finished_at: task.finished_at.map(Into::into),
+        })
+    }
+
+    /// list_local returns the persistent cache tasks from local storage.
+    #[instrument(skip_all)]
+    pub async fn list_local(&self) -> ClientResult<ListLocalPersistentCacheTasksResponse> {
+        let tasks = self.storage.get_persistent_tasks().inspect_err(|err| {
+            error!(
+                "list persistent cache tasks from local storage error: {:?}",
+                err
+            );
+        })?;
+
+        let tasks: Vec<StatLocalPersistentCacheTaskResponse> = tasks
+            .into_iter()
+            .map(|task| {
+                Ok(StatLocalPersistentCacheTaskResponse {
+                    task_id: task.id,
+                    persistent: task.persistent,
+                    ttl: Some(
+                        prost_wkt_types::Duration::try_from(task.ttl)
+                            .or_err(ErrorType::ParseError)?,
+                    ),
+                    piece_length: Some(task.piece_length),
+                    content_length: Some(task.content_length),
+                    uploading_count: task.uploading_count as u64,
+                    uploaded_count: task.uploaded_count,
+                    created_at: Some(task.created_at.into()),
+                    updated_at: Some(task.updated_at.into()),
+                    failed_at: task.failed_at.map(Into::into),
+                    finished_at: task.finished_at.map(Into::into),
+                })
+            })
+            .collect::<ClientResult<Vec<_>>>()?;
+
+        Ok(ListLocalPersistentCacheTasksResponse { tasks })
     }
 
     /// delete_persistent_cache_task deletes a persistent cache task.

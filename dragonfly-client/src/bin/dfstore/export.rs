@@ -95,15 +95,6 @@ pub struct ExportCommand {
     digest: Option<String>,
 
     #[arg(
-        short = 'e',
-        long = "endpoint",
-        default_value_os_t = dfdaemon::default_download_unix_socket_path(),
-        env = "DFSTORE_EXPORT_DFDAEMON_ENDPOINT",
-        help = "Endpoint of dfdaemon's GRPC server"
-    )]
-    endpoint: PathBuf,
-
-    #[arg(
         long,
         env = "DFSTORE_EXPORT_STORAGE_REGION",
         help = "Specify the region for the Object Storage Service (e.g., us-east-1)"

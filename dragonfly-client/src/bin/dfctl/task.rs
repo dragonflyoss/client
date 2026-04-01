@@ -16,7 +16,7 @@
 
 use chrono::{DateTime, Local};
 use clap::{Parser, Subcommand};
-use dragonfly_api::dfdaemon::v2::DeleteTaskRequest;
+use dragonfly_api::dfdaemon::v2::{DeleteTaskRequest, ListLocalTasksRequest};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::net::preferred_local_ip;
 use std::path::PathBuf;
@@ -247,35 +247,67 @@ impl LsCommand {
         &self,
         dfdaemon_download_client: dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient,
     ) -> Result<()> {
-        let tasks = dfdaemon_download_client.get_tasks().await?;
+        let response = dfdaemon_download_client
+            .list_local_tasks(ListLocalTasksRequest {
+                remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
+            })
+            .await?;
 
         // Define the table structure for printing.
         #[derive(Debug, Default, Tabled)]
         #[tabled(rename_all = "UPPERCASE")]
         struct TaskRow {
             id: String,
-            state: String,
+            #[tabled(rename = "PIECE LENGTH")]
+            piece_length: String,
             #[tabled(rename = "CONTENT LENGTH")]
             content_length: String,
-            #[tabled(rename = "CREATED AT")]
+            #[tabled(rename = "CREATED")]
             created_at: String,
-            #[tabled(rename = "UPDATED AT")]
+            #[tabled(rename = "FINISHED")]
+            finished_at: String,
+            #[tabled(rename = "FAILED")]
+            failed_at: String,
+            #[tabled(rename = "UPDATED")]
             updated_at: String,
         }
 
         let mut rows: Vec<TaskRow> = Vec::new();
-        for task in tasks {
+        for task in response.tasks {
             let mut row = TaskRow {
-                id: task.id.clone(),
-                state: task.state.clone(),
-                content_length: bytesize::to_string(task.content_length, true),
-                ..Default::default()
+                id: task.task_id.clone(),
+                piece_length: bytesize::to_string(task.piece_length.unwrap_or_default(), true),
+                content_length: bytesize::to_string(task.content_length.unwrap_or_default(), true),
+                created_at: "-".to_string(),
+                finished_at: "-".to_string(),
+                failed_at: "-".to_string(),
+                updated_at: "-".to_string(),
             };
 
             // Convert created_at to human readable format.
             if let Some(ts) = task.created_at {
                 if let Some(dt) = DateTime::from_timestamp(ts.seconds, ts.nanos as u32) {
                     row.created_at = dt
+                        .with_timezone(&Local)
+                        .format("%Y-%m-%d %H:%M:%S")
+                        .to_string();
+                }
+            }
+
+            // Convert finished_at to human readable format.
+            if let Some(ts) = task.finished_at {
+                if let Some(dt) = DateTime::from_timestamp(ts.seconds, ts.nanos as u32) {
+                    row.finished_at = dt
+                        .with_timezone(&Local)
+                        .format("%Y-%m-%d %H:%M:%S")
+                        .to_string();
+                }
+            }
+
+            // Convert failed_at to human readable format.
+            if let Some(ts) = task.failed_at {
+                if let Some(dt) = DateTime::from_timestamp(ts.seconds, ts.nanos as u32) {
+                    row.failed_at = dt
                         .with_timezone(&Local)
                         .format("%Y-%m-%d %H:%M:%S")
                         .to_string();
@@ -299,7 +331,7 @@ impl LsCommand {
         let mut table = Table::new(rows);
         table
             .with(Style::blank())
-            .with(Modify::new(Rows::first()).with(Alignment::center()));
+            .with(Modify::new(Rows::first()).with(Alignment::left()));
 
         println!("{table}");
         Ok(())
