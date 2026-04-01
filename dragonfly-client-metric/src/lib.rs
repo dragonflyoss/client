@@ -1453,7 +1453,7 @@ mod tests {
         let counter = LIST_LOCAL_TASKS_COUNT.with_label_values(&["4"]).get();
         assert!(counter > 0);
 
-        collect_list_local_tasks_started_metrics(4);
+        collect_list_local_tasks_failure_metrics(4);
         let failure_counter = LIST_LOCAL_TASKS_FAILURE_COUNT
             .with_label_values(&["4"])
             .get();
