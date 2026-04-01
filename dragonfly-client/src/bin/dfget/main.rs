@@ -68,7 +68,10 @@ Examples:
   $ dfget hdfs://<host>:<port>/<path> -O /tmp/file.txt --hdfs-delegation-token=<delegation_token>
 
   # Download a file from Amazon Simple Storage Service(S3).
-  $ dfget s3://<bucket>/<path> -O /tmp/file.txt --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret>
+  $ dfget s3://<bucket>/<path> -O /tmp/file.txt --storage-region=<region> --storage-access-key-id=<access_key_id> --storage-access-key-secret=<access_key_secret>
+
+  # Download a file from Amazon Simple Storage Service(S3) using S3 settings loaded from the environment.
+  $ DFGET_STORAGE__ENDPOINT=<endpoint> DFGET_STORAGE_REGION=<region> DFGET_STORAGE_ACCESS_KEY_ID=<access_key_id> DFGET_STORAGE_ACCESS_KEY_SECRET=<access_key_secret> dfget s3://<bucket>/<path> -O /tmp/file.txt
 
   # Download a file from Google Cloud Storage Service(GCS).
   $ dfget gs://<bucket>/<path> -O /tmp/file.txt --storage-credential-path=<credential_path>
@@ -126,6 +129,7 @@ struct Args {
     #[arg(
         long = "transfer-from-dfdaemon",
         default_value_t = false,
+        env = "DFGET_TRANSFER_FROM_DFDAEMON",
         help = "Specify whether to transfer the content of downloading file from dfdaemon's unix domain socket. If it is true, dfget will call dfdaemon to download the file, and dfdaemon will return the content of downloading file to dfget via unix domain socket, and dfget will copy the content to the output path. If it is false, dfdaemon will download the file and hardlink or copy the file to the output path."
     )]
     transfer_from_dfdaemon: bool,
@@ -133,6 +137,7 @@ struct Args {
     #[arg(
         long = "overwrite",
         default_value_t = false,
+        env = "DFGET_OVERWRITE",
         help = "Specify whether to overwrite the output file if it already exists. If it is true, dfget will overwrite the output file. If it is false, dfget will return an error if the output file already exists. Cannot be used with `--force-hard-link=true`"
     )]
     overwrite: bool,
@@ -140,12 +145,14 @@ struct Args {
     #[arg(
         long = "force-hard-link",
         default_value_t = false,
+        env = "DFGET_FORCE_HARD_LINK",
         help = "Specify whether the download file must be hard linked to the output path. If hard link is failed, download will be failed. If it is false, dfdaemon will copy the file to the output path if hard link is failed."
     )]
     force_hard_link: bool,
 
     #[arg(
         long = "content-for-calculating-task-id",
+        env = "DFGET_CONTENT_FOR_CALCULATING_TASK_ID",
         help = "Specify the content used to calculate the task ID. If it is set, use its value to calculate the task ID, Otherwise, calculate the task ID based on URL, piece-length, tag, application, and filtered-query-params."
     )]
     content_for_calculating_task_id: Option<String>,
@@ -156,6 +163,15 @@ struct Args {
         help = "Specify the output path of downloading file"
     )]
     output: PathBuf,
+
+    #[arg(
+        short = 'e',
+        long = "endpoint",
+        default_value_os_t = dfdaemon::default_download_unix_socket_path(),
+        env = "DFGET_DFDAEMON_ENDPOINT",
+        help = "Endpoint of dfdaemon's GRPC server"
+    )]
+    endpoint: PathBuf,
 
     #[arg(
         short = 'r',
@@ -169,6 +185,7 @@ struct Args {
         long = "timeout",
         value_parser= humantime::parse_duration,
         default_value = "2h",
+        env = "DFGET_TIMEOUT",
         help = "Specify the timeout for downloading a file"
     )]
     timeout: Duration,
@@ -184,6 +201,7 @@ struct Args {
         short = 'p',
         long = "priority",
         default_value_t = 6,
+        env = "DFGET_PRIORITY",
         help = "Specify the priority for scheduling task"
     )]
     priority: i32,
@@ -191,6 +209,7 @@ struct Args {
     #[arg(
         long = "piece-length",
         required = false,
+        env = "DFGET_PIECE_LENGTH",
         help = "Specify the piece length for downloading file. If the piece length is not specified, the piece length will be calculated according to the file size. Different piece lengths will be divided into different tasks. The value needs to be set with human readable format and needs to be greater than or equal to 4mib, for example: 4mib, 1gib"
     )]
     piece_length: Option<ByteSize>,
@@ -198,6 +217,7 @@ struct Args {
     #[arg(
         long = "application",
         default_value = "",
+        env = "DFGET_APPLICATION",
         help = "Different applications for the same URL will be divided into different tasks"
     )]
     application: String,
@@ -205,6 +225,7 @@ struct Args {
     #[arg(
         long = "tag",
         default_value = "",
+        env = "DFGET_TAG",
         help = "Different tags for the same URL will be divided into different tasks"
     )]
     tag: String,
@@ -235,48 +256,63 @@ struct Args {
     #[arg(
         long = "disable-back-to-source",
         default_value_t = false,
+        env = "DFGET_DISABLE_BACK_TO_SOURCE",
         help = "Disable back-to-source download when dfget download failed"
     )]
     disable_back_to_source: bool,
 
-    #[arg(long, help = "Specify the region for the Object Storage Service")]
+    #[arg(
+        long,
+        env = "DFGET_STORAGE_REGION",
+        help = "Specify the region for the Object Storage Service (e.g., us-east-1)"
+    )]
     storage_region: Option<String>,
 
-    #[arg(long, help = "Specify the endpoint for the Object Storage Service")]
+    #[arg(
+        long,
+        env = "DFGET_STORAGE_ENDPOINT",
+        help = "Specify the endpoint URL for the Object Storage Service (e.g., https://s3.amazonaws.com)"
+    )]
     storage_endpoint: Option<String>,
 
     #[arg(
         long,
-        help = "Specify the access key ID for the Object Storage Service"
+        env = "DFGET_STORAGE_ACCESS_KEY_ID",
+        help = "Specify the access key ID for authenticating with the Object Storage Service"
     )]
     storage_access_key_id: Option<String>,
 
     #[arg(
         long,
-        help = "Specify the access key secret for the Object Storage Service"
+        env = "DFGET_STORAGE_ACCESS_KEY_SECRET",
+        help = "Specify the secret access key for authenticating with the Object Storage Service"
     )]
     storage_access_key_secret: Option<String>,
 
     #[arg(
         long,
+        env = "DFGET_STORAGE_SECURITY_TOKEN",
         help = "Specify the security token for the Object Storage Service"
     )]
     storage_security_token: Option<String>,
 
     #[arg(
         long,
+        env = "DFGET_STORAGE_INSECURE_SKIP_VERIFY",
         help = "Specify whether to skip verify TLS certification for object storage service"
     )]
     storage_insecure_skip_verify: Option<bool>,
 
     #[arg(
         long,
+        env = "DFGET_STORAGE_SESSION_TOKEN",
         help = "Specify the session token for Amazon Simple Storage Service(S3)"
     )]
     storage_session_token: Option<String>,
 
     #[arg(
         long,
+        env = "DFGET_STORAGE_CREDENTIAL_PATH",
         help = "Specify the local path to the credential file which is used for OAuth2 authentication for Google Cloud Storage Service(GCS)"
     )]
     storage_credential_path: Option<String>,
@@ -284,12 +320,14 @@ struct Args {
     #[arg(
         long,
         default_value = "publicRead",
+        env = "DFGET_STORAGE_PREDEFINED_ACL",
         help = "Specify the predefined ACL for Google Cloud Storage Service(GCS)"
     )]
     storage_predefined_acl: Option<String>,
 
     #[arg(
         long,
+        env = "DFGET_HDFS_DELEGATION_TOKEN",
         help = "Specify the delegation token for Hadoop Distributed File System(HDFS)"
     )]
     hdfs_delegation_token: Option<String>,
@@ -297,12 +335,14 @@ struct Args {
     #[arg(
         long,
         default_value = "master",
+        env = "DFGET_MS_REVISION",
         help = "Specify the revision version for ModelScope Hub"
     )]
     ms_revision: String,
 
     #[arg(
         long = "ms-token",
+        env = "DFGET_MS_TOKEN",
         help = "Specify the authentication token for ModelScope Hub"
     )]
     ms_token: Option<String>,
@@ -310,16 +350,22 @@ struct Args {
     #[arg(
         long,
         default_value = "main",
+        env = "DFGET_HF_REVISION",
         help = "Specify the revision version for Hugging Face Hub"
     )]
     hf_revision: String,
 
-    #[arg(long, help = "Specify the authentication token for Hugging Face Hub")]
+    #[arg(
+        long,
+        env = "DFGET_HF_TOKEN",
+        help = "Specify the authentication token for Hugging Face Hub"
+    )]
     hf_token: Option<String>,
 
     #[arg(
         long,
         default_value_t = 100,
+        env = "DFGET_MAX_FILES",
         help = "Specify the max count of file to download when downloading a directory. If the actual file count is greater than this value, the downloading will be rejected"
     )]
     max_files: usize,
@@ -327,6 +373,7 @@ struct Args {
     #[arg(
         long,
         default_value_t = 5,
+        env = "DFGET_MAX_CONCURRENT_REQUESTS",
         help = "Specify the max count of concurrent download files when downloading a directory"
     )]
     max_concurrent_requests: usize,
@@ -334,6 +381,7 @@ struct Args {
     #[arg(
         long,
         default_value_t = false,
+        env = "DFGET_NO_PROGRESS",
         help = "Specify whether to disable the progress bar display"
     )]
     no_progress: bool,
@@ -350,11 +398,17 @@ struct Args {
         short = 'l',
         long,
         default_value = "info",
+        env = "DFGET_LOG_LEVEL",
         help = "Specify the logging level [trace, debug, info, warn, error]"
     )]
     log_level: Level,
 
-    #[arg(long, default_value_t = false, help = "Specify whether to print log")]
+    #[arg(
+        long,
+        default_value_t = false,
+        env = "DFGET_CONSOLE",
+        help = "Specify whether to print log"
+    )]
     console: bool,
 
     #[arg(

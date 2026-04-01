@@ -33,7 +33,10 @@ use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::{dfdaemon, VersionValueParser};
 use dragonfly_client_metric::Metrics;
 use dragonfly_client_storage::{server::quic::QUICServer, server::tcp::TCPServer, Storage};
-use dragonfly_client_util::{id_generator::IDGenerator, shutdown, sysinfo::SystemMonitor};
+use dragonfly_client_util::{
+    container::is_running_in_container, id_generator::IDGenerator, ratelimiter::bbr::BBR, shutdown,
+    sysinfo::SystemMonitor,
+};
 use leaky_bucket::RateLimiter;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -68,6 +71,7 @@ struct Args {
         short = 'c',
         long = "config",
         default_value_os_t = dfdaemon::default_dfdaemon_config_path(),
+        env = "DFDAEMON_CONFIG",
         help = "Specify config file to use")
     ]
     config: PathBuf,
@@ -76,6 +80,7 @@ struct Args {
         short = 'l',
         long,
         default_value = "info",
+        env = "DFDAEMON_LOG_LEVEL",
         help = "Specify the logging level [trace, debug, info, warn, error]"
     )]
     log_level: Level,
@@ -83,6 +88,7 @@ struct Args {
     #[arg(
         long,
         default_value_os_t = dfdaemon::default_dfdaemon_log_dir(),
+        env = "DFDAEMON_LOG_DIR",
         help = "Specify the log directory"
     )]
     log_dir: PathBuf,
@@ -90,11 +96,17 @@ struct Args {
     #[arg(
         long,
         default_value_t = 6,
+        env = "DFDAEMON_LOG_MAX_FILES",
         help = "Specify the max number of log files"
     )]
     log_max_files: usize,
 
-    #[arg(long, default_value_t = true, help = "Specify whether to print log")]
+    #[arg(
+        long,
+        default_value_t = true,
+        env = "DFDAEMON_CONSOLE",
+        help = "Specify whether to print log"
+    )]
     console: bool,
 
     #[arg(
@@ -377,6 +389,13 @@ async fn main() -> Result<(), anyhow::Error> {
         error!("initialize scheduler announcer failed: {}", err);
     })?;
 
+    // Initialize BBR rate limiter.
+    let bbr = if let Some(ref adaptive_rate_limit) = config.server.adaptive_rate_limit {
+        Some(Arc::new(BBR::new(adaptive_rate_limit.clone()).await))
+    } else {
+        None
+    };
+
     // Initialize upload grpc server.
     let mut dfdaemon_upload_grpc = DfdaemonUploadServer::new(
         config.clone(),
@@ -385,6 +404,7 @@ async fn main() -> Result<(), anyhow::Error> {
         persistent_task.clone(),
         persistent_cache_task.clone(),
         system_monitor.clone(),
+        bbr.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
@@ -397,6 +417,7 @@ async fn main() -> Result<(), anyhow::Error> {
         task.clone(),
         persistent_task.clone(),
         persistent_cache_task.clone(),
+        bbr.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
@@ -411,8 +432,12 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     );
 
-    // Log dfdaemon started pid.
-    info!("dfdaemon started at pid {}", std::process::id());
+    // Log dfdaemon started pid and whether it is running in container.
+    info!(
+        "dfdaemon started at pid {}, containerized: {}",
+        std::process::id(),
+        is_running_in_container()
+    );
 
     // grpc server started barrier.
     let grpc_server_started_barrier = Arc::new(Barrier::new(3));

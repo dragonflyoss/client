@@ -56,6 +56,7 @@ use dragonfly_client_util::{
     digest::{is_blob_url, verify_file_digest, Digest},
     http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
     id_generator::{PersistentTaskIDParameter, TaskIDParameter},
+    ratelimiter::bbr::BBR,
     shutdown,
     sysinfo::SystemMonitor,
 };
@@ -73,6 +74,7 @@ use tonic::{
     transport::{Channel, Server},
     Code, Request, Response, Status,
 };
+use tower::util::option_layer;
 use tower::{
     buffer::BufferLayer,
     limit::rate::RateLimitLayer,
@@ -84,6 +86,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
+use super::middleware::BBRLayer;
 
 /// gRPC server for upload operations.
 pub struct DfdaemonUploadServer {
@@ -105,6 +108,9 @@ pub struct DfdaemonUploadServer {
     /// System interface for monitoring.
     system_monitor: Arc<SystemMonitor>,
 
+    /// BBR rate limiter middleware for adaptive rate limiting based on system load.
+    bbr: Option<Arc<BBR>>,
+
     /// shutdown is used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
 
@@ -123,6 +129,7 @@ impl DfdaemonUploadServer {
         persistent_task: Arc<persistent_task::PersistentTask>,
         persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
         system_monitor: Arc<SystemMonitor>,
+        bbr: Option<Arc<BBR>>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -133,6 +140,7 @@ impl DfdaemonUploadServer {
             persistent_task,
             persistent_cache_task,
             system_monitor,
+            bbr,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -161,7 +169,7 @@ impl DfdaemonUploadServer {
         let mut shutdown = self.shutdown.clone();
 
         // Initialize health reporter.
-        let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+        let (health_reporter, health_service) = tonic_health::server::health_reporter();
 
         // Start upload grpc server.
         let mut server_builder = Server::builder();
@@ -176,11 +184,14 @@ impl DfdaemonUploadServer {
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
+            .layer(option_layer(self.bbr.clone().map(BBRLayer::new)))
             .layer(
                 ServiceBuilder::new()
                     .map_err(|err: Box<dyn std::error::Error + Send + Sync>| {
                         if err.is::<Overloaded>() {
-                            Status::resource_exhausted("Server is overloaded, please retry later")
+                            Status::resource_exhausted(
+                                "server is overloaded: too many requests, please retry later",
+                            )
                         } else {
                             Status::internal(err.to_string())
                         }
@@ -251,7 +262,7 @@ pub struct DfdaemonUploadServerHandler {
 }
 
 /// DfdaemonUploadServerHandler implements the dfdaemon upload grpc service.
-#[tonic::async_trait]
+#[async_trait::async_trait]
 impl DfdaemonUpload for DfdaemonUploadServerHandler {
     /// DownloadTaskStream is the stream of the download task response.
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
@@ -267,7 +278,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     ) -> Result<Response<Self::DownloadTaskStream>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Record the start time.
@@ -691,7 +702,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     async fn stat_task(&self, request: Request<StatTaskRequest>) -> Result<Response<Task>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.
@@ -742,7 +753,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     ) -> Result<Response<StatLocalTaskResponse>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.
@@ -789,7 +800,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     ) -> Result<Response<ListTaskEntriesResponse>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.
@@ -871,7 +882,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     ) -> Result<Response<()>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.
@@ -922,7 +933,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     ) -> Result<Response<Self::SyncPiecesStream>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.
@@ -1114,7 +1125,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     ) -> Result<Response<Self::SyncHostStream>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.
@@ -1168,8 +1179,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         }))
                         .await
                     {
-                        error!(
-                            "connection broken from remote host {}, err: {}",
+                        debug!(
+                            "connection broken from remote host {}, because {}",
                             remote_host_id, err
                         );
 
@@ -1197,7 +1208,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     ) -> Result<Response<Self::DownloadPersistentTaskStream>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Record the start time.
@@ -1527,7 +1538,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     ) -> Result<Response<()>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.
@@ -1574,7 +1585,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     ) -> Result<Response<PersistentTask>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.
@@ -1621,7 +1632,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     ) -> Result<Response<()>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.
@@ -1659,7 +1670,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     ) -> Result<Response<Self::SyncPersistentPiecesStream>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.
@@ -1872,7 +1883,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     ) -> Result<Response<Self::DownloadPersistentCacheTaskStream>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Record the start time.
@@ -2109,7 +2120,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     ) -> Result<Response<()>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.
@@ -2156,7 +2167,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     ) -> Result<Response<PersistentCacheTask>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.
@@ -2203,7 +2214,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     ) -> Result<Response<()>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.
@@ -2242,7 +2253,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     ) -> Result<Response<Self::SyncPersistentCachePiecesStream>, Status> {
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            Span::current().set_parent(parent_ctx.clone());
+            let _ = Span::current().set_parent(parent_ctx.clone());
         };
 
         // Clone the request.

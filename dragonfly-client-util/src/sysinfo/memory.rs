@@ -15,6 +15,7 @@
  */
 
 use sysinfo::{MemoryRefreshKind, Pid, ProcessRefreshKind, RefreshKind, System};
+use tracing::debug;
 
 /// Represents system-wide memory statistics.
 #[derive(Debug, Clone, Default)]
@@ -73,13 +74,26 @@ impl Memory {
     pub fn get_stats(&self) -> MemoryStats {
         let sys =
             System::new_with_specifics(RefreshKind::new().with_memory(MemoryRefreshKind::new()));
-
+        let total_memory = sys.total_memory();
+        let free_memory = sys.free_memory();
+        let available_memory = sys.available_memory();
+        let used_memory = sys.used_memory();
         let used_percent = (sys.used_memory() as f64 / sys.total_memory() as f64) * 100.0;
+
+        debug!(
+            "total memory: {} bytes, free memory: {} bytes, available memory: {} bytes, used memory: {} bytes, used percent: {}%",
+            total_memory,
+            free_memory,
+            available_memory,
+            used_memory,
+            used_percent
+        );
+
         MemoryStats {
-            total: sys.total_memory(),
-            free: sys.free_memory(),
-            available: sys.available_memory(),
-            usage: sys.used_memory(),
+            total: total_memory,
+            free: free_memory,
+            available: available_memory,
+            usage: used_memory,
             used_percent: used_percent.clamp(0.0, 100.0),
         }
     }
@@ -93,12 +107,19 @@ impl Memory {
     /// ProcessMemoryStats containing the process's memory usage percentage.
     pub fn get_process_stats(&self, pid: u32) -> ProcessMemoryStats {
         let sys = System::new_with_specifics(
-            RefreshKind::new().with_processes(ProcessRefreshKind::new().with_memory()),
+            RefreshKind::new()
+                .with_memory(MemoryRefreshKind::new().with_ram())
+                .with_processes(ProcessRefreshKind::new().with_memory()),
+        );
+        let memory_usage = sys.process(Pid::from_u32(pid)).unwrap().memory();
+        let total_memory = sys.total_memory();
+        let used_percent = (memory_usage as f64 / total_memory as f64) * 100.0;
+
+        debug!(
+            "process {} memory usage: {} bytes, total memory: {} bytes, used percent: {}%",
+            pid, memory_usage, total_memory, used_percent
         );
 
-        let used_percent = (sys.process(Pid::from_u32(pid)).unwrap().memory() as f64
-            / sys.total_memory() as f64)
-            * 100.0;
         ProcessMemoryStats {
             used_percent: used_percent.clamp(0.0, 100.0),
         }
@@ -125,17 +146,23 @@ impl Memory {
                     if let Some(memory_controller) = cgroup.controller_of::<MemController>() {
                         let memory_stats = memory_controller.memory_stat();
                         let used_percent = if memory_stats.limit_in_bytes > 0 {
-                            (memory_stats.usage_in_bytes as f64
-                                / memory_stats.limit_in_bytes as f64)
+                            (memory_stats.stat.rss as f64 / memory_stats.limit_in_bytes as f64)
                                 * 100.0
                         } else {
-                            (memory_stats.usage_in_bytes as f64 / self.get_stats().total as f64)
-                                * 100.0
+                            (memory_stats.stat.rss as f64 / self.get_stats().total as f64) * 100.0
                         };
+
+                        debug!(
+                            "process {} cgroup memory limit: {} bytes, memory usage: {} bytes, used percent: {}%",
+                            pid,
+                            memory_stats.limit_in_bytes,
+                            memory_stats.stat.rss,
+                            used_percent,
+                        );
 
                         return Some(CgroupMemoryStats {
                             limit: memory_stats.limit_in_bytes,
-                            usage: memory_stats.usage_in_bytes,
+                            usage: memory_stats.stat.rss,
                             used_percent: used_percent.clamp(0.0, 100.0),
                         });
                     }
