@@ -1,5 +1,5 @@
 /*
- *     Copyright 2024 The Dragonfly Authors
+ *     Copyright 2026 The Dragonfly Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@ use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{dfctl, dfdaemon};
 use dragonfly_client_core::Result;
 use std::path::PathBuf;
-use tracing::Level;
 
 pub mod persistent_cache_task;
 pub mod persistent_task;
@@ -33,9 +32,9 @@ pub mod task;
     name = dfctl::NAME,
     author,
     version,
-    about = "dfctl is a command line tool for managing Dragonfly tasks.",
+    about = "dfctl is a command line tool for managing tasks",
     long_about = "A command line tool for managing tasks, persistent tasks, and persistent cache tasks in \
-    Dragonfly. It provides listing and removal capabilities through a unified CLI interface.",
+    Dragonfly. It provides a unified CLI interface for querying and operating on these resources.",
     disable_version_flag = true
 )]
 struct Args {
@@ -49,25 +48,6 @@ struct Args {
     )]
     version: bool,
 
-    #[arg(
-        short = 'e',
-        long = "endpoint",
-        default_value_os_t = dfdaemon::default_download_unix_socket_path(),
-        help = "Endpoint of dfdaemon's GRPC server"
-    )]
-    endpoint: PathBuf,
-
-    #[arg(
-        short = 'l',
-        long,
-        default_value = "info",
-        help = "Specify the logging level [trace, debug, info, warn, error]"
-    )]
-    log_level: Level,
-
-    #[arg(long, default_value_t = false, help = "Specify whether to print log")]
-    console: bool,
-
     #[command(subcommand)]
     command: Command,
 }
@@ -80,7 +60,7 @@ pub enum Command {
         author,
         version,
         about = "Manage tasks in Dragonfly",
-        long_about = "Manage standard tasks in Dragonfly, including listing and removing tasks."
+        long_about = "Manage tasks in Dragonfly, including querying and operating on tasks."
     )]
     Task(task::TaskCommand),
 
@@ -89,7 +69,7 @@ pub enum Command {
         author,
         version,
         about = "Manage persistent tasks in Dragonfly",
-        long_about = "Manage persistent tasks in Dragonfly, including listing and removing persistent tasks."
+        long_about = "Manage persistent tasks in Dragonfly, including querying and operating on persistent tasks."
     )]
     PersistentTask(persistent_task::PersistentTaskCommand),
 
@@ -98,18 +78,18 @@ pub enum Command {
         author,
         version,
         about = "Manage persistent cache tasks in Dragonfly",
-        long_about = "Manage persistent cache tasks in Dragonfly, including listing and removing persistent cache tasks."
+        long_about = "Manage persistent cache tasks in Dragonfly, including querying and operating on persistent cache tasks."
     )]
     PersistentCacheTask(persistent_cache_task::PersistentCacheTaskCommand),
 }
 
 /// Implement the execute for Command.
 impl Command {
-    pub async fn execute(self, endpoint: PathBuf, log_level: Level, console: bool) -> Result<()> {
+    pub async fn execute(self) -> Result<()> {
         match self {
-            Self::Task(cmd) => cmd.execute(endpoint, log_level, console).await,
-            Self::PersistentTask(cmd) => cmd.execute(endpoint, log_level, console).await,
-            Self::PersistentCacheTask(cmd) => cmd.execute(endpoint, log_level, console).await,
+            Self::Task(cmd) => cmd.execute().await,
+            Self::PersistentTask(cmd) => cmd.execute().await,
+            Self::PersistentCacheTask(cmd) => cmd.execute().await,
         }
     }
 }
@@ -120,9 +100,7 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     // Execute the command.
-    args.command
-        .execute(args.endpoint, args.log_level, args.console)
-        .await?;
+    args.command.execute().await?;
     Ok(())
 }
 

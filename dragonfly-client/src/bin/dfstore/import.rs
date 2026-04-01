@@ -71,14 +71,6 @@ pub struct ImportCommand {
     )]
     timeout: Duration,
 
-    #[arg(
-        short = 'e',
-        long = "endpoint",
-        default_value_os_t = dfdaemon::default_download_unix_socket_path(),
-        help = "Endpoint of dfdaemon's GRPC server"
-    )]
-    endpoint: PathBuf,
-
     #[arg(long, help = "Specify the region for the Object Storage Service")]
     storage_region: Option<String>,
 
@@ -134,6 +126,14 @@ pub struct ImportCommand {
         help = "Specify whether to disable the progress bar display"
     )]
     no_progress: bool,
+
+    #[arg(
+        short = 'e',
+        long = "endpoint",
+        default_value_os_t = dfdaemon::default_download_unix_socket_path(),
+        help = "Endpoint of dfdaemon's GRPC server"
+    )]
+    endpoint: PathBuf,
 
     #[arg(
         short = 'l',

@@ -158,14 +158,6 @@ struct Args {
     output: PathBuf,
 
     #[arg(
-        short = 'e',
-        long = "endpoint",
-        default_value_os_t = dfdaemon::default_download_unix_socket_path(),
-        help = "Endpoint of dfdaemon's GRPC server"
-    )]
-    endpoint: PathBuf,
-
-    #[arg(
         short = 'r',
         long = "recursive",
         default_value_t = false,
@@ -345,6 +337,14 @@ struct Args {
         help = "Specify whether to disable the progress bar display"
     )]
     no_progress: bool,
+
+    #[arg(
+        short = 'e',
+        long = "endpoint",
+        default_value_os_t = dfdaemon::default_download_unix_socket_path(),
+        help = "Endpoint of dfdaemon's GRPC server"
+    )]
+    endpoint: PathBuf,
 
     #[arg(
         short = 'l',
