@@ -20,6 +20,7 @@ use std::env;
 use std::path::PathBuf;
 
 pub mod dfcache;
+pub mod dfctl;
 pub mod dfdaemon;
 pub mod dfget;
 pub mod dfinit;

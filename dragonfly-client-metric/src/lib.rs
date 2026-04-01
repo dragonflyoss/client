@@ -226,6 +226,20 @@ lazy_static! {
             &["type"]
         ).expect("metric can be created");
 
+    /// LIST_LOCAL_TASKS_COUNT is used to count the number of list tasks.
+    pub static ref LIST_LOCAL_TASKS_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("list_local_tasks_total", "Counter of the number of the list tasks.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type"]
+        ).expect("metric can be created");
+
+    /// LIST_LOCAL_TASKS_FAILURE_COUNT is used to count the failed number of list tasks.
+    pub static ref LIST_LOCAL_TASKS_FAILURE_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("list_tasks_failure_total", "Counter of the number of failed of the list tasks.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type"]
+        ).expect("metric can be created");
+
     /// LIST_TASK_ENTRIES_COUNT is used to count the number of list task entries.
     pub static ref LIST_TASK_ENTRIES_COUNT: IntCounterVec =
         IntCounterVec::new(
@@ -251,6 +265,20 @@ lazy_static! {
     pub static ref DELETE_TASK_FAILURE_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("delete_task_failure_total", "Counter of the number of failed of the delete task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type"]
+        ).expect("metric can be created");
+
+        /// DELETE_LOCAL_TASK_COUNT is used to count the number of delete local tasks.
+    pub static ref DELETE_LOCAL_TASK_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("delete_local_task_total", "Counter of the number of the delete local task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["type"]
+        ).expect("metric can be created");
+
+    /// DELETE_LOCAL_TASK_FAILURE_COUNT is used to count the failed number of delete local tasks.
+    pub static ref DELETE_LOCAL_TASK_FAILURE_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("delete_local_task_failure_total", "Counter of the number of failed of the delete local task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
             &["type"]
         ).expect("metric can be created");
 
@@ -381,6 +409,14 @@ fn register_custom_metrics() {
         .expect("metric can be registered");
 
     REGISTRY
+        .register(Box::new(LIST_LOCAL_TASKS_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(LIST_LOCAL_TASKS_FAILURE_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
         .register(Box::new(LIST_TASK_ENTRIES_COUNT.clone()))
         .expect("metric can be registered");
 
@@ -394,6 +430,14 @@ fn register_custom_metrics() {
 
     REGISTRY
         .register(Box::new(DELETE_TASK_FAILURE_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(DELETE_LOCAL_TASK_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(DELETE_LOCAL_TASK_FAILURE_COUNT.clone()))
         .expect("metric can be registered");
 
     REGISTRY
@@ -443,10 +487,14 @@ fn reset_custom_metrics() {
     UPDATE_TASK_FAILURE_COUNT.reset();
     STAT_TASK_COUNT.reset();
     STAT_TASK_FAILURE_COUNT.reset();
+    LIST_LOCAL_TASKS_COUNT.reset();
+    LIST_LOCAL_TASKS_FAILURE_COUNT.reset();
     LIST_TASK_ENTRIES_COUNT.reset();
     LIST_TASK_ENTRIES_FAILURE_COUNT.reset();
     DELETE_TASK_COUNT.reset();
     DELETE_TASK_FAILURE_COUNT.reset();
+    DELETE_LOCAL_TASK_COUNT.reset();
+    DELETE_LOCAL_TASK_FAILURE_COUNT.reset();
     DELETE_HOST_COUNT.reset();
     DELETE_HOST_FAILURE_COUNT.reset();
     DISK_SPACE.reset();
@@ -816,6 +864,20 @@ pub fn collect_stat_local_task_failure_metrics(typ: i32) {
         .inc();
 }
 
+/// collect_list_local_tasks_started_metrics collects the list task entries started metrics.
+pub fn collect_list_local_tasks_started_metrics(typ: i32) {
+    LIST_LOCAL_TASKS_COUNT
+        .with_label_values(&[typ.to_string().as_str()])
+        .inc();
+}
+
+/// collect_list_local_tasks_failure_metrics collects the list task entries failure metrics.
+pub fn collect_list_local_tasks_failure_metrics(typ: i32) {
+    LIST_LOCAL_TASKS_FAILURE_COUNT
+        .with_label_values(&[typ.to_string().as_str()])
+        .inc();
+}
+
 /// collect_list_task_entries_started_metrics collects the list task entries started metrics.
 pub fn collect_list_task_entries_started_metrics(typ: i32) {
     LIST_TASK_ENTRIES_COUNT
@@ -840,6 +902,20 @@ pub fn collect_delete_task_started_metrics(typ: i32) {
 /// collect_delete_task_failure_metrics collects the delete task failure metrics.
 pub fn collect_delete_task_failure_metrics(typ: i32) {
     DELETE_TASK_FAILURE_COUNT
+        .with_label_values(&[typ.to_string().as_str()])
+        .inc();
+}
+
+/// collect_delete_local_task_started_metrics collects the delete local task started metrics.
+pub fn collect_delete_local_task_started_metrics(typ: i32) {
+    DELETE_LOCAL_TASK_COUNT
+        .with_label_values(&[typ.to_string().as_str()])
+        .inc();
+}
+
+/// collect_delete_local_task_failure_metrics collects the delete local task failure metrics.
+pub fn collect_delete_local_task_failure_metrics(typ: i32) {
+    DELETE_LOCAL_TASK_FAILURE_COUNT
         .with_label_values(&[typ.to_string().as_str()])
         .inc();
 }
@@ -1372,6 +1448,19 @@ mod tests {
     }
 
     #[test]
+    fn test_collect_list_local_tasks_metrics() {
+        collect_list_local_tasks_started_metrics(4);
+        let counter = LIST_LOCAL_TASKS_COUNT.with_label_values(&["4"]).get();
+        assert!(counter > 0);
+
+        collect_list_local_tasks_failure_metrics(4);
+        let failure_counter = LIST_LOCAL_TASKS_FAILURE_COUNT
+            .with_label_values(&["4"])
+            .get();
+        assert!(failure_counter > 0);
+    }
+
+    #[test]
     fn test_collect_list_task_entries_metrics() {
         collect_list_task_entries_started_metrics(4);
         let counter = LIST_TASK_ENTRIES_COUNT.with_label_values(&["4"]).get();
@@ -1392,6 +1481,19 @@ mod tests {
 
         collect_delete_task_failure_metrics(5);
         let failure_counter = DELETE_TASK_FAILURE_COUNT.with_label_values(&["5"]).get();
+        assert!(failure_counter > 0);
+    }
+
+    #[test]
+    fn test_collect_delete_local_task_metrics() {
+        collect_delete_local_task_started_metrics(5);
+        let counter = DELETE_LOCAL_TASK_COUNT.with_label_values(&["5"]).get();
+        assert!(counter > 0);
+
+        collect_delete_local_task_failure_metrics(5);
+        let failure_counter = DELETE_LOCAL_TASK_FAILURE_COUNT
+            .with_label_values(&["5"])
+            .get();
         assert!(failure_counter > 0);
     }
 

@@ -40,8 +40,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-            key: ${{ matrix.target }}
-            cache-on-failure: true
+          key: ${{ matrix.target }}
+          cache-on-failure: true
 
       - name: Get the release version from the tag
         shell: bash
@@ -76,7 +76,7 @@ jobs:
       - name: Build binaries
         shell: bash
         run: |
-            cargo build --release --bins --workspace --exclude hdfs --target ${{ matrix.target }}
+          cargo build --release --bins --workspace --exclude hdfs --target ${{ matrix.target }}
 
       - name: Build archive client(DEB)
         shell: bash
@@ -104,6 +104,7 @@ jobs:
           mv "target/${{ matrix.target }}/release/dfdaemon" "$dirname"
           mv "target/${{ matrix.target }}/release/dfcache" "$dirname"
           mv "target/${{ matrix.target }}/release/dfstore" "$dirname"
+          mv "target/${{ matrix.target }}/release/dfctl" "$dirname"
           mv "target/${{ matrix.target }}/release/dfinit" "$dirname"
           mv CONTRIBUTING.md LICENSE README.md "$dirname"
           tar -czf "$dirname.tar.gz" "$dirname"
@@ -135,7 +136,7 @@ jobs:
       - name: Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "releases/*"
+          artifacts: 'releases/*'
           generateReleaseNotes: true
           allowUpdates: true
           draft: true
@@ -172,6 +173,6 @@ jobs:
 
       - uses: katyo/publish-crates@v2
         with:
-           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-           ignore-unpublished-changes: true
-           args: --locked
+          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          ignore-unpublished-changes: true
+          args: --locked
