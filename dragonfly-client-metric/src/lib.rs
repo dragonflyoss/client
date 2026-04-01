@@ -236,7 +236,7 @@ lazy_static! {
     /// LIST_LOCAL_TASKS_FAILURE_COUNT is used to count the failed number of list tasks.
     pub static ref LIST_LOCAL_TASKS_FAILURE_COUNT: IntCounterVec =
         IntCounterVec::new(
-            Opts::new("list_tasks_failure_total", "Counter of the number of failed of the list tasks.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            Opts::new("list_local_tasks_failure_total", "Counter of the number of failed of the list tasks.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
             &["type"]
         ).expect("metric can be created");
 
@@ -268,7 +268,7 @@ lazy_static! {
             &["type"]
         ).expect("metric can be created");
 
-        /// DELETE_LOCAL_TASK_COUNT is used to count the number of delete local tasks.
+    /// DELETE_LOCAL_TASK_COUNT is used to count the number of delete local tasks.
     pub static ref DELETE_LOCAL_TASK_COUNT: IntCounterVec =
         IntCounterVec::new(
             Opts::new("delete_local_task_total", "Counter of the number of the delete local task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
