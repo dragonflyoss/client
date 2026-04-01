@@ -27,12 +27,17 @@ use dragonfly_api::dfdaemon::v2::{
     dfdaemon_download_server::{
         DfdaemonDownload, DfdaemonDownloadServer as DfdaemonDownloadGRPCServer,
     },
-    DeleteCacheTaskRequest, DeleteTaskRequest, DownloadCacheTaskRequest, DownloadCacheTaskResponse,
-    DownloadPersistentCacheTaskRequest, DownloadPersistentCacheTaskResponse,
-    DownloadPersistentTaskRequest, DownloadPersistentTaskResponse, DownloadTaskRequest,
-    DownloadTaskResponse, Entry, ListTaskEntriesRequest, ListTaskEntriesResponse,
-    StatCacheTaskRequest as DfdaemonStatCacheTaskRequest, StatLocalTaskRequest,
-    StatLocalTaskResponse, StatPersistentCacheTaskRequest,
+    DeleteCacheTaskRequest, DeleteLocalTaskRequest, DeleteTaskRequest, DownloadCacheTaskRequest,
+    DownloadCacheTaskResponse, DownloadPersistentCacheTaskRequest,
+    DownloadPersistentCacheTaskResponse, DownloadPersistentTaskRequest,
+    DownloadPersistentTaskResponse, DownloadTaskRequest, DownloadTaskResponse, Entry,
+    ListLocalPersistentCacheTasksRequest, ListLocalPersistentCacheTasksResponse,
+    ListLocalPersistentTasksRequest, ListLocalPersistentTasksResponse, ListLocalTasksRequest,
+    ListLocalTasksResponse, ListTaskEntriesRequest, ListTaskEntriesResponse,
+    StatCacheTaskRequest as DfdaemonStatCacheTaskRequest, StatLocalPersistentCacheTaskRequest,
+    StatLocalPersistentCacheTaskResponse, StatLocalPersistentTaskRequest,
+    StatLocalPersistentTaskResponse, StatLocalTaskRequest, StatLocalTaskResponse,
+    StatPersistentCacheTaskRequest, StatPersistentTaskRequest,
     StatTaskRequest as DfdaemonStatTaskRequest, UploadPersistentCacheTaskRequest,
     UploadPersistentTaskRequest,
 };
@@ -46,9 +51,11 @@ use dragonfly_client_core::{
 };
 use dragonfly_client_metric::{
     collect_delete_host_failure_metrics, collect_delete_host_started_metrics,
+    collect_delete_local_task_failure_metrics, collect_delete_local_task_started_metrics,
     collect_delete_task_failure_metrics, collect_delete_task_started_metrics,
     collect_download_task_blocked_metrics, collect_download_task_failure_metrics,
     collect_download_task_finished_metrics, collect_download_task_started_metrics,
+    collect_list_local_tasks_failure_metrics, collect_list_local_tasks_started_metrics,
     collect_list_task_entries_failure_metrics, collect_list_task_entries_started_metrics,
     collect_stat_local_task_failure_metrics, collect_stat_local_task_started_metrics,
     collect_stat_task_failure_metrics, collect_stat_task_started_metrics,
@@ -123,7 +130,7 @@ pub struct DfdaemonDownloadServer {
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-/// DfdaemonDownloadServer implements the grpc server of the download.
+/// Dfdaemon download server implements the grpc server of the download.
 impl DfdaemonDownloadServer {
     /// Creates a new download server.
     #[allow(clippy::too_many_arguments)]
@@ -281,13 +288,13 @@ pub struct DfdaemonDownloadServerHandler {
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 }
 
-/// DfdaemonDownloadServerHandler implements the dfdaemon download grpc service.
+/// Dfdaemon download server handler implements the dfdaemon download grpc service.
 #[async_trait::async_trait]
 impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     /// Stream of download task responses.
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
-    /// Tells the dfdaemon to download the task.
+    /// Download the task.
     #[instrument(
         skip_all,
         fields(host_id, task_id, peer_id, url, remote_ip, content_length)
@@ -762,7 +769,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// stat_task gets the status of the task.
+    /// Stats the task metadata.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_task(
         &self,
@@ -813,8 +820,8 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         }
     }
 
-    /// stat_local_task stats the local task.
-    #[instrument(skip_all, fields(task_id, remote_ip))]
+    /// Stats the local task metadata.
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_local_task(
         &self,
         request: Request<StatLocalTaskRequest>,
@@ -827,16 +834,20 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Clone the request.
         let request = request.into_inner();
 
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
         // Get the task id from the request.
         let task_id = request.task_id;
 
         // Span record the task id.
+        Span::current().record("host_id", host_id.as_str());
         Span::current().record("task_id", task_id.as_str());
         Span::current().record(
             "remote_ip",
             request.remote_ip.clone().unwrap_or_default().as_str(),
         );
-        info!("stat local task in upload server");
+        info!("stat local task in download server");
 
         // Collect the local stat task metrics.
         collect_stat_local_task_started_metrics(TaskType::Standard as i32);
@@ -861,7 +872,50 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         }
     }
 
-    /// list_tasks lists the tasks.
+    /// List local tasks metadata.
+    #[instrument(skip_all, fields(host_id, remote_ip))]
+    async fn list_local_tasks(
+        &self,
+        request: Request<ListLocalTasksRequest>,
+    ) -> Result<Response<ListLocalTasksResponse>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            let _ = Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Span record the remote ip.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        info!("list local tasks in download server");
+
+        // Collect the list local tasks metrics.
+        collect_list_local_tasks_started_metrics(TaskType::Standard as i32);
+
+        match self.task.list_local().await {
+            Ok(response) => Ok(Response::new(response)),
+            Err(err) => {
+                // Collect the list local tasks failure metrics.
+                collect_list_local_tasks_failure_metrics(TaskType::Standard as i32);
+
+                // Log the error with detailed context.
+                error!("list local tasks failed: {}", err);
+
+                // Map the error to an appropriate gRPC status.
+                Err(Status::internal(err.to_string()))
+            }
+        }
+    }
+
+    /// List task entries in the task.
     #[instrument(skip_all, fields(task_id, url, remote_ip))]
     async fn list_task_entries(
         &self,
@@ -943,7 +997,8 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         }))
     }
 
-    /// delete_task calls the dfdaemon to delete the task.
+    /// Deletes the task's content and metadata from local storage, and removes
+    /// the associated peer metadata from the scheduler.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn delete_task(
         &self,
@@ -990,7 +1045,55 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(()))
     }
 
-    /// delete_host calls the scheduler to delete the host.
+    /// Deletes task content and metadata in the local storage.
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
+    async fn delete_local_task(
+        &self,
+        request: Request<DeleteLocalTaskRequest>,
+    ) -> Result<Response<()>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            let _ = Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        info!("delete local task in download server");
+
+        // Collect the delete local task started metrics.
+        collect_delete_local_task_started_metrics(TaskType::Standard as i32);
+
+        // Delete the task from the local storage.
+        self.task
+            .delete_local(task_id.as_str())
+            .await
+            .map_err(|err| {
+                // Collect the delete local task failure metrics.
+                collect_delete_local_task_failure_metrics(TaskType::Standard as i32);
+
+                error!("delete local task: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        Ok(Response::new(()))
+    }
+
+    /// Deletes the host from the scheduler, and the scheduler will delete all peers associated
+    /// with the host.
     #[instrument(skip_all, fields(host_id))]
     async fn delete_host(&self, request: Request<()>) -> Result<Response<()>, Status> {
         // If the parent context is set, use it as the parent context for the span.
@@ -1023,11 +1126,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(()))
     }
 
-    /// DownloadPersistentTaskStream is the stream of the download persistent task response.
+    /// Download persistent task stream is the stream of the download persistent task response.
     type DownloadPersistentTaskStream =
         ReceiverStream<Result<DownloadPersistentTaskResponse, Status>>;
 
-    /// download_persistent_task downloads the persistent task for downloading by user.
+    /// Downloads the persistent task for downloading by user.
     /// Note: This request include object storage credentials and should be used
     /// for downloading from object storage and peers.
     #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip, content_length))]
@@ -1352,7 +1455,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// upload_persistent_task uploads the persistent task.
+    /// Uploads the persistent task.
     #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip))]
     async fn upload_persistent_task(
         &self,
@@ -1489,11 +1592,149 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(task))
     }
 
-    /// DownloadPersistentCacheTaskStream is the stream of the download persistent cache task response.
+    /// Stats the persistent task metadata.
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
+    async fn stat_persistent_task(
+        &self,
+        request: Request<StatPersistentTaskRequest>,
+    ) -> Result<Response<PersistentTask>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            let _ = Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        info!("stat persistent task in download server");
+
+        // Collect the stat persistent task metrics.
+        collect_stat_task_started_metrics(TaskType::Persistent as i32);
+        match self
+            .persistent_task
+            .stat(task_id.as_str(), host_id.as_str())
+            .await
+        {
+            Ok(task) => Ok(Response::new(task)),
+            Err(err) => {
+                // Collect the stat persistent task failure metrics.
+                collect_stat_task_failure_metrics(TaskType::Persistent as i32);
+
+                // Log the error with detailed context.
+                error!("stat persistent task failed: {}", err);
+
+                // Map the error to an appropriate gRPC status.
+                Err(Status::internal(err.to_string()))
+            }
+        }
+    }
+
+    /// Stats the local persistent task metadata.
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
+    async fn stat_local_persistent_task(
+        &self,
+        request: Request<StatLocalPersistentTaskRequest>,
+    ) -> Result<Response<StatLocalPersistentTaskResponse>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            let _ = Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        info!("stat local persistent task in download server");
+
+        // Collect the stat persistent task metrics.
+        collect_stat_task_started_metrics(TaskType::Persistent as i32);
+        match self.persistent_task.stat_local(task_id.as_str()).await {
+            Ok(task) => Ok(Response::new(task)),
+            Err(err) => {
+                // Collect the stat persistent task failure metrics.
+                collect_stat_task_failure_metrics(TaskType::Persistent as i32);
+
+                // Log the error with detailed context.
+                error!("stat local persistent task failed: {}", err);
+
+                // Map the error to an appropriate gRPC status.
+                Err(Status::internal(err.to_string()))
+            }
+        }
+    }
+
+    /// Lists the local persistent tasks.
+    #[instrument(skip_all, fields(host_id, remote_ip))]
+    async fn list_local_persistent_tasks(
+        &self,
+        request: Request<ListLocalPersistentTasksRequest>,
+    ) -> Result<Response<ListLocalPersistentTasksResponse>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            let _ = Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        info!("list local persistent tasks in download server");
+
+        // Collect the list local persistent task metrics.
+        collect_list_local_tasks_started_metrics(TaskType::Persistent as i32);
+        match self.persistent_task.list_local().await {
+            Ok(task) => Ok(Response::new(task)),
+            Err(err) => {
+                // Collect the stat persistent task failure metrics.
+                collect_list_local_tasks_failure_metrics(TaskType::Persistent as i32);
+
+                // Log the error with detailed context.
+                error!("list local persistent tasks failed: {}", err);
+
+                // Map the error to an appropriate gRPC status.
+                Err(Status::internal(err.to_string()))
+            }
+        }
+    }
+
+    /// Download persistent cache task stream is the stream of the download persistent cache task response.
     type DownloadPersistentCacheTaskStream =
         ReceiverStream<Result<DownloadPersistentCacheTaskResponse, Status>>;
 
-    /// download_persistent_cache_task downloads the persistent cache task.
+    /// Downloads the persistent cache task.
     #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip, content_length))]
     async fn download_persistent_cache_task(
         &self,
@@ -1773,7 +2014,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// upload_persistent_cache_task uploads the persistent cache task.
+    /// Uploads the persistent cache task.
     #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip))]
     async fn upload_persistent_cache_task(
         &self,
@@ -1893,7 +2134,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(task))
     }
 
-    /// stat_persistent_cache_task stats the persistent cache task.
+    /// Stats the persistent cache task.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_persistent_cache_task(
         &self,
@@ -1940,10 +2181,102 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(task))
     }
 
-    /// DownloadCacheTaskStream is the stream of the download cache task response.
+    /// Stats the local persistent cache task.
+    #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
+    async fn stat_local_persistent_cache_task(
+        &self,
+        request: Request<StatLocalPersistentCacheTaskRequest>,
+    ) -> Result<Response<StatLocalPersistentCacheTaskResponse>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            let _ = Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Get the task id from the request.
+        let task_id = request.task_id;
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        info!("stat local persistent cache task in download server");
+
+        // Collect the stat persistent cache task metrics.
+        collect_stat_task_started_metrics(TaskType::PersistentCache as i32);
+        match self
+            .persistent_cache_task
+            .stat_local(task_id.as_str())
+            .await
+        {
+            Ok(task) => Ok(Response::new(task)),
+            Err(err) => {
+                // Collect the stat persistent cache task failure metrics.
+                collect_stat_task_failure_metrics(TaskType::PersistentCache as i32);
+
+                // Log the error with detailed context.
+                error!("stat local persistent cache task failed: {}", err);
+
+                // Map the error to an appropriate gRPC status.
+                Err(Status::internal(err.to_string()))
+            }
+        }
+    }
+
+    /// Lists the local persistent cache tasks.
+    #[instrument(skip_all, fields(host_id, remote_ip))]
+    async fn list_local_persistent_cache_tasks(
+        &self,
+        request: Request<ListLocalPersistentCacheTasksRequest>,
+    ) -> Result<Response<ListLocalPersistentCacheTasksResponse>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            let _ = Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Span record the host id and task id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+        info!("list local persistent cache tasks in download server");
+
+        // Collect the list local persistent cache task metrics.
+        collect_list_local_tasks_started_metrics(TaskType::PersistentCache as i32);
+        match self.persistent_cache_task.list_local().await {
+            Ok(task) => Ok(Response::new(task)),
+            Err(err) => {
+                // Collect the stat persistent cache task failure metrics.
+                collect_list_local_tasks_failure_metrics(TaskType::PersistentCache as i32);
+
+                // Log the error with detailed context.
+                error!("list local persistent cache tasks failed: {}", err);
+
+                // Map the error to an appropriate gRPC status.
+                Err(Status::internal(err.to_string()))
+            }
+        }
+    }
+
+    /// Download cache task stream is the stream of the download cache task response.
     type DownloadCacheTaskStream = ReceiverStream<Result<DownloadCacheTaskResponse, Status>>;
 
-    /// download_cache_task tells the dfdaemon to download the cache task.
+    /// Downloads the cache task.
     #[instrument(
         skip_all,
         fields(host_id, task_id, peer_id, url, remote_ip, content_length)
@@ -1955,7 +2288,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         todo!();
     }
 
-    /// stat_cache_task gets the status of the cache task.
+    /// Stats the cache task metadata.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_cache_task(
         &self,
@@ -1964,7 +2297,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         todo!();
     }
 
-    /// delete_cache_task calls the dfdaemon to delete the cache task.
+    /// Deletes the cache task.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn delete_cache_task(
         &self,
@@ -1974,14 +2307,14 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 }
 
-/// DfdaemonDownloadClient is a wrapper of DfdaemonDownloadGRPCClient.
+/// Dfdaemon download client is a wrapper of DfdaemonDownloadGRPCClient.
 #[derive(Clone)]
 pub struct DfdaemonDownloadClient {
-    /// client is the grpc client of the dfdaemon.
+    /// Client is the grpc client of the dfdaemon.
     pub client: DfdaemonDownloadGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>,
 }
 
-/// DfdaemonDownloadClient implements the grpc client of the dfdaemon download.
+/// Dfdaemon download client implements the grpc client of the dfdaemon download.
 impl DfdaemonDownloadClient {
     /// Creates a new DfdaemonDownloadClient.
     pub async fn new(config: Arc<Config>, addr: String) -> ClientResult<Self> {
@@ -2071,7 +2404,7 @@ impl DfdaemonDownloadClient {
         Ok(Self { client })
     }
 
-    /// download_task tells the dfdaemon to download the task.
+    /// Download the task.
     #[instrument(skip_all)]
     pub async fn download_task(
         &self,
@@ -2097,7 +2430,7 @@ impl DfdaemonDownloadClient {
         Ok(response)
     }
 
-    /// stat_task gets the status of the task.
+    /// Stat the task metadata.
     #[instrument(skip_all)]
     pub async fn stat_task(&self, request: DfdaemonStatTaskRequest) -> ClientResult<Task> {
         let request = Self::make_request(request);
@@ -2105,7 +2438,18 @@ impl DfdaemonDownloadClient {
         Ok(response.into_inner())
     }
 
-    /// list_task_entries lists the task entries.
+    /// List local tasks metadata.
+    #[instrument(skip_all)]
+    pub async fn list_local_tasks(
+        &self,
+        request: ListLocalTasksRequest,
+    ) -> ClientResult<ListLocalTasksResponse> {
+        let request = Self::make_request(request);
+        let response = self.client.clone().list_local_tasks(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// List task entries in the task.
     #[instrument(skip_all)]
     pub async fn list_task_entries(
         &self,
@@ -2116,7 +2460,8 @@ impl DfdaemonDownloadClient {
         Ok(response.into_inner())
     }
 
-    /// delete_task tells the dfdaemon to delete the task.
+    /// Deletes the task's content and metadata from local storage, and removes
+    /// the associated peer metadata from the scheduler.
     #[instrument(skip_all)]
     pub async fn delete_task(&self, request: DeleteTaskRequest) -> ClientResult<()> {
         let request = Self::make_request(request);
@@ -2124,7 +2469,17 @@ impl DfdaemonDownloadClient {
         Ok(())
     }
 
-    /// download_persistent_task downloads the persistent task.
+    /// Deletes task content and metadata in the local storage.
+    #[instrument(skip_all)]
+    pub async fn delete_local_task(&self, request: DeleteLocalTaskRequest) -> ClientResult<()> {
+        let request = Self::make_request(request);
+        self.client.clone().delete_local_task(request).await?;
+        Ok(())
+    }
+
+    /// Downloads the persistent task for downloading by user.
+    /// Note: This request include object storage credentials and should be used
+    /// for downloading from object storage and peers.
     #[instrument(skip_all)]
     pub async fn download_persistent_task(
         &self,
@@ -2153,7 +2508,7 @@ impl DfdaemonDownloadClient {
         Ok(response)
     }
 
-    /// upload_persistent_task uploads the persistent task.
+    /// Uploads the persistent task.
     #[instrument(skip_all)]
     pub async fn upload_persistent_task(
         &self,
@@ -2177,7 +2532,48 @@ impl DfdaemonDownloadClient {
         Ok(response.into_inner())
     }
 
-    /// download_persistent_cache_task downloads the persistent cache task.
+    /// Stats the persistent task metadata.
+    #[instrument(skip_all)]
+    pub async fn stat_persistent_task(
+        &self,
+        request: StatPersistentTaskRequest,
+    ) -> ClientResult<PersistentTask> {
+        let request = Self::make_request(request);
+        let response = self.client.clone().stat_persistent_task(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// Stats the local persistent task metadata.
+    #[instrument(skip_all)]
+    pub async fn stat_local_persistent_task(
+        &self,
+        request: StatLocalPersistentTaskRequest,
+    ) -> ClientResult<StatLocalPersistentTaskResponse> {
+        let request = Self::make_request(request);
+        let response = self
+            .client
+            .clone()
+            .stat_local_persistent_task(request)
+            .await?;
+        Ok(response.into_inner())
+    }
+
+    /// Lists the local persistent tasks.
+    #[instrument(skip_all)]
+    pub async fn list_local_persistent_tasks(
+        &self,
+        request: ListLocalPersistentTasksRequest,
+    ) -> ClientResult<ListLocalPersistentTasksResponse> {
+        let request = Self::make_request(request);
+        let response = self
+            .client
+            .clone()
+            .list_local_persistent_tasks(request)
+            .await?;
+        Ok(response.into_inner())
+    }
+
+    /// Downloads the persistent cache task.
     #[instrument(skip_all)]
     pub async fn download_persistent_cache_task(
         &self,
@@ -2206,7 +2602,7 @@ impl DfdaemonDownloadClient {
         Ok(response)
     }
 
-    /// upload_persistent_cache_task uploads the persistent cache task.
+    /// Uploads the persistent cache task.
     #[instrument(skip_all)]
     pub async fn upload_persistent_cache_task(
         &self,
@@ -2234,7 +2630,7 @@ impl DfdaemonDownloadClient {
         Ok(response.into_inner())
     }
 
-    /// stat_persistent_cache_task stats the persistent cache task.
+    /// Stats the persistent cache task.
     #[instrument(skip_all)]
     pub async fn stat_persistent_cache_task(
         &self,
@@ -2249,7 +2645,37 @@ impl DfdaemonDownloadClient {
         Ok(response.into_inner())
     }
 
-    /// make_request creates a new request with timeout.
+    /// Stats the local persistent cache task.
+    #[instrument(skip_all)]
+    pub async fn stat_local_persistent_cache_task(
+        &self,
+        request: StatLocalPersistentCacheTaskRequest,
+    ) -> ClientResult<StatLocalPersistentCacheTaskResponse> {
+        let request = Self::make_request(request);
+        let response = self
+            .client
+            .clone()
+            .stat_local_persistent_cache_task(request)
+            .await?;
+        Ok(response.into_inner())
+    }
+
+    /// Lists the local persistent cache tasks.
+    #[instrument(skip_all)]
+    pub async fn list_local_persistent_cache_tasks(
+        &self,
+        request: ListLocalPersistentCacheTasksRequest,
+    ) -> ClientResult<ListLocalPersistentCacheTasksResponse> {
+        let request = Self::make_request(request);
+        let response = self
+            .client
+            .clone()
+            .list_local_persistent_cache_tasks(request)
+            .await?;
+        Ok(response.into_inner())
+    }
+
+    /// Creates a new request with timeout.
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);

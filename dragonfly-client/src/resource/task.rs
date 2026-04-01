@@ -22,7 +22,9 @@ use dragonfly_api::common::v2::{
 };
 use dragonfly_api::dfdaemon::{
     self,
-    v2::{download_task_response, DownloadTaskResponse, StatLocalTaskResponse},
+    v2::{
+        download_task_response, DownloadTaskResponse, ListLocalTasksResponse, StatLocalTaskResponse,
+    },
 };
 use dragonfly_api::errordetails::v2::{Backend, Unknown};
 use dragonfly_api::scheduler::v2::{
@@ -1925,7 +1927,7 @@ impl Task {
     /// stat_local returns the task metadata from local storage.
     #[instrument(skip_all)]
     pub async fn stat_local(&self, task_id: &str) -> ClientResult<StatLocalTaskResponse> {
-        let Some(task_metadata) = self.storage.get_task(task_id).inspect_err(|err| {
+        let Some(task) = self.get(task_id).inspect_err(|err| {
             error!("get task {} from local storage error: {:?}", task_id, err);
         })?
         else {
@@ -1933,24 +1935,51 @@ impl Task {
         };
 
         Ok(StatLocalTaskResponse {
-            task_id: task_metadata.id,
-            piece_length: task_metadata.piece_length,
-            content_length: task_metadata.content_length,
-            response_header: task_metadata.response_header,
-            uploading_count: task_metadata.uploading_count as u64,
-            uploaded_count: task_metadata.uploaded_count,
-            created_at: Some(task_metadata.created_at.into()),
-            updated_at: Some(task_metadata.updated_at.into()),
-            prefetched_at: task_metadata.prefetched_at.map(Into::into),
-            failed_at: task_metadata.failed_at.map(Into::into),
-            finished_at: task_metadata.finished_at.map(Into::into),
+            task_id: task.id,
+            piece_length: task.piece_length,
+            content_length: task.content_length,
+            response_header: task.response_header,
+            uploading_count: task.uploading_count as u64,
+            uploaded_count: task.uploaded_count,
+            created_at: Some(task.created_at.into()),
+            updated_at: Some(task.updated_at.into()),
+            prefetched_at: task.prefetched_at.map(Into::into),
+            failed_at: task.failed_at.map(Into::into),
+            finished_at: task.finished_at.map(Into::into),
+        })
+    }
+
+    /// list_local returns the tasks from local storage.
+    #[instrument(skip_all)]
+    pub async fn list_local(&self) -> ClientResult<ListLocalTasksResponse> {
+        let tasks = self.storage.get_tasks().inspect_err(|err| {
+            error!("list tasks from local storage error: {:?}", err);
+        })?;
+
+        Ok(ListLocalTasksResponse {
+            tasks: tasks
+                .into_iter()
+                .map(|task| StatLocalTaskResponse {
+                    task_id: task.id,
+                    piece_length: task.piece_length,
+                    content_length: task.content_length,
+                    response_header: task.response_header,
+                    uploading_count: task.uploading_count as u64,
+                    uploaded_count: task.uploaded_count,
+                    created_at: Some(task.created_at.into()),
+                    updated_at: Some(task.updated_at.into()),
+                    prefetched_at: task.prefetched_at.map(Into::into),
+                    failed_at: task.failed_at.map(Into::into),
+                    finished_at: task.finished_at.map(Into::into),
+                })
+                .collect(),
         })
     }
 
     /// Delete a task and reclaim local storage.
     #[instrument(skip_all)]
     pub async fn delete(&self, task_id: &str, host_id: &str) -> ClientResult<()> {
-        let task = self.storage.get_task(task_id).inspect_err(|err| {
+        let task = self.get(task_id).inspect_err(|err| {
             error!("get task {} from local storage error: {:?}", task_id, err);
         })?;
 
@@ -1972,7 +2001,27 @@ impl Task {
                 Ok(())
             }
             None => {
-                error!("delete_task task {} not found", task_id);
+                error!("delete task {} not found", task_id);
+                Err(Error::TaskNotFound(task_id.to_owned()))
+            }
+        }
+    }
+
+    /// Delete a local task and reclaim local storage.
+    #[instrument(skip_all)]
+    pub async fn delete_local(&self, task_id: &str) -> ClientResult<()> {
+        let task = self.get(task_id).inspect_err(|err| {
+            error!("get task {} from local storage error: {:?}", task_id, err);
+        })?;
+
+        match task {
+            Some(task) => {
+                self.storage.delete_task(task.id.as_str()).await;
+                info!("delete task {} from local storage", task.id);
+                Ok(())
+            }
+            None => {
+                error!("delete task task {} not found", task_id);
                 Err(Error::TaskNotFound(task_id.to_owned()))
             }
         }

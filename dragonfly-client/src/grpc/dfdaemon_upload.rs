@@ -102,7 +102,7 @@ pub struct DfdaemonUploadServer {
     /// Persistent task manager.
     persistent_task: Arc<persistent_task::PersistentTask>,
 
-    /// persistent_cache_task is the persistent cache task manager.
+    /// Persistent cache task is the persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 
     /// System interface for monitoring.
@@ -111,16 +111,16 @@ pub struct DfdaemonUploadServer {
     /// BBR rate limiter middleware for adaptive rate limiting based on system load.
     bbr: Option<Arc<BBR>>,
 
-    /// shutdown is used to shutdown the grpc server.
+    /// Shutdown is used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
 
-    /// _shutdown_complete is used to notify the grpc server is shutdown.
+    /// Shutdown complete is used to notify the grpc server is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-/// DfdaemonUploadServer implements the grpc server of the upload.
+/// Dfdaemon upload server implements the grpc server of the upload.
 impl DfdaemonUploadServer {
-    /// new creates a new DfdaemonUploadServer.
+    /// Creates a new DfdaemonUploadServer.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
@@ -146,7 +146,7 @@ impl DfdaemonUploadServer {
         }
     }
 
-    /// run starts the upload server.
+    /// Starts the upload server.
     pub async fn run(&mut self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         let service = DfdaemonUploadGRPCServer::with_interceptor(
             DfdaemonUploadServerHandler {
@@ -240,34 +240,34 @@ impl DfdaemonUploadServer {
     }
 }
 
-/// DfdaemonUploadServerHandler is the handler of the dfdaemon upload grpc service.
+/// Dfdaemon upload server handler is the handler of the dfdaemon upload grpc service.
 pub struct DfdaemonUploadServerHandler {
-    /// config is the configuration of the dfdaemon.
+    /// Config is the configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// socket_path is the path of the unix domain socket.
+    /// Socket path is the path of the unix domain socket.
     socket_path: PathBuf,
 
-    /// task is the task manager.
+    /// Task is the task manager.
     task: Arc<task::Task>,
 
-    /// persistent_task is the persistent task manager.
+    /// Persistent task is the persistent task manager.
     persistent_task: Arc<persistent_task::PersistentTask>,
 
-    /// persistent_cache_task is the persistent cache task manager.
+    /// Persistent cache task is the persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 
     /// System interface for monitoring.
     system_monitor: Arc<SystemMonitor>,
 }
 
-/// DfdaemonUploadServerHandler implements the dfdaemon upload grpc service.
+/// Dfdaemon upload server handler implements the dfdaemon upload grpc service.
 #[async_trait::async_trait]
 impl DfdaemonUpload for DfdaemonUploadServerHandler {
-    /// DownloadTaskStream is the stream of the download task response.
+    /// Download task stream is the stream of the download task response.
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
-    /// download_task downloads the task.
+    /// Downloads the task.
     #[instrument(
         skip_all,
         fields(host_id, task_id, peer_id, url, remote_ip, content_length)
@@ -697,7 +697,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// stat_task stats the task.
+    /// Stats the task metadata.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_task(&self, request: Request<StatTaskRequest>) -> Result<Response<Task>, Status> {
         // If the parent context is set, use it as the parent context for the span.
@@ -745,7 +745,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         }
     }
 
-    /// stat_local_task stats the local task.
+    /// Stats the local task metadata.
     #[instrument(skip_all, fields(task_id, remote_ip))]
     async fn stat_local_task(
         &self,
@@ -792,7 +792,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         }
     }
 
-    /// list_tasks lists the tasks.
+    /// List task entries in the task.
     #[instrument(skip_all, fields(task_id, url, remote_ip))]
     async fn list_task_entries(
         &self,
@@ -874,7 +874,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         }))
     }
 
-    /// delete_task deletes the task.
+    /// Deletes the task's content and metadata from local storage, and removes
+    /// the associated peer metadata from the scheduler.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn delete_task(
         &self,
@@ -924,7 +925,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     /// SyncPiecesStream is the stream of the sync pieces response.
     type SyncPiecesStream = ReceiverStream<Result<SyncPiecesResponse, Status>>;
 
-    /// sync_pieces provides the piece metadata for parent. If the per-piece collection timeout is exceeded,
+    /// Sync pieces provides the piece metadata for parent. If the per-piece collection timeout is exceeded,
     /// the stream will be closed.
     #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
     async fn sync_pieces(
@@ -1114,10 +1115,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// SyncHostStream is the stream of the sync host response.
+    /// Sync host stream is the stream of the sync host response.
     type SyncHostStream = ReceiverStream<Result<Host, Status>>;
 
-    /// sync_host syncs the host information.
+    /// Sync the host information.
     #[instrument(skip_all)]
     async fn sync_host(
         &self,
@@ -1194,13 +1195,13 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// DownloadPersistentTaskStream is the stream of the download persistent task response.
+    /// Download persistent task stream is the stream of the download persistent task response.
     type DownloadPersistentTaskStream =
         ReceiverStream<Result<DownloadPersistentTaskResponse, Status>>;
 
-    /// download_persistent_task downloads the persistent task for scheduler replication purposes.
-    /// Note: This request does NOT include object storage credentials and should ONLY be used
-    /// for internal peer-to-peer task replication.
+    /// Downloads the persistent task for downloading by user.
+    /// Note: This request include object storage credentials and should be used
+    /// for downloading from object storage and peers.
     #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip, content_length))]
     async fn download_persistent_task(
         &self,
@@ -1577,7 +1578,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(()))
     }
 
-    /// stat_persistent_task stats the persistent task.
+    /// Stats the persistent task metadata.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_persistent_task(
         &self,
@@ -1624,7 +1625,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(task))
     }
 
-    /// delete_persistent_task deletes the persistent task.
+    /// Deletes the persistent task.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn delete_persistent_task(
         &self,
@@ -1659,10 +1660,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(()))
     }
 
-    /// SyncPersistentPiecesStream is the stream of the sync pieces response.
+    /// Sync persistent pieces stream is the stream of the sync pieces response.
     type SyncPersistentPiecesStream = ReceiverStream<Result<SyncPersistentPiecesResponse, Status>>;
 
-    /// sync_persistent_pieces provides the persistent piece metadata for parent.
+    /// Sync perisstent pieces provides the persistent piece metadata for parent.
     #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
     async fn sync_persistent_pieces(
         &self,
@@ -1871,11 +1872,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// DownloadPersistentCacheTaskStream is the stream of the download persistent cache task response.
+    /// Download persistent cache taskx stream is the stream of the download persistent cache task response.
     type DownloadPersistentCacheTaskStream =
         ReceiverStream<Result<DownloadPersistentCacheTaskResponse, Status>>;
 
-    /// download_persistent_cache_task downloads the persistent cache task.
+    /// Downloads the persistent cache task.
     #[instrument(skip_all, fields(host_id, task_id, peer_id, remote_ip, content_length))]
     async fn download_persistent_cache_task(
         &self,
@@ -2159,7 +2160,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(()))
     }
 
-    /// stat_persistent_cache_task stats the persistent cache task.
+    /// Stats the persistent cache task.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_persistent_cache_task(
         &self,
@@ -2206,7 +2207,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(task))
     }
 
-    /// delete_persistent_cache_task deletes the persistent cache task.
+    /// Deletes the persistent cache task.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn delete_persistent_cache_task(
         &self,
@@ -2245,7 +2246,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     type SyncPersistentCachePiecesStream =
         ReceiverStream<Result<SyncPersistentCachePiecesResponse, Status>>;
 
-    /// sync_persistent_cache_pieces provides the persistent cache piece metadata for parent.
+    /// Sync persistent cache pieces provides the persistent cache piece metadata for parent.
+    /// If the per-piece collection timeout is exceeded, the stream will be closed.
     #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
     async fn sync_persistent_cache_pieces(
         &self,
@@ -2433,7 +2435,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    // ExchangeIbVerbsQueuePairEndpoint exchanges the ib verbs queue pair endpoint.
+    // Exchanges the ib verbs queue pair endpoint.
     #[instrument(skip_all, fields(num, lid, gid))]
     async fn exchange_ib_verbs_queue_pair_endpoint(
         &self,
@@ -2442,10 +2444,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         unimplemented!()
     }
 
-    /// DownloadCacheTaskStream is the stream of the download cache task response.
+    /// Download cache task stream is the stream of the download cache task response.
     type DownloadCacheTaskStream = ReceiverStream<Result<DownloadCacheTaskResponse, Status>>;
 
-    /// download_cache_task downloads the cache task.
+    /// Downloads the cache task.
     #[instrument(
         skip_all,
         fields(host_id, task_id, peer_id, url, remote_ip, content_length)
@@ -2457,7 +2459,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         todo!();
     }
 
-    /// stat_cache_task stats the cache task.
+    /// Stats the cache task metadata.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn stat_cache_task(
         &self,
@@ -2466,7 +2468,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         todo!();
     }
 
-    /// delete_cache_task deletes the cache task.
+    /// Deletes the cache task.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn delete_cache_task(
         &self,
@@ -2475,10 +2477,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         todo!();
     }
 
-    /// SyncCachePiecesStream is the stream of the sync cache pieces response.
+    /// Sync cache pieces stream is the stream of the sync cache pieces response.
     type SyncCachePiecesStream = ReceiverStream<Result<SyncCachePiecesResponse, Status>>;
 
-    /// sync_cache_pieces provides the cache piece metadata for parent.
+    /// Sync cache pieces provides the cache piece metadata for parent.
     #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
     async fn sync_cache_pieces(
         &self,
@@ -2487,7 +2489,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         todo!();
     }
 
-    /// download_cache_piece provides the cache piece content for parent.
+    /// Downloads the cache piece content for parent.
     #[instrument(
         skip_all,
         fields(host_id, remote_host_id, task_id, piece_id, piece_length)
@@ -2500,16 +2502,16 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 }
 
-/// DfdaemonUploadClient is a wrapper of DfdaemonUploadGRPCClient.
+/// Dfdaemon upload client is a wrapper of DfdaemonUploadGRPCClient.
 #[derive(Clone)]
 pub struct DfdaemonUploadClient {
-    /// client is the grpc client of the dfdaemon upload.
+    /// Client is the grpc client of the dfdaemon upload.
     pub client: DfdaemonUploadGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>,
 }
 
-/// DfdaemonUploadClient implements the dfdaemon upload grpc client.
+/// Dfdaemon upload client implements the dfdaemon upload grpc client.
 impl DfdaemonUploadClient {
-    /// new creates a new DfdaemonUploadClient.
+    /// Creates a new DfdaemonUploadClient.
     pub async fn new(
         config: Arc<Config>,
         addr: String,
@@ -2574,7 +2576,7 @@ impl DfdaemonUploadClient {
         Ok(Self { client })
     }
 
-    /// download_task downloads the task.
+    /// Downloads the task.
     #[instrument(skip_all)]
     pub async fn download_task(
         &self,
@@ -2600,7 +2602,7 @@ impl DfdaemonUploadClient {
         Ok(response)
     }
 
-    /// stat_task gets the status of the task.
+    /// Stats the task metadata.
     #[instrument(skip_all)]
     pub async fn stat_task(&self, request: DfdaemonStatTaskRequest) -> ClientResult<Task> {
         let request = Self::make_request(request);
@@ -2608,7 +2610,7 @@ impl DfdaemonUploadClient {
         Ok(response.into_inner())
     }
 
-    /// list_task_entries lists the task entries.
+    /// List task entries in the task.
     #[instrument(skip_all)]
     pub async fn list_task_entries(
         &self,
@@ -2619,7 +2621,8 @@ impl DfdaemonUploadClient {
         Ok(response.into_inner())
     }
 
-    /// delete_task tells the dfdaemon to delete the task.
+    /// Deletes the task's content and metadata from local storage, and removes
+    /// the associated peer metadata from the scheduler.
     #[instrument(skip_all)]
     pub async fn delete_task(&self, request: DeleteTaskRequest) -> ClientResult<()> {
         let request = Self::make_request(request);
@@ -2627,7 +2630,8 @@ impl DfdaemonUploadClient {
         Ok(())
     }
 
-    /// sync_pieces provides the piece metadata for parent.
+    /// Sync pieces provides the piece metadata for parent. If the per-piece collection timeout is exceeded,
+    /// the stream will be closed.
     #[instrument(skip_all)]
     pub async fn sync_pieces(
         &self,
@@ -2638,7 +2642,7 @@ impl DfdaemonUploadClient {
         Ok(response)
     }
 
-    /// sync_host provides the host info for parent.
+    /// Sync the host information.
     #[instrument(skip_all)]
     pub async fn sync_host(
         &self,
@@ -2649,7 +2653,9 @@ impl DfdaemonUploadClient {
         Ok(response)
     }
 
-    /// download_persistent_task downloads the persistent task.
+    /// Downloads the persistent task for downloading by user.
+    /// Note: This request include object storage credentials and should be used
+    /// for downloading from object storage and peers.
     #[instrument(skip_all)]
     pub async fn download_persistent_task(
         &self,
@@ -2678,7 +2684,7 @@ impl DfdaemonUploadClient {
         Ok(response)
     }
 
-    /// stat_persistent_task stats the persistent task.
+    /// Stats the persistent task metadata.
     #[instrument(skip_all)]
     pub async fn stat_persistent_task(
         &self,
@@ -2689,7 +2695,7 @@ impl DfdaemonUploadClient {
         Ok(response.into_inner())
     }
 
-    /// delete_persistent_task deletes the persistent task.
+    /// Deletes the persistent task.
     #[instrument(skip_all)]
     pub async fn delete_persistent_task(
         &self,
@@ -2700,8 +2706,7 @@ impl DfdaemonUploadClient {
         Ok(())
     }
 
-    /// sync_persistent_pieces provides the persistent piece metadata for parent.
-    /// If the per-piece collection timeout is exceeded, the stream will be closed.
+    /// Sync perisstent pieces provides the persistent piece metadata for parent.
     #[instrument(skip_all)]
     pub async fn sync_persistent_pieces(
         &self,
@@ -2712,7 +2717,7 @@ impl DfdaemonUploadClient {
         Ok(response)
     }
 
-    /// download_persistent_cache_task downloads the persistent cache task.
+    /// Downloads the persistent cache task.
     #[instrument(skip_all)]
     pub async fn download_persistent_cache_task(
         &self,
@@ -2741,7 +2746,7 @@ impl DfdaemonUploadClient {
         Ok(response)
     }
 
-    /// stat_persistent_cache_task stats the persistent cache task.
+    /// Stats the persistent cache task.
     #[instrument(skip_all)]
     pub async fn stat_persistent_cache_task(
         &self,
@@ -2756,7 +2761,7 @@ impl DfdaemonUploadClient {
         Ok(response.into_inner())
     }
 
-    /// delete_persistent_cache_task deletes the persistent cache task.
+    /// Deletes the persistent cache task.
     #[instrument(skip_all)]
     pub async fn delete_persistent_cache_task(
         &self,
@@ -2771,7 +2776,7 @@ impl DfdaemonUploadClient {
         Ok(())
     }
 
-    /// sync_persistent_cache_pieces provides the persistent cache piece metadata for parent.
+    /// Sync persistent cache pieces provides the persistent cache piece metadata for parent.
     /// If the per-piece collection timeout is exceeded, the stream will be closed.
     #[instrument(skip_all)]
     pub async fn sync_persistent_cache_pieces(
@@ -2788,7 +2793,7 @@ impl DfdaemonUploadClient {
         Ok(response)
     }
 
-    /// exchange_ib_verbs_queue_pair_endpoint exchanges ib verbs queue pair endpoint.
+    /// Exchanges ib verbs queue pair endpoint.
     #[instrument(skip_all)]
     pub async fn exchange_ib_verbs_queue_pair_endpoint(
         &self,
@@ -2803,7 +2808,7 @@ impl DfdaemonUploadClient {
         Ok(response.into_inner())
     }
 
-    /// make_request creates a new request with timeout.
+    /// Creates a new request with timeout.
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
