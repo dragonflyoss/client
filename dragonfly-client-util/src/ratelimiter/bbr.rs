@@ -41,13 +41,13 @@ pub fn default_bucket_interval() -> Duration {
 /// Default CPU usage threshold (percentage) for overload detection.
 #[inline]
 pub fn default_cpu_threshold() -> u8 {
-    85
+    100
 }
 
 /// Default memory usage threshold (percentage) for overload detection.
 #[inline]
 pub fn default_memory_threshold() -> u8 {
-    85
+    90
 }
 
 /// Default cooldown duration after shedding a request, during which subsequent requests will also
@@ -105,12 +105,14 @@ pub struct BBRConfig {
     pub bucket_interval: Duration,
 
     /// CPU usage percentage threshold (0–100) above which the system is
-    /// considered overloaded.
+    /// considered overloaded. If threshold is 100, CPU usage is ignored
+    /// for overload detection.
     #[serde(default = "default_cpu_threshold")]
     pub cpu_threshold: u8,
 
     /// Memory usage percentage threshold (0–100) above which the system is
-    /// considered overloaded.
+    /// considered overloaded. If threshold is 100, Memory usage is ignored
+    /// for overload detection.
     #[serde(default = "default_memory_threshold")]
     pub memory_threshold: u8,
 
@@ -382,6 +384,10 @@ impl OverloadCollector {
     /// Reads cgroup stats in containers, falling back to process-level stats.
     #[inline]
     fn is_memory_overloaded(&self) -> bool {
+        if self.memory_threshold == 100 {
+            return false;
+        }
+
         let used_percent = if self.is_running_in_container {
             match self.memory.get_cgroup_stats(self.pid) {
                 Some(stats) => stats.used_percent.round() as u8,
@@ -403,6 +409,10 @@ impl OverloadCollector {
     /// Reads cgroup stats in containers, falling back to process-level stats.
     #[inline]
     async fn is_cpu_overloaded(&self) -> bool {
+        if self.cpu_threshold == 100 {
+            return false;
+        }
+
         let used_percent = if self.is_running_in_container {
             match self.cpu.get_cgroup_stats(self.pid).await {
                 Some(stats) => stats.used_percent.round() as u8,
