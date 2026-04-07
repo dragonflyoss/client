@@ -41,7 +41,7 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 /// scheduling, refer to https://d7y.io/docs/next/reference/configuration/scheduler/.
 /// Scheduler'configure `scheduler.retryInterval`, `scheduler.retryBackToSourceLimit` and `scheduler.retryLimit`
 /// is used for the scheduler to schedule the task.
-pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// TCP_KEEPALIVE is the keepalive duration for TCP connection.
 pub const TCP_KEEPALIVE: Duration = Duration::from_secs(3600);
