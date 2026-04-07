@@ -212,7 +212,30 @@ impl ParentSelector {
                 error!("parent {} has no host info, skipping", parent.id);
                 continue;
             };
+
             let parent_host_id = parent_host.id.clone();
+            if let Some(connection) = self.connections.get(&parent_host_id) {
+                connection.increment_request();
+                continue;
+            }
+
+            let dfdaemon_upload_client = match DfdaemonUploadClient::new(
+                self.config.clone(),
+                format_url(
+                    "http",
+                    IpAddr::from_str(&parent_host.ip)?,
+                    parent_host.port as u16,
+                ),
+                false,
+            )
+            .await
+            {
+                Ok(client) => client,
+                Err(err) => {
+                    error!("failed to connect to parent {}: {}", parent_host_id, err);
+                    continue;
+                }
+            };
 
             // Calculate initial weight based on parent's network info if available, otherwise use default weight.
             let weight = match parent_host.network.as_ref() {
@@ -227,17 +250,6 @@ impl ParentSelector {
                     continue;
                 }
                 dashmap::mapref::entry::Entry::Vacant(entry) => {
-                    let dfdaemon_upload_client = DfdaemonUploadClient::new(
-                        self.config.clone(),
-                        format_url(
-                            "http",
-                            IpAddr::from_str(&parent_host.ip)?,
-                            parent_host.port as u16,
-                        ),
-                        false,
-                    )
-                    .await?;
-
                     let connection = Connection::new();
                     connection.increment_request();
                     let shutdown = connection.shutdown.clone();
@@ -522,7 +534,30 @@ impl PersistentParentSelector {
                 warn!("persistent parent {} has no host info, skipping", parent.id);
                 continue;
             };
+
             let parent_host_id = parent_host.id.clone();
+            if let Some(connection) = self.connections.get(&parent_host_id) {
+                connection.increment_request();
+                continue;
+            }
+
+            let dfdaemon_upload_client = match DfdaemonUploadClient::new(
+                self.config.clone(),
+                format_url(
+                    "http",
+                    IpAddr::from_str(&parent_host.ip)?,
+                    parent_host.port as u16,
+                ),
+                false,
+            )
+            .await
+            {
+                Ok(client) => client,
+                Err(err) => {
+                    error!("failed to connect to parent {}: {}", parent_host_id, err);
+                    continue;
+                }
+            };
 
             // Calculate initial weight based on parent's network info if available, otherwise use default weight.
             let weight = match parent_host.network.as_ref() {
@@ -537,17 +572,6 @@ impl PersistentParentSelector {
                     continue;
                 }
                 dashmap::mapref::entry::Entry::Vacant(entry) => {
-                    let dfdaemon_upload_client = DfdaemonUploadClient::new(
-                        self.config.clone(),
-                        format_url(
-                            "http",
-                            IpAddr::from_str(&parent_host.ip)?,
-                            parent_host.port as u16,
-                        ),
-                        false,
-                    )
-                    .await?;
-
                     let connection = Connection::new();
                     connection.increment_request();
                     let shutdown = connection.shutdown.clone();
@@ -835,7 +859,30 @@ impl PersistentCacheParentSelector {
                 );
                 continue;
             };
+
             let parent_host_id = parent_host.id.clone();
+            if let Some(connection) = self.connections.get(&parent_host_id) {
+                connection.increment_request();
+                continue;
+            }
+
+            let dfdaemon_upload_client = match DfdaemonUploadClient::new(
+                self.config.clone(),
+                format_url(
+                    "http",
+                    IpAddr::from_str(&parent_host.ip)?,
+                    parent_host.port as u16,
+                ),
+                false,
+            )
+            .await
+            {
+                Ok(client) => client,
+                Err(err) => {
+                    error!("failed to connect to parent {}: {}", parent_host_id, err);
+                    continue;
+                }
+            };
 
             // Calculate initial weight based on parent's network info if available, otherwise use default weight.
             let weight = match parent_host.network.as_ref() {
@@ -850,17 +897,6 @@ impl PersistentCacheParentSelector {
                     continue;
                 }
                 dashmap::mapref::entry::Entry::Vacant(entry) => {
-                    let dfdaemon_upload_client = DfdaemonUploadClient::new(
-                        self.config.clone(),
-                        format_url(
-                            "http",
-                            IpAddr::from_str(&parent_host.ip)?,
-                            parent_host.port as u16,
-                        ),
-                        false,
-                    )
-                    .await?;
-
                     let connection = Connection::new();
                     connection.increment_request();
                     let shutdown = connection.shutdown.clone();
