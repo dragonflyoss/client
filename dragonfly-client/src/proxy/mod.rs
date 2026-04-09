@@ -381,24 +381,32 @@ pub async fn http_handler(
     }
 
     // If find the matching rule, proxy the request via the dfdaemon.
+    // Only GET/HEAD requests are routed to P2P; other methods (PUT/POST/DELETE)
+    // fall through to direct proxy to avoid data loss.
     let request_uri = request.uri();
     if let Some(rule) = find_matching_rule(
         config.proxy.rules.as_deref(),
         url::Url::parse(&request_uri.to_string()).or_err(ErrorType::ParseError)?,
     ) {
+        if request.method() == Method::GET {
+            info!(
+                "proxy HTTP request via dfdaemon by rule config: {:?}",
+                request
+            );
+            return proxy_via_dfdaemon(
+                config,
+                task,
+                &rule,
+                request,
+                remote_ip,
+                dfdaemon_download_client,
+            )
+            .await;
+        }
         info!(
-            "proxy HTTP request via dfdaemon by rule config: {:?}",
+            "proxy HTTP request bypassing dfdaemon for non-GET/HEAD method: {:?}",
             request
         );
-        return proxy_via_dfdaemon(
-            config,
-            task,
-            &rule,
-            request,
-            remote_ip,
-            dfdaemon_download_client,
-        )
-        .await;
     }
 
     // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
@@ -617,24 +625,32 @@ pub async fn upgraded_handler(
     }
 
     // If find the matching rule, proxy the request via the dfdaemon.
+    // Only GET/HEAD requests are routed to P2P; other methods (PUT/POST/DELETE)
+    // fall through to direct proxy to avoid data loss.
     let request_uri = request.uri();
     if let Some(rule) = find_matching_rule(
         config.proxy.rules.as_deref(),
         url::Url::parse(&request_uri.to_string()).or_err(ErrorType::ParseError)?,
     ) {
+        if request.method() == Method::GET {
+            info!(
+                "proxy HTTPS request via dfdaemon by rule config: {:?}",
+                request,
+            );
+            return proxy_via_dfdaemon(
+                config,
+                task,
+                &rule,
+                request,
+                remote_ip,
+                dfdaemon_download_client,
+            )
+            .await;
+        }
         info!(
-            "proxy HTTPS request via dfdaemon by rule config: {:?}",
+            "proxy HTTPS request bypassing dfdaemon for non-GET/HEAD method: {:?}",
             request,
         );
-        return proxy_via_dfdaemon(
-            config,
-            task,
-            &rule,
-            request,
-            remote_ip,
-            dfdaemon_download_client,
-        )
-        .await;
     }
 
     // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
