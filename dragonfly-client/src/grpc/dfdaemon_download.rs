@@ -347,10 +347,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             .task
             .id_generator
             .task_id(
-                if download.enable_task_id_based_blob_digest && is_blob_url(&download.url) {
-                    TaskIDParameter::BlobDigestBased(download.url.clone())
-                } else if let Some(content) = download.content_for_calculating_task_id.clone() {
+                if let Some(content) = download.content_for_calculating_task_id.clone() {
                     TaskIDParameter::Content(content)
+                } else if download.enable_task_id_based_blob_digest && is_blob_url(&download.url) {
+                    TaskIDParameter::BlobDigestBased(download.url.clone())
                 } else {
                     let revision = download
                         .hugging_face
