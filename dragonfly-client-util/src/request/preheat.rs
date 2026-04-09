@@ -16,15 +16,16 @@
 
 use super::errors::Error;
 use super::{GetRequest, Request, Result};
+use base64::Engine;
 use oci_client::client::ClientConfig;
 use oci_client::manifest::ImageIndexEntry;
 use oci_client::secrets::RegistryAuth;
 use oci_client::{Client as OciClient, Reference, RegistryOperation};
 use oci_spec::image::{Arch, Os};
-use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use rustls_pki_types::CertificateDer;
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// PreheatRequest represents a request to preheat an OCI image through the
 /// Dragonfly seed client. The preheat downloads all blobs (config and layers)
@@ -131,35 +132,29 @@ pub async fn preheat<R: Request>(request: &R, preheat_req: &PreheatRequest) -> R
     let mut auth_headers = HeaderMap::new();
     if let Some(ref token) = token {
         auth_headers.insert(
-            "Authorization",
+            AUTHORIZATION,
             HeaderValue::from_str(&format!("Bearer {}", token))
                 .map_err(|err| Error::Internal(format!("invalid auth token: {}", err)))?,
         );
     } else if let (Some(username), Some(password)) = (&preheat_req.username, &preheat_req.password)
     {
-        let credentials = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            format!("{}:{}", username, password),
-        );
+        let credentials =
+            base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", username, password));
         auth_headers.insert(
-            "Authorization",
+            AUTHORIZATION,
             HeaderValue::from_str(&format!("Basic {}", credentials))
                 .map_err(|err| Error::Internal(format!("invalid credentials: {}", err)))?,
         );
     }
 
-    // Construct blob download URLs and download through Dragonfly.
+    // Download each blob (config + layers) through Dragonfly proxy.
     let registry = reference.resolve_registry();
     let repository = reference.repository();
 
-    // Collect all blob digests: config + layers.
-    let config_digest = manifest.config.digest.clone();
-    let mut blob_digests: Vec<String> = vec![config_digest];
-    for layer in &manifest.layers {
-        blob_digests.push(layer.digest.clone());
-    }
+    let blob_digests =
+        std::iter::once(&manifest.config.digest).chain(manifest.layers.iter().map(|l| &l.digest));
 
-    for blob_digest in &blob_digests {
+    for blob_digest in blob_digests {
         let blob_url = format!(
             "https://{}/v2/{}/blobs/{}",
             registry, repository, blob_digest
@@ -183,12 +178,20 @@ pub async fn preheat<R: Request>(request: &R, preheat_req: &PreheatRequest) -> R
         let response = request.get(get_request).await?;
 
         // Read and discard the body to complete the download through Dragonfly.
-        if let Some(mut reader) = response.reader {
-            tokio::io::copy(&mut reader, &mut tokio::io::sink())
-                .await
-                .map_err(|err| {
-                    Error::Internal(format!("failed to read blob {}: {}", blob_digest, err))
-                })?;
+        match response.reader {
+            Some(mut reader) => {
+                tokio::io::copy(&mut reader, &mut tokio::io::sink())
+                    .await
+                    .map_err(|err| {
+                        Error::Internal(format!("failed to read blob {}: {}", blob_digest, err))
+                    })?;
+            }
+            None => {
+                warn!(
+                    "no response body for blob {}, download may not have completed",
+                    blob_digest
+                );
+            }
         }
 
         info!("preheated blob: {}", blob_url);
