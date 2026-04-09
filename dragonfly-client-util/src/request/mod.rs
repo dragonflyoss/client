@@ -15,6 +15,7 @@
  */
 
 pub mod errors;
+pub mod preheat;
 mod selector;
 
 use crate::http::{headermap_to_hashmap, query_params::default_proxy_rule_filtered_query_params};

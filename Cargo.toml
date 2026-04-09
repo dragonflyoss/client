@@ -120,6 +120,8 @@ cgroups-rs = "0.5"
 num_cpus = "1.17"
 async-trait = "0.1"
 humantime-serde = "1.1.1"
+oci-client = { version = "0.16.1", default-features = false, features = ["rustls-tls"] }
+oci-spec = "0.9"
 
 # TODO(Gaius): Remove the git dependency after the next release of mocktail, refer to https://github.com/IBM/mocktail/issues/65.
 mocktail = { version = "0.3.0", git = "https://github.com/IBM/mocktail", rev = "860e75e171a8eb818083813dbeed4401d1a40b3b" }
