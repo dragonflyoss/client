@@ -1190,10 +1190,13 @@ fn make_download_task_request(
             actual_piece_length: None,
             actual_content_length: None,
             actual_piece_count: None,
-            enable_task_id_based_blob_digest: config
-                .proxy
-                .registry_mirror
-                .enable_task_id_based_blob_digest,
+            enable_task_id_based_blob_digest: header::get_enable_task_id_based_blob_digest(
+                &header,
+                config
+                    .proxy
+                    .registry_mirror
+                    .enable_task_id_based_blob_digest,
+            ),
         }),
     })
 }

@@ -80,6 +80,14 @@ pub const DRAGONFLY_PIECE_LENGTH_HEADER: &str = "X-Dragonfly-Piece-Length";
 pub const DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID_HEADER: &str =
     "X-Dragonfly-Content-For-Calculating-Task-ID";
 
+/// DRAGONFLY_ENABLE_TASK_ID_BASED_BLOB_DIGEST is the header key to indicate whether to use the blob's content
+/// digest (e.g., SHA-256 hash) for task ID calculation, when downloading from OCI registries. When enabled
+/// for OCI blob URLs (e.g., /v2/<name>/blobs/sha256:<digest>), the task ID is derived from the blob digest
+/// rather than the full URL. This enables deduplication across registries - the same blob from different
+/// registries shares one task ID, eliminating redundant downloads and storage.
+pub const DRAGONFLY_ENABLE_TASK_ID_BASED_BLOB_DIGEST: &str =
+    "X-Dragonfly-Enable-Task-ID-Based-Blob-Digest";
+
 /// DRAGONFLY_TASK_DOWNLOAD_FINISHED_HEADER is the response header key to indicate whether the task download finished.
 /// When the task download is finished, the response will include this header with the value `"true"`,
 /// indicating that the download hit the local cache.
@@ -114,7 +122,7 @@ pub enum ErrorType {
     Dfdaemon,
 }
 
-/// ErrorType implements as_str.
+/// Error type implements as_str.
 impl ErrorType {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -125,7 +133,7 @@ impl ErrorType {
     }
 }
 
-/// ErrorType implements fmt::Display.
+/// Error type implements fmt::Display.
 impl fmt::Display for ErrorType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_str())
@@ -136,7 +144,8 @@ impl fmt::Display for ErrorType {
 impl FromStr for ErrorType {
     type Err = String;
 
-    /// from_str parses a string into a ErrorType.
+    /// Parses a string into an ErrorType. The string must be one of "backend", "proxy", or
+    /// "dfdaemon".
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "backend" => Ok(ErrorType::Backend),
@@ -147,7 +156,7 @@ impl FromStr for ErrorType {
     }
 }
 
-/// get_tag gets the tag from http header.
+/// Get X-Dragonfly-Tag header value to determine the tag of the task.
 pub fn get_tag(header: &HeaderMap) -> Option<String> {
     header
         .get(DRAGONFLY_TAG_HEADER)
@@ -155,7 +164,7 @@ pub fn get_tag(header: &HeaderMap) -> Option<String> {
         .map(|tag| tag.to_string())
 }
 
-/// get_application gets the application from http header.
+/// Get X-Dragonfly-Application header value to determine the application of the task.
 pub fn get_application(header: &HeaderMap) -> Option<String> {
     header
         .get(DRAGONFLY_APPLICATION_HEADER)
@@ -163,7 +172,7 @@ pub fn get_application(header: &HeaderMap) -> Option<String> {
         .map(|application| application.to_string())
 }
 
-/// get_priority gets the priority from http header.
+/// Get X-Dragonfly-Priority header value to determine the priority of the task.
 pub fn get_priority(header: &HeaderMap) -> i32 {
     let default_priority = Priority::Level6 as i32;
     match header.get(DRAGONFLY_PRIORITY_HEADER) {
@@ -184,7 +193,8 @@ pub fn get_priority(header: &HeaderMap) -> i32 {
     }
 }
 
-/// get_registry gets the custom address of container registry from http header.
+/// Get X-Dragonfly-Registry header value to determine the custom address of container registry for
+/// downloading.
 pub fn get_registry(header: &HeaderMap) -> Option<String> {
     header
         .get(DRAGONFLY_REGISTRY_HEADER)
@@ -192,7 +202,8 @@ pub fn get_registry(header: &HeaderMap) -> Option<String> {
         .map(|registry| registry.to_string())
 }
 
-/// get_filters gets the filters from http header.
+/// Get X-Dragonfly-Filtered-Query-Params header value to determine the filtered query params for
+/// generating task ID.
 pub fn get_filtered_query_params(
     header: &HeaderMap,
     default_filtered_query_params: Vec<String>,
@@ -209,7 +220,8 @@ pub fn get_filtered_query_params(
     }
 }
 
-/// get_use_p2p gets the use p2p from http header.
+/// Get X-Dragonfly-Use-P2P header value to determine whether to use P2P technology to distribute
+/// the content.
 pub fn get_use_p2p(header: &HeaderMap) -> bool {
     match header.get(DRAGONFLY_USE_P2P_HEADER) {
         Some(value) => match value.to_str() {
@@ -223,7 +235,8 @@ pub fn get_use_p2p(header: &HeaderMap) -> bool {
     }
 }
 
-/// get_prefetch gets the prefetch from http header.
+/// Get X-Dragonfly-Prefetch header value to determine whether to prefetch the entire file for
+/// range request.
 pub fn get_prefetch(header: &HeaderMap) -> Option<bool> {
     match header.get(DRAGONFLY_PREFETCH_HEADER) {
         Some(value) => match value.to_str() {
@@ -237,7 +250,8 @@ pub fn get_prefetch(header: &HeaderMap) -> Option<bool> {
     }
 }
 
-/// get_output_path gets the output path from http header.
+/// Get X-Dragonfly-Output-Path header value to determine the absolute output path for the
+/// downloaded file.
 pub fn get_output_path(header: &HeaderMap) -> Option<String> {
     header
         .get(DRAGONFLY_OUTPUT_PATH_HEADER)
@@ -245,7 +259,8 @@ pub fn get_output_path(header: &HeaderMap) -> Option<String> {
         .map(|output_path| output_path.to_string())
 }
 
-/// get_force_hard_link gets the force hard link from http header.
+/// Get X-Dragonfly-Force-Hard-Link header value to determine whether the download file must be
+/// hard linked to the output path.
 pub fn get_force_hard_link(header: &HeaderMap) -> bool {
     match header.get(DRAGONFLY_FORCE_HARD_LINK_HEADER) {
         Some(value) => match value.to_str() {
@@ -259,7 +274,8 @@ pub fn get_force_hard_link(header: &HeaderMap) -> bool {
     }
 }
 
-/// get_piece_length gets the piece length from http header.
+/// Get X-Dragonfly-Piece-Length header value to determine the piece length for downloading the
+/// file.
 pub fn get_piece_length(header: &HeaderMap) -> Option<ByteSize> {
     match header.get(DRAGONFLY_PIECE_LENGTH_HEADER) {
         Some(piece_length) => match piece_length.to_str() {
@@ -279,12 +295,31 @@ pub fn get_piece_length(header: &HeaderMap) -> Option<ByteSize> {
     }
 }
 
-/// get_content_for_calculating_task_id gets the content for calculating task id from http header.
+/// Get X-Dragonfly-Content-For-Calculating-Task-ID header value to determine the content for
+/// calculating task ID.
 pub fn get_content_for_calculating_task_id(header: &HeaderMap) -> Option<String> {
     header
         .get(DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID_HEADER)
         .and_then(|content| content.to_str().ok())
         .map(|content| content.to_string())
+}
+
+/// Get X-Dragonfly-Enable-Task-ID-Based-Blob-Digest header value to determine whether to use the
+/// blob's content digest for task ID calculation.
+pub fn get_enable_task_id_based_blob_digest(header: &HeaderMap, default: bool) -> bool {
+    match header.get(DRAGONFLY_ENABLE_TASK_ID_BASED_BLOB_DIGEST) {
+        Some(value) => match value.to_str() {
+            Ok(value) => value.eq_ignore_ascii_case("true"),
+            Err(err) => {
+                error!(
+                    "get enable task id based blob digest from header failed: {}",
+                    err
+                );
+                default
+            }
+        },
+        None => default,
+    }
 }
 
 #[cfg(test)]
@@ -460,5 +495,26 @@ mod tests {
 
         let empty_headers = HeaderMap::new();
         assert_eq!(get_registry(&empty_headers), None);
+    }
+
+    #[test]
+    fn test_get_enable_task_id_based_blob_digest() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            DRAGONFLY_ENABLE_TASK_ID_BASED_BLOB_DIGEST,
+            HeaderValue::from_static("true"),
+        );
+        assert!(get_enable_task_id_based_blob_digest(&headers, false));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            DRAGONFLY_ENABLE_TASK_ID_BASED_BLOB_DIGEST,
+            HeaderValue::from_static("false"),
+        );
+        assert!(!get_enable_task_id_based_blob_digest(&headers, true));
+
+        let empty_headers = HeaderMap::new();
+        assert!(get_enable_task_id_based_blob_digest(&empty_headers, true));
+        assert!(!get_enable_task_id_based_blob_digest(&empty_headers, false));
     }
 }
