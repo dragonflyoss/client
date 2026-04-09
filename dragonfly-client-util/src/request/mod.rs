@@ -17,6 +17,7 @@
 pub mod errors;
 mod selector;
 
+use crate::digest::is_blob_url;
 use crate::http::{headermap_to_hashmap, query_params::default_proxy_rule_filtered_query_params};
 use crate::id_generator::{IDGenerator, TaskIDParameter};
 use crate::net::format_url;
@@ -118,10 +119,17 @@ pub struct GetRequest {
     /// Default value includes the filtered query params of s3, gcs, oss, obs, cos.
     pub filtered_query_params: Vec<String>,
 
-    /// content_for_calculating_task_id is the content used to calculate the task id.
-    /// If content_for_calculating_task_id is set, use its value to calculate the task ID.
-    /// Otherwise, calculate the task ID based on url, piece_length, tag, application, and filtered_query_params.
+    /// Content for calculating task id. This is used when the task ID cannot be calculated based
+    /// on URL and other parameters, such as when the URL contains dynamic query parameters that
+    /// cannot be filtered out.
     pub content_for_calculating_task_id: Option<String>,
+
+    /// Enable task id based blob digest. It indicates whether to use the blob digest for task ID calculation
+    /// when downloading from OCI registries. When enabled for OCI blob URLs (e.g., /v2/<name>/blobs/sha256:<digest>),
+    /// the task ID is derived from the blob digest rather than the full URL. This enables deduplication across
+    /// registries - the same blob from different registries shares one task ID, eliminating redundant downloads
+    /// and storage.
+    pub enable_task_id_based_blob_digest: bool,
 
     /// Refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L67
     pub priority: Option<i32>,
@@ -129,7 +137,7 @@ pub struct GetRequest {
     /// timeout is the timeout of the request.
     pub timeout: Duration,
 
-    /// client_cert is the client certificates for the request.
+    /// Client cert is the client certificates for the request.
     pub client_cert: Option<Vec<CertificateDer<'static>>>,
 }
 
@@ -427,17 +435,22 @@ impl Proxy {
         // Generate task id for selecting seed peer.
         let task_id = self
             .id_generator
-            .task_id(match request.content_for_calculating_task_id.as_ref() {
-                Some(content) => TaskIDParameter::Content(content.clone()),
-                None => TaskIDParameter::URLBased {
-                    url: request.url.clone(),
-                    piece_length: request.piece_length,
-                    tag: request.tag.clone(),
-                    application: request.application.clone(),
-                    filtered_query_params,
-                    revision: None,
+            .task_id(
+                if let Some(content) = request.content_for_calculating_task_id.clone() {
+                    TaskIDParameter::Content(content)
+                } else if request.enable_task_id_based_blob_digest && is_blob_url(&request.url) {
+                    TaskIDParameter::BlobDigestBased(request.url.clone())
+                } else {
+                    TaskIDParameter::URLBased {
+                        url: request.url.clone(),
+                        piece_length: request.piece_length,
+                        tag: request.tag.clone(),
+                        application: request.application.clone(),
+                        filtered_query_params,
+                        revision: None,
+                    }
                 },
-            })
+            )
             .map_err(|err| Error::Internal(format!("failed to generate task id: {}", err)))?;
 
         // Select seed peers for downloading.
@@ -601,6 +614,20 @@ impl Proxy {
                     })?,
             );
         }
+
+        headers.insert(
+            "X-Dragonfly-Enable-Task-ID-Based-Blob-Digest",
+            request
+                .enable_task_id_based_blob_digest
+                .to_string()
+                .parse()
+                .map_err(|err| {
+                    Error::InvalidArgument(format!(
+                        "invalid enable task id based blob digest: {}",
+                        err
+                    ))
+                })?,
+        );
 
         if let Some(priority) = request.priority {
             headers.insert(
