@@ -1161,6 +1161,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_calculate_interested() {
+        // Install the ring CryptoProvider as the process-level default. This is
+        // required when both `ring` and `aws-lc-rs` features are enabled (e.g.,
+        // `--all-features` in CI), because rustls cannot auto-detect which
+        // provider to use.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
         let temp_dir = tempdir().unwrap();
 
         let config = Config::default();
