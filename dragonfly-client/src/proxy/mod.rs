@@ -381,7 +381,7 @@ pub async fn http_handler(
     }
 
     // If find the matching rule, proxy the request via the dfdaemon.
-    // Only GET/HEAD requests are routed to P2P; other methods (PUT/POST/DELETE)
+    // Only GET requests are routed to P2P; other methods (HEAD/PUT/POST/DELETE)
     // fall through to direct proxy to avoid data loss.
     let request_uri = request.uri();
     if let Some(rule) = find_matching_rule(
@@ -404,7 +404,7 @@ pub async fn http_handler(
             .await;
         }
         info!(
-            "proxy HTTP request bypassing dfdaemon for non-GET/HEAD method: {:?}",
+            "proxy HTTP request bypassing dfdaemon for non-GET method: {:?}",
             request
         );
     }
@@ -625,7 +625,7 @@ pub async fn upgraded_handler(
     }
 
     // If find the matching rule, proxy the request via the dfdaemon.
-    // Only GET/HEAD requests are routed to P2P; other methods (PUT/POST/DELETE)
+    // Only GET requests are routed to P2P; other methods (HEAD/PUT/POST/DELETE)
     // fall through to direct proxy to avoid data loss.
     let request_uri = request.uri();
     if let Some(rule) = find_matching_rule(
@@ -648,7 +648,7 @@ pub async fn upgraded_handler(
             .await;
         }
         info!(
-            "proxy HTTPS request bypassing dfdaemon for non-GET/HEAD method: {:?}",
+            "proxy HTTPS request bypassing dfdaemon for non-GET method: {:?}",
             request,
         );
     }
