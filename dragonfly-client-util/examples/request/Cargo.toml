@@ -1,0 +1,24 @@
+[package]
+name = "request"
+description = "An example of request library for the Dragonfly client"
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "get"
+path = "src/bin/get.rs"
+
+[[bin]]
+name = "preheat"
+path = "src/bin/preheat.rs"
+
+[dependencies]
+dragonfly-client-util.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
