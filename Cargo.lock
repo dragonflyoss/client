@@ -1484,7 +1484,6 @@ dependencies = [
  "rustls-pemfile 2.2.0",
  "rustls-pki-types",
  "serde",
- "serde_json",
  "sha2",
  "sysinfo",
  "tempfile",
