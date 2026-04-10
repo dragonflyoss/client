@@ -338,6 +338,19 @@ impl HTTP {
             return;
         }
 
+        // Only cache absolute URLs. A relative path (e.g. "/new/path") cannot be used
+        // as a standalone redirect target in subsequent requests, so skip caching it.
+        match Url::parse(target_url) {
+            Ok(parsed) if parsed.has_host() => {}
+            _ => {
+                debug!(
+                    "skipping cache for relative redirect {} -> {}",
+                    original_url, target_url
+                );
+                return;
+            }
+        }
+
         debug!(
             "caching temporary redirect {} -> {}",
             original_url, target_url
@@ -411,21 +424,31 @@ impl Backend for HTTP {
         {
             Ok(response) if response.status() == reqwest::StatusCode::TEMPORARY_REDIRECT => {
                 if let Some(location) = response.headers().get(LOCATION) {
-                    let redirect_url = location.to_str().or_err(ErrorType::ParseError)?;
+                    let location_str = location.to_str().or_err(ErrorType::ParseError)?;
+
+                    // Resolve relative Location URLs against the request URL base so
+                    // that the redirect can always be followed with an absolute URL.
+                    let base_url = Url::parse(&request.url).or_err(ErrorType::ParseError)?;
+                    let redirect_url_parsed =
+                        base_url.join(location_str).or_err(ErrorType::ParseError)?;
+                    let redirect_url = redirect_url_parsed.as_str();
+
                     debug!(
                         "stat request got 307 Temporary Redirect, following redirect {} -> {}",
                         request.url, redirect_url
                     );
 
-                    self.store_temporary_redirect_url(&request.url, redirect_url)
+                    // Pass the raw Location string to the cache so that relative paths
+                    // (e.g. "/signed") are not stored — only absolute URLs are cached.
+                    self.store_temporary_redirect_url(&request.url, location_str)
                         .await;
 
                     // Strips sensitive headers when following a cross-origin redirect.
                     let mut redirect_headers = request_header.clone();
                     remove_sensitive_headers(
                         &mut redirect_headers,
-                        &redirect_url.parse()?,
-                        &request.url.parse()?,
+                        &redirect_url_parsed,
+                        &base_url,
                     );
 
                     match self
@@ -613,21 +636,31 @@ impl Backend for HTTP {
         // If the response is a 307 Temporary Redirect, follow the redirect manually.
         if response.status() == reqwest::StatusCode::TEMPORARY_REDIRECT {
             if let Some(location) = response.headers().get(LOCATION) {
-                let redirect_url = location.to_str().or_err(ErrorType::ParseError)?;
+                let location_str = location.to_str().or_err(ErrorType::ParseError)?;
+
+                // Resolve relative Location URLs against the request URL base so
+                // that the redirect can always be followed with an absolute URL.
+                let base_url = Url::parse(&request.url).or_err(ErrorType::ParseError)?;
+                let redirect_url_parsed =
+                    base_url.join(location_str).or_err(ErrorType::ParseError)?;
+                let redirect_url = redirect_url_parsed.as_str();
+
                 debug!(
                     "get request got 307 Temporary Redirect, following redirect {} -> {}",
                     request.url, redirect_url
                 );
 
-                self.store_temporary_redirect_url(&request.url, redirect_url)
+                // Pass the raw Location string to the cache so that relative paths
+                // (e.g. "/signed") are not stored — only absolute URLs are cached.
+                self.store_temporary_redirect_url(&request.url, location_str)
                     .await;
 
                 // Strips sensitive headers when following a cross-origin redirect.
                 let mut redirect_headers = request_header.clone();
                 remove_sensitive_headers(
                     &mut redirect_headers,
-                    &redirect_url.parse()?,
-                    &request.url.parse()?,
+                    &redirect_url_parsed,
+                    &base_url,
                 );
 
                 response = match self
@@ -1512,6 +1545,73 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         // Second request after TTL expiry - should store redirect url again.
+        let mut response = backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "1".to_string(),
+                url: format!("{}/redirect", server.uri()),
+                range: None,
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.http_status_code, Some(StatusCode::OK));
+        assert_eq!(response.text().await.unwrap(), "target content");
+    }
+
+    #[tokio::test]
+    async fn should_not_cache_relative_307_redirect_location() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/target"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("target content")
+                    .insert_header("Content-Type", "text/plain"),
+            )
+            .mount(&server)
+            .await;
+
+        // Return a 307 with a relative Location path each time it is called.
+        Mock::given(method("GET"))
+            .and(path("/redirect"))
+            .respond_with(
+                ResponseTemplate::new(307).insert_header("Location", "/target"),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let backend = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true).unwrap();
+
+        // First request - relative Location should NOT be cached.
+        let mut response = backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "1".to_string(),
+                url: format!("{}/redirect", server.uri()),
+                range: None,
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.http_status_code, Some(StatusCode::OK));
+        assert_eq!(response.text().await.unwrap(), "target content");
+
+        // Second request - because the relative URL was not cached, the origin server
+        // must be contacted again (wiremock expects exactly 2 calls to /redirect).
         let mut response = backend
             .get(GetRequest {
                 task_id: "test".to_string(),
