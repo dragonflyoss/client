@@ -14,15 +14,12 @@
  * limitations under the License.
  */
 
-use dragonfly_client_util::request::{PreheatRequest, Proxy, Request};
+use dragonfly_client_util::request::{GetRequest, Proxy, Request};
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 
-/// This example demonstrates how to use the `preheat` method of the Dragonfly request module
-/// to pre-cache an OCI image via the Dragonfly P2P network.
-///
-/// The example preheats the `dragonflyoss/scheduler:v2.4.3` image for the `linux/amd64` platform.
-/// All blobs (config and layers) are downloaded through the Dragonfly seed peer proxy and cached
-/// in the P2P network, ensuring fast access for subsequent pulls across the cluster.
+/// This example demonstrates how to use the `get` method of the Dragonfly request module
+/// to download a file via the Dragonfly P2P network.
 ///
 /// Prerequisites:
 ///   1. A running Dragonfly scheduler service.
@@ -34,7 +31,7 @@ use std::time::Duration;
 ///
 ///   ```shell
 ///   export DRAGONFLY_SCHEDULER_ENDPOINT="http://127.0.0.1:8002"
-///   cargo run -p dragonfly-client-util --example preheat
+///   cargo run -p get
 ///   ```
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -52,14 +49,11 @@ async fn main() -> anyhow::Result<()> {
         .await
         .map_err(|err| anyhow::anyhow!("failed to build proxy: {}", err))?;
 
-    // Create a preheat request for the dragonflyoss/scheduler:v2.4.3 image.
-    // Anonymous authentication is used here since the image is public. For private
-    // registries, set `username` and `password` to the appropriate credentials.
-    let request = PreheatRequest {
-        image: "docker.io/dragonflyoss/scheduler:v2.4.3".to_string(),
-        username: None,
-        password: None,
-        platform: Some("linux/amd64".to_string()),
+    // Create a GET request for the target URL. The request is routed through the Dragonfly
+    // seed peer proxy so that the content is cached in the P2P network.
+    let request = GetRequest {
+        url: "https://example.com/path/to/file".to_string(),
+        header: None,
         piece_length: None,
         tag: None,
         application: None,
@@ -67,21 +61,26 @@ async fn main() -> anyhow::Result<()> {
         content_for_calculating_task_id: None,
         enable_task_id_based_blob_digest: false,
         priority: None,
-        timeout: Duration::from_secs(600),
+        timeout: Duration::from_secs(300),
         client_cert: None,
     };
 
-    // Preheat the image. This downloads all blobs (config + layers) through the Dragonfly
-    // seed peer proxy, caching them in the P2P network.
-    proxy
-        .preheat(&request)
+    // Send the GET request and receive a streaming response.
+    let response = proxy
+        .get(request)
         .await
-        .map_err(|err| anyhow::anyhow!("preheat failed: {}", err))?;
+        .map_err(|err| anyhow::anyhow!("get request failed: {}", err))?;
 
-    println!(
-        "Successfully preheated image: {}",
-        "docker.io/dragonflyoss/scheduler:v2.4.3"
-    );
+    println!("Response success: {}", response.success);
+    println!("Response status:  {:?}", response.status_code);
+    println!("Response headers: {:?}", response.header);
+
+    // Read the response body from the streaming reader.
+    if let Some(mut reader) = response.reader {
+        let mut body = Vec::new();
+        reader.read_to_end(&mut body).await?;
+        println!("Downloaded {} bytes", body.len());
+    }
 
     Ok(())
 }

@@ -9,6 +9,8 @@ members = [
     "dragonfly-client-storage",
     "dragonfly-client-util",
     "dragonfly-client-backend/examples/plugin",
+    "dragonfly-client-util/examples/get",
+    "dragonfly-client-util/examples/preheat",
     "dragonfly-client-metric",
 ]
 
