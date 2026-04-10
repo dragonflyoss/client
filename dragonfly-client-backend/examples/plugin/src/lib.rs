@@ -64,7 +64,7 @@ impl Backend for Hdfs {
     }
 }
 
-/// register_plugin is a function that returns a Box<dyn Backend + Send + Sync>.
+/// Register plugin is a function that returns a Box<dyn Backend + Send + Sync>.
 /// This function is used to register the HDFS plugin to the Backend.
 #[no_mangle]
 pub fn register_plugin() -> Box<dyn Backend + Send + Sync> {

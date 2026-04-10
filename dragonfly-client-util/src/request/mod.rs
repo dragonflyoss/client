@@ -14,9 +14,6 @@
  * limitations under the License.
  */
 
-pub mod errors;
-mod selector;
-
 use crate::digest::is_blob_url;
 use crate::http::{headermap_to_hashmap, query_params::default_proxy_rule_filtered_query_params};
 use crate::id_generator::{IDGenerator, TaskIDParameter};
@@ -29,7 +26,15 @@ use dragonfly_api::scheduler::v2::scheduler_client::SchedulerClient;
 use errors::{BackendError, DfdaemonError, Error, ProxyError};
 use futures::TryStreamExt;
 use hostname;
-use reqwest::{header::HeaderMap, header::HeaderValue, Client};
+use oci_client::client::ClientConfig;
+use oci_client::manifest::ImageIndexEntry;
+use oci_client::secrets::RegistryAuth;
+use oci_client::{Client as OciClient, Reference, RegistryOperation};
+use oci_spec::image::{Arch, Os};
+use reqwest::{
+    header::{HeaderMap, HeaderValue, AUTHORIZATION},
+    Client,
+};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_tracing::TracingMiddleware;
 use rustix::path::Arg;
@@ -43,7 +48,10 @@ use std::time::Duration;
 use tokio::io::AsyncRead;
 use tokio_util::io::StreamReader;
 use tonic::transport::Endpoint;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
+
+pub mod errors;
+mod selector;
 
 /// POOL_MAX_IDLE_PER_HOST is the max idle connections per host.
 const POOL_MAX_IDLE_PER_HOST: usize = 1024;
@@ -83,7 +91,7 @@ pub trait Request {
     /// This method is designed for scenarios where the response body is expected to be processed as a
     /// stream, allowing efficient handling of large or continuous data. The response includes metadata
     /// such as status codes and headers, along with a streaming `Body` for accessing the response content.
-    async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>>;
+    async fn get(&self, request: &GetRequest) -> Result<GetResponse<Body>>;
 
     /// Sends an GET request to a remote server via the Dragonfly and writes the response
     /// body directly into the provided buffer.
@@ -92,7 +100,16 @@ pub trait Request {
     /// memory, avoiding the overhead of streaming for smaller or fixed-size responses. The provided
     /// `BytesMut` buffer is used to store the response content, and the response metadata (e.g., status
     /// and headers) is returned separately.
-    async fn get_into(&self, request: GetRequest, buf: &mut BytesMut) -> Result<GetResponse>;
+    async fn get_into(&self, request: &GetRequest, buf: &mut BytesMut) -> Result<GetResponse>;
+
+    /// Preheats an OCI image by downloading all its blobs via the Dragonfly.
+    ///
+    /// This method is designed for scenarios where OCI image content needs to be pre-cached in
+    /// the seed client before actual consumption, ensuring faster subsequent access across the
+    /// cluster. It parses the image reference, authenticates with the OCI registry, resolves
+    /// the image manifest (including multi-platform image indexes), and downloads each blob
+    /// (config and layers) through the seed client.
+    async fn preheat(&self, request: &PreheatRequest) -> Result<()>;
 }
 
 /// GetRequest represents a GET request to be sent via the Dragonfly.
@@ -128,17 +145,37 @@ pub struct GetRequest {
     /// when downloading from OCI registries. When enabled for OCI blob URLs (e.g., /v2/<name>/blobs/sha256:<digest>),
     /// the task ID is derived from the blob digest rather than the full URL. This enables deduplication across
     /// registries - the same blob from different registries shares one task ID, eliminating redundant downloads
-    /// and storage.
+    /// and storage, default is true.
     pub enable_task_id_based_blob_digest: bool,
 
     /// Refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L67
     pub priority: Option<i32>,
 
-    /// timeout is the timeout of the request.
+    /// timeout is the timeout of the request, default is 300s.
     pub timeout: Duration,
 
     /// Client cert is the client certificates for the request.
     pub client_cert: Option<Vec<CertificateDer<'static>>>,
+}
+
+/// Default implementation for GetRequest.
+impl Default for GetRequest {
+    /// Default returns a default GetRequest with empty url and default values for other fields.
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            header: None,
+            piece_length: None,
+            tag: None,
+            application: None,
+            filtered_query_params: default_proxy_rule_filtered_query_params(),
+            content_for_calculating_task_id: None,
+            enable_task_id_based_blob_digest: true,
+            priority: None,
+            timeout: Duration::from_secs(300),
+            client_cert: None,
+        }
+    }
 }
 
 /// GetResponse represents a GET response received via the Dragonfly.
@@ -157,6 +194,86 @@ where
 
     /// body is the content of the response.
     pub reader: Option<R>,
+}
+
+/// PreheatRequest represents a request to preheat an OCI image through the
+/// Dragonfly seed client. The preheat downloads all blobs (config and layers)
+/// of the specified image via the Dragonfly proxy, effectively caching them
+/// in the P2P network for faster downloading.
+pub struct PreheatRequest {
+    /// Image is the OCI image reference (e.g., "docker.io/library/nginx:latest").
+    pub image: String,
+
+    /// Username for registry authentication. If not provided, anonymous access is used.
+    pub username: Option<String>,
+
+    /// Password for registry authentication. If not provided, anonymous access is used.
+    pub password: Option<String>,
+
+    /// Platform specifies the target platform in the format "os/arch"
+    /// (e.g., "linux/amd64", "linux/arm64"). This is used to select the correct
+    /// manifest from a multi-platform image index, default is current platform.
+    pub platform: Option<String>,
+
+    /// Piece length is the optional piece length for the Dragonfly task.
+    pub piece_length: Option<u64>,
+
+    /// Tag identifies different tasks for the same URL.
+    pub tag: Option<String>,
+
+    /// Application identifies different tasks for the same URL.
+    pub application: Option<String>,
+
+    /// Filtered query params to generate the task id.
+    /// When filter is ["Signature", "Expires", "ns"], for example:
+    /// http://example.com/xyz?Expires=e1&Signature=s1&ns=docker.io and http://example.com/xyz?Expires=e2&Signature=s2&ns=docker.io
+    /// will generate the same task id.
+    /// Default value includes the filtered query params of s3, gcs, oss, obs, cos.
+    pub filtered_query_params: Vec<String>,
+
+    /// Content for calculating task id. This is used when the task ID cannot be calculated based
+    /// on URL and other parameters, such as when the URL contains dynamic query parameters that
+    /// cannot be filtered out.
+    pub content_for_calculating_task_id: Option<String>,
+
+    /// Enable task id based blob digest. It indicates whether to use the blob digest for task ID calculation
+    /// when downloading from OCI registries. When enabled for OCI blob URLs (e.g., /v2/<name>/blobs/sha256:<digest>),
+    /// the task ID is derived from the blob digest rather than the full URL. This enables deduplication across
+    /// registries - the same blob from different registries shares one task ID, eliminating redundant downloads
+    /// and storage, default is true.
+    pub enable_task_id_based_blob_digest: bool,
+
+    /// Refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L67
+    pub priority: Option<i32>,
+
+    /// Timeout is the timeout for each blob download request, default is 300s.
+    pub timeout: Duration,
+
+    /// Client cert is the optional client certificates for the request.
+    pub client_cert: Option<Vec<CertificateDer<'static>>>,
+}
+
+/// Default implementation for PreheatRequest.
+impl Default for PreheatRequest {
+    /// Default returns a default PreheatRequest with empty image and default values for other
+    /// fields.
+    fn default() -> Self {
+        Self {
+            image: String::new(),
+            username: None,
+            password: None,
+            platform: None,
+            piece_length: None,
+            tag: None,
+            application: None,
+            filtered_query_params: default_proxy_rule_filtered_query_params(),
+            content_for_calculating_task_id: None,
+            enable_task_id_based_blob_digest: true,
+            priority: None,
+            timeout: Duration::from_secs(300),
+            client_cert: None,
+        }
+    }
 }
 
 /// Factory for creating HTTPClient instances.
@@ -365,8 +482,8 @@ impl Request for Proxy {
     /// This method is designed for scenarios where the response body is expected to be processed as a
     /// stream, allowing efficient handling of large or continuous data. The response includes metadata
     /// such as status codes and headers, along with a streaming `Body` for accessing the response content.
-    async fn get(&self, request: GetRequest) -> Result<GetResponse> {
-        let response = self.try_send(&request).await?;
+    async fn get(&self, request: &GetRequest) -> Result<GetResponse> {
+        let response = self.try_send(request).await?;
         let header = response.headers().clone();
         let status_code = response.status();
         let reader = Box::new(StreamReader::new(
@@ -390,9 +507,9 @@ impl Request for Proxy {
     /// memory, avoiding the overhead of streaming for smaller or fixed-size responses. The provided
     /// `BytesMut` buffer is used to store the response content, and the response metadata (e.g., status
     /// and headers) is returned separately.
-    async fn get_into(&self, request: GetRequest, buf: &mut BytesMut) -> Result<GetResponse> {
+    async fn get_into(&self, request: &GetRequest, buf: &mut BytesMut) -> Result<GetResponse> {
         let get_into = async {
-            let response = self.try_send(&request).await?;
+            let response = self.try_send(request).await?;
             let status = response.status();
             let headers = response.headers().clone();
 
@@ -417,6 +534,106 @@ impl Request for Proxy {
             .await
             .map_err(|err| Error::RequestTimeout(err.to_string()))?
     }
+
+    /// Preheats an OCI image by downloading all its blobs via the Dragonfly.
+    ///
+    /// This method is designed for scenarios where OCI image content needs to be pre-cached in
+    /// the seed client before actual consumption, ensuring faster subsequent access across the
+    /// cluster. It parses the image reference, authenticates with the OCI registry, resolves
+    /// the image manifest (including multi-platform image indexes), and downloads each blob
+    /// (config and layers) through the seed client.
+    async fn preheat(&self, request: &PreheatRequest) -> Result<()> {
+        let oci_client = Self::oci_client(request.platform.clone())?;
+
+        // Parse image reference.
+        let reference: Reference = request
+            .image
+            .parse()
+            .map_err(|err| Error::InvalidArgument(format!("invalid image reference: {}", err)))?;
+
+        // Create registry authentication.
+        let auth = match (&request.username, &request.password) {
+            (Some(username), Some(password)) => {
+                RegistryAuth::Basic(username.clone(), password.clone())
+            }
+            _ => RegistryAuth::Anonymous,
+        };
+
+        // Pull image manifest. This handles multi-platform image index manifests
+        // by selecting the platform-specific manifest using our resolver.
+        let (manifest, digest) = oci_client
+            .pull_image_manifest(&reference, &auth)
+            .await
+            .map_err(|err| Error::Internal(format!("failed to pull image manifest: {}", err)))?;
+        debug!(
+            "pulled manifest for image {} with digest {}, layers: {}",
+            request.image,
+            digest,
+            manifest.layers.len()
+        );
+
+        // Authenticate with the registry and get a bearer token if available.
+        let token = oci_client
+            .auth(&reference, &auth, RegistryOperation::Pull)
+            .await
+            .map_err(|err| {
+                Error::Internal(format!("failed to authenticate with registry: {}", err))
+            })?
+            .ok_or_else(|| {
+                Error::Internal("registry did not return authentication token".to_string())
+            })?;
+
+        // Build authorization header for blob downloads through the Dragonfly.
+        let mut header = HeaderMap::new();
+        header.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", token))
+                .map_err(|err| Error::Internal(format!("invalid auth token: {}", err)))?,
+        );
+
+        let registry = reference.resolve_registry();
+        let repository = reference.repository();
+        for digest in std::iter::once(&manifest.config.digest)
+            .chain(manifest.layers.iter().map(|layer| &layer.digest))
+        {
+            let url = Self::build_blob_url(registry, repository, digest);
+            let get_request = GetRequest {
+                url: url.clone(),
+                header: Some(header.clone()),
+                piece_length: request.piece_length,
+                tag: request.tag.clone(),
+                application: request.application.clone(),
+                filtered_query_params: request.filtered_query_params.clone(),
+                content_for_calculating_task_id: request.content_for_calculating_task_id.clone(),
+                enable_task_id_based_blob_digest: request.enable_task_id_based_blob_digest,
+                priority: request.priority,
+                timeout: request.timeout,
+                client_cert: request.client_cert.clone(),
+            };
+
+            let response = self.get(&get_request).await?;
+            match response.reader {
+                Some(mut reader) => {
+                    tokio::io::copy(&mut reader, &mut tokio::io::sink())
+                        .await
+                        .map_err(|err| {
+                            Error::Internal(format!("failed to read blob {}: {}", digest, err))
+                        })?;
+                }
+                None => {
+                    warn!(
+                        "no response body for blob {}, download may not have completed",
+                        digest
+                    );
+                }
+            }
+
+            debug!("preheated blob: {}", url);
+        }
+
+        debug!("preheat completed for image: {}", request.image);
+        Ok(())
+    }
 }
 
 /// Proxy implements proxy request logic.
@@ -426,12 +643,6 @@ impl Proxy {
         &self,
         request: &GetRequest,
     ) -> Result<Vec<Entry<ClientWithMiddleware>>> {
-        let filtered_query_params = if request.filtered_query_params.is_empty() {
-            default_proxy_rule_filtered_query_params()
-        } else {
-            request.filtered_query_params.clone()
-        };
-
         // Generate task id for selecting seed peer.
         let task_id = self
             .id_generator
@@ -446,7 +657,7 @@ impl Proxy {
                         piece_length: request.piece_length,
                         tag: request.tag.clone(),
                         application: request.application.clone(),
-                        filtered_query_params,
+                        filtered_query_params: request.filtered_query_params.clone(),
                         revision: None,
                     }
                 },
@@ -567,7 +778,7 @@ impl Proxy {
         }
     }
 
-    /// make_request_headers applies p2p related headers to the request headers.
+    /// Make request headers applies p2p related headers to the request headers.
     fn make_request_headers(&self, request: &GetRequest) -> Result<HeaderMap> {
         let mut headers = request.header.clone().unwrap_or_default();
 
@@ -651,6 +862,41 @@ impl Proxy {
 
         headers.insert("X-Dragonfly-Use-P2P", HeaderValue::from_static("true"));
         Ok(headers)
+    }
+
+    /// Helper function to check if a URL is an OCI blob URL (e.g., /v2/<name>/blobs/sha256:
+    /// <digest>).
+    fn build_blob_url(registry: &str, repository: &str, digest: &str) -> String {
+        format!("https://{}/v2/{}/blobs/{}", registry, repository, digest)
+    }
+
+    /// Builds an OCI client with a platform resolver that matches the requested os/arch.
+    fn oci_client(platform: Option<String>) -> Result<OciClient> {
+        let mut oci_config = ClientConfig::default();
+        if let Some(platform) = platform {
+            let (os, arch) = platform
+                .split_once('/')
+                .map(|(os, arch)| (Os::from(os), Arch::from(arch)))
+                .ok_or_else(|| {
+                    Error::InvalidArgument(format!(
+                        "invalid platform format '{}', expected 'os/arch' (e.g., 'linux/amd64')",
+                        platform
+                    ))
+                })?;
+
+            oci_config.platform_resolver = Some(Box::new(move |manifests: &[ImageIndexEntry]| {
+                manifests
+                    .iter()
+                    .find(|entry| {
+                        entry.platform.as_ref().is_some_and(|platform| {
+                            platform.os == os && platform.architecture == arch
+                        })
+                    })
+                    .map(|entry| entry.digest.clone())
+            }))
+        };
+
+        Ok(OciClient::new(oci_config))
     }
 }
 
