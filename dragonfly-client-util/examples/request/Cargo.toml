@@ -1,6 +1,6 @@
 [package]
 name = "request"
-description = "Examples of using the Dragonfly client request module to download files and preheat OCI images via the P2P network"
+description = "An example of request library for the Dragonfly client"
 version.workspace = true
 authors.workspace = true
 homepage.workspace = true

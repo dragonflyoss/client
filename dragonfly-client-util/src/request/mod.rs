@@ -91,7 +91,7 @@ pub trait Request {
     /// This method is designed for scenarios where the response body is expected to be processed as a
     /// stream, allowing efficient handling of large or continuous data. The response includes metadata
     /// such as status codes and headers, along with a streaming `Body` for accessing the response content.
-    async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>>;
+    async fn get(&self, request: &GetRequest) -> Result<GetResponse<Body>>;
 
     /// Sends an GET request to a remote server via the Dragonfly and writes the response
     /// body directly into the provided buffer.
@@ -100,7 +100,7 @@ pub trait Request {
     /// memory, avoiding the overhead of streaming for smaller or fixed-size responses. The provided
     /// `BytesMut` buffer is used to store the response content, and the response metadata (e.g., status
     /// and headers) is returned separately.
-    async fn get_into(&self, request: GetRequest, buf: &mut BytesMut) -> Result<GetResponse>;
+    async fn get_into(&self, request: &GetRequest, buf: &mut BytesMut) -> Result<GetResponse>;
 
     /// Preheats an OCI image by downloading all its blobs via the Dragonfly.
     ///
@@ -439,7 +439,7 @@ impl Request for Proxy {
     /// This method is designed for scenarios where the response body is expected to be processed as a
     /// stream, allowing efficient handling of large or continuous data. The response includes metadata
     /// such as status codes and headers, along with a streaming `Body` for accessing the response content.
-    async fn get(&self, request: GetRequest) -> Result<GetResponse> {
+    async fn get(&self, request: &GetRequest) -> Result<GetResponse> {
         let response = self.try_send(&request).await?;
         let header = response.headers().clone();
         let status_code = response.status();
@@ -464,7 +464,7 @@ impl Request for Proxy {
     /// memory, avoiding the overhead of streaming for smaller or fixed-size responses. The provided
     /// `BytesMut` buffer is used to store the response content, and the response metadata (e.g., status
     /// and headers) is returned separately.
-    async fn get_into(&self, request: GetRequest, buf: &mut BytesMut) -> Result<GetResponse> {
+    async fn get_into(&self, request: &GetRequest, buf: &mut BytesMut) -> Result<GetResponse> {
         let get_into = async {
             let response = self.try_send(&request).await?;
             let status = response.status();

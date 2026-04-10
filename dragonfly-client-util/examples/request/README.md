@@ -1,11 +1,6 @@
 # Examples of Request
 
-Examples of downloading a file and preheating an OCI image via the Dragonfly P2P network using the `request` module.
-
-## Prerequisites
-
-1. A running Dragonfly scheduler service.
-2. At least one seed peer registered with the scheduler.
+An example of using the `request` module to download a file and preheat an OCI image via the Dragonfly P2P network.
 
 ## Run GET Example
 
