@@ -1,6 +1,6 @@
 [package]
-name = "get"
-description = "An example of using the Dragonfly client to download a file via the P2P network"
+name = "request"
+description = "Examples of using the Dragonfly client request module to download files and preheat OCI images via the P2P network"
 version.workspace = true
 authors.workspace = true
 homepage.workspace = true
@@ -9,6 +9,14 @@ keywords.workspace = true
 license.workspace = true
 edition.workspace = true
 publish = false
+
+[[bin]]
+name = "get"
+path = "src/bin/get.rs"
+
+[[bin]]
+name = "preheat"
+path = "src/bin/preheat.rs"
 
 [dependencies]
 dragonfly-client-util.workspace = true
