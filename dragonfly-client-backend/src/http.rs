@@ -429,13 +429,12 @@ impl Backend for HTTP {
                     // Resolve relative Location URLs against the request URL base so
                     // that the redirect can always be followed with an absolute URL.
                     let base_url = Url::parse(&request.url).or_err(ErrorType::ParseError)?;
-                    let redirect_url_parsed =
-                        base_url.join(location_str).or_err(ErrorType::ParseError)?;
-                    let redirect_url = redirect_url_parsed.as_str();
+                    let redirect_url_parsed = resolve_redirect_url(&base_url, location_str)?;
+                    let redirect_url_str = redirect_url_parsed.as_str();
 
                     debug!(
                         "stat request got 307 Temporary Redirect, following redirect {} -> {}",
-                        request.url, redirect_url
+                        request.url, redirect_url_str
                     );
 
                     // Pass the raw Location string to the cache so that relative paths
@@ -453,7 +452,7 @@ impl Backend for HTTP {
 
                     match self
                         .client(request.client_cert.clone(), self.enable_hickory_dns)?
-                        .get(redirect_url)
+                        .get(redirect_url_str)
                         .headers(redirect_headers)
                         .timeout(request.timeout)
                         .send()
@@ -463,7 +462,7 @@ impl Backend for HTTP {
                         Err(err) => {
                             error!(
                                 "stat request failed {} {}: {}",
-                                request.task_id, redirect_url, err
+                                request.task_id, redirect_url_str, err
                             );
 
                             return Ok(StatResponse {
@@ -641,13 +640,12 @@ impl Backend for HTTP {
                 // Resolve relative Location URLs against the request URL base so
                 // that the redirect can always be followed with an absolute URL.
                 let base_url = Url::parse(&request.url).or_err(ErrorType::ParseError)?;
-                let redirect_url_parsed =
-                    base_url.join(location_str).or_err(ErrorType::ParseError)?;
-                let redirect_url = redirect_url_parsed.as_str();
+                let redirect_url_parsed = resolve_redirect_url(&base_url, location_str)?;
+                let redirect_url_str = redirect_url_parsed.as_str();
 
                 debug!(
                     "get request got 307 Temporary Redirect, following redirect {} -> {}",
-                    request.url, redirect_url
+                    request.url, redirect_url_str
                 );
 
                 // Pass the raw Location string to the cache so that relative paths
@@ -665,7 +663,7 @@ impl Backend for HTTP {
 
                 response = match self
                     .client(request.client_cert.clone(), self.enable_hickory_dns)?
-                    .get(redirect_url)
+                    .get(redirect_url_str)
                     .headers(redirect_headers)
                     .timeout(request.timeout)
                     .send()
@@ -675,7 +673,7 @@ impl Backend for HTTP {
                     Err(err) => {
                         error!(
                             "get request failed {} {} {}: {}",
-                            request.task_id, request.piece_id, redirect_url, err
+                            request.task_id, request.piece_id, redirect_url_str, err
                         );
 
                         return Ok(GetResponse {
@@ -822,6 +820,15 @@ fn remove_sensitive_headers(headers: &mut HeaderMap, next: &Url, previous: &Url)
         headers.remove(reqwest::header::PROXY_AUTHORIZATION);
         headers.remove(reqwest::header::WWW_AUTHENTICATE);
     }
+}
+
+/// Resolves a potentially-relative `Location` header value against the request's base URL.
+///
+/// Absolute Location values (e.g. `https://cdn.example.com/file`) are returned unchanged.
+/// Relative values (e.g. `/new/path`) are resolved to a full URL using `base_url` as the
+/// base, matching the RFC 3986 resolution semantics used by browsers and reqwest.
+fn resolve_redirect_url(base_url: &Url, location: &str) -> Result<Url> {
+    Ok(base_url.join(location).or_err(ErrorType::ParseError)?)
 }
 
 #[cfg(test)]
