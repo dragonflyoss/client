@@ -65,3 +65,4 @@ cgroups-rs.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 mocktail.workspace = true
+anyhow.workspace = true
