@@ -35,18 +35,8 @@ async fn main() -> anyhow::Result<()> {
 
     let request = PreheatRequest {
         image: "docker.io/dragonflyoss/scheduler:v2.4.3".to_string(),
-        username: None,
-        password: None,
         platform: Some("linux/amd64".to_string()),
-        piece_length: None,
-        tag: None,
-        application: None,
-        filtered_query_params: Vec::new(),
-        content_for_calculating_task_id: None,
-        enable_task_id_based_blob_digest: false,
-        priority: None,
-        timeout: Duration::from_secs(600),
-        client_cert: None,
+        ..Default::default()
     };
 
     proxy

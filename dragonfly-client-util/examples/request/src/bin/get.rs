@@ -36,16 +36,7 @@ async fn main() -> anyhow::Result<()> {
 
     let request = GetRequest {
         url: "https://example.com/path/to/file".to_string(),
-        header: None,
-        piece_length: None,
-        tag: None,
-        application: None,
-        filtered_query_params: Vec::new(),
-        content_for_calculating_task_id: None,
-        enable_task_id_based_blob_digest: false,
-        priority: None,
-        timeout: Duration::from_secs(300),
-        client_cert: None,
+        ..Default::default()
     };
 
     let response = proxy

@@ -145,17 +145,37 @@ pub struct GetRequest {
     /// when downloading from OCI registries. When enabled for OCI blob URLs (e.g., /v2/<name>/blobs/sha256:<digest>),
     /// the task ID is derived from the blob digest rather than the full URL. This enables deduplication across
     /// registries - the same blob from different registries shares one task ID, eliminating redundant downloads
-    /// and storage.
+    /// and storage, default is true.
     pub enable_task_id_based_blob_digest: bool,
 
     /// Refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L67
     pub priority: Option<i32>,
 
-    /// timeout is the timeout of the request.
+    /// timeout is the timeout of the request, default is 300s.
     pub timeout: Duration,
 
     /// Client cert is the client certificates for the request.
     pub client_cert: Option<Vec<CertificateDer<'static>>>,
+}
+
+/// Default implementation for GetRequest.
+impl Default for GetRequest {
+    /// Default returns a default GetRequest with empty url and default values for other fields.
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            header: None,
+            piece_length: None,
+            tag: None,
+            application: None,
+            filtered_query_params: default_proxy_rule_filtered_query_params(),
+            content_for_calculating_task_id: None,
+            enable_task_id_based_blob_digest: true,
+            priority: None,
+            timeout: Duration::from_secs(300),
+            client_cert: None,
+        }
+    }
 }
 
 /// GetResponse represents a GET response received via the Dragonfly.
@@ -220,17 +240,40 @@ pub struct PreheatRequest {
     /// when downloading from OCI registries. When enabled for OCI blob URLs (e.g., /v2/<name>/blobs/sha256:<digest>),
     /// the task ID is derived from the blob digest rather than the full URL. This enables deduplication across
     /// registries - the same blob from different registries shares one task ID, eliminating redundant downloads
-    /// and storage.
+    /// and storage, default is true.
     pub enable_task_id_based_blob_digest: bool,
 
     /// Refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L67
     pub priority: Option<i32>,
 
-    /// Timeout is the timeout for each blob download request.
+    /// Timeout is the timeout for each blob download request, default is 300s.
     pub timeout: Duration,
 
     /// Client cert is the optional client certificates for the request.
     pub client_cert: Option<Vec<CertificateDer<'static>>>,
+}
+
+/// Default implementation for PreheatRequest.
+impl Default for PreheatRequest {
+    /// Default returns a default PreheatRequest with empty image and default values for other
+    /// fields.
+    fn default() -> Self {
+        Self {
+            image: String::new(),
+            username: None,
+            password: None,
+            platform: None,
+            piece_length: None,
+            tag: None,
+            application: None,
+            filtered_query_params: default_proxy_rule_filtered_query_params(),
+            content_for_calculating_task_id: None,
+            enable_task_id_based_blob_digest: true,
+            priority: None,
+            timeout: Duration::from_secs(300),
+            client_cert: None,
+        }
+    }
 }
 
 /// Factory for creating HTTPClient instances.
@@ -440,7 +483,7 @@ impl Request for Proxy {
     /// stream, allowing efficient handling of large or continuous data. The response includes metadata
     /// such as status codes and headers, along with a streaming `Body` for accessing the response content.
     async fn get(&self, request: &GetRequest) -> Result<GetResponse> {
-        let response = self.try_send(&request).await?;
+        let response = self.try_send(request).await?;
         let header = response.headers().clone();
         let status_code = response.status();
         let reader = Box::new(StreamReader::new(
@@ -466,7 +509,7 @@ impl Request for Proxy {
     /// and headers) is returned separately.
     async fn get_into(&self, request: &GetRequest, buf: &mut BytesMut) -> Result<GetResponse> {
         let get_into = async {
-            let response = self.try_send(&request).await?;
+            let response = self.try_send(request).await?;
             let status = response.status();
             let headers = response.headers().clone();
 
@@ -568,7 +611,7 @@ impl Request for Proxy {
                 client_cert: request.client_cert.clone(),
             };
 
-            let response = self.get(get_request).await?;
+            let response = self.get(&get_request).await?;
             match response.reader {
                 Some(mut reader) => {
                     tokio::io::copy(&mut reader, &mut tokio::io::sink())
@@ -600,12 +643,6 @@ impl Proxy {
         &self,
         request: &GetRequest,
     ) -> Result<Vec<Entry<ClientWithMiddleware>>> {
-        let filtered_query_params = if request.filtered_query_params.is_empty() {
-            default_proxy_rule_filtered_query_params()
-        } else {
-            request.filtered_query_params.clone()
-        };
-
         // Generate task id for selecting seed peer.
         let task_id = self
             .id_generator
@@ -620,7 +657,7 @@ impl Proxy {
                         piece_length: request.piece_length,
                         tag: request.tag.clone(),
                         application: request.application.clone(),
-                        filtered_query_params,
+                        filtered_query_params: request.filtered_query_params.clone(),
                         revision: None,
                     }
                 },
