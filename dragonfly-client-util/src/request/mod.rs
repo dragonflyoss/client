@@ -118,7 +118,7 @@ pub struct GetRequest {
     pub url: String,
 
     /// header is the headers of the request.
-    pub header: Option<HeaderMap>,
+    pub header: HeaderMap,
 
     /// Task piece length.
     pub piece_length: Option<u64>,
@@ -164,7 +164,7 @@ impl Default for GetRequest {
     fn default() -> Self {
         Self {
             url: String::new(),
-            header: None,
+            header: HeaderMap::new(),
             piece_length: None,
             tag: None,
             application: None,
@@ -187,7 +187,7 @@ where
     pub success: bool,
 
     /// header is the headers of the response.
-    pub header: Option<HeaderMap>,
+    pub header: HeaderMap,
 
     /// status_code is the status code of the response.
     pub status_code: Option<reqwest::StatusCode>,
@@ -494,7 +494,7 @@ impl Request for Proxy {
 
         Ok(GetResponse {
             success: status_code.is_success(),
-            header: Some(header),
+            header,
             status_code: Some(status_code),
             reader: Some(reader),
         })
@@ -511,7 +511,7 @@ impl Request for Proxy {
         let get_into = async {
             let response = self.try_send(request).await?;
             let status = response.status();
-            let headers = response.headers().clone();
+            let header = response.headers().clone();
 
             if status.is_success() {
                 let bytes = response.bytes().await.map_err(|err| {
@@ -523,7 +523,7 @@ impl Request for Proxy {
 
             Ok(GetResponse {
                 success: status.is_success(),
-                header: Some(headers),
+                header,
                 status_code: Some(status),
                 reader: None,
             })
@@ -599,7 +599,7 @@ impl Request for Proxy {
             let url = Self::build_blob_url(registry, repository, digest);
             let get_request = GetRequest {
                 url: url.clone(),
-                header: Some(header.clone()),
+                header: header.clone(),
                 piece_length: request.piece_length,
                 tag: request.tag.clone(),
                 application: request.application.clone(),
@@ -780,8 +780,7 @@ impl Proxy {
 
     /// Make request headers applies p2p related headers to the request headers.
     fn make_request_headers(&self, request: &GetRequest) -> Result<HeaderMap> {
-        let mut headers = request.header.clone().unwrap_or_default();
-
+        let mut headers = request.header.clone();
         if let Some(piece_length) = request.piece_length {
             headers.insert(
                 "X-Dragonfly-Piece-Length",
