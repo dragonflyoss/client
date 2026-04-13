@@ -956,10 +956,9 @@ pub struct PreheatCommand {
     #[arg(
         short = 'H',
         long = "header",
-        required = false,
         help = "Specify the header for downloading file. Examples: --header='Content-Type: application/json' --header='Accept: application/json'"
     )]
-    header: Option<Vec<String>>,
+    header: Vec<String>,
 
     #[arg(
         short = 'p',
@@ -1289,7 +1288,7 @@ impl PreheatCommand {
             tag: self.tag.clone(),
             application: self.application.clone(),
             filtered_query_params,
-            header: header_vec_to_hashmap(self.header.clone().unwrap_or_default())?,
+            header: header_vec_to_hashmap(self.header.clone())?,
             priority: self.priority,
             username: self.username.clone(),
             password: self.password.clone(),
@@ -1364,7 +1363,7 @@ impl PreheatCommand {
             tag: self.tag.clone(),
             application: self.application.clone(),
             filtered_query_params,
-            header: header_vec_to_hashmap(self.header.clone().unwrap_or_default())?,
+            header: header_vec_to_hashmap(self.header.clone())?,
             priority: self.priority,
             scope: self.scope.clone(),
             ips: self.ips.clone().unwrap_or_default(),
@@ -1468,7 +1467,7 @@ impl PreheatCommand {
             tag: self.tag.clone(),
             application: self.application.clone(),
             filtered_query_params,
-            header: header_vec_to_headermap(self.header.clone().unwrap_or_default())?,
+            header: header_vec_to_headermap(self.header.clone())?,
 
             // TODO: Support content for calculating task ID.
             content_for_calculating_task_id: None,
