@@ -35,8 +35,8 @@ use std::path::{Path, PathBuf};
 ///
 /// # Examples
 ///
-/// ```rust
-/// use cgroups_rs::get_cgroup_by_pid;
+/// ```no_run
+/// use dragonfly_client_util::cgroups::get_cgroup_by_pid;
 ///
 /// // Get cgroup for the current process
 /// let cgroup = get_cgroup_by_pid(std::process::id()).unwrap();
@@ -78,8 +78,10 @@ pub fn get_cgroup_by_pid(pid: u32) -> Result<Cgroup> {
 /// * `Err(Error)` - If the process doesn't exist or cgroup v2 is not available
 ///
 /// # Example
-/// ```
-/// let cgroup_path = get_cgroup_v2_path_by_pid(1)?;
+/// ```no_run
+/// use dragonfly_client_util::cgroups::get_cgroup_v2_path_by_pid;
+///
+/// let cgroup_path = get_cgroup_v2_path_by_pid(1).unwrap();
 /// // Returns something like: /sys/fs/cgroup/system.slice/service.scope
 /// ```
 pub fn get_cgroup_v2_path_by_pid(pid: u32) -> Result<PathBuf> {

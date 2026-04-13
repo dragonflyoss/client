@@ -285,7 +285,7 @@ impl CPU {
     /// Parses the usage_usec value from cpu.stat content.
     ///
     /// The cpu.stat file format (cgroup v2) looks like:
-    /// ```
+    /// ```text
     /// usage_usec 123456789
     /// user_usec 100000000
     /// system_usec 23456789

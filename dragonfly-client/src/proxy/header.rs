@@ -16,9 +16,11 @@
 
 use bytesize::ByteSize;
 use dragonfly_api::common::v2::Priority;
+use dragonfly_client_util::http::get_range;
 use reqwest::header::HeaderMap;
 use std::{fmt, str::FromStr};
 use tracing::error;
+use url::Url;
 
 /// DRAGONFLY_TAG_HEADER is the header key of tag in http request.
 pub const DRAGONFLY_TAG_HEADER: &str = "X-Dragonfly-Tag";
@@ -73,6 +75,15 @@ pub const DRAGONFLY_FORCE_HARD_LINK_HEADER: &str = "X-Dragonfly-Force-Hard-Link"
 /// be set with human readable format and needs to be greater than or equal
 /// to 4mib, for example: 4mib, 1gib
 pub const DRAGONFLY_PIECE_LENGTH_HEADER: &str = "X-Dragonfly-Piece-Length";
+
+/// DRAGONFLY_PRESERVE_RANGE_FOR_STAT_HEADER is an internal header key used by dfdaemon to indicate
+/// that the original Range header must be preserved for the source stat request.
+pub const DRAGONFLY_PRESERVE_RANGE_FOR_STAT_HEADER: &str = "X-Dragonfly-Preserve-Range-For-Stat";
+
+/// DRAGONFLY_PRESERVE_ORIGINAL_RANGE_FOR_SOURCE_HEADER is an internal header key used by dfdaemon
+/// to indicate that the caller's original Range header must be preserved on the source GET request.
+pub const DRAGONFLY_PRESERVE_ORIGINAL_RANGE_FOR_SOURCE_HEADER: &str =
+    "X-Dragonfly-Preserve-Original-Range-For-Source";
 
 /// DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID_HEADER is the header key of content for calculating task id.
 /// If DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID_HEADER is set, use its value to calculate the task ID.
@@ -295,6 +306,103 @@ pub fn get_piece_length(header: &HeaderMap) -> Option<ByteSize> {
     }
 }
 
+/// Get X-Dragonfly-Preserve-Range-For-Stat header value to determine whether the original Range
+/// header should be preserved for the source stat request.
+pub fn get_preserve_range_for_stat(header: &HeaderMap) -> bool {
+    match header.get(DRAGONFLY_PRESERVE_RANGE_FOR_STAT_HEADER) {
+        Some(value) => match value.to_str() {
+            Ok(value) => value.eq_ignore_ascii_case("true"),
+            Err(err) => {
+                error!("get preserve range for stat from header failed: {}", err);
+                false
+            }
+        },
+        None => false,
+    }
+}
+
+/// Get X-Dragonfly-Preserve-Original-Range-For-Source header value to determine whether the
+/// caller's original Range header should be preserved on the source GET request.
+pub fn get_preserve_original_range_for_source(header: &HeaderMap) -> bool {
+    match header.get(DRAGONFLY_PRESERVE_ORIGINAL_RANGE_FOR_SOURCE_HEADER) {
+        Some(value) => match value.to_str() {
+            Ok(value) => value.eq_ignore_ascii_case("true"),
+            Err(err) => {
+                error!(
+                    "get preserve original range for source from header failed: {}",
+                    err
+                );
+                false
+            }
+        },
+        None => false,
+    }
+}
+
+/// range_header_is_signature_bound returns whether the caller's authentication material explicitly
+/// signs the Range header for the given request.
+pub fn range_header_is_signature_bound(header: &HeaderMap, url: Option<&str>) -> bool {
+    if !header.contains_key(reqwest::header::RANGE) {
+        return false;
+    }
+
+    if header
+        .get(reqwest::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| sigv4_signed_headers_contains(value, "range"))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    url.and_then(|value| Url::parse(value).ok())
+        .map(|parsed_url| presigned_url_signs_header(&parsed_url, "range"))
+        .unwrap_or(false)
+}
+
+/// signed_range_covers_content returns whether the signed Range header safely covers the full
+/// object body after clamping it against the object's content length.
+pub fn signed_range_covers_content(
+    header: &HeaderMap,
+    url: Option<&str>,
+    content_length: u64,
+) -> bool {
+    if !range_header_is_signature_bound(header, url) {
+        return false;
+    }
+
+    matches!(
+        get_range(header, content_length),
+        Ok(Some(range)) if range.start == 0 && range.length == content_length
+    )
+}
+
+fn sigv4_signed_headers_contains(authorization: &str, header_name: &str) -> bool {
+    authorization
+        .split(',')
+        .find_map(|part| part.trim().strip_prefix("SignedHeaders="))
+        .map(|signed_headers| signed_headers_contains_header(signed_headers, header_name))
+        .unwrap_or(false)
+}
+
+fn presigned_url_signs_header(url: &Url, header_name: &str) -> bool {
+    url.query_pairs()
+        .find_map(|(key, value)| {
+            if key.eq_ignore_ascii_case("X-Amz-SignedHeaders") {
+                Some(signed_headers_contains_header(value.as_ref(), header_name))
+            } else {
+                None
+            }
+        })
+        .unwrap_or(false)
+}
+
+fn signed_headers_contains_header(signed_headers: &str, header_name: &str) -> bool {
+    signed_headers
+        .split(';')
+        .any(|value| value.trim().eq_ignore_ascii_case(header_name))
+}
+
 /// Get X-Dragonfly-Content-For-Calculating-Task-ID header value to determine the content for
 /// calculating task ID.
 pub fn get_content_for_calculating_task_id(header: &HeaderMap) -> Option<String> {
@@ -479,6 +587,91 @@ mod tests {
 
         headers.insert(DRAGONFLY_PIECE_LENGTH_HEADER, HeaderValue::from_static("0"));
         assert_eq!(get_piece_length(&headers), Some(ByteSize::b(0)));
+    }
+
+    #[test]
+    fn test_get_preserve_range_for_stat() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            DRAGONFLY_PRESERVE_RANGE_FOR_STAT_HEADER,
+            HeaderValue::from_static("true"),
+        );
+        assert!(get_preserve_range_for_stat(&headers));
+
+        headers.insert(
+            DRAGONFLY_PRESERVE_RANGE_FOR_STAT_HEADER,
+            HeaderValue::from_static("false"),
+        );
+        assert!(!get_preserve_range_for_stat(&headers));
+
+        let empty_headers = HeaderMap::new();
+        assert!(!get_preserve_range_for_stat(&empty_headers));
+    }
+
+    #[test]
+    fn test_get_preserve_original_range_for_source() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            DRAGONFLY_PRESERVE_ORIGINAL_RANGE_FOR_SOURCE_HEADER,
+            HeaderValue::from_static("true"),
+        );
+        assert!(get_preserve_original_range_for_source(&headers));
+
+        headers.insert(
+            DRAGONFLY_PRESERVE_ORIGINAL_RANGE_FOR_SOURCE_HEADER,
+            HeaderValue::from_static("false"),
+        );
+        assert!(!get_preserve_original_range_for_source(&headers));
+    }
+
+    #[test]
+    fn test_range_header_is_signature_bound() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            reqwest::header::RANGE,
+            HeaderValue::from_static("bytes=0-1023"),
+        );
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            HeaderValue::from_static(
+                "AWS4-HMAC-SHA256 Credential=test, SignedHeaders=host;range;x-amz-date, Signature=test",
+            ),
+        );
+        assert!(range_header_is_signature_bound(&headers, None));
+
+        let mut presigned_headers = HeaderMap::new();
+        presigned_headers.insert(
+            reqwest::header::RANGE,
+            HeaderValue::from_static("bytes=0-1023"),
+        );
+        assert!(range_header_is_signature_bound(
+            &presigned_headers,
+            Some("https://bucket.s3.us-west-2.amazonaws.com/models/model.bin?X-Amz-SignedHeaders=host%3Brange&X-Amz-Signature=test"),
+        ));
+
+        let mut unsigned_headers = HeaderMap::new();
+        unsigned_headers.insert(
+            reqwest::header::RANGE,
+            HeaderValue::from_static("bytes=0-1023"),
+        );
+        assert!(!range_header_is_signature_bound(&unsigned_headers, None));
+    }
+
+    #[test]
+    fn test_signed_range_covers_content() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            reqwest::header::RANGE,
+            HeaderValue::from_static("bytes=0-52428799"),
+        );
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            HeaderValue::from_static(
+                "AWS4-HMAC-SHA256 Credential=test, SignedHeaders=host;range;x-amz-date, Signature=test",
+            ),
+        );
+        assert!(signed_range_covers_content(&headers, None, 15_349_416));
+        assert!(!signed_range_covers_content(&headers, None, 80_000_000));
     }
 
     #[test]

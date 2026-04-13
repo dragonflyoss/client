@@ -59,7 +59,8 @@ use dragonfly_client_core::{
 use dragonfly_client_util::tls::NoVerifier;
 use futures::TryStreamExt;
 use http::header::{
-    HeaderName, HeaderValue, CONTENT_LENGTH, LOCATION, RANGE, TRANSFER_ENCODING, USER_AGENT,
+    HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, LOCATION, RANGE, TRANSFER_ENCODING,
+    USER_AGENT,
 };
 use lru::LruCache;
 use reqwest::header::HeaderMap;
@@ -544,9 +545,19 @@ impl Backend for HTTP {
 
         let response_status_code = response.status();
         let response_header = response.headers().clone();
-        let content_length = match response_header.get(CONTENT_LENGTH) {
-            Some(content_length) => content_length.to_str()?.parse::<u64>().ok(),
-            None => response.content_length(),
+        let content_length = if response_status_code == reqwest::StatusCode::PARTIAL_CONTENT {
+            response_header
+                .get(CONTENT_RANGE)
+                .and_then(parse_content_range_total)
+                .or_else(|| match response_header.get(CONTENT_LENGTH) {
+                    Some(content_length) => content_length.to_str().ok()?.parse::<u64>().ok(),
+                    None => response.content_length(),
+                })
+        } else {
+            match response_header.get(CONTENT_LENGTH) {
+                Some(content_length) => content_length.to_str()?.parse::<u64>().ok(),
+                None => response.content_length(),
+            }
         };
 
         debug!(
@@ -807,6 +818,17 @@ fn remove_sensitive_headers(headers: &mut HeaderMap, next: &Url, previous: &Url)
         headers.remove(reqwest::header::PROXY_AUTHORIZATION);
         headers.remove(reqwest::header::WWW_AUTHENTICATE);
     }
+}
+
+fn parse_content_range_total(content_range: &HeaderValue) -> Option<u64> {
+    let content_range = content_range.to_str().ok()?;
+    let (_, value) = content_range.split_once(' ')?;
+    let total = value.rsplit('/').next()?;
+    if total == "*" {
+        return None;
+    }
+
+    total.parse::<u64>().ok()
 }
 
 #[cfg(test)]
@@ -1411,6 +1433,15 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         .unwrap();
         let mut headers = HeaderMap::new();
         assert!(http.make_request_headers(&mut headers, None).is_err());
+    }
+
+    #[test]
+    fn should_parse_content_range_total() {
+        let content_range = HeaderValue::from_static("bytes 0-1023/4096");
+        assert_eq!(parse_content_range_total(&content_range), Some(4096));
+
+        let invalid_total = HeaderValue::from_static("bytes 0-1023/*");
+        assert_eq!(parse_content_range_total(&invalid_total), None);
     }
 
     #[tokio::test]

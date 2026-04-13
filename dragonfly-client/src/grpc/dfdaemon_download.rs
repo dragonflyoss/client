@@ -18,6 +18,7 @@ use crate::dynconfig::Dynconfig;
 use crate::grpc::block_list::{
     BlockList, DownloadBlockListCheckParams, UploadBlockListCheckParams,
 };
+use crate::proxy::header as proxy_header;
 use crate::resource::{persistent_cache_task, persistent_task, task};
 use dragonfly_api::common::v2::{
     CacheTask, PersistentCacheTask, PersistentTask, Priority, Task, TaskType,
@@ -448,9 +449,8 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Download's range priority is higher than the request header's range.
         // If download protocol is http, use the range of the request header.
         // If download protocol is not http, use the range of the download.
-        if download.range.is_none() {
-            // Convert the header.
-            let request_header = match hashmap_to_headermap(&download.request_header) {
+        let request_header = if download.range.is_none() {
+            Some(match hashmap_to_headermap(&download.request_header) {
                 Ok(header) => header,
                 Err(e) => {
                     // Download task failed.
@@ -470,30 +470,49 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                     error!("convert header: {}", e);
                     return Err(Status::invalid_argument(e.to_string()));
                 }
+            })
+        } else {
+            None
+        };
+
+        if download.range.is_none() {
+            download.range = match get_range(
+                request_header.as_ref().unwrap(),
+                task.content_length().unwrap_or_default(),
+            ) {
+                Ok(range) => range,
+                Err(e) => {
+                    // Download task failed.
+                    self.task
+                        .download_failed(task_id.as_str())
+                        .await
+                        .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+                    // Collect download task failure metrics.
+                    collect_download_task_failure_metrics(
+                        download.r#type,
+                        download.tag.clone().unwrap_or_default().as_str(),
+                        download.application.clone().unwrap_or_default().as_str(),
+                        download.priority.to_string().as_str(),
+                    );
+
+                    error!("get range failed: {}", e);
+                    return Err(Status::failed_precondition(e.to_string()));
+                }
             };
+        }
 
-            download.range =
-                match get_range(&request_header, task.content_length().unwrap_or_default()) {
-                    Ok(range) => range,
-                    Err(e) => {
-                        // Download task failed.
-                        self.task
-                            .download_failed(task_id.as_str())
-                            .await
-                            .unwrap_or_else(|err| error!("download task failed: {}", err));
-
-                        // Collect download task failure metrics.
-                        collect_download_task_failure_metrics(
-                            download.r#type,
-                            download.tag.clone().unwrap_or_default().as_str(),
-                            download.application.clone().unwrap_or_default().as_str(),
-                            download.priority.to_string().as_str(),
-                        );
-
-                        error!("get range failed: {}", e);
-                        return Err(Status::failed_precondition(e.to_string()));
-                    }
-                };
+        if let Some(request_header) = request_header.as_ref() {
+            let signed_range_bound = proxy_header::range_header_is_signature_bound(
+                request_header,
+                Some(download.url.as_str()),
+            );
+            if signed_range_bound {
+                download.request_header.insert(
+                    proxy_header::DRAGONFLY_PRESERVE_ORIGINAL_RANGE_FOR_SOURCE_HEADER.to_string(),
+                    "true".to_string(),
+                );
+            }
         }
 
         // Initialize stream channel.

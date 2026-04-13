@@ -27,7 +27,7 @@ use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_metric::{
     collect_proxy_request_failure_metrics, collect_proxy_request_started_metrics,
-    collect_proxy_request_via_dfdaemon_metrics,
+    collect_proxy_request_via_dfdaemon_metrics, collect_s3_proxy_request_metrics,
 };
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
@@ -62,6 +62,7 @@ use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, instrument, Instrument, Span};
 
 pub mod header;
+pub mod s3;
 
 lazy_static! {
   /// Supported HTTP protocols, including HTTP/1.1 and HTTP/1.0.
@@ -70,6 +71,21 @@ lazy_static! {
 
 /// Response type for the proxy server.
 pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
+
+#[derive(Debug, Clone)]
+enum ProxyRouteDecision {
+    Direct,
+    ViaDfdaemon {
+        rule: Rule,
+        preserve_range_for_stat: bool,
+    },
+}
+
+#[derive(Clone, Copy)]
+struct DfdaemonRoute<'a> {
+    rule: &'a Rule,
+    preserve_range_for_stat: bool,
+}
 
 /// Proxy server for intercepting and handling HTTP requests.
 pub struct Proxy {
@@ -380,61 +396,26 @@ pub async fn http_handler(
         }
     }
 
-    // If find the matching rule, proxy the request via the dfdaemon.
-    // Only GET requests are routed to P2P; other methods (HEAD/PUT/POST/DELETE)
-    // fall through to direct proxy to avoid data loss.
-    let request_uri = request.uri();
-    if let Some(rule) = find_matching_rule(
-        config.proxy.rules.as_deref(),
-        url::Url::parse(&request_uri.to_string()).or_err(ErrorType::ParseError)?,
-    ) {
-        if request.method() == Method::GET {
-            info!(
-                "proxy HTTP request via dfdaemon by rule config: {:?}",
-                request
-            );
-
+    match resolve_proxy_route(config.as_ref(), &request)? {
+        ProxyRouteDecision::ViaDfdaemon {
+            rule,
+            preserve_range_for_stat,
+        } => {
             return proxy_via_dfdaemon(
                 config,
                 task,
-                &rule,
+                DfdaemonRoute {
+                    rule: &rule,
+                    preserve_range_for_stat,
+                },
                 request,
                 remote_ip,
                 dfdaemon_download_client,
+                registry_cert,
             )
             .await;
         }
-
-        debug!(
-            "proxy HTTP request bypassing dfdaemon for non-GET method: {:?}",
-            request
-        );
-    }
-
-    // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
-    // dfdaemon.
-    if header::get_use_p2p(request.headers()) {
-        info!(
-            "proxy HTTP request via dfdaemon by X-Dragonfly-Use-P2P header: {:?}",
-            request
-        );
-
-        if request.method() == Method::GET {
-            return proxy_via_dfdaemon(
-                config,
-                task,
-                &Rule::default(),
-                request,
-                remote_ip,
-                dfdaemon_download_client,
-            )
-            .await;
-        }
-
-        debug!(
-            "proxy HTTP request bypassing dfdaemon for non-GET method: {:?}",
-            request
-        );
+        ProxyRouteDecision::Direct => {}
     }
 
     if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
@@ -636,61 +617,26 @@ pub async fn upgraded_handler(
             .or_err(ErrorType::ParseError)?;
     }
 
-    // If find the matching rule, proxy the request via the dfdaemon.
-    // Only GET requests are routed to P2P; other methods (HEAD/PUT/POST/DELETE)
-    // fall through to direct proxy to avoid data loss.
-    let request_uri = request.uri();
-    if let Some(rule) = find_matching_rule(
-        config.proxy.rules.as_deref(),
-        url::Url::parse(&request_uri.to_string()).or_err(ErrorType::ParseError)?,
-    ) {
-        if request.method() == Method::GET {
-            info!(
-                "proxy HTTPS request via dfdaemon by rule config: {:?}",
-                request,
-            );
-
+    match resolve_proxy_route(config.as_ref(), &request)? {
+        ProxyRouteDecision::ViaDfdaemon {
+            rule,
+            preserve_range_for_stat,
+        } => {
             return proxy_via_dfdaemon(
                 config,
                 task,
-                &rule,
+                DfdaemonRoute {
+                    rule: &rule,
+                    preserve_range_for_stat,
+                },
                 request,
                 remote_ip,
                 dfdaemon_download_client,
+                registry_cert,
             )
             .await;
         }
-
-        debug!(
-            "proxy HTTPS request bypassing dfdaemon for non-GET method: {:?}",
-            request,
-        );
-    }
-
-    // If the request header contains the X-Dragonfly-Use-P2P header, proxy the request via the
-    // dfdaemon.
-    if header::get_use_p2p(request.headers()) {
-        if request.method() == Method::GET {
-            info!(
-                "proxy HTTP request via dfdaemon by X-Dragonfly-Use-P2P header: {:?}",
-                request,
-            );
-
-            return proxy_via_dfdaemon(
-                config,
-                task,
-                &Rule::default(),
-                request,
-                remote_ip,
-                dfdaemon_download_client,
-            )
-            .await;
-        }
-
-        debug!(
-            "proxy HTTPS request bypassing dfdaemon for non-GET method: {:?}",
-            request,
-        );
+        ProxyRouteDecision::Direct => {}
     }
 
     if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
@@ -715,27 +661,37 @@ pub async fn upgraded_handler(
 async fn proxy_via_dfdaemon(
     config: Arc<Config>,
     task: Arc<Task>,
-    rule: &Rule,
+    route: DfdaemonRoute<'_>,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
     dfdaemon_download_client: DfdaemonDownloadClient,
+    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     // Collect the metrics for the proxy request via dfdaemon.
     collect_proxy_request_via_dfdaemon_metrics();
 
+    let request_url = request.uri().to_string();
+    let signed_range_bound =
+        header::range_header_is_signature_bound(request.headers(), Some(request_url.as_str()));
+
     // Make the download task request.
-    let download_task_request =
-        match make_download_task_request(config.clone(), rule, request, remote_ip) {
-            Ok(download_task_request) => download_task_request,
-            Err(err) => {
-                error!("make download task request failed: {}", err);
-                return Ok(make_error_response(
-                    header::ErrorType::Proxy,
-                    http::StatusCode::INTERNAL_SERVER_ERROR,
-                    None,
-                ));
-            }
-        };
+    let download_task_request = match make_download_task_request(
+        config.clone(),
+        route.rule,
+        route.preserve_range_for_stat,
+        &request,
+        remote_ip,
+    ) {
+        Ok(download_task_request) => download_task_request,
+        Err(err) => {
+            error!("make download task request failed: {}", err);
+            return Ok(make_error_response(
+                header::ErrorType::Proxy,
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                None,
+            ));
+        }
+    };
 
     // Download the task by the dfdaemon download client.
     let response = match dfdaemon_download_client
@@ -744,6 +700,15 @@ async fn proxy_via_dfdaemon(
     {
         Ok(response) => response,
         Err(err) => match err {
+            ClientError::TonicStatus(err)
+                if signed_range_bound && err.code() == tonic::Code::FailedPrecondition =>
+            {
+                info!(
+                    "fall back to direct origin for signed S3 range request because dfdaemon cannot accelerate it safely yet: {}",
+                    request.uri()
+                );
+                return proxy_direct_to_origin(request, registry_cert).await;
+            }
             ClientError::TonicStatus(err) if err.code() == tonic::Code::ResourceExhausted => {
                 return Ok(make_error_response(
                     header::ErrorType::Proxy,
@@ -843,7 +808,7 @@ async fn proxy_via_dfdaemon(
         config.host.ip.unwrap(),
         download_task_started_response.clone(),
     )?;
-    *response.status_mut() = http::StatusCode::OK;
+    *response.status_mut() = ranged_response_status(download_task_started_response.range.is_some());
 
     // Return the response if the client return the first piece.
     let mut initialized = false;
@@ -1032,6 +997,17 @@ async fn proxy_via_dfdaemon(
     }
 }
 
+async fn proxy_direct_to_origin(
+    request: Request<hyper::body::Incoming>,
+    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+) -> ClientResult<Response> {
+    if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
+        return proxy_via_https(request, registry_cert).await;
+    }
+
+    proxy_via_http(request).await
+}
+
 /// proxy_via_http proxies the HTTP request directly to the remote server.
 #[instrument(skip_all)]
 async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
@@ -1059,17 +1035,10 @@ async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientRe
         }
     });
 
-    // Override Host header with full authority (including port) to handle
-    // containerd's behavior with non-443 HTTPS ports, which otherwise
-    // causes request failures.
-    let authority = request
-        .uri()
-        .authority()
-        .ok_or_else(|| ClientError::Unknown("request uri authority is not set".to_string()))?
-        .as_str()
-        .parse()
-        .or_err(ErrorType::ParseError)?;
-    request.headers_mut().insert(hyper::header::HOST, authority);
+    let host_header = host_header_for_origin(request.uri())?;
+    request
+        .headers_mut()
+        .insert(hyper::header::HOST, host_header);
 
     let response = client.send_request(request).await?;
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
@@ -1105,17 +1074,10 @@ async fn proxy_via_https(
         .build();
     let client = Client::builder(TokioExecutor::new()).build(https);
 
-    // Override Host header with full authority (including port) to handle
-    // containerd's behavior with non-443 HTTPS ports, which otherwise
-    // causes request failures.
-    let authority = request
-        .uri()
-        .authority()
-        .ok_or_else(|| ClientError::Unknown("request uri authority is not set".to_string()))?
-        .as_str()
-        .parse()
-        .or_err(ErrorType::ParseError)?;
-    request.headers_mut().insert(hyper::header::HOST, authority);
+    let host_header = host_header_for_origin(request.uri())?;
+    request
+        .headers_mut()
+        .insert(hyper::header::HOST, host_header);
 
     let response = client.request(request).await.inspect_err(|err| {
         error!("request failed: {:?}", err);
@@ -1169,11 +1131,32 @@ fn make_registry_mirror_request(
     Ok(request)
 }
 
+fn host_header_for_origin(uri: &hyper::Uri) -> ClientResult<hyper::header::HeaderValue> {
+    let host = uri
+        .host()
+        .ok_or_else(|| ClientError::Unknown("request uri host is not set".to_string()))?;
+    let default_port = match uri.scheme_str() {
+        Some("http") => Some(80),
+        Some("https") => Some(443),
+        _ => None,
+    };
+    let host_header = match uri.port_u16() {
+        Some(port) if Some(port) != default_port => uri
+            .authority()
+            .ok_or_else(|| ClientError::Unknown("request uri authority is not set".to_string()))?
+            .as_str(),
+        _ => host,
+    };
+
+    Ok(host_header.parse().or_err(ErrorType::ParseError)?)
+}
+
 /// make_download_task_request makes a download task request by the request.
-fn make_download_task_request(
+fn make_download_task_request<B>(
     config: Arc<Config>,
     rule: &Rule,
-    request: Request<hyper::body::Incoming>,
+    preserve_range_for_stat: bool,
+    request: &Request<B>,
     remote_ip: std::net::IpAddr,
 ) -> ClientResult<DownloadTaskRequest> {
     // Convert the Reqwest header to the Hyper header.
@@ -1191,6 +1174,13 @@ fn make_download_task_request(
                 piece_length, MIN_PIECE_LENGTH
             )));
         }
+    }
+
+    if preserve_range_for_stat {
+        header.insert(
+            header::DRAGONFLY_PRESERVE_RANGE_FOR_STAT_HEADER,
+            "true".parse().or_err(ErrorType::ParseError)?,
+        );
     }
 
     Ok(DownloadTaskRequest {
@@ -1327,6 +1317,14 @@ fn make_response_headers(
     hashmap_to_headermap(&download_task_started_response.response_header)
 }
 
+fn ranged_response_status(has_range: bool) -> http::StatusCode {
+    if has_range {
+        http::StatusCode::PARTIAL_CONTENT
+    } else {
+        http::StatusCode::OK
+    }
+}
+
 /// find_matching_rule returns whether the dfdaemon should be used to download the task.
 /// If the dfdaemon should be used, return the matched rule.
 fn find_matching_rule(rules: Option<&[Rule]>, mut url: url::Url) -> Option<Rule> {
@@ -1339,6 +1337,83 @@ fn find_matching_rule(rules: Option<&[Rule]>, mut url: url::Url) -> Option<Rule>
         .iter()
         .find(|rule| rule.regex.is_match(url.as_str()))
         .cloned()
+}
+
+fn resolve_proxy_route<B>(
+    config: &Config,
+    request: &Request<B>,
+) -> ClientResult<ProxyRouteDecision> {
+    if let Some(classified_request) =
+        s3::classify_request(&config.proxy.s3, request.method(), request.uri())
+    {
+        collect_s3_proxy_request_metrics(
+            classified_request.operation.as_str(),
+            classified_request.route.as_str(),
+        );
+
+        match classified_request.route {
+            s3::Route::ViaDfdaemon => {
+                info!(
+                    "proxy S3 request via dfdaemon: operation={:?}, url={}",
+                    classified_request.operation,
+                    request.uri()
+                );
+                return Ok(ProxyRouteDecision::ViaDfdaemon {
+                    rule: Rule::default(),
+                    preserve_range_for_stat: request.headers().contains_key(reqwest::header::RANGE),
+                });
+            }
+            s3::Route::Passthrough => {
+                info!(
+                    "proxy S3 request directly to origin: operation={:?}, url={}",
+                    classified_request.operation,
+                    request.uri()
+                );
+                return Ok(ProxyRouteDecision::Direct);
+            }
+        }
+    }
+
+    let request_url = url::Url::parse(&request.uri().to_string()).or_err(ErrorType::ParseError)?;
+    if let Some(rule) = find_matching_rule(config.proxy.rules.as_deref(), request_url) {
+        if request.method() == Method::GET {
+            info!(
+                "proxy request via dfdaemon by rule config: {:?}",
+                request.uri()
+            );
+            return Ok(ProxyRouteDecision::ViaDfdaemon {
+                rule,
+                preserve_range_for_stat: false,
+            });
+        }
+
+        debug!(
+            "proxy request bypassing dfdaemon for non-GET method matched by rule config: {:?}",
+            request.uri()
+        );
+        return Ok(ProxyRouteDecision::Direct);
+    }
+
+    if header::get_use_p2p(request.headers()) {
+        if request.method() == Method::GET {
+            info!(
+                "proxy request via dfdaemon by X-Dragonfly-Use-P2P header: {:?}",
+                request.uri()
+            );
+            return Ok(ProxyRouteDecision::ViaDfdaemon {
+                rule: Rule::default(),
+                preserve_range_for_stat: false,
+            });
+        }
+
+        debug!(
+            "proxy request bypassing dfdaemon for non-GET method with X-Dragonfly-Use-P2P header: {:?}",
+            request.uri()
+        );
+        return Ok(ProxyRouteDecision::Direct);
+    }
+
+    Ok(ProxyRouteDecision::Direct)
 }
 
 /// make_error_response makes an error response with the given status and message.
@@ -1369,4 +1444,333 @@ fn empty() -> BoxBody<Bytes, ClientError> {
     Empty::<Bytes>::new()
         .map_err(|never| match never {})
         .boxed()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dragonfly_client_util::id_generator::{IDGenerator, TaskIDParameter};
+    use hyper::Request;
+
+    fn task_id_for_download(download: &Download) -> String {
+        IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false)
+            .task_id(TaskIDParameter::URLBased {
+                url: download.url.clone(),
+                piece_length: download.piece_length,
+                tag: download.tag.clone(),
+                application: download.application.clone(),
+                filtered_query_params: download.filtered_query_params.clone(),
+                revision: None,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn should_route_s3_get_object_via_dfdaemon_before_generic_rules() {
+        let mut config = Config::default();
+        config.proxy.s3.enable = true;
+        config.proxy.rules = Some(vec![Rule::default()]);
+
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("https://bucket.s3.us-west-2.amazonaws.com/models/model.bin")
+            .body(())
+            .unwrap();
+
+        let route = resolve_proxy_route(&config, &request).unwrap();
+
+        match route {
+            ProxyRouteDecision::ViaDfdaemon { .. } => {}
+            ProxyRouteDecision::Direct => panic!("expected S3 GetObject to route via dfdaemon"),
+        }
+    }
+
+    #[test]
+    fn should_keep_s3_list_objects_v2_on_direct_passthrough() {
+        let mut config = Config::default();
+        config.proxy.s3.enable = true;
+        config.proxy.rules = Some(vec![Rule::default()]);
+
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("https://bucket.s3.us-west-2.amazonaws.com/?list-type=2&prefix=models/")
+            .body(())
+            .unwrap();
+
+        let route = resolve_proxy_route(&config, &request).unwrap();
+
+        match route {
+            ProxyRouteDecision::Direct => {}
+            ProxyRouteDecision::ViaDfdaemon { .. } => {
+                panic!("expected ListObjectsV2 to remain direct passthrough")
+            }
+        }
+    }
+
+    #[test]
+    fn should_preserve_s3_auth_headers_in_download_task_request() {
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("https://bucket.s3.us-west-2.amazonaws.com/models/model.bin")
+            .header(
+                reqwest::header::AUTHORIZATION,
+                "AWS4-HMAC-SHA256 Credential=test",
+            )
+            .header("x-amz-date", "20260409T000000Z")
+            .header("x-amz-content-sha256", "UNSIGNED-PAYLOAD")
+            .header("x-amz-security-token", "session-token")
+            .header(reqwest::header::HOST, "bucket.s3.us-west-2.amazonaws.com")
+            .body(())
+            .unwrap();
+
+        let task_request = make_download_task_request(
+            Arc::new(Config::default()),
+            &Rule::default(),
+            false,
+            &request,
+            "127.0.0.1".parse().unwrap(),
+        )
+        .unwrap();
+
+        let download = task_request.download.unwrap();
+        assert_eq!(
+            download
+                .request_header
+                .get(reqwest::header::AUTHORIZATION.as_str())
+                .unwrap(),
+            "AWS4-HMAC-SHA256 Credential=test"
+        );
+        assert_eq!(
+            download.request_header.get("x-amz-date").unwrap(),
+            "20260409T000000Z"
+        );
+        assert_eq!(
+            download.request_header.get("x-amz-content-sha256").unwrap(),
+            "UNSIGNED-PAYLOAD"
+        );
+        assert_eq!(
+            download.request_header.get("x-amz-security-token").unwrap(),
+            "session-token"
+        );
+        assert!(!download
+            .request_header
+            .contains_key(reqwest::header::HOST.as_str()));
+    }
+
+    #[test]
+    fn should_mark_s3_ranged_get_for_range_preservation() {
+        let mut config = Config::default();
+        config.proxy.s3.enable = true;
+
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("https://bucket.s3.us-west-2.amazonaws.com/models/model.bin")
+            .header(reqwest::header::RANGE, "bytes=0-1023")
+            .body(())
+            .unwrap();
+
+        let route = resolve_proxy_route(&config, &request).unwrap();
+
+        match route {
+            ProxyRouteDecision::ViaDfdaemon {
+                preserve_range_for_stat,
+                ..
+            } => assert!(preserve_range_for_stat),
+            ProxyRouteDecision::Direct => {
+                panic!("expected ranged S3 GetObject to route via dfdaemon")
+            }
+        }
+    }
+
+    #[test]
+    fn should_route_sigv4_signed_s3_ranged_get_via_dfdaemon_for_capability_check() {
+        let mut config = Config::default();
+        config.proxy.s3.enable = true;
+
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("https://bucket.s3.us-west-2.amazonaws.com/models/model.bin")
+            .header(
+                reqwest::header::AUTHORIZATION,
+                "AWS4-HMAC-SHA256 Credential=test, SignedHeaders=host;range;x-amz-date, Signature=test",
+            )
+            .header(reqwest::header::RANGE, "bytes=0-1023")
+            .body(())
+            .unwrap();
+
+        let route = resolve_proxy_route(&config, &request).unwrap();
+
+        match route {
+            ProxyRouteDecision::ViaDfdaemon {
+                preserve_range_for_stat,
+                ..
+            } => assert!(preserve_range_for_stat),
+            ProxyRouteDecision::Direct => {
+                panic!("expected SigV4 signed ranged S3 GetObject to route via dfdaemon first")
+            }
+        }
+    }
+
+    #[test]
+    fn should_route_presigned_s3_ranged_get_with_unsigned_range_via_dfdaemon() {
+        let mut config = Config::default();
+        config.proxy.s3.enable = true;
+
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("https://bucket.s3.us-west-2.amazonaws.com/models/model.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=test%2F20260410%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20260410T000000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=test-signature")
+            .header(reqwest::header::RANGE, "bytes=0-1023")
+            .body(())
+            .unwrap();
+
+        let route = resolve_proxy_route(&config, &request).unwrap();
+
+        match route {
+            ProxyRouteDecision::ViaDfdaemon {
+                preserve_range_for_stat,
+                ..
+            } => assert!(preserve_range_for_stat),
+            ProxyRouteDecision::Direct => {
+                panic!("expected presigned ranged S3 GetObject with unsigned Range to route via dfdaemon")
+            }
+        }
+    }
+
+    #[test]
+    fn should_route_presigned_s3_ranged_get_with_signed_range_via_dfdaemon_for_capability_check() {
+        let mut config = Config::default();
+        config.proxy.s3.enable = true;
+
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("https://bucket.s3.us-west-2.amazonaws.com/models/model.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=test%2F20260410%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20260410T000000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host%3Brange&X-Amz-Signature=test-signature")
+            .header(reqwest::header::RANGE, "bytes=0-1023")
+            .body(())
+            .unwrap();
+
+        let route = resolve_proxy_route(&config, &request).unwrap();
+
+        match route {
+            ProxyRouteDecision::ViaDfdaemon {
+                preserve_range_for_stat,
+                ..
+            } => assert!(preserve_range_for_stat),
+            ProxyRouteDecision::Direct => {
+                panic!("expected presigned ranged S3 GetObject with signed Range to route via dfdaemon first")
+            }
+        }
+    }
+
+    #[test]
+    fn should_generate_same_task_id_for_equivalent_presigned_s3_urls() {
+        let first_request = Request::builder()
+            .method(Method::GET)
+            .uri("https://bucket.s3.us-west-2.amazonaws.com/models/model.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=first%2F20260409%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20260409T000000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=first-signature")
+            .body(())
+            .unwrap();
+        let second_request = Request::builder()
+            .method(Method::GET)
+            .uri("https://bucket.s3.us-west-2.amazonaws.com/models/model.bin?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=second%2F20260410%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20260410T000000Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Signature=second-signature")
+            .body(())
+            .unwrap();
+
+        let first_download = make_download_task_request(
+            Arc::new(Config::default()),
+            &Rule::default(),
+            false,
+            &first_request,
+            "127.0.0.1".parse().unwrap(),
+        )
+        .unwrap()
+        .download
+        .unwrap();
+        let second_download = make_download_task_request(
+            Arc::new(Config::default()),
+            &Rule::default(),
+            false,
+            &second_request,
+            "127.0.0.1".parse().unwrap(),
+        )
+        .unwrap()
+        .download
+        .unwrap();
+
+        assert_eq!(
+            task_id_for_download(&first_download),
+            task_id_for_download(&second_download)
+        );
+    }
+
+    #[test]
+    fn should_keep_non_get_rule_matched_request_on_direct_passthrough() {
+        let mut config = Config::default();
+        config.proxy.rules = Some(vec![Rule::default()]);
+
+        let request = Request::builder()
+            .method(Method::HEAD)
+            .uri("https://example.com/artifacts/model.bin")
+            .body(())
+            .unwrap();
+
+        let route = resolve_proxy_route(&config, &request).unwrap();
+
+        match route {
+            ProxyRouteDecision::Direct => {}
+            ProxyRouteDecision::ViaDfdaemon { .. } => {
+                panic!("expected non-GET rule-matched request to remain direct passthrough")
+            }
+        }
+    }
+
+    #[test]
+    fn should_keep_non_get_use_p2p_request_on_direct_passthrough() {
+        let request = Request::builder()
+            .method(Method::HEAD)
+            .uri("https://example.com/artifacts/model.bin")
+            .header(header::DRAGONFLY_USE_P2P_HEADER, "true")
+            .body(())
+            .unwrap();
+
+        let route = resolve_proxy_route(&Config::default(), &request).unwrap();
+
+        match route {
+            ProxyRouteDecision::Direct => {}
+            ProxyRouteDecision::ViaDfdaemon { .. } => {
+                panic!("expected non-GET X-Dragonfly-Use-P2P request to remain direct passthrough")
+            }
+        }
+    }
+
+    #[test]
+    fn should_preserve_default_https_host_header_without_port() {
+        let uri = "https://bucket.s3.us-west-2.amazonaws.com:443/models/model.bin"
+            .parse()
+            .unwrap();
+
+        assert_eq!(
+            host_header_for_origin(&uri).unwrap(),
+            "bucket.s3.us-west-2.amazonaws.com"
+        );
+    }
+
+    #[test]
+    fn should_preserve_non_default_https_host_header_with_port() {
+        let uri = "https://registry.example.com:5443/v2/library/alpine/manifests/latest"
+            .parse()
+            .unwrap();
+
+        assert_eq!(
+            host_header_for_origin(&uri).unwrap(),
+            "registry.example.com:5443"
+        );
+    }
+
+    #[test]
+    fn should_return_partial_content_status_for_ranged_downloads() {
+        assert_eq!(
+            ranged_response_status(true),
+            http::StatusCode::PARTIAL_CONTENT
+        );
+        assert_eq!(ranged_response_status(false), http::StatusCode::OK);
+    }
 }

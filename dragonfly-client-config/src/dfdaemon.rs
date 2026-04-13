@@ -1223,6 +1223,38 @@ impl ProxyServer {
     }
 }
 
+/// ProxyS3 is the S3-aware proxy configuration.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ProxyS3 {
+    /// Enable indicates whether to enable S3-aware request routing in the proxy.
+    pub enable: bool,
+
+    /// Detect AWS endpoints indicates whether to automatically match common AWS S3 endpoint
+    /// patterns such as path-style, virtual-hosted-style, dualstack, and accelerate hosts.
+    pub detect_aws_endpoints: bool,
+
+    /// Hosts is an allowlist of exact S3-compatible endpoint hosts that should be treated as
+    /// path-style endpoints, such as `minio.example.com`.
+    pub hosts: Vec<String>,
+
+    /// Host suffixes is an allowlist of S3-compatible endpoint suffixes that should be treated as
+    /// both path-style roots and virtual-hosted-style suffixes, such as `minio.example.com`.
+    pub host_suffixes: Vec<String>,
+}
+
+/// ProxyS3 implements Default.
+impl Default for ProxyS3 {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            detect_aws_endpoints: true,
+            hosts: Vec::new(),
+            host_suffixes: Vec::new(),
+        }
+    }
+}
+
 /// Rule is the proxy rule configuration.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -1323,6 +1355,9 @@ pub struct Proxy {
     /// Server is the proxy server configuration for dfdaemon.
     pub server: ProxyServer,
 
+    /// S3 is the S3-aware proxy configuration.
+    pub s3: ProxyS3,
+
     /// Rules is the proxy rules.
     pub rules: Option<Vec<Rule>>,
 
@@ -1353,6 +1388,7 @@ impl Default for Proxy {
     fn default() -> Self {
         Self {
             server: ProxyServer::default(),
+            s3: ProxyS3::default(),
             rules: None,
             registry_mirror: RegistryMirror::default(),
             disable_back_to_source: false,
@@ -2189,6 +2225,12 @@ key: /etc/ssl/private/client.pem
                     "filteredQueryParams": ["Signature", "Expires"]
                 }
             ],
+            "s3": {
+                "enable": true,
+                "detectAwsEndpoints": true,
+                "hosts": ["minio.example.com"],
+                "hostSuffixes": ["storage.example.com"]
+            },
             "registryMirror": {
                 "enableTaskIDBasedBlobDigest": true,
                 "addr": "https://mirror.example.com",
@@ -2221,6 +2263,10 @@ key: /etc/ssl/private/client.pem
             proxy.server.basic_auth.as_ref().unwrap().password,
             "password".to_string()
         );
+        assert!(proxy.s3.enable);
+        assert!(proxy.s3.detect_aws_endpoints);
+        assert_eq!(proxy.s3.hosts, vec!["minio.example.com"]);
+        assert_eq!(proxy.s3.host_suffixes, vec!["storage.example.com"]);
 
         let rule = &proxy.rules.as_ref().unwrap()[0];
         assert_eq!(rule.regex.as_str(), "^https?://example\\.com/.*$");

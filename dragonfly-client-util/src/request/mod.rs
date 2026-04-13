@@ -21,6 +21,7 @@ use crate::net::format_url;
 use crate::net::preferred_local_ip;
 use crate::pool::{Builder as PoolBuilder, Entry, Factory, Pool};
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use bytes::BytesMut;
 use dragonfly_api::scheduler::v2::scheduler_client::SchedulerClient;
 use errors::{BackendError, DfdaemonError, Error, ProxyError};
@@ -578,18 +579,13 @@ impl Request for Proxy {
             .await
             .map_err(|err| {
                 Error::Internal(format!("failed to authenticate with registry: {}", err))
-            })?
-            .ok_or_else(|| {
-                Error::Internal("registry did not return authentication token".to_string())
             })?;
 
         // Build authorization header for blob downloads through the Dragonfly.
         let mut header = HeaderMap::new();
-        header.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {}", token))
-                .map_err(|err| Error::Internal(format!("invalid auth token: {}", err)))?,
-        );
+        if let Some(authorization) = Self::make_registry_authorization_header(&auth, token)? {
+            header.insert(AUTHORIZATION, authorization);
+        }
 
         let registry = reference.resolve_registry();
         let repository = reference.repository();
@@ -643,6 +639,9 @@ impl Proxy {
         &self,
         request: &GetRequest,
     ) -> Result<Vec<Entry<ClientWithMiddleware>>> {
+        let filtered_query_params =
+            Self::effective_filtered_query_params(&request.filtered_query_params);
+
         // Generate task id for selecting seed peer.
         let task_id = self
             .id_generator
@@ -657,7 +656,7 @@ impl Proxy {
                         piece_length: request.piece_length,
                         tag: request.tag.clone(),
                         application: request.application.clone(),
-                        filtered_query_params: request.filtered_query_params.clone(),
+                        filtered_query_params,
                         revision: None,
                     }
                 },
@@ -870,6 +869,44 @@ impl Proxy {
         format!("https://{}/v2/{}/blobs/{}", registry, repository, digest)
     }
 
+    /// Returns the configured query-param filters, defaulting to the standard proxy rule filters
+    /// when the caller leaves the list empty.
+    fn effective_filtered_query_params(filtered_query_params: &[String]) -> Vec<String> {
+        if filtered_query_params.is_empty() {
+            default_proxy_rule_filtered_query_params()
+        } else {
+            filtered_query_params.to_vec()
+        }
+    }
+
+    /// Builds the Authorization header for OCI blob downloads.
+    ///
+    /// Prefer a bearer token when the registry returns one. If no token is returned, fall back to
+    /// basic auth when credentials were provided; otherwise send no Authorization header.
+    fn make_registry_authorization_header(
+        auth: &RegistryAuth,
+        bearer_token: Option<String>,
+    ) -> Result<Option<HeaderValue>> {
+        if let Some(token) = bearer_token {
+            return HeaderValue::from_str(&format!("Bearer {}", token))
+                .map(Some)
+                .map_err(|err| Error::Internal(format!("invalid auth token: {}", err)));
+        }
+
+        match auth {
+            RegistryAuth::Basic(username, password) => HeaderValue::from_str(&format!(
+                "Basic {}",
+                BASE64_STANDARD.encode(format!("{}:{}", username, password))
+            ))
+            .map(Some)
+            .map_err(|err| Error::Internal(format!("invalid basic auth header: {}", err))),
+            RegistryAuth::Bearer(token) => HeaderValue::from_str(&format!("Bearer {}", token))
+                .map(Some)
+                .map_err(|err| Error::Internal(format!("invalid auth token: {}", err))),
+            RegistryAuth::Anonymous => Ok(None),
+        }
+    }
+
     /// Builds an OCI client with a platform resolver that matches the requested os/arch.
     fn oci_client(platform: Option<String>) -> Result<OciClient> {
         let mut oci_config = ClientConfig::default();
@@ -1023,5 +1060,64 @@ mod tests {
 
         // Still should be 1 because the proxy1 client should have been cleaned up.
         assert_eq!(pool.size().await, 1);
+    }
+
+    #[test]
+    fn test_effective_filtered_query_params_defaults_when_empty() {
+        let mut actual = Proxy::effective_filtered_query_params(&[]);
+        let mut expected = default_proxy_rule_filtered_query_params();
+        actual.sort();
+        expected.sort();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_effective_filtered_query_params_preserves_explicit_values() {
+        let filters = vec!["Signature".to_string(), "Expires".to_string()];
+        assert_eq!(Proxy::effective_filtered_query_params(&filters), filters);
+    }
+
+    #[test]
+    fn test_make_registry_authorization_header_prefers_bearer_token() {
+        let header = Proxy::make_registry_authorization_header(
+            &RegistryAuth::Basic("user".to_string(), "password".to_string()),
+            Some("token".to_string()),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(header.to_str().unwrap(), "Bearer token");
+    }
+
+    #[test]
+    fn test_make_registry_authorization_header_uses_basic_auth_without_token() {
+        let header = Proxy::make_registry_authorization_header(
+            &RegistryAuth::Basic("user".to_string(), "password".to_string()),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(header.to_str().unwrap(), "Basic dXNlcjpwYXNzd29yZA==");
+    }
+
+    #[test]
+    fn test_make_registry_authorization_header_uses_existing_bearer_auth_without_token() {
+        let header = Proxy::make_registry_authorization_header(
+            &RegistryAuth::Bearer("token".to_string()),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(header.to_str().unwrap(), "Bearer token");
+    }
+
+    #[test]
+    fn test_make_registry_authorization_header_allows_anonymous_without_token() {
+        let header =
+            Proxy::make_registry_authorization_header(&RegistryAuth::Anonymous, None).unwrap();
+
+        assert!(header.is_none());
     }
 }

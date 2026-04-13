@@ -184,6 +184,13 @@ lazy_static! {
             &[]
         ).expect("metric can be created");
 
+    /// S3_PROXY_REQUEST_COUNT is used to count S3-aware proxy routing decisions.
+    pub static ref S3_PROXY_REQUEST_COUNT: IntCounterVec =
+        IntCounterVec::new(
+            Opts::new("s3_proxy_request_total", "Counter of the number of S3-aware proxy requests by operation and route.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
+            &["operation", "route"]
+        ).expect("metric can be created");
+
     /// UPDATE_TASK_COUNT is used to count the number of update tasks.
     pub static ref UPDATE_TASK_COUNT: IntCounterVec =
         IntCounterVec::new(
@@ -393,6 +400,10 @@ fn register_custom_metrics() {
         .expect("metric can be registered");
 
     REGISTRY
+        .register(Box::new(S3_PROXY_REQUEST_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
         .register(Box::new(UPDATE_TASK_COUNT.clone()))
         .expect("metric can be registered");
 
@@ -483,6 +494,7 @@ fn reset_custom_metrics() {
     PROXY_REQUEST_COUNT.reset();
     PROXY_REQUEST_FAILURE_COUNT.reset();
     PROXY_REQUEST_VIA_DFDAEMON_COUNT.reset();
+    S3_PROXY_REQUEST_COUNT.reset();
     UPDATE_TASK_COUNT.reset();
     UPDATE_TASK_FAILURE_COUNT.reset();
     STAT_TASK_COUNT.reset();
@@ -819,6 +831,13 @@ pub fn collect_proxy_request_failure_metrics() {
 pub fn collect_proxy_request_via_dfdaemon_metrics() {
     PROXY_REQUEST_VIA_DFDAEMON_COUNT
         .with_label_values(&[])
+        .inc();
+}
+
+/// collect_s3_proxy_request_metrics collects the S3-aware proxy routing metrics.
+pub fn collect_s3_proxy_request_metrics(operation: &str, route: &str) {
+    S3_PROXY_REQUEST_COUNT
+        .with_label_values(&[operation, route])
         .inc();
 }
 
@@ -1408,6 +1427,12 @@ mod tests {
             .with_label_values(&[])
             .get();
         assert!(via_dfdaemon_counter > 0);
+
+        collect_s3_proxy_request_metrics("get_object", "dfdaemon");
+        let s3_proxy_counter = S3_PROXY_REQUEST_COUNT
+            .with_label_values(&["get_object", "dfdaemon"])
+            .get();
+        assert!(s3_proxy_counter > 0);
     }
 
     #[test]

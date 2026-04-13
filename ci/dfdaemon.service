@@ -5,6 +5,10 @@ After=network-online.target
 After=network.target
 
 [Service]
+# Configure /etc/dragonfly/dfdaemon.yaml with proxy.s3.enable=true to turn on S3-aware proxy mode.
+# Applications using the proxy should set HTTPS_PROXY and trust the proxy CA via the system store
+# or AWS_CA_BUNDLE. Dfdaemon preserves caller-provided SigV4 headers or presigned URLs and does not
+# source AWS credentials on the caller's behalf.
 ExecStart=/usr/bin/dfdaemon --config /etc/dragonfly/dfdaemon.yaml --console
 
 Type=simple

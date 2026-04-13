@@ -15,6 +15,35 @@ Dragonfly client written in Rust. It can serve as both a peer and a seed peer.
 
 You can find the full documentation on the [d7y.io](https://d7y.io).
 
+## S3-Aware Proxy Mode
+
+`dfdaemon` can run as an HTTPS proxy for authenticated S3 reads so existing AWS SDK and CLI
+clients can use Dragonfly with `HTTPS_PROXY` plus a trusted proxy CA, without changing
+application code.
+
+V1 behavior:
+
+- `GetObject` uses Dragonfly P2P.
+- Ranged `GetObject` uses Dragonfly P2P. If the caller's SigV4 signature explicitly covers the
+  `Range` header, `dfdaemon` preserves that original signed `Range` on the source request instead
+  of rewriting it.
+- `HeadObject` and `ListObjectsV2` stay direct passthrough.
+- Other S3 APIs stay passthrough and are not accelerated.
+- The proxy preserves caller-provided SigV4 headers or presigned URLs. `dfdaemon` does not
+  discover AWS credentials or re-sign origin requests.
+
+Example client environment:
+
+```shell
+export HTTPS_PROXY=http://127.0.0.1:4001
+export HTTP_PROXY=http://127.0.0.1:4001
+export AWS_CA_BUNDLE=/etc/ssl/certs/dragonfly-proxy-ca.pem
+```
+
+See the sample `dfdaemon` service in [`ci/dfdaemon.service`](./ci/dfdaemon.service) and the
+docker-compose client config template in the
+[dragonfly repository](https://github.com/dragonflyoss/dragonfly/blob/main/deploy/docker-compose/template/client.template.yaml).
+
 ## Community
 
 Join the conversation and help the community grow. Here are the ways to get involved:
