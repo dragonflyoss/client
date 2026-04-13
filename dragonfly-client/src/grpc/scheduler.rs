@@ -25,9 +25,10 @@ use dragonfly_api::scheduler::v2::{
     AnnouncePersistentCachePeerResponse, AnnouncePersistentPeerRequest,
     AnnouncePersistentPeerResponse, DeleteHostRequest, DeletePeerRequest,
     DeletePersistentCachePeerRequest, DeletePersistentCacheTaskRequest,
-    DeletePersistentPeerRequest, DeletePersistentTaskRequest, DeleteTaskRequest, StatPeerRequest,
-    StatPersistentCachePeerRequest, StatPersistentCacheTaskRequest, StatPersistentPeerRequest,
-    StatPersistentTaskRequest, StatTaskRequest, UploadPersistentCacheTaskFailedRequest,
+    DeletePersistentPeerRequest, DeletePersistentTaskRequest, DeleteTaskRequest,
+    PreheatFileRequest, PreheatImageRequest, StatPeerRequest, StatPersistentCachePeerRequest,
+    StatPersistentCacheTaskRequest, StatPersistentPeerRequest, StatPersistentTaskRequest,
+    StatTaskRequest, UploadPersistentCacheTaskFailedRequest,
     UploadPersistentCacheTaskFinishedRequest, UploadPersistentCacheTaskStartedRequest,
     UploadPersistentTaskFailedRequest, UploadPersistentTaskFinishedRequest,
     UploadPersistentTaskStartedRequest,
@@ -573,6 +574,32 @@ impl SchedulerClient {
         self.client(task_id.as_str(), None)
             .await?
             .delete_persistent_cache_task(request)
+            .await?;
+        Ok(())
+    }
+
+    /// preheat_image synchronously resolves an image manifest and triggers an asynchronous
+    /// preheat task on the scheduler.
+    #[instrument(skip(self))]
+    pub async fn preheat_image(&self, request: PreheatImageRequest) -> Result<()> {
+        let url = request.url.clone();
+        let request = Self::make_request(request);
+        self.client(url.as_str(), None)
+            .await?
+            .preheat_image(request)
+            .await?;
+        Ok(())
+    }
+
+    /// preheat_file synchronously resolves a file URL and triggers an asynchronous
+    /// preheat task on the scheduler.
+    #[instrument(skip(self))]
+    pub async fn preheat_file(&self, request: PreheatFileRequest) -> Result<()> {
+        let url = request.url.clone();
+        let request = Self::make_request(request);
+        self.client(url.as_str(), None)
+            .await?
+            .preheat_file(request)
             .await?;
         Ok(())
     }
