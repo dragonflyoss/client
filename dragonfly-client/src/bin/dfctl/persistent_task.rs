@@ -17,6 +17,7 @@
 use chrono::{DateTime, Local};
 use clap::{Parser, Subcommand};
 use dragonfly_api::dfdaemon::v2::ListLocalPersistentTasksRequest;
+use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::net::preferred_local_ip;
 use std::path::PathBuf;
@@ -73,11 +74,17 @@ pub struct LsCommand {
         short = 'l',
         long,
         default_value = "info",
+        env = "DFCTL_PERSISTENT_TASK_LS_LOG_LEVEL",
         help = "Specify the logging level [trace, debug, info, warn, error]"
     )]
     log_level: Level,
 
-    #[arg(long, default_value_t = false, help = "Specify whether to print log")]
+    #[arg(
+        long,
+        default_value_t = false,
+        env = "DFCTL_PERSISTENT_TASK_LS_CONSOLE",
+        help = "Specify whether to print log"
+    )]
     console: bool,
 }
 
@@ -139,16 +146,130 @@ impl LsCommand {
         if let Err(err) = self.run(dfdaemon_download_client).await {
             match err {
                 Error::TonicStatus(status) => {
+                    let details = status.details();
+                    if let Ok(backend_err) = serde_json::from_slice::<Backend>(details) {
+                        println!(
+                            "{}{}{}Listing Persistent Tasks Failed!{}",
+                            color::Fg(color::Red),
+                            style::Italic,
+                            style::Bold,
+                            style::Reset
+                        );
+
+                        println!(
+                            "{}{}{}****************************************{}",
+                            color::Fg(color::Black),
+                            style::Italic,
+                            style::Bold,
+                            style::Reset
+                        );
+
+                        if let Some(status_code) = backend_err.status_code {
+                            println!(
+                                "{}{}{}Bad Status Code:{} {}",
+                                color::Fg(color::Red),
+                                style::Italic,
+                                style::Bold,
+                                style::Reset,
+                                status_code
+                            );
+                        }
+
+                        println!(
+                            "{}{}{}Message:{} {}",
+                            color::Fg(color::Cyan),
+                            style::Italic,
+                            style::Bold,
+                            style::Reset,
+                            backend_err.message
+                        );
+
+                        if !backend_err.header.is_empty() {
+                            println!(
+                                "{}{}{}Header:{}",
+                                color::Fg(color::Cyan),
+                                style::Italic,
+                                style::Bold,
+                                style::Reset
+                            );
+                            for (key, value) in backend_err.header.iter() {
+                                println!("  [{}]: {}", key.as_str(), value.as_str());
+                            }
+                        }
+
+                        println!(
+                            "{}{}{}****************************************{}",
+                            color::Fg(color::Black),
+                            style::Italic,
+                            style::Bold,
+                            style::Reset
+                        );
+                    } else {
+                        println!(
+                            "{}{}{}Listing Persistent Tasks Failed!{}",
+                            color::Fg(color::Red),
+                            style::Italic,
+                            style::Bold,
+                            style::Reset
+                        );
+
+                        println!(
+                            "{}{}{}*********************************{}",
+                            color::Fg(color::Black),
+                            style::Italic,
+                            style::Bold,
+                            style::Reset
+                        );
+
+                        println!(
+                            "{}{}{}Bad Code:{} {}",
+                            color::Fg(color::Red),
+                            style::Italic,
+                            style::Bold,
+                            style::Reset,
+                            status.code()
+                        );
+
+                        println!(
+                            "{}{}{}Message:{} {}",
+                            color::Fg(color::Cyan),
+                            style::Italic,
+                            style::Bold,
+                            style::Reset,
+                            status.message()
+                        );
+
+                        if !status.details().is_empty() {
+                            println!(
+                                "{}{}{}Details:{} {}",
+                                color::Fg(color::Cyan),
+                                style::Italic,
+                                style::Bold,
+                                style::Reset,
+                                std::str::from_utf8(status.details()).unwrap()
+                            );
+                        }
+
+                        println!(
+                            "{}{}{}*********************************{}",
+                            color::Fg(color::Black),
+                            style::Italic,
+                            style::Bold,
+                            style::Reset
+                        );
+                    }
+                }
+                Error::BackendError(err) => {
                     println!(
                         "{}{}{}Listing Persistent Tasks Failed!{}",
                         color::Fg(color::Red),
                         style::Italic,
                         style::Bold,
-                        style::Reset,
+                        style::Reset
                     );
 
                     println!(
-                        "{}{}{}*********************************{}",
+                        "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,
                         style::Bold,
@@ -156,34 +277,29 @@ impl LsCommand {
                     );
 
                     println!(
-                        "{}{}{}Bad Code:{} {}",
+                        "{}{}{}Message:{} {}",
                         color::Fg(color::Red),
                         style::Italic,
                         style::Bold,
                         style::Reset,
-                        status.code()
+                        err.message
                     );
 
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        status.message()
-                    );
+                    if err.header.is_some() {
+                        println!(
+                            "{}{}{}Header:{}",
+                            color::Fg(color::Cyan),
+                            style::Italic,
+                            style::Bold,
+                            style::Reset
+                        );
+                        for (key, value) in err.header.unwrap_or_default().iter() {
+                            println!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
+                        }
+                    }
 
                     println!(
-                        "{}{}{}Details:{} {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        std::str::from_utf8(status.details()).unwrap()
-                    );
-
-                    println!(
-                        "{}{}{}*********************************{}",
+                        "{}{}{}****************************************{}",
                         color::Fg(color::Black),
                         style::Italic,
                         style::Bold,

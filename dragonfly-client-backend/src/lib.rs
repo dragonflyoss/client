@@ -38,6 +38,7 @@ pub mod http;
 pub mod hugging_face;
 pub mod model_scope;
 pub mod object_storage;
+pub mod oci;
 
 /// POOL_MAX_IDLE_PER_HOST is the max idle connections per host.
 const POOL_MAX_IDLE_PER_HOST: usize = 1024;

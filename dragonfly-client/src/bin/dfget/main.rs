@@ -224,10 +224,9 @@ struct Args {
     #[arg(
         short = 'H',
         long = "header",
-        required = false,
         help = "Specify the header for downloading file. Examples: --header='Content-Type: application/json' --header='Accept: application/json'"
     )]
-    header: Option<Vec<String>>,
+    header: Vec<String>,
 
     #[arg(
         long = "filtered-query-param",
@@ -881,7 +880,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
 #[allow(clippy::too_many_arguments)]
 async fn get_all_entries(
     base_url: &Url,
-    header: Option<Vec<String>>,
+    header: Vec<String>,
     include_files: Option<Vec<String>>,
     object_storage: Option<ObjectStorage>,
     hdfs: Option<Hdfs>,
@@ -1062,7 +1061,7 @@ async fn download(
                 application: Some(args.application),
                 priority: args.priority,
                 filtered_query_params,
-                request_header: header_vec_to_hashmap(args.header.unwrap_or_default())?,
+                request_header: header_vec_to_hashmap(args.header)?,
                 piece_length: args.piece_length.map(|piece_length| piece_length.as_u64()),
                 output_path,
                 timeout: Some(
@@ -1267,7 +1266,7 @@ async fn download(
 /// the gRPC response into a local `DirEntry` format for further processing.
 async fn get_entries(
     url: &Url,
-    header: Option<Vec<String>>,
+    header: Vec<String>,
     object_storage: Option<ObjectStorage>,
     hdfs: Option<Hdfs>,
     hugging_face: Option<HuggingFace>,
@@ -1279,7 +1278,7 @@ async fn get_entries(
         .list_task_entries(ListTaskEntriesRequest {
             task_id: Uuid::new_v4().to_string(),
             url: url.to_string(),
-            request_header: header_vec_to_hashmap(header.clone().unwrap_or_default())?,
+            request_header: header_vec_to_hashmap(header.clone())?,
             timeout: None,
             certificate_chain: Vec::new(),
             object_storage,
@@ -1699,7 +1698,7 @@ mod tests {
 
         let entries = get_all_entries(
             &Url::parse("http://example.com/root/").unwrap(),
-            None,
+            Vec::new(),
             None,
             None,
             None,
@@ -1759,7 +1758,7 @@ mod tests {
 
         let entries = get_all_entries(
             &Url::parse("http://example.com/root/").unwrap(),
-            None,
+            Vec::new(),
             None,
             None,
             None,
@@ -1845,7 +1844,7 @@ mod tests {
 
         let entries = get_all_entries(
             &Url::parse("http://example.com/root/").unwrap(),
-            None,
+            Vec::new(),
             None,
             None,
             None,
@@ -1931,7 +1930,7 @@ mod tests {
 
         let entries = get_all_entries(
             &Url::parse("http://example.com/root/").unwrap(),
-            None,
+            Vec::new(),
             None,
             None,
             None,
