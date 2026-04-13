@@ -25,7 +25,7 @@ jobs:
           cache-on-failure: true
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@v2
+        uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GH_TOKEN }}
 
@@ -63,7 +63,7 @@ jobs:
           cache-on-failure: true
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@v2
+        uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GH_TOKEN }}
 
