@@ -578,8 +578,8 @@ impl SchedulerClient {
         Ok(())
     }
 
-    /// preheat_image synchronously resolves an image manifest and triggers an asynchronous
-    /// preheat task on the scheduler.
+    /// preheat_image sends a preheat image request to the scheduler, which resolves the image
+    /// manifest and triggers an asynchronous preheat task.
     #[instrument(skip(self))]
     pub async fn preheat_image(&self, request: PreheatImageRequest) -> Result<()> {
         let url = request.url.clone();
@@ -591,8 +591,8 @@ impl SchedulerClient {
         Ok(())
     }
 
-    /// preheat_file synchronously resolves a file URL and triggers an asynchronous
-    /// preheat task on the scheduler.
+    /// preheat_file sends a preheat file request to the scheduler, which resolves the file URL
+    /// and triggers an asynchronous preheat task.
     #[instrument(skip(self))]
     pub async fn preheat_file(&self, request: PreheatFileRequest) -> Result<()> {
         let url = request.url.clone();
