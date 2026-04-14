@@ -1124,37 +1124,50 @@ async fn proxy_via_https(
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }
 
+/// get_ns_from_query extracts the `ns` query parameter from the request URI.
+/// Containerd appends `?ns=<registry>` when routing requests through a mirror
+/// (e.g., `GET /v2/library/nginx/manifests/latest?ns=docker.io`).
+fn get_ns_from_query(uri: &http::Uri) -> Option<String> {
+    uri.query().and_then(|query| {
+        url::form_urlencoded::parse(query.as_bytes())
+            .find(|(key, _)| key == "ns")
+            .map(|(_, value)| {
+                let value = value.to_string();
+                if value.contains("://") {
+                    value
+                } else {
+                    format!("https://{}", value)
+                }
+            })
+    })
+}
+
 /// make_registry_mirror_request makes a registry mirror request by the request.
 fn make_registry_mirror_request(
     config: Arc<Config>,
     mut request: Request<hyper::body::Incoming>,
 ) -> ClientResult<Request<hyper::body::Incoming>> {
     let header = request.headers().clone();
-    let registry_mirror_uri = match header::get_registry(&header) {
-        Some(registry) => format!(
-            "{}{}",
-            registry,
-            request
-                .uri()
-                .path_and_query()
-                .map(|v| v.as_str())
-                .unwrap_or("/")
-        )
-        .parse::<http::Uri>()
-        .or_err(ErrorType::ParseError)?,
-        None => format!(
-            "{}{}",
-            config.proxy.registry_mirror.addr,
-            request
-                .uri()
-                .path_and_query()
-                .map(|v| v.as_str())
-                .unwrap_or("/")
-        )
-        .parse::<http::Uri>()
-        .or_err(ErrorType::ParseError)?,
-    };
-    header::get_registry(&header);
+
+    // Determine the upstream registry address. Fallback order:
+    // 1. X-Dragonfly-Registry header (explicit override)
+    // 2. `ns` query parameter (set by containerd when using registry mirrors)
+    // 3. Static config value (proxy.registry_mirror.addr)
+    let upstream_addr = header::get_registry(&header)
+        .or_else(|| get_ns_from_query(request.uri()))
+        .unwrap_or_else(|| config.proxy.registry_mirror.addr.clone());
+
+    let registry_mirror_uri = format!(
+        "{}{}",
+        upstream_addr,
+        request
+            .uri()
+            .path_and_query()
+            .map(|v| v.as_str())
+            .unwrap_or("/")
+    )
+    .parse::<http::Uri>()
+    .or_err(ErrorType::ParseError)?;
 
     *request.uri_mut() = registry_mirror_uri.clone();
     request.headers_mut().insert(
@@ -1369,4 +1382,53 @@ fn empty() -> BoxBody<Bytes, ClientError> {
     Empty::<Bytes>::new()
         .map_err(|never| match never {})
         .boxed()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_ns_from_query_with_ns_param() {
+        let uri: http::Uri = "/v2/library/nginx/manifests/latest?ns=docker.io"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            get_ns_from_query(&uri),
+            Some("https://docker.io".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_ns_from_query_with_scheme() {
+        let uri: http::Uri = "/v2/library/nginx/manifests/latest?ns=https://registry.example.com"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            get_ns_from_query(&uri),
+            Some("https://registry.example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_ns_from_query_no_ns_param() {
+        let uri: http::Uri = "/v2/library/nginx/manifests/latest?foo=bar"
+            .parse()
+            .unwrap();
+        assert_eq!(get_ns_from_query(&uri), None);
+    }
+
+    #[test]
+    fn test_get_ns_from_query_no_query() {
+        let uri: http::Uri = "/v2/library/nginx/manifests/latest".parse().unwrap();
+        assert_eq!(get_ns_from_query(&uri), None);
+    }
+
+    #[test]
+    fn test_get_ns_from_query_multiple_params() {
+        let uri: http::Uri = "/v2/library/nginx/manifests/latest?foo=bar&ns=ghcr.io&baz=qux"
+            .parse()
+            .unwrap();
+        assert_eq!(get_ns_from_query(&uri), Some("https://ghcr.io".to_string()));
+    }
 }
