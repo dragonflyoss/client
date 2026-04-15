@@ -62,6 +62,7 @@ use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, instrument, Instrument, Span};
 
 pub mod header;
+pub mod query;
 
 lazy_static! {
   /// Supported HTTP protocols, including HTTP/1.1 and HTTP/1.0.
@@ -1124,37 +1125,31 @@ async fn proxy_via_https(
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }
 
-/// make_registry_mirror_request makes a registry mirror request by the request.
+/// Get a registry mirror request by the request.
+///
+/// Determine the upstream registry address. Fallback order:
+/// 1. `X-Dragonfly-Registry` header (explicit override).
+/// 2. `ns` query parameter (set by containerd when using registry mirrors).
+/// 3. Static config value (proxy.registry_mirror.addr).
 fn make_registry_mirror_request(
     config: Arc<Config>,
     mut request: Request<hyper::body::Incoming>,
 ) -> ClientResult<Request<hyper::body::Incoming>> {
-    let header = request.headers().clone();
-    let registry_mirror_uri = match header::get_registry(&header) {
-        Some(registry) => format!(
-            "{}{}",
-            registry,
-            request
-                .uri()
-                .path_and_query()
-                .map(|v| v.as_str())
-                .unwrap_or("/")
-        )
-        .parse::<http::Uri>()
-        .or_err(ErrorType::ParseError)?,
-        None => format!(
-            "{}{}",
-            config.proxy.registry_mirror.addr,
-            request
-                .uri()
-                .path_and_query()
-                .map(|v| v.as_str())
-                .unwrap_or("/")
-        )
-        .parse::<http::Uri>()
-        .or_err(ErrorType::ParseError)?,
-    };
-    header::get_registry(&header);
+    let upstream_addr = header::get_registry(request.headers())
+        .or_else(|| query::get_ns_from_query(request.uri()))
+        .unwrap_or_else(|| config.proxy.registry_mirror.addr.clone());
+
+    let registry_mirror_uri = format!(
+        "{}{}",
+        upstream_addr,
+        request
+            .uri()
+            .path_and_query()
+            .map(|v| v.as_str())
+            .unwrap_or("/")
+    )
+    .parse::<http::Uri>()
+    .or_err(ErrorType::ParseError)?;
 
     *request.uri_mut() = registry_mirror_uri.clone();
     request.headers_mut().insert(
