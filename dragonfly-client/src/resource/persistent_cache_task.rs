@@ -1593,12 +1593,15 @@ impl PersistentCacheTask {
     /// list_local returns the persistent cache tasks from local storage.
     #[instrument(skip_all)]
     pub async fn list_local(&self) -> ClientResult<ListLocalPersistentCacheTasksResponse> {
-        let tasks = self.storage.get_persistent_tasks().inspect_err(|err| {
-            error!(
-                "list persistent cache tasks from local storage error: {:?}",
-                err
-            );
-        })?;
+        let tasks = self
+            .storage
+            .get_persistent_cache_tasks()
+            .inspect_err(|err| {
+                error!(
+                    "list persistent cache tasks from local storage error: {:?}",
+                    err
+                );
+            })?;
 
         let tasks: Vec<StatLocalPersistentCacheTaskResponse> = tasks
             .into_iter()
