@@ -103,7 +103,7 @@ impl Task {
         content_length: Option<u64>,
     ) -> bool {
         disable_small_file_hard_link
-            && content_length.is_some_and(|content_length| content_length <= piece::MIN_PIECE_LENGTH)
+            && content_length.is_some_and(|size| size <= piece::MIN_PIECE_LENGTH)
     }
 
     /// new returns a new Task.

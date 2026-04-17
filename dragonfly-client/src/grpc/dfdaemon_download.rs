@@ -100,8 +100,7 @@ use url::Url;
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 use super::middleware::BBRLayer;
 
-const DISABLE_SMALL_FILE_HARD_LINK_METADATA_KEY: &str =
-    "x-dragonfly-disable-small-file-hard-link";
+const DISABLE_SMALL_FILE_HARD_LINK_METADATA_KEY: &str = "x-dragonfly-disable-small-file-hard-link";
 
 /// gRPC Unix server for download operations.
 pub struct DfdaemonDownloadServer {
@@ -2441,10 +2440,11 @@ impl DfdaemonDownloadClient {
         }
 
         if disable_small_file_hard_link {
-            request.metadata_mut().insert(
-                DISABLE_SMALL_FILE_HARD_LINK_METADATA_KEY,
-                tonic::metadata::MetadataValue::from_static("true"),
-            );
+            let value = tonic::metadata::MetadataValue::try_from("true")
+                .map_err(|_| tonic::Status::invalid_argument("invalid metadata value"))?;
+            request
+                .metadata_mut()
+                .insert(DISABLE_SMALL_FILE_HARD_LINK_METADATA_KEY, value);
         }
 
         let response = self.client.clone().download_task(request).await?;
