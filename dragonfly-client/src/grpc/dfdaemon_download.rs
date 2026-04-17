@@ -100,6 +100,9 @@ use url::Url;
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 use super::middleware::BBRLayer;
 
+const DISABLE_SMALL_FILE_HARD_LINK_METADATA_KEY: &str =
+    "x-dragonfly-disable-small-file-hard-link";
+
 /// gRPC Unix server for download operations.
 pub struct DfdaemonDownloadServer {
     /// Configuration of the dfdaemon.
@@ -303,6 +306,12 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         &self,
         request: Request<DownloadTaskRequest>,
     ) -> Result<Response<Self::DownloadTaskStream>, Status> {
+        let disable_small_file_hard_link = request
+            .metadata()
+            .get(DISABLE_SMALL_FILE_HARD_LINK_METADATA_KEY)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+
         // If the parent context is set, use it as the parent context for the span.
         if let Some(parent_ctx) = request.extensions().get::<Context>() {
             let _ = Span::current().set_parent(parent_ctx.clone());
@@ -393,7 +402,11 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         info!("download task started: {:?}", download);
         let task = match self
             .task
-            .download_started(task_id.as_str(), download.clone())
+            .download_started(
+                task_id.as_str(),
+                download.clone(),
+                disable_small_file_hard_link,
+            )
             .await
         {
             Err(ClientError::BackendError(err)) => {
@@ -2409,6 +2422,7 @@ impl DfdaemonDownloadClient {
     pub async fn download_task(
         &self,
         request: DownloadTaskRequest,
+        disable_small_file_hard_link: bool,
     ) -> ClientResult<tonic::Response<tonic::codec::Streaming<DownloadTaskResponse>>> {
         // Get the download from the request.
         let download = request.clone().download.ok_or_else(|| {
@@ -2423,6 +2437,13 @@ impl DfdaemonDownloadClient {
             request.set_timeout(
                 Duration::try_from(timeout)
                     .map_err(|_| tonic::Status::invalid_argument("invalid timeout"))?,
+            );
+        }
+
+        if disable_small_file_hard_link {
+            request.metadata_mut().insert(
+                DISABLE_SMALL_FILE_HARD_LINK_METADATA_KEY,
+                tonic::metadata::MetadataValue::from_static("true"),
             );
         }
 

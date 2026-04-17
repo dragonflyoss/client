@@ -98,6 +98,14 @@ pub struct Task {
 
 /// Task implements the task manager.
 impl Task {
+    fn should_disable_hard_link_for_small_file(
+        disable_small_file_hard_link: bool,
+        content_length: Option<u64>,
+    ) -> bool {
+        disable_small_file_hard_link
+            && content_length.is_some_and(|content_length| content_length <= piece::MIN_PIECE_LENGTH)
+    }
+
     /// new returns a new Task.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -147,6 +155,7 @@ impl Task {
         &self,
         id: &str,
         request: Download,
+        disable_small_file_hard_link: bool,
     ) -> ClientResult<metadata::Task> {
         let (task, reused) = self.storage.prepare_download_task(id)?;
         if reused {
@@ -160,6 +169,13 @@ impl Task {
             //    - Success: Continue processing
             //    - Failure: Fall back to copying the file instead
             if let Some(output_path) = &request.output_path {
+                if Self::should_disable_hard_link_for_small_file(
+                    disable_small_file_hard_link,
+                    task.content_length(),
+                ) {
+                    return Ok(task);
+                }
+
                 if let Err(err) = self
                     .storage
                     .hard_link_task(id, Path::new(output_path.as_str()))
@@ -280,6 +296,13 @@ impl Task {
         //    - Success: Continue processing
         //    - Failure: Fall back to copying the file instead
         if let Some(output_path) = &request.output_path {
+            if Self::should_disable_hard_link_for_small_file(
+                disable_small_file_hard_link,
+                Some(content_length),
+            ) {
+                return task;
+            }
+
             if let Err(err) = self
                 .storage
                 .hard_link_task(id, Path::new(output_path.as_str()))
@@ -2033,6 +2056,23 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_should_disable_hard_link_for_small_file() {
+        assert!(Task::should_disable_hard_link_for_small_file(
+            true,
+            Some(piece::MIN_PIECE_LENGTH),
+        ));
+        assert!(!Task::should_disable_hard_link_for_small_file(
+            false,
+            Some(piece::MIN_PIECE_LENGTH),
+        ));
+        assert!(!Task::should_disable_hard_link_for_small_file(
+            true,
+            Some(piece::MIN_PIECE_LENGTH + 1),
+        ));
+        assert!(!Task::should_disable_hard_link_for_small_file(true, None));
+    }
 
     // test_delete_task_not_found tests the Task.delete method when the task does not exist.
     #[tokio::test]

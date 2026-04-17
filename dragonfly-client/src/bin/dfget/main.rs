@@ -151,6 +151,14 @@ struct Args {
     force_hard_link: bool,
 
     #[arg(
+        long = "disable-small-file-hard-link",
+        default_value_t = false,
+        env = "DFGET_DISABLE_SMALL_FILE_HARD_LINK",
+        help = "Specify whether to disable hard link preference for small files. If it is true, dfdaemon will copy small files directly to the output path."
+    )]
+    disable_small_file_hard_link: bool,
+
+    #[arg(
         long = "content-for-calculating-task-id",
         env = "DFGET_CONTENT_FOR_CALCULATING_TASK_ID",
         help = "Specify the content used to calculate the task ID. If it is set, use its value to calculate the task ID, Otherwise, calculate the task ID based on URL, piece-length, tag, application, and filtered-query-params."
@@ -1050,45 +1058,48 @@ async fn download(
 
     // Create dfdaemon client.
     let response = download_client
-        .download_task(DownloadTaskRequest {
-            download: Some(Download {
-                url: args.url.to_string(),
-                digest: args.digest,
-                // NOTE: Dfget does not support range download.
-                range: None,
-                r#type: TaskType::Standard as i32,
-                tag: Some(args.tag),
-                application: Some(args.application),
-                priority: args.priority,
-                filtered_query_params,
-                request_header: header_vec_to_hashmap(args.header)?,
-                piece_length: args.piece_length.map(|piece_length| piece_length.as_u64()),
-                output_path,
-                timeout: Some(
-                    prost_wkt_types::Duration::try_from(args.timeout)
-                        .or_err(ErrorType::ParseError)?,
-                ),
-                need_back_to_source: false,
-                disable_back_to_source: args.disable_back_to_source,
-                certificate_chain: Vec::new(),
-                prefetch: false,
-                is_prefetch: false,
-                need_piece_content,
-                object_storage,
-                hdfs,
-                hugging_face,
-                model_scope,
-                force_hard_link: args.force_hard_link,
-                content_for_calculating_task_id: args.content_for_calculating_task_id,
-                remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
-                concurrent_piece_count: None,
-                overwrite: args.overwrite,
-                actual_piece_length: None,
-                actual_content_length: None,
-                actual_piece_count: None,
-                enable_task_id_based_blob_digest: false,
-            }),
-        })
+        .download_task(
+            DownloadTaskRequest {
+                download: Some(Download {
+                    url: args.url.to_string(),
+                    digest: args.digest,
+                    // NOTE: Dfget does not support range download.
+                    range: None,
+                    r#type: TaskType::Standard as i32,
+                    tag: Some(args.tag),
+                    application: Some(args.application),
+                    priority: args.priority,
+                    filtered_query_params,
+                    request_header: header_vec_to_hashmap(args.header)?,
+                    piece_length: args.piece_length.map(|piece_length| piece_length.as_u64()),
+                    output_path,
+                    timeout: Some(
+                        prost_wkt_types::Duration::try_from(args.timeout)
+                            .or_err(ErrorType::ParseError)?,
+                    ),
+                    need_back_to_source: false,
+                    disable_back_to_source: args.disable_back_to_source,
+                    certificate_chain: Vec::new(),
+                    prefetch: false,
+                    is_prefetch: false,
+                    need_piece_content,
+                    object_storage,
+                    hdfs,
+                    hugging_face,
+                    model_scope,
+                    force_hard_link: args.force_hard_link,
+                    content_for_calculating_task_id: args.content_for_calculating_task_id,
+                    remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
+                    concurrent_piece_count: None,
+                    overwrite: args.overwrite,
+                    actual_piece_length: None,
+                    actual_content_length: None,
+                    actual_piece_count: None,
+                    enable_task_id_based_blob_digest: false,
+                }),
+            },
+            args.disable_small_file_hard_link,
+        )
         .await
         .inspect_err(|err| {
             error!("download task failed: {}", err);

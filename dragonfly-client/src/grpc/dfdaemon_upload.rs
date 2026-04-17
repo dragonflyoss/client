@@ -345,7 +345,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         info!("download task started: {:?}", download);
         let task = match self
             .task
-            .download_started(task_id.as_str(), download.clone())
+            .download_started(task_id.as_str(), download.clone(), false)
             .await
         {
             Err(ClientError::BackendError(err)) => {

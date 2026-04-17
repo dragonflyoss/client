@@ -740,7 +740,7 @@ async fn proxy_via_dfdaemon(
 
     // Download the task by the dfdaemon download client.
     let response = match dfdaemon_download_client
-        .download_task(download_task_request)
+        .download_task(download_task_request, false)
         .await
     {
         Ok(response) => response,

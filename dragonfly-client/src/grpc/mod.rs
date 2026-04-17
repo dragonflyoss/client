@@ -100,7 +100,7 @@ pub async fn prefetch_task(
 
     // Download task by dfdaemon download client.
     let response = dfdaemon_download_client
-        .download_task(request)
+        .download_task(request, false)
         .await
         .inspect_err(|err| {
             error!("prefetch task failed: {}", err);
