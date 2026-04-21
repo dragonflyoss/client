@@ -1248,7 +1248,7 @@ dependencies = [
  "pprof",
  "prometheus",
  "prost-wkt-types",
- "rand 0.9.3",
+ "rand 0.9.4",
  "rcgen",
  "regex",
  "reqwest 0.12.28",
@@ -1632,7 +1632,7 @@ checksum = "18c1ddb9231d8554c2d6bdf4cfaabf0c59251658c68b6c95cd52dd0c513a912a"
 dependencies = [
  "getrandom 0.3.1",
  "libm",
- "rand 0.9.3",
+ "rand 0.9.4",
  "siphasher 1.0.1",
 ]
 
@@ -2116,7 +2116,7 @@ dependencies = [
  "idna 1.0.3",
  "ipnet",
  "once_cell",
- "rand 0.9.3",
+ "rand 0.9.4",
  "ring 0.17.7",
  "thiserror 2.0.18",
  "tinyvec",
@@ -2138,7 +2138,7 @@ dependencies = [
  "moka",
  "once_cell",
  "parking_lot",
- "rand 0.9.3",
+ "rand 0.9.4",
  "resolv-conf",
  "smallvec",
  "thiserror 2.0.18",
@@ -3112,7 +3112,7 @@ dependencies = [
  "hyper 1.9.0",
  "hyper-util",
  "prost 0.14.3",
- "rand 0.9.3",
+ "rand 0.9.4",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -3641,7 +3641,7 @@ dependencies = [
  "futures-util",
  "opentelemetry",
  "percent-encoding",
- "rand 0.9.3",
+ "rand 0.9.4",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -4433,7 +4433,7 @@ dependencies = [
  "fastbloom",
  "getrandom 0.3.1",
  "lru-slab",
- "rand 0.9.3",
+ "rand 0.9.4",
  "ring 0.17.7",
  "rustc-hash",
  "rustls",
@@ -4482,9 +4482,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.9.3"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ec095654a25171c2124e9e3393a930bddbffdc939556c914957a4c3e0a87166"
+checksum = "44c5af06bb1b7d3216d91932aed5265164bf384dc89cd6ba05cf59a35f5f76ea"
 dependencies = [
  "rand_chacha 0.9.0",
  "rand_core 0.9.3",
@@ -4793,7 +4793,7 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46a4bd6027df676bcb752d3724db0ea3c0c5fc1dd0376fec51ac7dcaf9cc69be"
 dependencies = [
- "rand 0.9.3",
+ "rand 0.9.4",
 ]
 
 [[package]]
@@ -6328,7 +6328,7 @@ checksum = "ee48d38b119b0cd71fe4141b30f5ba9c7c5d9f4e7a3a8b4a674e4b6ef789976f"
 dependencies = [
  "getrandom 0.3.1",
  "js-sys",
- "rand 0.9.3",
+ "rand 0.9.4",
  "serde_core",
  "wasm-bindgen",
 ]
