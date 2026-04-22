@@ -15,7 +15,9 @@
  */
 
 use dragonfly_client::proxy::header::DRAGONFLY_REGISTRY_HEADER;
-use dragonfly_client_config::dfinit::{self, ContainerdRegistry};
+use dragonfly_client_config::dfinit::{
+    self, default_container_runtime_containerd_registry_capabilities, ContainerdRegistry,
+};
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -88,13 +90,19 @@ impl Containerd {
                 config_path.to_string()
             );
 
-            return self
-                .add_registries(
-                    config_path,
-                    self.config.registries.clone(),
-                    self.proxy_config.clone(),
-                )
-                .await;
+            self.add_registries(
+                config_path,
+                self.config.registries.clone(),
+                self.proxy_config.clone(),
+            )
+            .await?;
+
+            if self.config.proxy_all_registries {
+                self.add_default_registry(config_path, self.proxy_config.clone())
+                    .await?;
+            }
+
+            return Ok(());
         }
 
         // If containerd does not support mirror mode and config_path not set, create a new
@@ -125,6 +133,11 @@ impl Containerd {
             self.proxy_config.clone(),
         )
         .await?;
+
+        if self.config.proxy_all_registries {
+            self.add_default_registry(config_path, self.proxy_config.clone())
+                .await?;
+        }
 
         Ok(())
     }
@@ -190,6 +203,51 @@ impl Containerd {
 
         Ok(())
     }
+
+    /// add_default_registry writes a catch-all `_default/hosts.toml` under the containerd
+    /// config_path so that registries not explicitly listed in `registries` are still
+    /// proxied through dfdaemon. The dfdaemon infers the upstream registry from the `ns=`
+    /// query parameter that containerd appends when resolving via the `_default` fallback,
+    /// so no `X-Dragonfly-Registry` header and no top-level `server` field are set.
+    /// Explicitly configured registries keep their own `hosts.toml` and take precedence.
+    #[instrument(skip_all)]
+    pub async fn add_default_registry(
+        &self,
+        config_path: &str,
+        proxy_config: dfinit::Proxy,
+    ) -> Result<()> {
+        info!(
+            "add _default catch-all mirror pointing at {}",
+            proxy_config.addr
+        );
+
+        let mut host_config_table = Table::new();
+        host_config_table.set_implicit(true);
+
+        let mut capabilities = Array::default();
+        for capability in default_container_runtime_containerd_registry_capabilities() {
+            capabilities.push(Value::from(capability));
+        }
+        host_config_table.insert("capabilities", value(capabilities));
+
+        let mut host_table = Table::new();
+        host_table.set_implicit(true);
+        host_table.insert(proxy_config.addr.as_str(), Item::Table(host_config_table));
+
+        let mut default_table = toml_edit::DocumentMut::new();
+        default_table.set_implicit(true);
+        default_table.insert("host", Item::Table(host_table));
+
+        let default_config_dir = PathBuf::from(config_path).join("_default");
+        fs::create_dir_all(default_config_dir.as_os_str()).await?;
+        fs::write(
+            default_config_dir.join("hosts.toml").as_os_str(),
+            default_table.to_string().as_bytes(),
+        )
+        .await?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -228,6 +286,7 @@ mod tests {
                     ca: Some(vec!["test-ca-cert".into()]),
                     capabilities: vec!["pull".into(), "resolve".into()],
                 }],
+                proxy_all_registries: false,
             },
             dfinit::Proxy {
                 addr: "http://127.0.0.1:65001".into(),
@@ -263,6 +322,94 @@ X-Dragonfly-Registry = "https://registry.example.com"
     }
 
     #[tokio::test]
+    async fn test_containerd_config_with_proxy_all_registries() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+        let certs_dir = temp_dir.path().join("certs.d");
+        let certs_dir_str = certs_dir.to_str().unwrap();
+
+        let initial_config = format!(
+            r#"
+[plugins]
+  [plugins."io.containerd.grpc.v1.cri"]
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "{}"
+"#,
+            certs_dir_str
+        );
+        fs::write(&config_path, initial_config).await.unwrap();
+
+        let containerd = Containerd::new(
+            dfinit::Containerd {
+                config_path: config_path.clone(),
+                registries: vec![ContainerdRegistry {
+                    host_namespace: "docker.io".into(),
+                    server_addr: "https://registry.example.com".into(),
+                    skip_verify: None,
+                    ca: None,
+                    capabilities: vec!["pull".into(), "resolve".into()],
+                }],
+                proxy_all_registries: true,
+            },
+            dfinit::Proxy {
+                addr: "http://127.0.0.1:65001".into(),
+            },
+        );
+
+        let result = containerd.run().await;
+        assert!(result.is_ok(), "containerd.run() failed: {:?}", result);
+
+        // Explicitly configured registry still gets its own hosts.toml with the registry header.
+        let explicit_hosts = fs::read_to_string(certs_dir.join("docker.io").join("hosts.toml"))
+            .await
+            .unwrap();
+        assert!(explicit_hosts.contains("X-Dragonfly-Registry = \"https://registry.example.com\""));
+
+        // _default catch-all is written, without a top-level `server` or X-Dragonfly-Registry
+        // header — dfdaemon infers the upstream from the containerd `ns=` query parameter.
+        let default_hosts = fs::read_to_string(certs_dir.join("_default").join("hosts.toml"))
+            .await
+            .unwrap();
+        let expected = r#"[host."http://127.0.0.1:65001"]
+capabilities = ["pull", "resolve"]
+"#;
+        assert_eq!(default_hosts.trim(), expected.trim());
+    }
+
+    #[tokio::test]
+    async fn test_containerd_config_without_proxy_all_registries() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+        let certs_dir = temp_dir.path().join("certs.d");
+        let certs_dir_str = certs_dir.to_str().unwrap();
+
+        let initial_config = format!(
+            r#"
+[plugins]
+  [plugins."io.containerd.grpc.v1.cri"]
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "{}"
+"#,
+            certs_dir_str
+        );
+        fs::write(&config_path, initial_config).await.unwrap();
+
+        let containerd = Containerd::new(
+            dfinit::Containerd {
+                config_path: config_path.clone(),
+                registries: vec![],
+                proxy_all_registries: false,
+            },
+            dfinit::Proxy {
+                addr: "http://127.0.0.1:65001".into(),
+            },
+        );
+
+        assert!(containerd.run().await.is_ok());
+        assert!(!certs_dir.join("_default").join("hosts.toml").exists());
+    }
+
+    #[tokio::test]
     async fn test_containerd_config_with_v3_config_path() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.toml");
@@ -294,6 +441,7 @@ version = 3
                     ca: Some(vec!["test-ca-cert".into()]),
                     capabilities: vec!["pull".into(), "resolve".into()],
                 }],
+                proxy_all_registries: false,
             },
             dfinit::Proxy {
                 addr: "http://127.0.0.1:65001".into(),
