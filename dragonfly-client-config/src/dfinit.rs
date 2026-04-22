@@ -92,7 +92,7 @@ fn default_proxy_addr() -> String {
 /// default_container_runtime_containerd_registry_host_capabilities is the default
 /// capabilities of the containerd registry.
 #[inline]
-fn default_container_runtime_containerd_registry_capabilities() -> Vec<String> {
+pub fn default_container_runtime_containerd_registry_capabilities() -> Vec<String> {
     vec!["pull".to_string(), "resolve".to_string()]
 }
 

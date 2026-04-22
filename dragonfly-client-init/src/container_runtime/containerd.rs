@@ -15,7 +15,9 @@
  */
 
 use dragonfly_client::proxy::header::DRAGONFLY_REGISTRY_HEADER;
-use dragonfly_client_config::dfinit::{self, ContainerdRegistry};
+use dragonfly_client_config::dfinit::{
+    self, default_container_runtime_containerd_registry_capabilities, ContainerdRegistry,
+};
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -96,7 +98,7 @@ impl Containerd {
             .await?;
 
             if self.config.proxy_all_registries {
-                self.add_default_mirror(config_path, self.proxy_config.clone())
+                self.add_default_registry(config_path, self.proxy_config.clone())
                     .await?;
             }
 
@@ -133,7 +135,7 @@ impl Containerd {
         .await?;
 
         if self.config.proxy_all_registries {
-            self.add_default_mirror(config_path, self.proxy_config.clone())
+            self.add_default_registry(config_path, self.proxy_config.clone())
                 .await?;
         }
 
@@ -202,14 +204,14 @@ impl Containerd {
         Ok(())
     }
 
-    /// add_default_mirror writes a catch-all `_default/hosts.toml` under the containerd
+    /// add_default_registry writes a catch-all `_default/hosts.toml` under the containerd
     /// config_path so that registries not explicitly listed in `registries` are still
     /// proxied through dfdaemon. The dfdaemon infers the upstream registry from the `ns=`
     /// query parameter that containerd appends when resolving via the `_default` fallback,
     /// so no `X-Dragonfly-Registry` header and no top-level `server` field are set.
     /// Explicitly configured registries keep their own `hosts.toml` and take precedence.
     #[instrument(skip_all)]
-    pub async fn add_default_mirror(
+    pub async fn add_default_registry(
         &self,
         config_path: &str,
         proxy_config: dfinit::Proxy,
@@ -223,8 +225,9 @@ impl Containerd {
         host_config_table.set_implicit(true);
 
         let mut capabilities = Array::default();
-        capabilities.push(Value::from("pull"));
-        capabilities.push(Value::from("resolve"));
+        for capability in default_container_runtime_containerd_registry_capabilities() {
+            capabilities.push(Value::from(capability));
+        }
         host_config_table.insert("capabilities", value(capabilities));
 
         let mut host_table = Table::new();
